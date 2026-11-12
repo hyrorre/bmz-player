@@ -1,5 +1,25 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum QwilightVisualizerKind {
+    Spectrum,
+    Timing,
+    Judgments,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkinQwilightVisualizerDef {
+    pub id: String,
+    pub kind: QwilightVisualizerKind,
+    #[serde(default)]
+    pub system: i32,
+    #[serde(default = "default_grid_division", rename = "lineWidth")]
+    pub line_width: i32,
+    #[serde(default = "default_grid_division", rename = "lineHeight")]
+    pub line_height: i32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SkinGraphDef {
     /// LR2 BAR_GRAPH: eleven lamp cells per animation frame in source-grid order.

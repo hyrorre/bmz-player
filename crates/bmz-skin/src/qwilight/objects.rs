@@ -1,6 +1,7 @@
 use super::{customize::LaneCoverChoice, layout::Layout, resources::Resources, *};
 
 mod hud;
+mod information;
 
 /// beatoraja's common play offsets that BMZ shows for every play skin.
 const OFFSET_LIFT: i32 = 3;
@@ -137,7 +138,9 @@ impl Builder {
         self.decorations()?;
         self.judgments()?;
         self.hud()?;
+        self.information()?;
         self.lane_cover()?;
+        self.destinations.retain(|id, _| !self.eval.hidden_pipelines.contains(id));
         let pipeline = self
             .eval
             .list("lambda", "pipeline")?
@@ -162,7 +165,7 @@ impl Builder {
             }
         }
         self.document["destination"] = json!(destinations);
-        self.warnings.push("Qwilight play compatibility is experimental; online UI, audio visualizers and pause-menu assets are not implemented. Scoring and judgments follow the selected BMZ rules.".into());
+        self.warnings.push("Qwilight play compatibility is experimental; online UI and pause-menu assets are not implemented. Scoring and judgments follow the selected BMZ rules.".into());
         Ok(())
     }
     fn notes(&mut self) -> Result<()> {
@@ -337,6 +340,11 @@ impl Builder {
         for index in 0..256 {
             let values = self.eval.list("point", &format!("paintProperty{index}"))?;
             if values.len() < 5 {
+                continue;
+            }
+            if let Some(hint) = values.get(8)
+                && self.eval.hidden_pipelines.contains(&(self.eval.numeric(hint)? as i32))
+            {
                 continue;
             }
             let mut v =
@@ -598,22 +606,6 @@ impl Builder {
         }
         self.fractional_hud()?;
         self.judgment_meter()?;
-        for (pipeline, name, reference) in
-            [(47, "title", 10), (48, "artist", 14), (51, "genre", 13)]
-        {
-            let [x, y, w, h] = self.area(name)?;
-            if w <= 0.0 || h <= 0.0 {
-                continue;
-            }
-            let id = format!("qw-text-{name}");
-            self.push(
-                "text",
-                json!({"id":id,"ref":reference,"size":h.round() as i32,"align":0,"overflow":1}),
-            );
-            for dx in self.alt_offsets(&format!("alt-{name}"), 0)? {
-                self.destination(pipeline, &id, self.rect(x + dx, y, w, h), None, None);
-            }
-        }
         let [x, y, w, h] = self.area("hitPoints")?;
         if let Some(path) = self
             .resources

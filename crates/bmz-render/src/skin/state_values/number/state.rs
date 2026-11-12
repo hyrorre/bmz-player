@@ -199,6 +199,7 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         SKIN_REF_BMZ_LR2_HISPEED => Some(displayed_hispeed_hundredths(state)),
         407 => Some(gauge_after_dot(state.gauge) as i64),
         163 => Some((state.timeleft_ms / 60_000) as i64),
+        SKIN_REF_BMZ_CHART_TOTAL_MINUTES => state.chart_length_ms.map(|ms| ms.max(0) / 60_000),
         164 => Some(((state.timeleft_ms / 1_000) % 60) as i64),
         165 => Some((state.resource_load_progress.clamp(0.0, 1.0) * 100.0) as i64),
         1163 | 1164 => {

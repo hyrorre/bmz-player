@@ -20,6 +20,9 @@ FAST/SLOW回数・判定誤差ms・PGREAT対その他判定の比率（RATE）�
 左右の枠、フレーム番号付きのゲージ素材、判定画像の反復回数に対応しました（2026-11-13）。
 判定線位置のスキン調整は削除し、BMZのLIFTへ統合しました。
 検証条件は[CR_minimalの表示修正](../notes/2026/2026-11-13-qwilight-play-visuals.md)を参照してください。
+曲情報の省略幅・文字配置、NPS、経過/総時間、譜面レベル・難易度表・難易度バッジ、
+打鍵タイミング、判定推移、出力PCMのスペクトラムと、26項目の個別表示切り替えに対応しました。
+値・判定履歴・音声解析はBMZ側のものです。[追加表示の検証記録](../notes/2026/2026-11-13-qwilight-play-information.md)を参照してください。
 テーマ、選曲・リザルト、専用SEや一部HUD・特殊演出、Qwilight独自のカバー高さ・開閉操作は対象外です。
 [仕様と制限](skin.md#qwilightのプレイスキン)、[実素材テスト](../crates/bmz-player/src/skin_loader/tests/qwilight.rs)、
 [実装記録](../notes/2026/2026-11-10-qwilight-play-skins.md)を参照してください。

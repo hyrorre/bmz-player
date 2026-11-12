@@ -103,6 +103,9 @@ pub struct SkinDocument {
     pub lift_cover: Vec<SkinHiddenCoverDef>,
     #[serde(default, rename = "hiterrorvisualizer")]
     pub hiterror_visualizer: Vec<SkinHitErrorVisualizerDef>,
+    /// Qwilight play overlays driven by BMZ timing, judgment history and output PCM.
+    #[serde(default, rename = "qwilightVisualizer")]
+    pub qwilight_visualizer: Vec<SkinQwilightVisualizerDef>,
     #[serde(default)]
     pub timingvisualizer: Vec<SkinTimingVisualizerDef>,
     #[serde(default)]

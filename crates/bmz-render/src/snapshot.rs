@@ -317,6 +317,8 @@ pub struct PlayNoteGraphs {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RenderSnapshot {
+    /// Actual output PCM, 32 logarithmic frequency bands normalized to 0..1.
+    pub audio_spectrum: [f32; 32],
     /// Physical output dimensions injected by Renderer before skin evaluation.
     pub screen_size: [u32; 2],
     /// 表示オフセットを含まない譜面時刻。判定演出・BGA・skin timer の基準に使う。

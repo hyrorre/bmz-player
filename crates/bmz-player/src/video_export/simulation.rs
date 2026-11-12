@@ -351,6 +351,7 @@ impl Simulation {
             &play.render_snapshot_cache,
         );
         snapshot.play_elapsed_time = TimeUs(scene_us);
+        snapshot.audio_spectrum = play.audio.spectrum().bands();
         snapshot.play_note_graphs.clone_from(&self.note_graphs);
         refresh_play_skin_visuals(&mut snapshot, session);
         snapshot.operating_time_ms = (scene_us / 1000).min(i64::from(i32::MAX)) as i32;

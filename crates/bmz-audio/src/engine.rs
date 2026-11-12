@@ -9,6 +9,7 @@ pub struct AudioEngine {
     pub queue: ScheduledSoundQueue,
     pub mixer: MixerState,
     pub samples: SampleBank,
+    spectrum: Arc<crate::spectrum::AudioSpectrum>,
     paused_at_output_frame: Option<u64>,
     paused_at_time: Option<std::time::Instant>,
 }
@@ -19,6 +20,7 @@ impl AudioEngine {
             queue: ScheduledSoundQueue::new(),
             mixer: MixerState::new(output_sample_rate),
             samples: SampleBank::default(),
+            spectrum: Arc::default(),
             paused_at_output_frame: None,
             paused_at_time: None,
         }
@@ -30,6 +32,7 @@ impl AudioEngine {
             queue: ScheduledSoundQueue::new(),
             mixer: MixerState::new(output_sample_rate),
             samples,
+            spectrum: Arc::default(),
             paused_at_output_frame: None,
             paused_at_time: None,
         }
@@ -48,6 +51,10 @@ impl AudioEngine {
 
     pub fn output_sample_rate(&self) -> u32 {
         self.mixer.output_sample_rate
+    }
+
+    pub fn spectrum(&self) -> &Arc<crate::spectrum::AudioSpectrum> {
+        &self.spectrum
     }
 
     pub fn reserve_sample_slot(&mut self, id: bmz_core::ids::SoundId) {
@@ -103,6 +110,8 @@ impl AudioEngine {
     /// Viewer のシークでは filesystem / decode をやり直さず、同じ譜面音源を新しい
     /// output-frame 基準へ差し替えるために使う。
     pub fn clear_playback(&mut self) {
+        self.spectrum.set_enabled(false);
+        self.spectrum.clear();
         self.queue.clear();
         self.mixer.voices.clear();
         self.mixer.master_gain = 1.0;
@@ -220,6 +229,7 @@ impl AudioEngine {
     ) {
         output.fill(0.0);
         if self.playback_paused() {
+            self.spectrum.record(output, self.output_sample_rate());
             return;
         }
         let frame_count = output.len() / 2;
@@ -233,6 +243,7 @@ impl AudioEngine {
         // 中間 Vec を確保せず、期日到来分を直接 mixer へ流し込む(RT 安全)。
         self.mixer.push_scheduled(self.queue.drain_due(output_end_frame));
         self.mixer.mix_stereo(&self.samples, output_start_frame, output);
+        self.spectrum.record(output, self.output_sample_rate());
     }
 
     pub fn schedule_all(&mut self, sounds: impl IntoIterator<Item = ScheduledSound>) {

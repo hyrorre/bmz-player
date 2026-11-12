@@ -41,6 +41,20 @@ impl WinitApp {
         self.start_scene_timers_before_snapshot(select_view, result_view);
         let snapshot_start = Instant::now();
         let mut scene = self.scene_snapshot();
+        if let Some(play) = &self.play.active_play {
+            let spectrum = play.running.audio.engine.spectrum();
+            let enabled = play_view
+                && self.renderer.play_skin_document().is_some_and(|document| {
+                    document
+                        .qwilight_visualizer
+                        .iter()
+                        .any(|v| v.kind == bmz_render::skin::QwilightVisualizerKind::Spectrum)
+                });
+            spectrum.set_enabled(enabled);
+            if let AppSceneSnapshot::Play(snapshot) = &mut scene {
+                snapshot.audio_spectrum = spectrum.bands();
+            }
+        }
         if let AppSceneSnapshot::Play(snapshot) = &mut scene {
             snapshot.stagefile_override = self.draw_play_presentation(
                 snapshot.ready_elapsed_time.is_some() || snapshot.seamless_play_entry,

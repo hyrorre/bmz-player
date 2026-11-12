@@ -258,6 +258,7 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         }
     });
     let mut snapshot = RenderSnapshot {
+        audio_spectrum: [0.0; 32],
         stagefile_override: None,
         screen_size: [0, 0],
         time: chart_now,

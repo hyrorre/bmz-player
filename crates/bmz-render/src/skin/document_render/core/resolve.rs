@@ -139,6 +139,20 @@ macro_rules! skin_document_render_core_resolve_methods {
                     ));
                 }
                 if let Some(visualizer) = indexed_destination_object(
+                    &self.qwilight_visualizer,
+                    objects.map(|o| o.qwilight_visualizer),
+                    |item| item.id == destination.id,
+                ) {
+                    return Some(graph::qwilight_visualizer_items(
+                        self,
+                        visualizer,
+                        destination,
+                        frame,
+                        state,
+                        runtime_graphs.play_note_graphs,
+                    ));
+                }
+                if let Some(visualizer) = indexed_destination_object(
                     &self.timingvisualizer,
                     objects.map(|o| o.timingvisualizer),
                     |item| item.id == destination.id,

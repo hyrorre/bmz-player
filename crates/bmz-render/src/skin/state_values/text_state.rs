@@ -87,6 +87,13 @@ pub(super) fn skin_state_text_with_draw_state(
     if text.value_expr.trim() == SKIN_EXPR_DIFFICULTY_NAME {
         return state.difficulty_name.to_string();
     }
+    if text.value_expr.trim() == "bmz:play_level" {
+        return if state.play_level.is_empty() {
+            String::new()
+        } else {
+            format!("LV {}", state.play_level)
+        };
+    }
     if !text.constant_text.is_empty() {
         return text.constant_text.clone();
     }

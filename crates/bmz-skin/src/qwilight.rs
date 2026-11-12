@@ -23,6 +23,7 @@ mod resources;
 mod syntax;
 #[cfg(test)]
 mod tests;
+mod visibility;
 
 pub use customize::{
     QWILIGHT_LANE_COVER_DIR, QWILIGHT_LANE_COVER_PROPERTY, is_qwilight_lane_cover_image_path,
@@ -129,13 +130,15 @@ impl Definition {
                 })
             })
             .collect();
+        visibility::properties(&mut properties, &mut labels);
         properties.push(customize::lane_cover_property(lane_covers));
         json!({"type": 0,
             "name": self.text("format", "title-1041").or_else(|| self.text("format", "title")).unwrap_or_else(|| "Qwilight play skin".into()),
             "property": properties, "propertyLabels": labels,
             "offset": customize::adjustment_defs(self),
             "source": [], "image": [], "destination": [], "slider": [],
-            "value": [], "text": [], "panel": [], "judge": [], "graph": [], "sourceFrames": {}
+            "value": [], "text": [], "panel": [], "judge": [], "graph": [],
+            "qwilightVisualizer": [], "sourceFrames": {}
         })
     }
 }
@@ -192,6 +195,7 @@ struct Evaluator {
     play_configures: Table,
     play_phase: Cell<bool>,
     available: [bool; CONFIGURE_COUNT],
+    hidden_pipelines: Vec<i32>,
 }
 impl Evaluator {
     fn new(
@@ -234,6 +238,7 @@ impl Evaluator {
             load_configures,
             play_phase: Cell::new(false),
             available: [true; CONFIGURE_COUNT],
+            hidden_pipelines: visibility::hidden(options),
         };
         for i in 0..CONFIGURE_COUNT {
             eval.available[i] = eval.configure_available(i);

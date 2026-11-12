@@ -130,6 +130,152 @@ fn digits(decoded: &DecodedSkin, id: &str, state: &SkinDrawState) -> String {
         .collect()
 }
 
+fn information_fixture() -> (tempfile::TempDir, DecodedSkin) {
+    let (root, _) = fixture();
+    let path = root.path().join("skin.yaml");
+    let mut yaml = fs::read_to_string(&path).unwrap().replace(
+        "pipeline: 100, 101, 102, 2, 3, 8, 31, 7, 6, 54, 55, 56, 15, 9, 10",
+        "pipeline: 100, 101, 102, 103, 2, 3, 8, 31, 7, 6, 54, 55, 56, 15, 9, 10, 47, 48, 51, 52, 59, 60, 44, 29, 43, 61, 1",
+    );
+    yaml.push_str(
+        r#"
+  titleSystem0: 2
+  titlePosition0: 210
+  titlePosition1: 16
+  titleHeight: 42
+  artistPosition0: 210
+  genrePosition0: 210
+  levelTextPosition0: 760
+  levelTextPosition1: 690
+  wantLevelPosition0: 650
+  wantLevelPosition1: 690
+  binInputVisualizerLength: 11
+  binInputVisualizerHeight: 15
+  inputVisualizerPosition0: 45
+  inputVisualizerPosition1: 620
+  binHmsLength: 13
+  binHmsHeight: 17
+  hmsPosition0: 410
+  hmsPosition1: 620
+  hmsSystem: 2
+  judgmentVisualizerPosition0: 450
+  judgmentVisualizerPosition1: 470
+  judgmentVisualizerLength: 360
+  judgmentVisualizerHeight: 14
+  judgmentVisualizerSystem: 3
+  audioVisualizerPosition0: 450
+  audioVisualizerPosition1: 520
+  audioVisualizerLength: 360
+  audioVisualizerHeight: 200
+  judgmentInputVisualizerPosition0: 10
+  judgmentInputVisualizerPosition1: 640
+  judgmentInputVisualizerLength: 400
+  judgmentInputVisualizerHeight: 80
+  paintProperty3: 0, 0, 20, 20, 0, 1, 24, 0, 43
+font:
+  titleLevel: 26
+paint:
+  title: DeepSkyBlue
+"#,
+    );
+    fs::write(&path, yaml).unwrap();
+    let decoded = decode_qwilight(&path, root.path(), 6, BTreeMap::new());
+    (root, decoded)
+}
+
+#[test]
+fn qwilight_information_uses_point_anchored_text_and_live_numbers() {
+    let (_root, decoded) = information_fixture();
+    let document = &decoded.document;
+    let title = document.text.iter().find(|t| t.id == "qw-text-title").unwrap();
+    assert_eq!((title.ref_id, title.align, title.size), (12, 1, 26));
+    let text = document.static_render_items(
+        &sources(&decoded),
+        &SkinDrawState::default(),
+        &SkinTextState {
+            title: "曲名",
+            subtitle: "[追加情報]",
+            artist: "作曲者",
+            genre: "GENRE",
+            play_level: "18.5",
+            table_level: "6UE19",
+            table_text_fallback: "6UE19 表の名前",
+            ..Default::default()
+        },
+    );
+    let rendered = format!("{text:?}");
+    for expected in ["曲名", "追加情報", "作曲者", "GENRE", "LV 18.5", "6UE19"] {
+        assert!(rendered.contains(expected), "missing {expected}");
+    }
+    let state = SkinDrawState {
+        keylogger_nps: 19,
+        play_timer_ms: Some(66_000),
+        chart_length_ms: Some(158_000),
+        play_screen: true,
+        ..Default::default()
+    };
+    assert_eq!(digits(&decoded, "qw-nps", &state), "19");
+    assert_eq!(digits(&decoded, "qw-time-minutes", &state), "1");
+    assert_eq!(digits(&decoded, "qw-time-seconds", &state), "06");
+    assert_eq!(digits(&decoded, "qw-time-total-minutes", &state), "2");
+    assert_eq!(digits(&decoded, "qw-time-total-seconds", &state), "38");
+    let state =
+        SkinDrawState { play_timer_ms: Some(600_000), chart_length_ms: Some(3_601_000), ..state };
+    assert_eq!(digits(&decoded, "qw-time-minutes", &state), "10");
+    assert_eq!(digits(&decoded, "qw-time-total-minutes", &state), "60");
+}
+
+#[test]
+fn qwilight_visibility_removes_each_element_and_its_linked_decoration() {
+    let (root, decoded) = information_fixture();
+    let options = decoded
+        .document
+        .property
+        .iter()
+        .filter(|p| p.name.starts_with("Qwilight show "))
+        .map(|p| (p.name.clone(), "Off".into()))
+        .collect();
+    let hidden = decode_qwilight(&root.path().join("skin.yaml"), root.path(), 6, options);
+    assert!(hidden.document.qwilight_visualizer.is_empty());
+    assert!(hidden.document.destination.iter().all(|entry| !matches!(entry,DestinationListEntry::Single(d)
+        if d.id.starts_with("qw-text-") || d.id.starts_with("qw-time-") || d.id=="qw-nps" || d.id.starts_with("qw-paint-3") || d.id=="qw-judge" || d.id=="qw-gauge")));
+    assert!(hidden.document.note.is_some());
+    let restored = decode_qwilight(
+        &root.path().join("skin.yaml"),
+        root.path(),
+        6,
+        BTreeMap::from([("Qwilight show Spectrum".into(), "On".into())]),
+    );
+    assert_eq!(restored.document.qwilight_visualizer.len(), 3);
+}
+
+#[test]
+fn qwilight_timing_and_spectrum_follow_the_current_state() {
+    let (_root, decoded) = information_fixture();
+    let mut state = SkinDrawState {
+        qwilight_timing: vec![(-50.0, 0, 1), (50.0, 400, 2)],
+        ..Default::default()
+    };
+    let feedback = items(&decoded, "qw-judgmentVisualizer", &state);
+    let rects: Vec<_> = feedback
+        .iter()
+        .filter_map(|item| match item {
+            SkinRenderItem::Rect { rect, color, .. } => Some((rect, color)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rects.len(), 2);
+    assert!(rects[0].0.x < rects[1].0.x);
+    assert!(rects[0].1.a > rects[1].1.a);
+    state.qwilight_timing[0].1 = 800;
+    state.qwilight_timing[1].1 = 800;
+    assert!(items(&decoded, "qw-judgmentVisualizer", &state).is_empty());
+    state.audio_spectrum[10] = 0.5;
+    assert_eq!(items(&decoded, "qw-audioVisualizer", &state).len(), 1);
+    state.audio_spectrum.fill(0.0);
+    assert!(items(&decoded, "qw-audioVisualizer", &state).is_empty());
+}
+
 #[test]
 fn qwilight_counters_ratio_and_timing_use_bmz_values() {
     let (_root, decoded) = fixture();
@@ -312,4 +458,109 @@ fn qwilight_cr_minimal_feedback_gpu() {
         changed_pixels(&held, &expired, (460, 640), (350, 400)) > 1000,
         "YELL must remain after 800 ms and disappear after 4 seconds"
     );
+}
+
+#[test]
+#[ignore = "requires CR_minimal and GPU; set BMZ_QWILIGHT_SKIN_ROOT and BMZ_QWILIGHT_PREVIEW_DIR"]
+fn qwilight_cr_minimal_information_gpu() {
+    use bmz_core::input::{InputEvent, InputKind, InputSource};
+    use bmz_gameplay::session::{SkinRuntimeEvent, SkinRuntimeEventKind};
+    let root = PathBuf::from(std::env::var_os("BMZ_QWILIGHT_SKIN_ROOT").expect("set skin root"));
+    let output =
+        PathBuf::from(std::env::var_os("BMZ_QWILIGHT_PREVIEW_DIR").expect("set preview dir"));
+    fs::create_dir_all(&output).unwrap();
+    let options = BTreeMap::from([("プレイサイド".into(), "Center".into())]);
+    let prepare = |options: &BTreeMap<String, String>| {
+        prepare_installed_qwilight(
+            &root,
+            std::slice::from_ref(&root),
+            "CR_minimal",
+            KeyMode::K6,
+            6,
+            options,
+            &BTreeMap::new(),
+            0.0,
+        )
+    };
+    let (mut renderer, mut snapshot) = prepare(&options);
+    snapshot.title = "情報表示の確認".into();
+    snapshot.subtitle = "[6K TEST]".into();
+    snapshot.artist = "BMZ Player".into();
+    snapshot.subartist = "PCM spectrum / timing".into();
+    snapshot.genre = "#TEST SONG".into();
+    snapshot.play_level = "18".into();
+    snapshot.difficulty_name = "INSANE".into();
+    snapshot.table_text_secondary = "6UE19".into();
+    snapshot.table_text_fallback = "6UE19 表の名前".into();
+    snapshot.skin_chart_length_ms = Some(158_000);
+    snapshot.duration = TimeUs(158_000_000);
+    snapshot.time = TimeUs(65_000_000);
+    snapshot.play_elapsed_time = snapshot.time;
+    render_qwilight_snapshot(&mut renderer, snapshot.clone());
+    snapshot.time = TimeUs(66_000_000);
+    snapshot.play_elapsed_time = snapshot.time;
+    snapshot.recent_judgements[0].time = TimeUs(65_900_000);
+    snapshot.recent_judgements[0].delta_us = -35_000;
+    snapshot.skin_events = (0..9)
+        .map(|i| SkinRuntimeEvent {
+            sequence: i + 1,
+            kind: SkinRuntimeEventKind::Input(InputEvent {
+                lane: Lane::Key1,
+                kind: InputKind::Press,
+                time: TimeUs(65_100_000 + i as i64 * 100_000),
+                source: InputSource::Replay,
+                device_kind: Default::default(),
+                scratch_direction: None,
+            }),
+        })
+        .collect();
+    snapshot.play_note_graphs.judge = (0..158)
+        .map(|i| bmz_render::snapshot::ResultJudgeGraphBucket {
+            values: if i < 66 { [0, 8 + i % 8, 2, 1, 0, 0] } else { [12, 0, 0, 0, 0, 0] },
+        })
+        .collect::<Vec<_>>()
+        .into();
+    snapshot.play_note_graphs.judge_revision = 1;
+    let mut audio = bmz_audio::engine::AudioEngine::new(48_000);
+    audio.spectrum().set_enabled(true);
+    let pcm = (0..4096)
+        .map(|i| {
+            [100.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0]
+                .into_iter()
+                .map(|hz| (std::f32::consts::TAU * hz * i as f32 / 48_000.0).sin() * 0.06)
+                .sum()
+        })
+        .collect();
+    audio.insert_sample(
+        bmz_core::ids::SoundId(1),
+        bmz_audio::sample::DecodedSample { channels: 1, sample_rate: 48_000, frames: pcm },
+    );
+    audio.play_now(bmz_core::ids::SoundId(1), 1.0, false);
+    audio.render_stereo(0, &mut vec![0.0; 8192]);
+    snapshot.audio_spectrum = audio.spectrum().bands();
+    assert!(snapshot.audio_spectrum.iter().any(|value| *value > 0.5));
+    let full = render_qwilight_snapshot(&mut renderer, snapshot.clone());
+    save_preview(&output, "CR_minimal-6k-information.png", &full);
+    let mut hidden = options;
+    for name in [
+        "Title",
+        "Artist",
+        "Genre",
+        "NPS",
+        "Time",
+        "Level",
+        "Table",
+        "Difficulty",
+        "Timing",
+        "Judgment graph",
+        "Spectrum",
+    ] {
+        hidden.insert(format!("Qwilight show {name}"), "Off".into());
+    }
+    let (mut hidden_renderer, _) = prepare(&hidden);
+    let disabled = render_qwilight_snapshot(&mut hidden_renderer, snapshot);
+    save_preview(&output, "CR_minimal-6k-information-off.png", &disabled);
+    assert!(changed_pixels(&full, &disabled, (0, 420), (0, 70)) > 1000, "song information");
+    assert!(changed_pixels(&full, &disabled, (0, 420), (610, 720)) > 1000, "NPS, time, history");
+    assert!(changed_pixels(&full, &disabled, (450, 820), (520, 720)) > 1000, "spectrum and level");
 }

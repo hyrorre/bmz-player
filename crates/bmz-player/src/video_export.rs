@@ -93,6 +93,14 @@ pub fn run(options: VideoExportOptions, paths: &AppPaths, profile_id: Option<&st
     let timing =
         media.presentation_timing(simulation::SceneTiming::from_document(&decoded.document));
     crate::skin_loader::install_decoded_skin(&mut renderer, decoded, manifest)?;
+    prepared.play.audio.spectrum().set_enabled(renderer.play_skin_document().is_some_and(
+        |document| {
+            document
+                .qwilight_visualizer
+                .iter()
+                .any(|v| v.kind == bmz_render::skin::QwilightVisualizerKind::Spectrum)
+        },
+    ));
     // 実プレイと同じく、DST_NOTE2 を持つプレイスキンでは見逃しノーツを落として描く。
     prepared.play.session.missed_note_fall = renderer
         .play_skin_document()
