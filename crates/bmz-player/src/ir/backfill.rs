@@ -432,6 +432,9 @@ fn resolve_target_provider(
 }
 
 fn target_from_provider(provider: &IrProviderConfig) -> Result<TargetProvider> {
+    if crate::ir::bokutachi::is_config(provider) {
+        return Err(crate::ir::bokutachi::unsupported());
+    }
     if crate::ir::bms_ir::is_bms_ir_config(provider) {
         bail!("BMS-IR local score backfill is disabled");
     }

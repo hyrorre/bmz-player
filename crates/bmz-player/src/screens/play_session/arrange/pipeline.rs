@@ -74,6 +74,7 @@ pub(super) fn normal_applied_arrange(
     h_random_threshold_ms: Option<u32>,
 ) -> AppliedArrange {
     AppliedArrange {
+        source_key_mode: None,
         arrange: ArrangeOption::Normal,
         arrange_2p: ArrangeOption::Normal,
         double_option: DoubleOption::Off,
@@ -127,6 +128,7 @@ pub(super) fn apply_arrange_internal(
         let perm_usize: Vec<usize> = perm.iter().map(|&i| i as usize).collect();
         apply_lane_permutation(chart, &perm_usize);
         return AppliedArrange {
+            source_key_mode: None,
             arrange,
             arrange_2p: ArrangeOption::Normal,
             double_option: DoubleOption::Off,
@@ -155,6 +157,7 @@ pub(super) fn apply_arrange_internal(
             let perm = mirror_permutation(key_mode);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
+                source_key_mode: None,
                 arrange: ArrangeOption::Mirror,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
@@ -178,6 +181,7 @@ pub(super) fn apply_arrange_internal(
             let perm = random_lane_permutation(used_seed, key_mode, false, legacy_seed);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
+                source_key_mode: None,
                 arrange: ArrangeOption::Random,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
@@ -201,6 +205,7 @@ pub(super) fn apply_arrange_internal(
             let perm = rotate_lane_permutation(used_seed, key_mode, false, legacy_seed);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
+                source_key_mode: None,
                 arrange: ArrangeOption::RRandom,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
@@ -224,6 +229,7 @@ pub(super) fn apply_arrange_internal(
             let perm = random_lane_permutation(used_seed, key_mode, true, legacy_seed);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
+                source_key_mode: None,
                 arrange: ArrangeOption::RandomEx,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
@@ -247,6 +253,7 @@ pub(super) fn apply_arrange_internal(
             let perm = f_random_lane_permutation(used_seed, key_mode, arrange, legacy_seed);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
+                source_key_mode: None,
                 arrange,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
@@ -280,6 +287,7 @@ pub(super) fn apply_arrange_internal(
                 h_random_threshold_ms,
             );
             AppliedArrange {
+                source_key_mode: None,
                 arrange,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
@@ -349,6 +357,7 @@ pub fn apply_arrange_pair(
         let perm_usize: Vec<usize> = perm.iter().map(|&i| i as usize).collect();
         apply_lane_permutation(chart, &perm_usize);
         return AppliedArrange {
+            source_key_mode: None,
             arrange: arrange_1p,
             arrange_2p,
             double_option: DoubleOption::Off,
@@ -398,6 +407,7 @@ pub fn apply_arrange_pair(
     }
 
     AppliedArrange {
+        source_key_mode: None,
         arrange: arrange_1p,
         arrange_2p,
         double_option: DoubleOption::Off,

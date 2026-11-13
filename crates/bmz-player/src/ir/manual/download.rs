@@ -29,6 +29,9 @@ pub async fn download_scores(
     cancel: &IrManualCancel,
 ) -> Result<IrScoreDownloadReport> {
     let provider = selected_provider(ctx.ir_config, options.provider.as_deref())?.clone();
+    if crate::ir::bokutachi::is_config(&provider) {
+        return Err(crate::ir::bokutachi::unsupported());
+    }
     if !provider.enabled {
         bail!("IR provider '{}' is disabled", provider.provider);
     }

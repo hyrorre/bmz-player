@@ -25,6 +25,8 @@ static CREDENTIAL_REFRESH_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[derive(Debug, Default, Clone)]
 pub struct IrSyncReport {
+    /// Claimed jobs, including asynchronous imports still awaiting confirmation.
+    pub processed: u32,
     pub submitted: u32,
     pub failed: u32,
     pub messages: Vec<String>,
@@ -143,7 +145,7 @@ pub async fn ensure_fresh_credentials(
     let Some(credentials) = load_credentials(profile_root, provider_key, base_url)? else {
         bail!("not signed in to IR provider '{provider_key}'; run `bmz ir login` first");
     };
-    if !credentials.needs_refresh(now) {
+    if crate::ir::bokutachi::is_provider(provider_key) || !credentials.needs_refresh(now) {
         return Ok(credentials);
     }
     let client = BmzOfficialIrClient::anonymous(base_url)?;

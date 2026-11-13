@@ -14,6 +14,7 @@ pub(super) struct IrLoginUiState {
 
 #[derive(Default)]
 pub(super) struct IrLoginForm {
+    pub(super) api_key: String,
     pub(super) email: String,
     pub(super) password: String,
     credential_status: Option<IrCredentialStatus>,
@@ -178,6 +179,12 @@ impl IrDeviceKeyUiState {
         self.message = None;
         tokio::spawn(async move {
             let outcome = async {
+                anyhow::ensure!(
+                    !crate::ir::bokutachi::is_provider(&provider)
+                        && !crate::ir::bokutachi::is_provider(&provider_key),
+                    "{}",
+                    crate::ir::bokutachi::unsupported()
+                );
                 let credentials = crate::ir::sync::ensure_fresh_credentials(
                     &profile_root,
                     &provider_key,
@@ -359,7 +366,9 @@ impl IrLoginUiState {
                 entry.account_id = credentials.account_id;
                 entry.account_display_name = credentials.display_name;
                 entry.last_login_at = Some(now_unix_seconds());
-                if profile.ir.primary_provider.is_empty() || was_primary {
+                if !crate::ir::bokutachi::is_config(entry)
+                    && (profile.ir.primary_provider.is_empty() || was_primary)
+                {
                     profile.ir.primary_provider = credentials.provider;
                     entry.role = IrProviderRoleConfig::Primary;
                 }
@@ -393,6 +402,8 @@ impl IrLoginUiState {
         };
         let email = form.email.clone();
         let password = form.password.clone();
+        let api_key = form.api_key.clone();
+        self.provider_forms[form_index].api_key.clear();
         let (sender, receiver) = std::sync::mpsc::channel();
         self.receiver = Some(receiver);
         self.busy = true;
@@ -402,7 +413,11 @@ impl IrLoginUiState {
         tokio::spawn(async move {
             let outcome = async {
                 let origin = credential_origin(&base_url)?;
-                let tokens = if crate::ir::bms_ir::is_bms_ir_provider(&provider) {
+                let tokens = if crate::ir::bokutachi::is_provider(&provider) {
+                    crate::ir::bokutachi::BokutachiClient::new(&base_url)?
+                        .validate_key(&api_key)
+                        .await?
+                } else if crate::ir::bms_ir::is_bms_ir_provider(&provider) {
                     crate::ir::bms_ir::BmsIrClient::new(&base_url)?.login(&email, &password).await?
                 } else if crate::ir::rian_ir::is_rian_ir_provider(&provider) {
                     crate::ir::rian_ir::RianIrClient::new(&base_url)?

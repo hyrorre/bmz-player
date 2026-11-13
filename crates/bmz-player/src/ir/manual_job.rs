@@ -63,11 +63,13 @@ pub enum IrManualOp {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum IrQueueStatusFilter {
+    Ineligible,
+    Completed,
     #[default]
     Failed,
     Pending,
     Sending,
-    /// 成功済み以外すべて。
+    /// 成功・新規追加なしを除く未完了ジョブ。
     Unfinished,
 }
 
@@ -77,6 +79,12 @@ impl IrQueueStatusFilter {
             Self::Failed => &[IrScoreJobStatus::Failed],
             Self::Pending => &[IrScoreJobStatus::Pending],
             Self::Sending => &[IrScoreJobStatus::Sending],
+            Self::Completed => &[
+                IrScoreJobStatus::Succeeded,
+                IrScoreJobStatus::NoChange,
+                IrScoreJobStatus::NotCleared,
+            ],
+            Self::Ineligible => &[IrScoreJobStatus::Ineligible],
             Self::Unfinished => &[],
         }
     }

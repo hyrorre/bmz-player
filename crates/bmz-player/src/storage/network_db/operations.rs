@@ -550,7 +550,7 @@ impl NetworkDatabase {
     ) -> Result<Vec<IrScoreJobRecord>> {
         const SENDING_STALE_AFTER_SECONDS: i64 = 300;
         let retry_filter = if ignore_retry_backoff {
-            "status IN ('pending', 'failed')"
+            "status IN ('pending', 'failed', 'ineligible')"
         } else {
             "status IN ('pending', 'failed') AND next_attempt_at <= ?1"
         };
@@ -634,7 +634,7 @@ impl NetworkDatabase {
              WHERE provider = ?1
                AND account_id = ?2
                AND kind = ?3
-               AND status != 'succeeded'",
+               AND status NOT IN ('succeeded', 'no_change', 'not_cleared', 'ineligible')",
             params![provider, account_id, kind.as_str()],
             |row| row.get(0),
         )?;
@@ -665,7 +665,7 @@ impl NetworkDatabase {
              WHERE provider = ?3
                AND account_id = ?4
                AND kind = ?5
-               AND status != 'succeeded'"
+               AND status NOT IN ('succeeded', 'no_change', 'not_cleared', 'ineligible')"
         );
         let (claimable, leased, total): (i64, i64, i64) = self.conn.query_row(
             &sql,
@@ -777,6 +777,9 @@ impl NetworkDatabase {
         account_id: &str,
         now: i64,
     ) -> Result<u32> {
+        if crate::ir::bokutachi::is_provider(provider) {
+            return Err(crate::ir::bokutachi::unsupported());
+        }
         let submitted = {
             let mut statement = self.conn.prepare(
                 "SELECT DISTINCT local_score_id, remote_score_id
@@ -1028,9 +1031,9 @@ impl NetworkDatabase {
         }
         tx.execute(
             "UPDATE ir_score_jobs
-             SET status = 'succeeded', payload_json = '', last_error = '', updated_at = ?2
+             SET status = 'succeeded', payload_json = '', last_error = ?3, updated_at = ?2
              WHERE id = ?1",
-            params![record.job_id, record.submitted_at],
+            params![record.job_id, record.submitted_at, record.error],
         )?;
         tx.commit()?;
         Ok(())
@@ -1340,7 +1343,7 @@ fn ir_score_job_filter_sql(
         values.extend(filter.kinds.iter().map(|kind| Value::Text(kind.as_str().to_string())));
     }
     if filter.statuses.is_empty() {
-        clauses.push("status != 'succeeded'".to_string());
+        clauses.push("status NOT IN ('succeeded', 'no_change', 'not_cleared')".to_string());
     } else {
         clauses.push(format!("status IN ({})", sql_placeholders(filter.statuses.len())));
         values

@@ -2,6 +2,12 @@ use super::download::{now_unix_seconds, prompt_password};
 use super::*;
 use crate::ir::credentials::{credential_origin, validate_login_origin};
 
+fn prompt_api_key() -> Result<String> {
+    let key = rpassword::prompt_password("Bokutachi API key (submit_score): ")?;
+    anyhow::ensure!(!key.trim().is_empty(), "API key must not be empty");
+    Ok(key)
+}
+
 pub(super) async fn login(
     profile_paths: &ProfilePaths,
     profile: &mut ProfileConfig,
@@ -11,16 +17,20 @@ pub(super) async fn login(
     base_url: Option<String>,
 ) -> Result<()> {
     let is_bms_ir = crate::ir::bms_ir::is_bms_ir_provider(provider);
+    let is_bokutachi = crate::ir::bokutachi::is_provider(provider);
     let is_rian_ir = crate::ir::rian_ir::is_rian_ir_provider(provider);
     let base_url = resolve_login_base_url(profile, provider, base_url.as_deref())?;
     let origin = credential_origin(&base_url)?;
 
     let password = match password {
         Some(password) => password,
+        None if is_bokutachi => prompt_api_key()?,
         None => prompt_password()?,
     };
 
-    let tokens = if is_bms_ir {
+    let tokens = if is_bokutachi {
+        crate::ir::bokutachi::BokutachiClient::new(&base_url)?.validate_key(&password).await?
+    } else if is_bms_ir {
         crate::ir::bms_ir::BmsIrClient::new(&base_url)?.login(email, &password).await?
     } else if is_rian_ir {
         crate::ir::rian_ir::RianIrClient::new(&base_url)?.login(email, &password).await?
@@ -85,7 +95,7 @@ pub(super) async fn login(
     entry.account_id = account_id.clone();
     entry.account_display_name = display_name.clone();
     entry.last_login_at = Some(now);
-    if profile.ir.primary_provider.is_empty() || was_primary {
+    if !is_bokutachi && (profile.ir.primary_provider.is_empty() || was_primary) {
         profile.ir.primary_provider = provider_key.clone();
         entry.role = IrProviderRoleConfig::Primary;
     }
@@ -133,6 +143,11 @@ fn resolve_login_base_url(
 ) -> Result<String> {
     if crate::ir::bms_ir::is_bms_ir_provider(provider) {
         return crate::ir::bms_ir::fixed_base_url(requested_base_url);
+    }
+    if crate::ir::bokutachi::is_provider(provider) {
+        return Ok(requested_base_url
+            .unwrap_or(crate::ir::bokutachi::DEFAULT_BASE_URL)
+            .to_string());
     }
     let existing_base_url = profile
         .ir
@@ -185,6 +200,7 @@ pub(super) async fn logout(
         && let Some(entry) = entry
         && !crate::ir::rian_ir::is_rian_ir_config(entry)
         && !crate::ir::bms_ir::is_bms_ir_config(entry)
+        && !crate::ir::bokutachi::is_config(entry)
     {
         let client = BmzOfficialIrClient::new(&entry.base_url, credentials.access_token.clone())?;
         if let Err(error) = client.logout(&credentials.refresh_token).await {
@@ -217,7 +233,9 @@ pub(super) async fn logout(
 }
 
 pub(super) fn canonical_provider_protocol(provider: &str) -> &'static str {
-    if crate::ir::bms_ir::is_bms_ir_provider(provider) {
+    if crate::ir::bokutachi::is_provider(provider) {
+        crate::ir::bokutachi::PROVIDER
+    } else if crate::ir::bms_ir::is_bms_ir_provider(provider) {
         crate::ir::bms_ir::BMS_IR_PROVIDER
     } else if crate::ir::rian_ir::is_rian_ir_provider(provider) {
         crate::ir::rian_ir::RIAN_IR_PROVIDER
@@ -258,16 +276,34 @@ pub(super) async fn status(profile_paths: &ProfilePaths, profile: &ProfileConfig
                 println!("  account: {} ({})", credentials.display_name, credentials.account_id);
                 if entry.enabled && !entry.base_url.is_empty() {
                     let now = now_unix_seconds();
-                    match ensure_fresh_credentials(
-                        profile_paths.root_dir.as_path(),
-                        provider_key.unwrap_or(""),
-                        &entry.base_url,
-                        now,
-                    )
-                    .await
-                    {
+                    let fresh = if crate::ir::bokutachi::is_config(entry) {
+                        Ok(credentials)
+                    } else {
+                        ensure_fresh_credentials(
+                            profile_paths.root_dir.as_path(),
+                            provider_key.unwrap_or(""),
+                            &entry.base_url,
+                            now,
+                        )
+                        .await
+                    };
+                    match fresh {
                         Ok(fresh) => {
-                            if crate::ir::bms_ir::is_bms_ir_config(entry) {
+                            if crate::ir::bokutachi::is_config(entry) {
+                                match crate::ir::bokutachi::BokutachiClient::new(&entry.base_url)?
+                                    .validate_key(&fresh.access_token)
+                                    .await
+                                {
+                                    Ok(tokens) if tokens.player.id == fresh.account_id => println!(
+                                        "  connection: OK ({}; submission only)",
+                                        fresh.account_id
+                                    ),
+                                    Ok(_) => println!(
+                                        "  connection: NG (account changed; validate the API key again)"
+                                    ),
+                                    Err(error) => println!("  connection: NG ({error:#})"),
+                                }
+                            } else if crate::ir::bms_ir::is_bms_ir_config(entry) {
                                 match crate::ir::bms_ir::BmsIrClient::new(&entry.base_url)?
                                     .login(&fresh.account_id, &fresh.access_token)
                                     .await

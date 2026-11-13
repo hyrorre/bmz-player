@@ -4,13 +4,16 @@ pub(super) fn replay_paths_for_jobs(
     score_db_path: &Path,
     jobs: &[IrScoreJobRecord],
 ) -> Result<HashMap<i64, Option<String>>> {
-    if !jobs.iter().any(|job| job.kind == IrJobKind::Replay) {
+    let needs_replay = |job: &&IrScoreJobRecord| {
+        job.kind == IrJobKind::Replay && !crate::ir::bokutachi::is_provider(&job.provider)
+    };
+    if !jobs.iter().any(|job| needs_replay(&job)) {
         return Ok(HashMap::new());
     }
     let score_db = ScoreDatabase::open(score_db_path)?;
     Ok(jobs
         .iter()
-        .filter(|job| job.kind == IrJobKind::Replay)
+        .filter(needs_replay)
         .map(|job| {
             let replay_path = match score_db.replay_path_for_history(job.local_score_id) {
                 Ok(path) => path,
@@ -95,6 +98,7 @@ pub(super) fn replay_job_for_score(
     if job.kind != IrJobKind::Score
         || crate::ir::rian_ir::is_rian_ir_provider(&job.provider)
         || crate::ir::bms_ir::is_bms_ir_provider(&job.provider)
+        || crate::ir::bokutachi::is_provider(&job.provider)
     {
         return Ok(None);
     }
@@ -128,6 +132,9 @@ pub(super) async fn submit_replay_job(
     local_score_id: i64,
     credentials: IrStoredCredentials,
 ) -> Result<()> {
+    if crate::ir::bokutachi::is_config(provider) {
+        return Err(crate::ir::bokutachi::unsupported());
+    }
     if crate::ir::bms_ir::is_bms_ir_config(provider) {
         bail!("BMS-IR replay upload is not supported");
     }
@@ -178,6 +185,9 @@ pub(super) async fn submit_job_payload(
     credentials: IrStoredCredentials,
     include_ranking: bool,
 ) -> Result<(String, String)> {
+    if crate::ir::bokutachi::is_config(provider) {
+        anyhow::bail!("Bokutachi jobs require the durable import worker");
+    }
     let mut payload: IrScoreSubmission =
         serde_json::from_str(payload_json).context("failed to parse stored IR payload")?;
     normalize_legacy_score_seed_options(&mut payload);
@@ -225,6 +235,9 @@ pub(super) fn ensure_score_payload_allowed(
     provider: &IrProviderConfig,
     payload: &IrScoreSubmission,
 ) -> Result<()> {
+    if crate::ir::bokutachi::is_config(provider) {
+        return crate::ir::bokutachi::context(payload).map(|_| ());
+    }
     if crate::ir::bms_ir::is_bms_ir_config(provider) {
         return crate::ir::bms_ir::ensure_score_payload_supported(payload);
     }

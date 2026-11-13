@@ -39,6 +39,27 @@ pub async fn resend_job(
     kind: IrJobKind,
     local_score_id: i64,
 ) -> Result<IrManualResendReport> {
+    resend_job_with_retry(
+        ctx,
+        network_db,
+        provider_key,
+        account_id,
+        kind,
+        local_score_id,
+        IrJobRetryFilter::ExplicitResend,
+    )
+    .await
+}
+
+async fn resend_job_with_retry(
+    ctx: &IrSyncContext<'_>,
+    network_db: &mut NetworkDatabase,
+    provider_key: &str,
+    account_id: &str,
+    kind: IrJobKind,
+    local_score_id: i64,
+    retry: IrJobRetryFilter,
+) -> Result<IrManualResendReport> {
     let report = sync_pending_ir_jobs_filtered(
         network_db,
         ctx.score_db,
@@ -48,11 +69,11 @@ pub async fn resend_job(
         IrSyncJobFilter { provider_key, account_id, kind, local_score_id: Some(local_score_id) },
         now_unix_seconds(),
         1,
-        IrJobRetryFilter::IgnoreBackoff,
+        retry,
         IrSyncThrottle::none(),
     )
     .await?;
-    let claimed = report.submitted.saturating_add(report.failed) > 0;
+    let claimed = report.processed > 0;
     Ok(IrManualResendReport {
         targeted: 1,
         submitted: report.submitted,
@@ -108,13 +129,14 @@ pub async fn resend_failed_jobs(
             index: u32::try_from(index + 1).unwrap_or(u32::MAX),
             limit,
         });
-        match resend_job(
+        match resend_job_with_retry(
             ctx,
             network_db,
             &job.provider,
             &job.account_id,
             job.kind,
             job.local_score_id,
+            IrJobRetryFilter::IgnoreBackoff,
         )
         .await
         {

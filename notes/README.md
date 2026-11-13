@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-13 | [Bokutachi PR #86のレビュー対応](2026/2026-11-13-bokutachi-review.md) |
 | 2026-11-13 | [デフォルト描画状態の暗黙アセット探索と起動診断](2026/2026-11-13-startup-default-and-diagnostics.md) |
 | 2026-11-13 | [Luxez-Flatの詳細オプションで波ダッシュの字形を検査する](2026/2026-11-13-luxez-detail-option-glyphs.md) |
 | 2026-11-12 | [F1で開くリザルトIRランキングのスクロール](2026/2026-11-12-result-ir-scroll.md) |
@@ -56,6 +57,8 @@
 | 2026-11-10 | [曲更新がbeatorajaより遅い問題の調査と改善](2026/2026-11-10-song-update-performance.md) |
 | 2026-11-09 | [Rust実行経路の停止・負荷候補の計測と修正](2026/2026-11-09-rust-frame-stalls.md) |
 | 2026-11-09 | [Surface再設定失敗後のクラッシュ経路](2026/2026-11-09-surface-reconfiguration-recovery.md) |
+| 2026-11-09 | [Bokutachiの新規単曲送信](2026/2026-11-09-bokutachi-submission.md) |
+| 2026-11-09 | [Bokutachiのコース各曲送信とBMS段位更新](2026/2026-11-09-bokutachi-courses.md) |
 | 2026-11-08 | [スレッド分離後のスキンtimer更新とLN残光](2026/2026-11-08-play-skin-timer-projection.md) |
 | 2026-11-08 | [READY中のターンテーブル回転停止](2026/2026-11-08-ready-turntable-rotation.md) |
 | 2026-11-08 | [音声予約の固定と選曲・HS変更時の移動](2026/2026-11-08-play-display-and-select-motion.md) |
