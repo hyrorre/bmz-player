@@ -187,6 +187,149 @@ fn frame(d: &SkinDestinationDef, i: usize) -> &SkinAnimationDef {
 }
 
 #[test]
+fn qwilight_live_offsets_match_fresh_load_and_reset_without_assets_or_drift() {
+    use bmz_render::skin::QwilightOffsetValue;
+    let root = fixture();
+    let base = decode(root.path(), BTreeMap::new());
+    let named: BTreeMap<_, _> = base
+        .document
+        .offset
+        .iter()
+        .filter(|o| o.id >= 1100)
+        .map(|o| (o.name.clone(), LuaSkinOffsetValue { x: 31, y: 17, w: 41, h: -9, a: -71, r: 0 }))
+        .collect();
+    let expected = decode(root.path(), named.clone());
+    let values = base
+        .document
+        .offset
+        .iter()
+        .filter_map(|o| {
+            let v = named.get(&o.name)?;
+            Some((o.id, QwilightOffsetValue { x: v.x, y: v.y, w: v.w, h: v.h, a: v.a }))
+        })
+        .collect();
+    let mut renderer = Renderer::default();
+    install_decoded_skin(&mut renderer, base, bmz_render::skin::default_skin_manifest()).unwrap();
+    let original = renderer.play_skin_document().unwrap().clone();
+    fs::rename(root.path().join("skin.yaml"), root.path().join("unavailable.yaml")).unwrap();
+    for _ in 0..200 {
+        assert!(renderer.set_play_qwilight_offsets(&values));
+        let live = renderer.play_skin_document().unwrap();
+        assert_eq!(live.destination, expected.document.destination);
+        assert_eq!(live.judge, expected.document.judge);
+        assert_eq!(live.text, expected.document.text);
+        assert_eq!(live.slider, expected.document.slider);
+        assert_eq!(live.qwilight_visualizer, expected.document.qwilight_visualizer);
+        assert_eq!(live.source, original.source);
+        assert!(renderer.set_play_qwilight_offsets(&BTreeMap::new()));
+        assert_eq!(renderer.play_skin_document().unwrap(), &original);
+    }
+}
+
+#[test]
+#[ignore = "requires installed Qwilight skins and GPU; set BMZ_QWILIGHT_SKIN_ROOT"]
+fn qwilight_installed_live_offset_gpu_and_cost() {
+    use bmz_render::skin::QwilightOffsetValue;
+    let root = PathBuf::from(std::env::var_os("BMZ_QWILIGHT_SKIN_ROOT").expect("skin root"));
+    let (mut renderer, snapshot) = prepare_installed_qwilight(
+        &root,
+        std::slice::from_ref(&root),
+        "CR_minimal",
+        KeyMode::K6,
+        6,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        0.0,
+    );
+    let _ = render_qwilight_snapshot(&mut renderer, snapshot.clone());
+    let base = render_qwilight_snapshot(&mut renderer, snapshot.clone());
+    let mut values = BTreeMap::from([
+        (1147, QwilightOffsetValue { x: 40, h: 6, ..Default::default() }),
+        (1135, QwilightOffsetValue { x: 35, w: 40, h: -50, a: -40, ..Default::default() }),
+        (1106, QwilightOffsetValue { x: 50, ..Default::default() }),
+    ]);
+    let start = Instant::now();
+    for i in 0..1000 {
+        values.get_mut(&1147).unwrap().x = i % 80;
+        assert!(renderer.set_play_qwilight_offsets(&values));
+    }
+    eprintln!(
+        "CR_minimal live layout average: {:.1} us/edit (1000 edits, no decode/upload)",
+        start.elapsed().as_micros() as f64 / 1000.0
+    );
+    let moved = render_qwilight_snapshot(&mut renderer, snapshot.clone());
+    let changed = changed_pixels(&base, &moved, (0, 1280), (0, 720));
+    assert!(changed > 1000, "live layout did not reach GPU: {changed}");
+    assert!(renderer.set_play_qwilight_offsets(&BTreeMap::new()));
+    let reset = render_qwilight_snapshot(&mut renderer, snapshot);
+    assert_eq!(base, reset, "reset restores the exact original pixels");
+    eprintln!("CR_minimal live GPU: {changed} changed pixels; reset identical");
+}
+
+#[test]
+#[ignore = "requires installed Qwilight skins and GPU; set BMZ_QWILIGHT_SKIN_ROOT"]
+fn qwilight_installed_reload_reuses_gpu_atlases() {
+    let root = PathBuf::from(std::env::var_os("BMZ_QWILIGHT_SKIN_ROOT").expect("skin root"));
+    let path = root.join("CR_minimal/CR_minimal.yaml");
+    let textures = Arc::new(Mutex::new(SkinGpuTextureCache::default()));
+    let state = LuaLoadRuntimeState {
+        number_values: BTreeMap::from([(bmz_render::skin::SKIN_REF_BMZ_KEY_MODE, 6)]),
+        ..Default::default()
+    };
+    let decode = || {
+        decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+            pinned_sources: None,
+            skin_path: &path,
+            kind: SkinKind::Play,
+            options: &BTreeMap::new(),
+            files: &BTreeMap::new(),
+            runtime_state: &state,
+            library_roots: std::slice::from_ref(&root),
+            document_cache: None,
+            source_cache: None,
+            texture_cache: Some(textures.clone()),
+            font_cache: None,
+            installed_fonts: None,
+        })
+        .unwrap()
+    };
+    let mut renderer = Renderer::default();
+    renderer
+        .attach_offscreen(bmz_render::renderer::SurfaceSize { width: 320, height: 180 })
+        .unwrap();
+    let uploader = renderer.gpu_uploader().unwrap();
+    let start = Instant::now();
+    let cold = decode();
+    let cacheable = cold.sources.iter().filter(|s| s.cache_key.is_some()).count();
+    let uncached = cold.sources.len() - cacheable;
+    let mut cold = upload_decoded_skin_with_texture_cache(&uploader, cold, Some(&textures));
+    // Cache entries become reusable only after the UI thread installs handles.
+    for source in &mut cold.prepared {
+        if let Some(prepared) = source.prepared.take() {
+            renderer.insert_prepared_texture(TextureId(source.texture.0), prepared);
+            if let Some(key) = source.cache_key.clone() {
+                textures.lock().unwrap().insert(key, source.texture, source.size);
+            }
+        }
+    }
+    let cold_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let start = Instant::now();
+    let warm = decode();
+    assert_eq!(warm.stats.source_texture_cache_hits, cacheable);
+    assert!(warm.sources.iter().filter(|s| s.cache_key.is_some()).all(|s| s.asset.is_none()));
+    let warm = upload_decoded_skin_with_texture_cache(&uploader, warm, Some(&textures));
+    assert!(warm.upload_stats.uploaded_source_count <= uncached);
+    eprintln!(
+        "CR_minimal reload: cold {:.2} ms / {} uploaded bytes; warm {:.2} ms / {} uploaded bytes; {} cached sources",
+        cold_ms,
+        cold.upload_stats.uploaded_source_bytes,
+        start.elapsed().as_secs_f64() * 1000.0,
+        warm.upload_stats.uploaded_source_bytes,
+        cacheable
+    );
+}
+
+#[test]
 fn qwilight_element_offsets_bind_requested_controls_and_preserve_exclusions() {
     let root = fixture();
     let base = decode(root.path(), BTreeMap::new());

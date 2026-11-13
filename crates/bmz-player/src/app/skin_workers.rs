@@ -15,6 +15,10 @@ type PlaySkinChartResult =
     std::result::Result<Arc<crate::screens::play_snapshot::PlaySkinChartFacts>, String>;
 
 impl PlaySkinChartState {
+    #[cfg(test)]
+    pub(super) fn wait(&self) -> PlaySkinChartResult {
+        self.wait_unless_cancelled(|| false)
+    }
     pub(super) fn finish(&self, facts: PlaySkinChartResult) {
         let mut value = self.0.facts.lock().unwrap_or_else(|error| error.into_inner());
         if value.is_none() {
@@ -23,10 +27,21 @@ impl PlaySkinChartState {
         }
     }
 
-    pub(super) fn wait(&self) -> PlaySkinChartResult {
+    pub(super) fn wait_unless_cancelled(
+        &self,
+        cancelled: impl Fn() -> bool,
+    ) -> PlaySkinChartResult {
         let mut value = self.0.facts.lock().unwrap_or_else(|error| error.into_inner());
         while value.is_none() {
-            value = self.0.ready.wait(value).unwrap_or_else(|error| error.into_inner());
+            if cancelled() {
+                return Err("skin decode cancelled".into());
+            }
+            value = self
+                .0
+                .ready
+                .wait_timeout(value, Duration::from_millis(20))
+                .unwrap_or_else(|error| error.into_inner())
+                .0;
         }
         value.as_ref().unwrap().clone()
     }
@@ -123,118 +138,139 @@ pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, mut request: Ski
     request.runtime_state.screen_size = pipeline.screen_size;
     request.runtime_state.file_store = Some(pipeline.lua_file_store.clone());
     pipeline.record_screen_request(request.clone());
-    let SkinDecodeRequest {
-        pinned_sources,
-        generation,
-        path,
-        kind,
-        options,
-        files,
-        mut runtime_state,
-        library_roots,
-        resolved_path,
-        access_error,
-        installed_font_cache,
-        lr2_continue_fallback,
-        play_chart_state,
-    } = request;
+    let kind = request.kind;
+    let control = pipeline.decode_control.clone();
+    if !control.enqueue(request) {
+        return;
+    }
     let tx = pipeline.decode_tx.clone();
     let source_cache = pipeline.source_asset_cache.clone();
     let document_cache = pipeline.document_cache.clone();
     let texture_cache = pipeline.gpu_texture_cache.clone();
     let font_cache = pipeline.font_cache.clone();
-    let send_path = path.clone();
-    let queued_at = Instant::now();
     let worker = thread::Builder::new()
         .name(format!("skin-decode-{:?}", kind))
         .spawn(move || {
-            let chart_facts = play_chart_state.map(|state| state.wait()).transpose();
-            let decode_started_at = Instant::now();
-            let result = (|| {
-                if let Some(error) = access_error {
-                    anyhow::bail!(error);
-                }
-                let skin_path = resolved_path.as_deref().unwrap_or(&path);
-                if let Some(facts) = chart_facts.map_err(anyhow::Error::msg)? {
-                    apply_play_chart_facts_lua_load_state(&mut runtime_state, &facts);
-                }
-                if let Some(fallback) = lr2_continue_fallback {
-                    let assets = bmz_skin::SkinPathContext::new(
-                        &fallback.play_skin,
-                        library_roots.iter().cloned(),
-                    )
-                    .and_then(|context| {
-                        crate::skin_loader::resolve_lr2_continue_assets_with_context(
-                            &context,
-                            &fallback.runtime_state,
-                            Some(document_cache.clone()),
-                        )
-                    });
-                    match assets {
-                        Ok(assets) => {
-                            runtime_state.lr2_continue_assets = merge_lr2_continue_assets(
-                                assets,
-                                &runtime_state.lr2_continue_assets,
-                            )
-                            .into();
-                        }
-                        Err(error) => tracing::warn!(
-                            play_skin = %fallback.play_skin.display(),
-                            error = %format_error_chain(&error),
-                            "failed to resolve LR2 CONTINUE fallback assets"
-                        ),
-                    }
-                }
-                for provider in lr2_continue_theme_providers(skin_path, &library_roots) {
-                    let assets =
-                        bmz_skin::SkinPathContext::new(&provider, library_roots.iter().cloned())
-                            .and_then(|context| {
-                                crate::skin_loader::resolve_lr2_continue_assets_with_context(
-                                    &context,
-                                    &bmz_skin::LuaLoadRuntimeState::default(),
-                                    Some(document_cache.clone()),
-                                )
-                            });
-                    match assets {
-                        Ok(assets) => {
-                            runtime_state.lr2_continue_assets = fill_empty_lr2_continue_assets(
-                                assets,
-                                &runtime_state.lr2_continue_assets,
-                            )
-                            .into();
-                        }
-                        Err(error) => tracing::warn!(
-                            provider = %provider.display(),
-                            error = %format_error_chain(&error),
-                            "failed to resolve same-theme LR2 CONTINUE assets"
-                        ),
-                    }
-                }
-                decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
-                    pinned_sources: Some(&pinned_sources),
-                    skin_path,
+            while let Some((request, queued_at)) = control.next(kind) {
+                let SkinDecodeRequest {
+                    pinned_sources,
+                    generation,
+                    path,
                     kind,
-                    options: &options,
-                    files: &files,
-                    runtime_state: &runtime_state,
-                    library_roots: &library_roots,
-                    document_cache: Some(document_cache),
-                    source_cache: Some(source_cache),
-                    texture_cache: Some(texture_cache),
-                    font_cache: Some(font_cache),
-                    installed_fonts: Some(installed_font_cache),
-                })
-            })();
-            let decode_finished_at = Instant::now();
-            let _ = tx.send(PendingSkinResult {
-                generation,
-                path: send_path,
-                kind,
-                queued_at,
-                decode_started_at,
-                decode_finished_at,
-                result,
-            });
+                    options,
+                    files,
+                    mut runtime_state,
+                    library_roots,
+                    resolved_path,
+                    access_error,
+                    installed_font_cache,
+                    lr2_continue_fallback,
+                    play_chart_state,
+                } = request;
+                if !control.current(kind, generation) {
+                    continue;
+                }
+                let chart_facts = play_chart_state
+                    .map(|state| state.wait_unless_cancelled(|| !control.current(kind, generation)))
+                    .transpose();
+                if !control.current(kind, generation) {
+                    continue;
+                }
+                let decode_started_at = Instant::now();
+                let result = (|| {
+                    if let Some(error) = access_error {
+                        anyhow::bail!(error);
+                    }
+                    let skin_path = resolved_path.as_deref().unwrap_or(&path);
+                    if let Some(facts) = chart_facts.map_err(anyhow::Error::msg)? {
+                        apply_play_chart_facts_lua_load_state(&mut runtime_state, &facts);
+                    }
+                    if let Some(fallback) = lr2_continue_fallback {
+                        let assets = bmz_skin::SkinPathContext::new(
+                            &fallback.play_skin,
+                            library_roots.iter().cloned(),
+                        )
+                        .and_then(|context| {
+                            crate::skin_loader::resolve_lr2_continue_assets_with_context(
+                                &context,
+                                &fallback.runtime_state,
+                                Some(document_cache.clone()),
+                            )
+                        });
+                        match assets {
+                            Ok(assets) => {
+                                runtime_state.lr2_continue_assets = merge_lr2_continue_assets(
+                                    assets,
+                                    &runtime_state.lr2_continue_assets,
+                                )
+                                .into();
+                            }
+                            Err(error) => tracing::warn!(
+                                play_skin = %fallback.play_skin.display(),
+                                error = %format_error_chain(&error),
+                                "failed to resolve LR2 CONTINUE fallback assets"
+                            ),
+                        }
+                    }
+                    for provider in lr2_continue_theme_providers(skin_path, &library_roots) {
+                        let assets = bmz_skin::SkinPathContext::new(
+                            &provider,
+                            library_roots.iter().cloned(),
+                        )
+                        .and_then(|context| {
+                            crate::skin_loader::resolve_lr2_continue_assets_with_context(
+                                &context,
+                                &bmz_skin::LuaLoadRuntimeState::default(),
+                                Some(document_cache.clone()),
+                            )
+                        });
+                        match assets {
+                            Ok(assets) => {
+                                runtime_state.lr2_continue_assets = fill_empty_lr2_continue_assets(
+                                    assets,
+                                    &runtime_state.lr2_continue_assets,
+                                )
+                                .into();
+                            }
+                            Err(error) => tracing::warn!(
+                                provider = %provider.display(),
+                                error = %format_error_chain(&error),
+                                "failed to resolve same-theme LR2 CONTINUE assets"
+                            ),
+                        }
+                    }
+                    crate::skin_loader::decode_beatoraja_skin_request_cancellable(
+                        BeatorajaSkinDecodeRequest {
+                            pinned_sources: Some(&pinned_sources),
+                            skin_path,
+                            kind,
+                            options: &options,
+                            files: &files,
+                            runtime_state: &runtime_state,
+                            library_roots: &library_roots,
+                            document_cache: Some(document_cache.clone()),
+                            source_cache: Some(source_cache.clone()),
+                            texture_cache: Some(texture_cache.clone()),
+                            font_cache: Some(font_cache.clone()),
+                            installed_fonts: Some(installed_font_cache),
+                        },
+                        &|| !control.current(kind, generation),
+                    )
+                })();
+                let decode_finished_at = Instant::now();
+                if !control.current(kind, generation) {
+                    continue;
+                }
+                let _ = tx.send(PendingSkinResult {
+                    generation,
+                    path,
+                    kind,
+                    queued_at,
+                    decode_started_at,
+                    decode_finished_at,
+                    result,
+                });
+            }
         })
         .expect("failed to spawn skin decode thread");
     pipeline.track_decode_worker(worker);
@@ -248,6 +284,7 @@ pub(super) fn skin_upload_worker(
     uploader: bmz_render::renderer::GpuUploader,
     texture_cache: SharedSkinGpuTextureCache,
     event_proxy: EventLoopProxy<AppUserEvent>,
+    control: Arc<super::skin_pipeline::SkinDecodeControl>,
 ) {
     while let Ok(PendingSkinResult {
         generation,
@@ -259,11 +296,17 @@ pub(super) fn skin_upload_worker(
         result,
     }) = decode_rx.recv()
     {
+        if !control.current(kind, generation) {
+            continue;
+        }
         let upload_started_at = Instant::now();
         let uploaded = result.map(|decoded| {
             upload_decoded_skin_with_texture_cache(&uploader, decoded, Some(&texture_cache))
         });
         let upload_finished_at = Instant::now();
+        if !control.current(kind, generation) {
+            continue;
+        }
         if upload_tx
             .send(PendingUploadResult {
                 generation,

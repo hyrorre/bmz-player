@@ -1,6 +1,6 @@
 //! Read-only ZIP assets. `archive.zip!skin/entry` never extracts files and does
 //! not collide with the song resource registry's `archive.zip!/entry` names.
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -12,7 +12,13 @@ use zip::ZipArchive;
 
 const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_ENTRIES: usize = 32_768;
-type Archive = Arc<Mutex<ZipArchive<BufReader<File>>>>;
+type Archive = Arc<IndexedArchive>;
+struct IndexedArchive {
+    zip: Mutex<ZipArchive<BufReader<File>>>,
+    names: Vec<String>,
+    exact: HashMap<String, String>,
+    folded: HashMap<String, String>,
+}
 type CacheEntry = (PathBuf, Option<SystemTime>, u64, Archive);
 
 fn archive(path: &Path) -> Result<Archive> {
@@ -27,7 +33,26 @@ fn archive(path: &Path) -> Result<Archive> {
     }
     let zip = ZipArchive::new(BufReader::new(File::open(path)?))?;
     ensure!(zip.len() <= MAX_ENTRIES, "skin ZIP contains too many entries");
-    let zip = Arc::new(Mutex::new(zip));
+    let mut exact = HashMap::new();
+    let mut folded: HashMap<String, String> = HashMap::new();
+    for stored in zip.file_names() {
+        let name = normalized_entry(stored);
+        if name.ends_with('/') || validate_entry(&name).is_err() {
+            continue;
+        }
+        exact.entry(name.clone()).or_insert_with(|| stored.to_string());
+        folded
+            .entry(name.to_ascii_lowercase())
+            .and_modify(|old| {
+                if stored < old.as_str() {
+                    *old = stored.to_string();
+                }
+            })
+            .or_insert_with(|| stored.to_string());
+    }
+    let mut names: Vec<_> = exact.keys().cloned().collect();
+    names.sort();
+    let zip = Arc::new(IndexedArchive { zip: Mutex::new(zip), names, exact, folded });
     cache.retain(|(p, _, _, _)| p != path);
     while cache.len() >= 4 {
         cache.pop_front();
@@ -66,25 +91,16 @@ pub(super) fn split_path(path: &Path) -> Result<Option<(PathBuf, String)>> {
 /// drive paths) are left out instead of making the whole archive unusable.
 pub fn zip_entry_names(path: &Path) -> Result<Vec<String>> {
     let archive = archive(path)?;
-    let zip = archive.lock().unwrap_or_else(|e| e.into_inner());
-    let mut names: Vec<_> = zip
-        .file_names()
-        .map(normalized_entry)
-        .filter(|name| !name.ends_with('/') && validate_entry(name).is_ok())
-        .collect();
-    names.sort();
-    names.dedup();
-    Ok(names)
+    Ok(archive.names.clone())
 }
 
 pub(super) fn find_entry(path: &Path, requested: &str) -> Result<String> {
     let archive = archive(path)?;
-    let zip = archive.lock().unwrap_or_else(|e| e.into_inner());
-    // `requested` is validated, so a traversal entry never matches it.
-    let found = zip.file_names().find(|name| normalized_entry(name) == requested).or_else(|| {
-        zip.file_names().filter(|name| normalized_entry(name).eq_ignore_ascii_case(requested)).min()
-    });
-    found.map(str::to_string).ok_or_else(|| {
+    let found = archive
+        .exact
+        .get(requested)
+        .or_else(|| archive.folded.get(&requested.to_ascii_lowercase()));
+    found.cloned().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("skin ZIP entry not found: {requested}"),
@@ -97,7 +113,7 @@ pub(super) fn find_entry(path: &Path, requested: &str) -> Result<String> {
 pub(super) fn read_entry(path: &Path, name: &str) -> Result<Vec<u8>> {
     validate_entry(&normalized_entry(name))?;
     let archive = archive(path)?;
-    let mut zip = archive.lock().unwrap_or_else(|e| e.into_inner());
+    let mut zip = archive.zip.lock().unwrap_or_else(|e| e.into_inner());
     let mut entry = zip.by_name(name)?;
     ensure!(entry.size() <= MAX_ENTRY_BYTES, "skin ZIP entry is too large");
     let mut bytes = Vec::with_capacity(entry.size() as usize);

@@ -35,7 +35,11 @@ impl WinitApp {
                 offsets: true,
             };
         }
-        let select_last_played_at = self.select_snapshot().last_played_at;
+        let select_last_played_at = if request.select || request.decide {
+            self.select_snapshot().last_played_at
+        } else {
+            None
+        };
         let texture_request = SkinReloadRequest { result: false, course_result: false, ..request };
         let frontend_chart = if request.decide {
             Some(self.decide_load_chart_snapshot())
@@ -89,6 +93,40 @@ impl WinitApp {
             && skin_reload_request_includes_key_mode(request, key_mode)
         {
             let selection = play_skin_selection_for_session(&skin, key_mode, session_mode);
+            let mut offset_state = runtime_state.clone();
+            offset_state.offset_values.clear();
+            offset_state.offset_id_values.clear();
+            apply_skin_offsets_to_lua_runtime_state(&mut offset_state, selection.offsets);
+            if request.offsets
+                && old_path == selection.path.trim()
+                && old_options == *selection.options
+                && old_files == *selection.files
+                && bmz_skin::is_qwilight_play_skin_path(Path::new(selection.path))
+                && qwilight_native_offsets_equal(&runtime_state, &offset_state)
+                && (self.is_kind_pending_decode(SkinKind::Play)
+                    || self.skin.skin_pipeline.has_current_install(SkinKind::Play))
+            {
+                // A pending replacement gets the newest settings at installation.
+                // Do not invalidate that generation or start another asset decode.
+                if !self.is_kind_pending_decode(SkinKind::Play)
+                    && let Some(document) = self.renderer.play_skin_document()
+                {
+                    let values = qwilight_offset_values_from_config(selection.offsets, document);
+                    self.renderer.set_play_qwilight_offsets(&values);
+                }
+                self.skin.last_play_skin_signature = Some((
+                    key_mode,
+                    session_mode,
+                    old_path,
+                    old_options,
+                    old_files,
+                    offset_state,
+                    play_preload_generation,
+                ));
+                self.frame.request_immediate_frame();
+                self.request_redraw();
+                return;
+            }
             let play_options_only = self.play.active_play.is_some()
                 && old_path == selection.path.trim()
                 && old_files == *selection.files

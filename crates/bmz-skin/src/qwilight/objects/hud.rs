@@ -32,7 +32,8 @@ impl Builder {
             if !self.image(&part, path.into_iter().collect(), 0, None) {
                 self.push(
                     "text",
-                    json!({"id":part,"constantText":label,"size":self.element_height(10,height).round() as i32}),
+                    json!({"id":part,"constantText":label,"size":height.round() as i32,
+                        "qwOffsetSize":self.metric(10,height,None,false)}),
                 );
             }
         }
@@ -90,6 +91,7 @@ impl Builder {
                         dest["offsets"] = json!([OFFSET_LIFT, OFFSET_JUDGE]);
                         // The same 1 second decay as Qwilight's judgment-meter overlay.
                         dest["dst"][1]["a"] = json!(0);
+                        dest["dst"][1]["qwOffsetRect"]["fade"] = json!(true);
                     }
                 }
             }

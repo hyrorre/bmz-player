@@ -637,6 +637,18 @@ impl Renderer {
         self.play_skin_context.set_user_selected_options(enabled_options)
     }
 
+    /// Updates only layout; texture handles, fonts and animation timers stay installed.
+    pub fn set_play_qwilight_offsets(
+        &mut self,
+        values: &std::collections::BTreeMap<i32, bmz_skin_document::QwilightOffsetValue>,
+    ) -> bool {
+        let updated = self.play_skin_context.apply_qwilight_offsets(values);
+        if updated {
+            self.deferred.forget_sequences();
+        }
+        updated
+    }
+
     pub fn play_skin_timer_animation_duration_ms(&self, timer: i32) -> i32 {
         self.play_skin_context.timer_animation_duration_ms(timer)
     }

@@ -203,6 +203,13 @@ impl SkinContext {
         true
     }
 
+    pub fn apply_qwilight_offsets(
+        &mut self,
+        values: &std::collections::BTreeMap<i32, bmz_skin_document::QwilightOffsetValue>,
+    ) -> bool {
+        self.document.as_mut().is_some_and(|document| document.apply_qwilight_offsets(values))
+    }
+
     pub fn with_play_graphs(
         &self,
         judge_graph_density: Vec<u8>,

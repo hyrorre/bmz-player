@@ -321,6 +321,7 @@ pub use install::{
 pub(crate) use path::RANDOM_FILE_SELECTION;
 
 use cache::*;
+pub(crate) use decode::decode_beatoraja_skin_request_cancellable;
 use decode::*;
 use install::*;
 use path::*;

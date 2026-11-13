@@ -12,6 +12,57 @@ use crate::skin_loader::{
 
 use super::{PendingSkinResult, PendingUploadResult, SkinDecodeRequest};
 
+/// One running decode and one replaceable waiting request per scene. Generations
+/// are shared with the workers so stale work stops before asset decode/upload.
+#[derive(Default)]
+pub(super) struct SkinDecodeControl {
+    state: Mutex<SkinDecodeControlState>,
+}
+
+#[derive(Default)]
+struct SkinDecodeControlState {
+    generations: SkinReloadGenerations,
+    running: std::collections::HashSet<SkinKind>,
+    waiting: HashMap<SkinKind, (SkinDecodeRequest, std::time::Instant)>,
+    stopped: bool,
+}
+
+impl SkinDecodeControl {
+    pub(super) fn generation(&self, kind: SkinKind) -> u64 {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).generations.current(kind)
+    }
+    fn bump(&self, kind: SkinKind) -> u64 {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).generations.bump(kind)
+    }
+    pub(super) fn current(&self, kind: SkinKind, generation: u64) -> bool {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        !state.stopped && state.generations.current(kind) == generation
+    }
+    /// True assigns ownership of the scene's drain loop to the caller.
+    pub(super) fn enqueue(&self, request: SkinDecodeRequest) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.stopped {
+            return false;
+        }
+        let kind = request.kind;
+        state.waiting.insert(kind, (request, std::time::Instant::now()));
+        state.running.insert(kind)
+    }
+    pub(super) fn next(&self, kind: SkinKind) -> Option<(SkinDecodeRequest, std::time::Instant)> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(request) = state.waiting.remove(&kind) {
+            return Some(request);
+        }
+        state.running.remove(&kind);
+        None
+    }
+    fn stop(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.stopped = true;
+        state.waiting.clear();
+    }
+}
+
 pub(super) const MAX_PENDING_SKIN_UPLOADS: usize = 1;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -147,7 +198,7 @@ pub(super) struct SkinPipelineRuntime {
     pub(super) installed_font_cache: HashMap<String, SkinFontCacheKey>,
     pub(super) gpu_texture_cache: SharedSkinGpuTextureCache,
     pending: PendingSkinKinds,
-    pub(super) generations: SkinReloadGenerations,
+    pub(super) decode_control: Arc<SkinDecodeControl>,
     /// Files Lua skins write (rotation logs, play history); beatoraja keeps
     /// them in the skin folder, BMZ in memory until the app exits.
     pub(super) lua_file_store: bmz_skin::LuaSkinFileStore,
@@ -225,7 +276,7 @@ impl SkinPipelineRuntime {
             installed_font_cache: HashMap::new(),
             gpu_texture_cache: Arc::new(Mutex::new(SkinGpuTextureCache::default())),
             pending: PendingSkinKinds::default(),
-            generations: SkinReloadGenerations::default(),
+            decode_control: Arc::default(),
             lua_file_store: bmz_skin::LuaSkinFileStore::default(),
         }
     }
@@ -309,6 +360,7 @@ impl SkinPipelineRuntime {
 
     /// GPU/cache を持つ worker が native driver の終了処理まで生き残らないようにする。
     pub(super) fn shutdown_workers(&mut self) {
+        self.decode_control.stop();
         // A Play decode can still be waiting for its chart worker. Release it
         // before joining, including when the app exits during chart import.
         for request in
@@ -372,11 +424,19 @@ impl SkinPipelineRuntime {
     }
 
     pub(super) fn generation(&self, kind: SkinKind) -> u64 {
-        self.generations.current(kind)
+        self.decode_control.generation(kind)
+    }
+
+    pub(super) fn has_current_install(&self, kind: SkinKind) -> bool {
+        self.screen_dependencies
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&kind)
+            .is_some_and(|(generation, _)| *generation == self.generation(kind))
     }
 
     pub(super) fn bump_generation(&mut self, kind: SkinKind) -> u64 {
-        self.generations.bump(kind)
+        self.decode_control.bump(kind)
     }
 
     pub(super) fn begin_result_load(&mut self, refresh: bool) -> u64 {
@@ -602,5 +662,87 @@ mod tests {
         runtime.set_pending(SkinKind::Select, false);
         runtime.set_pending(SkinKind::Play, false);
         assert!(!runtime.has_pending());
+    }
+    #[test]
+    fn decode_requests_coalesce_per_scene_and_stale_work_is_cancelled() {
+        let control = SkinDecodeControl::default();
+        let request = |kind, generation| {
+            SkinDecodeRequest::new(
+                generation,
+                "test.json".into(),
+                kind,
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            )
+        };
+        let first = control.bump(SkinKind::Play);
+        assert!(control.enqueue(request(SkinKind::Play, first)));
+        assert_eq!(control.next(SkinKind::Play).unwrap().0.generation, first);
+        for _ in 0..200 {
+            let generation = control.bump(SkinKind::Play);
+            assert!(!control.enqueue(request(SkinKind::Play, generation)), "no extra worker");
+        }
+        assert!(!control.current(SkinKind::Play, first));
+        let latest = control.generation(SkinKind::Play);
+        let other = control.bump(SkinKind::Result);
+        assert!(control.enqueue(request(SkinKind::Result, other)));
+        assert_eq!(control.next(SkinKind::Play).unwrap().0.generation, latest);
+        assert!(control.current(SkinKind::Play, latest));
+        assert!(control.next(SkinKind::Play).is_none());
+        assert!(control.enqueue(request(SkinKind::Play, latest)), "idle worker may restart");
+        control.stop();
+        assert!(!control.current(SkinKind::Play, latest));
+        assert!(control.next(SkinKind::Play).is_none());
+        assert!(!control.enqueue(request(SkinKind::Play, latest)));
+    }
+
+    #[test]
+    fn superseding_a_decode_releases_its_chart_wait_without_poisoning_shared_facts() {
+        use super::super::{PlaySkinChartState, spawn_skin_decode};
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("skin.json");
+        std::fs::write(&path, r#"{"type":0,"name":"latest"}"#).unwrap();
+        let mut runtime = SkinPipelineRuntime::new();
+        let facts = PlaySkinChartState::default();
+        let generation = runtime.bump_generation(SkinKind::Play);
+        spawn_skin_decode(
+            &runtime,
+            SkinDecodeRequest::new(
+                generation,
+                path.clone(),
+                SkinKind::Play,
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            )
+            .with_play_chart_state(Some(facts.clone()))
+            .with_library_roots(vec![root.path().to_path_buf()]),
+        );
+        let generation = runtime.bump_generation(SkinKind::Play);
+        spawn_skin_decode(
+            &runtime,
+            SkinDecodeRequest::new(
+                generation,
+                path,
+                SkinKind::Play,
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            )
+            .with_library_roots(vec![root.path().to_path_buf()]),
+        );
+        let result = runtime
+            .decode_rx
+            .as_ref()
+            .unwrap()
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        assert_eq!(result.generation, generation);
+        assert_eq!(result.result.unwrap().document.name, "latest");
+        // The old skin's cancellation must not finish the chart shared by a newer request.
+        facts.finish(Err("chart still owned by its loader".into()));
+        assert_eq!(facts.wait().unwrap_err(), "chart still owned by its loader");
+        runtime.shutdown_workers();
     }
 }

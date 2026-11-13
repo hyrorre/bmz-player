@@ -73,22 +73,15 @@ impl Builder {
         let cw = self.point("statusSliderContentsLength", w)?;
         let ch = self.point("statusSliderContentsHeight", h)?;
         let system = self.point("statusSliderSystem", 0.0)? as i32;
-        let offset = self.element_offset(28);
-        let mut bounds =
-            if offset.w != 0 || offset.h != 0 { self.area("status")? } else { [x, y, w, h] };
+        let mut bounds = self.area("status")?;
         if bounds[2] <= 0.0 || bounds[3] <= 0.0 {
             bounds = [x, y, w, h];
         }
         let axis = if system < 2 { 3 } else { 2 };
-        let delta = if system < 2 { offset.h } else { offset.w };
-        let scale = if bounds[axis] > 0.0 {
-            (bounds[axis] + f64::from(delta)).max(1.0) / bounds[axis]
-        } else {
-            1.0
-        };
         let src = self.source(vec![path], 1);
         self.push("slider",json!({"id":"qw-status-thumb","src":src,"w":-1,"h":-1,"type":6,
-            "angle":match system {0=>0,1=>2,2=>3,_=>1},"range":((if system<2 {h} else {w})*scale).round() as i32,"changeable":false}));
+            "angle":match system {0=>0,1=>2,2=>3,_=>1},"range":(if system<2 {h} else {w}).round() as i32,"changeable":false,
+            "qwOffsetRange":self.metric(28,if system<2 {h} else {w},Some(bounds[axis]),system>=2)}));
         let (x, y) = match system {
             0 => (x, y + h - ch / 2.0),
             1 => (x, y - ch / 2.0),

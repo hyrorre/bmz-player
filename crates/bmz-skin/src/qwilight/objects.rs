@@ -29,7 +29,6 @@ pub(super) struct Builder {
     lane_cover: LaneCoverChoice,
     destinations: BTreeMap<i32, Vec<Json>>,
     source_ids: BTreeMap<(Vec<String>, usize), String>,
-    element_offsets: BTreeMap<String, LuaSkinOffsetValue>,
     /// Unadjusted areas of each element, per DP copy or lane, for decorations
     /// that the skin associates with that element.
     element_bounds: std::cell::RefCell<BTreeMap<i32, Vec<[f64; 4]>>>,
@@ -41,7 +40,6 @@ impl Builder {
         resources: Resources,
         context: &SkinPathContext,
         lane_cover: LaneCoverChoice,
-        element_offsets: &BTreeMap<String, LuaSkinOffsetValue>,
     ) -> Result<Self> {
         let lane_covers = customize::lane_cover_names(context);
         let mut document = eval.definition.header(&eval.available, &lane_covers);
@@ -59,7 +57,6 @@ impl Builder {
             lane_cover,
             destinations: BTreeMap::new(),
             source_ids: BTreeMap::new(),
-            element_offsets: element_offsets.clone(),
             element_bounds: Default::default(),
         })
     }
@@ -899,7 +896,11 @@ impl Builder {
                 let infinity_width =
                     self.point("judgmentVSVisualizerInfinityDrawingLength", width * 2.0)?;
                 if !self.image(&id, path.into_iter().collect(), 0, None) {
-                    self.push("text", json!({"id":id,"constantText":"∞","size":self.element_height(pipeline, height).round() as i32}));
+                    self.push(
+                        "text",
+                        json!({"id":id,"constantText":"∞","size":height.round() as i32,
+                        "qwOffsetSize":self.metric(pipeline,height,None,false)}),
+                    );
                 }
                 for dx in offsets {
                     let x = x + dx

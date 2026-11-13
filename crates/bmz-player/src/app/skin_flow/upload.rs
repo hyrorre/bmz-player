@@ -20,10 +20,18 @@ impl WinitApp {
         let upload_tx = self.skin.skin_pipeline.upload_tx.clone();
         let texture_cache = self.skin.skin_pipeline.gpu_texture_cache.clone();
         let event_proxy = self.event_proxy.clone();
+        let control = self.skin.skin_pipeline.decode_control.clone();
         let worker = thread::Builder::new()
             .name("skin-upload".to_string())
             .spawn(move || {
-                skin_upload_worker(decode_rx, upload_tx, uploader, texture_cache, event_proxy)
+                skin_upload_worker(
+                    decode_rx,
+                    upload_tx,
+                    uploader,
+                    texture_cache,
+                    event_proxy,
+                    control,
+                )
             })
             .expect("failed to spawn skin upload thread");
         self.skin.skin_pipeline.upload_worker = Some(worker);
@@ -567,7 +575,7 @@ impl WinitApp {
         let UploadedSkin {
             load_dependencies,
             kind,
-            document,
+            mut document,
             lua_runtime,
             fonts,
             prepared,
@@ -575,6 +583,17 @@ impl WinitApp {
             decode_stats,
             upload_stats,
         } = uploaded;
+        if kind == SkinKind::Play
+            && let Some((key_mode, session_mode, ..)) = &self.skin.last_play_skin_signature
+        {
+            let selection = play_skin_selection_for_session(
+                &self.boot.profile_config.skin,
+                *key_mode,
+                *session_mode,
+            );
+            let values = qwilight_offset_values_from_config(selection.offsets, &document);
+            document.apply_qwilight_offsets(&values);
+        }
         let result_refresh = kind == SkinKind::Result
             && self.skin.skin_pipeline.result_refresh_generation == Some(generation);
         if matches!(kind, SkinKind::Play | SkinKind::Result) {

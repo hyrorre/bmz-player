@@ -38,7 +38,8 @@ impl Builder {
                 _ => 0.0,
             };
             let id = format!("qw-text-{name}");
-            let mut text = json!({"id":id,"ref":reference,"size":self.element_height(pipeline,size).round() as i32,"align":align,"overflow":1});
+            let mut text = json!({"id":id,"ref":reference,"size":size.round() as i32,"align":align,"overflow":1,
+                "qwOffsetSize":self.metric(pipeline,size,None,false)});
             if name == "levelText" {
                 text["value_expr"] = json!("bmz:play_level");
             }
@@ -65,7 +66,6 @@ impl Builder {
                     for (component, value) in ["r", "g", "b", "a"].into_iter().zip(color) {
                         rect[component] = json!(value);
                     }
-                    rect["a"] = json!(self.element_alpha(pipeline, i32::from(color[3])));
                     let destination = self.destination(pipeline, &id, rect, None, None);
                     if variants > 1 {
                         destination["op"] = json!([150 + difficulty]);
@@ -109,9 +109,10 @@ impl Builder {
                 "qwilightVisualizer",
                 json!({"id":id,"kind":kind,
                 "system":self.point(&format!("{name}System"),3.0)? as i32,
-                "lineWidth":(self.point(&format!("{name}ContentsLength"),1.0)? * (w+f64::from(self.element_offset(pipeline).w)).max(1.0)/w).round() as i32,
-                "lineHeight":(self.point(&format!("{name}ContentsHeight"),h)? * self.element_height(pipeline,h)/h).round() as i32,
-                "opacity": if pipeline == 1 { Some((0.1+f64::from(self.element_offset(pipeline).a)/255.0).clamp(0.0,1.0)) } else { None }}),
+                "lineWidth":self.point(&format!("{name}ContentsLength"),1.0)?.round() as i32,
+                "lineHeight":self.point(&format!("{name}ContentsHeight"),h)?.round() as i32,
+                "qwOffsetWidth":self.metric(pipeline,self.point(&format!("{name}ContentsLength"),1.0)?,Some(w),true),
+                "qwOffsetHeight":self.metric(pipeline,self.point(&format!("{name}ContentsHeight"),h)?,Some(h),false)}),
             );
             for dx in self.alt_offsets(alt, 0)? {
                 let destination = self.destination(
@@ -195,7 +196,11 @@ impl Builder {
                 0,
                 None,
             ) {
-                self.push("text", json!({"id":id,"constantText":fallback,"size":self.element_height(29,h).round() as i32}));
+                self.push(
+                    "text",
+                    json!({"id":id,"constantText":fallback,"size":h.round() as i32,
+                    "qwOffsetSize":self.metric(29,h,None,false)}),
+                );
             }
         }
         let colon = self.point("hmsColonDrawingLength", w)?;

@@ -15,6 +15,7 @@ pub(super) fn decode_skin_sources(
     warn_missing_required: bool,
     source_cache: Option<&SharedSkinSourceAssetCache>,
     texture_cache: Option<&SharedSkinGpuTextureCache>,
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> DecodedSources {
     let tasks = collect_source_tasks(document, skin_root, resolved_files, path_context);
     let task_count = tasks.len();
@@ -23,6 +24,9 @@ pub(super) fn decode_skin_sources(
     let mut pairs: Vec<_> = tasks
         .into_par_iter()
         .filter_map(|task| {
+            if cancelled() {
+                return None;
+            }
             let decoded = decode_source_task(
                 task,
                 required_sources,
@@ -181,16 +185,31 @@ fn decode_source_task(
         }
         SourceDecodeTask::Frames { index, source_id, paths, columns } => {
             let path = paths.first()?.clone();
-            match load_frame_sequence(&paths, columns) {
-                Ok(asset) => Some(asset_source_result(
+            let key = skin_frame_sequence_cache_key(&paths, columns);
+            let (cached, key, texture_status) = lookup_source_texture_cache_key(texture_cache, key);
+            if let Some(cached) = cached {
+                return Some(cached_source_result(
+                    index,
+                    source_id,
+                    path,
+                    cached,
+                    key,
+                    false,
+                    texture_status,
+                ));
+            }
+            match load_source_asset_with_cache_key(key.clone(), source_cache, || {
+                load_frame_sequence(&paths, columns)
+            }) {
+                Ok((asset, source_status)) => Some(asset_source_result(
                     index,
                     source_id,
                     path,
                     asset,
-                    None,
+                    key,
                     false,
-                    SourceCacheStatus::Uncacheable,
-                    TextureCacheStatus::Uncacheable,
+                    source_status,
+                    texture_status,
                 )),
                 Err(error) => {
                     tracing::warn!(%source_id, %error, "failed to assemble skin frames");

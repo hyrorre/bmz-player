@@ -9,6 +9,9 @@ pub struct SkinTextureId(pub u32);
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SkinDocument {
+    /// Adapter-only, immutable layout recipe. Live edits reuse installed assets.
+    #[serde(skip)]
+    pub qwilight_layout: Option<std::sync::Arc<QwilightLayout>>,
     /// LR2 CSV origin. Keeps compatibility behavior separate from JSON/Lua skins.
     #[serde(default)]
     pub lr2: bool,

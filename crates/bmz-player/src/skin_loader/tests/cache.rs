@@ -1,6 +1,80 @@
 use super::*;
 
 #[test]
+fn frame_sequence_cache_reuses_pixels_and_tracks_order_grid_and_backing_changes() {
+    let root = tempfile::tempdir().unwrap();
+    let a = root.path().join("a.png");
+    let b = root.path().join("b.png");
+    fs::write(&a, b"first").unwrap();
+    fs::write(&b, b"second").unwrap();
+    let paths = vec![a.clone(), b.clone()];
+    let key = skin_frame_sequence_cache_key(&paths, 2).unwrap();
+    assert_ne!(key, skin_frame_sequence_cache_key(&[b.clone(), a.clone()], 2).unwrap());
+    assert_ne!(key, skin_frame_sequence_cache_key(&paths, 1).unwrap());
+    assert_ne!(key, skin_source_asset_cache_key(&a, false).unwrap());
+    let cache = Arc::new(Mutex::new(SkinSourceAssetCache::default()));
+    let image = RgbaImageAsset { width: 2, height: 1, pixels: vec![255; 8] };
+    assert_eq!(
+        load_source_asset_with_cache_key(Some(key.clone()), Some(&cache), || Ok(image.clone()))
+            .unwrap()
+            .1,
+        SourceCacheStatus::Miss
+    );
+    assert_eq!(
+        load_source_asset_with_cache_key(Some(key.clone()), Some(&cache), || panic!(
+            "must reuse atlas"
+        ))
+        .unwrap()
+        .1,
+        SourceCacheStatus::Hit
+    );
+    fs::write(&b, b"replacement of different length").unwrap();
+    assert_ne!(key, skin_frame_sequence_cache_key(&paths, 2).unwrap());
+    assert!(skin_frame_sequence_cache_key(&[PathBuf::from("bmz://lr2/empty"), a], 2).is_some());
+}
+
+#[test]
+fn frame_sequence_gpu_cache_bypasses_decode_of_all_frames() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("skin.json");
+    let frames = vec![root.path().join("a.png"), root.path().join("b.png")];
+    for frame in &frames {
+        fs::write(frame, b"not a PNG").unwrap();
+    }
+    fs::write(
+        &path,
+        r#"{"source":[{"id":"a","path":"a.png"}],
+        "sourceFrames":{"a":{"paths":["a.png","b.png"],"columns":2}},
+        "image":[{"id":"image","src":"a"}],
+        "destination":[{"id":"image","dst":[{"x":0,"y":0,"w":10,"h":10}]}]}"#,
+    )
+    .unwrap();
+    let textures = Arc::new(Mutex::new(SkinGpuTextureCache::default()));
+    textures.lock().unwrap().insert(
+        skin_frame_sequence_cache_key(&frames, 2).unwrap(),
+        SkinTextureId(12345),
+        SkinImageSize { width: 4.0, height: 2.0 },
+    );
+    let decoded = decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
+        &path,
+        SkinKind::Play,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &Default::default(),
+        None,
+        None,
+        Some(textures),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(decoded.stats.source_texture_cache_hits, 1);
+    assert_eq!(decoded.stats.decoded_source_bytes, 0);
+    assert_eq!(decoded.sources[0].texture, SkinTextureId(12345));
+    assert!(decoded.sources[0].asset.is_none());
+}
+
+#[test]
 fn lr2_continue_source_changes_invalidate_document_cache() {
     let root = unique_test_dir("lr2-result-continue-cache");
     fs::create_dir_all(&root).unwrap();
@@ -1329,6 +1403,7 @@ fn skin_gpu_cache_evicts_lru_but_pins_active_and_pending_textures() {
     cache.limit_bytes = 8;
     let keys: Vec<_> = (0..3)
         .map(|i| SkinSourceAssetCacheKey {
+            frames: None,
             color_key: None,
             path: PathBuf::from(format!("image-{i}.png")),
             modified: None,

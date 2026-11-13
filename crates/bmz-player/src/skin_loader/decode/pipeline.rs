@@ -129,6 +129,14 @@ pub struct BeatorajaSkinDecodeRequest<'a> {
 pub fn decode_beatoraja_skin_request(
     request: BeatorajaSkinDecodeRequest<'_>,
 ) -> Result<DecodedSkin> {
+    decode_beatoraja_skin_request_cancellable(request, &|| false)
+}
+
+pub(crate) fn decode_beatoraja_skin_request_cancellable(
+    request: BeatorajaSkinDecodeRequest<'_>,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<DecodedSkin> {
+    anyhow::ensure!(!cancelled(), "skin decode cancelled");
     let BeatorajaSkinDecodeRequest {
         pinned_sources,
         skin_path,
@@ -167,6 +175,7 @@ pub fn decode_beatoraja_skin_request(
         Some(&path_context),
     )?;
     let document_us = elapsed_us(document_start);
+    anyhow::ensure!(!cancelled(), "skin decode cancelled");
     tracing::debug!(
         ?kind,
         path = %skin_path.display(),
@@ -235,9 +244,11 @@ pub fn decode_beatoraja_skin_request(
                 warn_missing_required,
                 source_cache.as_ref(),
                 texture_cache.as_ref(),
+                cancelled,
             )
         },
     );
+    anyhow::ensure!(!cancelled(), "skin decode cancelled");
     tracing::debug!(
         ?kind,
         task_count = decoded_sources.task_count,

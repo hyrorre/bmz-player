@@ -1,5 +1,88 @@
 use super::*;
 
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "creates a Winit event loop; run alone with --ignored"]
+fn qwilight_offset_settings_update_installed_play_without_queuing_decodes() {
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    let event_loop =
+        EventLoop::<AppUserEvent>::with_user_event().with_any_thread(true).build().unwrap();
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    let (maintenance_tx, _) = tokio::sync::watch::channel(false);
+    let mut app = WinitApp::new(
+        data.boot(),
+        AppOptions { viewer_play: true, ..Default::default() },
+        Instant::now(),
+        None,
+        None,
+        Arc::new(AtomicBool::new(false)),
+        event_loop.create_proxy(),
+        LogBuffer::default(),
+        maintenance_tx,
+        None,
+    )
+    .unwrap();
+    app.skin.skin_pipeline.shutdown_workers();
+    *app.skin.skin_pipeline = SkinPipelineRuntime::new();
+    let temp = tempfile::tempdir().unwrap();
+    let path = write_qwilight_customize_fixture(temp.path());
+    let yaml = std::fs::read_to_string(&path).unwrap().replace("pipeline: 7", "pipeline: 7, 47");
+    std::fs::write(&path, format!("{yaml}  titlePosition0: 20\n  titlePosition1: 20\n")).unwrap();
+    let state = bmz_skin::LuaLoadRuntimeState::default();
+    let decoded = crate::skin_loader::decode_beatoraja_skin_with_options_and_runtime_state(
+        &path,
+        SkinKind::Play,
+        &Default::default(),
+        &Default::default(),
+        &state,
+    )
+    .unwrap();
+    install_decoded_skin(&mut app.renderer, decoded, bmz_render::skin::default_skin_manifest())
+        .unwrap();
+    let base = app.renderer.play_skin_document().unwrap().destination.clone();
+    let path_label = path.to_string_lossy().to_string();
+    app.boot.profile_config.skin.play7 = path_label.clone();
+    app.skin.last_play_skin_signature = Some(play_skin_signature(
+        KeyMode::K7,
+        SessionMode::Normal,
+        &path_label,
+        &Default::default(),
+        &Default::default(),
+        &state,
+        app.play.play_preload_generation,
+    ));
+    let generation = app.skin.skin_pipeline.bump_generation(SkinKind::Play);
+    app.skin.skin_pipeline.record_screen_dependencies(SkinKind::Play, Default::default());
+    // Even the YAML is unavailable after installation: updates must not reload it.
+    std::fs::rename(&path, path.with_extension("unavailable")).unwrap();
+    for x in (1..=200).chain([0]) {
+        app.boot.profile_config.skin.play7_offsets = vec![SkinOffsetConfig {
+            name: Some("Qwilight Title offset".into()),
+            id: if x == 50 { 0 } else { 1147 },
+            x,
+            ..Default::default()
+        }];
+        app.reload_skins(SkinReloadRequest { play7: true, offsets: true, ..Default::default() });
+        assert_eq!(app.skin.skin_pipeline.generation(SkinKind::Play), generation);
+        assert!(!app.is_kind_pending_decode(SkinKind::Play));
+        let current = &app.renderer.play_skin_document().unwrap().destination;
+        if x == 0 {
+            assert_eq!(current, &base);
+        } else {
+            assert_ne!(current, &base);
+        }
+    }
+    app.skin.skin_pipeline.set_pending(SkinKind::Play, true);
+    app.boot.profile_config.skin.play7_offsets[0].x = 301;
+    app.reload_skins(SkinReloadRequest { play7: true, offsets: true, ..Default::default() });
+    assert_eq!(
+        app.skin.skin_pipeline.generation(SkinKind::Play),
+        generation,
+        "an edit while loading must not invalidate the pending assets"
+    );
+    assert_eq!(app.skin.last_play_skin_signature.as_ref().unwrap().5.offset_values["Qwilight Title offset"].x, 301);
+}
+
 #[test]
 fn qwilight_catalog_registers_only_play_slots_without_running_lua() {
     let temp = tempfile::tempdir().unwrap();

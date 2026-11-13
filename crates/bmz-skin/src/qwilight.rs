@@ -189,11 +189,31 @@ pub fn load_qwilight_play_skin(
     let layout = layout::Layout::build(&mut eval, mode)?;
     let resources = resources::Resources::new(context, &eval)?;
     let lane_cover = customize::LaneCoverChoice::from_options(options);
-    let mut builder =
-        objects::Builder::new(eval, layout, resources, context, lane_cover, &state.offset_values)?;
+    let height = layout.height;
+    let mut builder = objects::Builder::new(eval, layout, resources, context, lane_cover)?;
     builder.build()?;
-    let document =
+    let recipe = bmz_skin_document::QwilightLayout::from_adapter_json(&builder.document, height)?;
+    let mut document: SkinDocument =
         serde_json::from_value(builder.document).context("invalid converted Qwilight play skin")?;
+    document.qwilight_layout = Some(std::sync::Arc::new(recipe));
+    let offsets = document
+        .offset
+        .iter()
+        .filter_map(|def| {
+            let value = state.offset_values.get(&def.name)?;
+            Some((
+                def.id,
+                bmz_skin_document::QwilightOffsetValue {
+                    x: value.x,
+                    y: value.y,
+                    w: value.w,
+                    h: value.h,
+                    a: value.a,
+                },
+            ))
+        })
+        .collect();
+    document.apply_qwilight_offsets(&offsets);
     Ok(LoadedSkinDocument {
         document,
         lua_runtime: None,
