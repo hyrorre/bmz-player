@@ -235,7 +235,7 @@ fn delayed_audio_image_and_video_decodes_keep_the_loaded_archive_generation() {
     let temp = Temp::new("decode-generations");
     let path = temp.0.join("song.zip");
     let chart = b"#TITLE Pinned\n#BPM 120\n#STAGEFILE bga.png\n#WAV01 kick.bin\n#BMP01 bga.png\n#BMP02 clip.y4m\n#00111:01\n#00104:01\n#00107:02\n";
-    let write = |value: i16, color: [u8; 4]| {
+    let write = |value: i16, color: [u8; 4], luma: u8| {
         let mut wav = b"RIFF".to_vec();
         wav.extend(132_u32.to_le_bytes());
         wav.extend(b"WAVEfmt ");
@@ -255,10 +255,13 @@ fn delayed_audio_image_and_video_decodes_keep_the_loaded_archive_generation() {
         image::RgbaImage::from_pixel(2, 2, image::Rgba(color))
             .write_to(&mut png, image::ImageFormat::Png)
             .unwrap();
-        // The same raw-video fixture format used by bmz-video's decoder tests.
         let mut video = b"YUV4MPEG2 W2 H2 F10:1 Ip A1:1 C420jpeg\nFRAME\n".to_vec();
-        let luma = if value > 0 { 16 } else { 235 };
         video.extend([luma, luma, luma, luma, 128, 128]);
+        // Use the same FFmpeg conversion for the expected frame because YUV-to-RGBA
+        // rounding can differ across builds. The plain file bypasses the archive registry.
+        let reference = temp.0.join(format!("reference-{luma}.y4m"));
+        std::fs::write(&reference, &video).unwrap();
+        let expected_frame = bmz_video::decode_first_frame(&reference).unwrap();
         write_zip(
             &path,
             &[
@@ -268,15 +271,17 @@ fn delayed_audio_image_and_video_decodes_keep_the_loaded_archive_generation() {
                 ("song/clip.y4m", &video),
             ],
         );
+        expected_frame
     };
-    write(8192, [255, 0, 0, 255]);
+    let old_frame = write(8192, [255, 0, 0, 255], 16);
     let (old, old_chart) = load(&path);
-    write(-8192, [0, 0, 255, 255]);
+    let new_frame = write(-8192, [0, 0, 255, 255], 235);
     let (new, new_chart) = load(&path);
+    assert_ne!(old_frame.rgba, new_frame.rgba, "video fixtures must distinguish the generations");
     let worker = std::thread::spawn(move || {
-        for (source, chart, sample, color, video_color) in [
-            (old, old_chart, 0.25, [255, 0, 0, 255], [0, 0, 0, 255]),
-            (new, new_chart, -0.25, [0, 0, 255, 255], [255, 255, 255, 255]),
+        for (source, chart, sample, color, expected_frame) in [
+            (old, old_chart, 0.25, [255, 0, 0, 255], old_frame),
+            (new, new_chart, -0.25, [0, 0, 255, 255], new_frame),
         ] {
             // The non-WAV extension exercises the FFmpeg memory input too.
             let decoded = FfmpegSampleLoader::default().load(&chart.sounds[0].path).unwrap();
@@ -294,7 +299,11 @@ fn delayed_audio_image_and_video_decodes_keep_the_loaded_archive_generation() {
             // Delayed video opening and reopening must use the same old/new bytes.
             for _ in 0..2 {
                 let frame = bmz_video::decode_first_frame(video).unwrap();
-                assert_eq!(&frame.rgba[..4], &video_color);
+                assert_eq!(
+                    (frame.width, frame.height),
+                    (expected_frame.width, expected_frame.height)
+                );
+                assert_eq!(frame.rgba, expected_frame.rgba);
             }
         }
     });
