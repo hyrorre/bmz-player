@@ -108,6 +108,9 @@ UPDATE SCOREでは送信しません。ALWAYSとCOMPLETE SONGの意味は既存I
 PMSは公開ハッシュ検索から、入力機器区分・SHA256・CHART・primaryが一致する候補を選び、
 候補のsong IDで再解決します。chart ID・game・SHA256・採点ノーツ数を再確認し、
 送信本文でも同じ`tachiSongID`と`difficulty: "CHART"`を使用します。
+Bokutachiが返す文字列のsong IDはそのまま使用し、旧形式の数値IDも読み取ります。
+旧版で譜面照合が `invalid type: string … expected u64` で失敗した場合は、
+修正版の送信キューから該当ジョブを個別に再送信すると、保存済みの成績で照合をやり直せます。
 
 未登録、候補の曖昧さ、ハッシュや採点ノーツ数の不一致は理由を表示して停止します。
 「採点ノーツ数不一致」は、本人の全曲分の採点対象数がBokutachiの登録数と異なるという意味です。

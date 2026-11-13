@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-13 | [Bokutachiの文字列曲IDによる送信失敗](2026/2026-11-13-bokutachi-song-id.md) |
 | 2026-11-13 | [Kaleidへのmain統合とBokutachi条件](2026/2026-11-13-kaleid-main-bokutachi.md) |
 | 2026-11-13 | [Qwilightプレイスキンの要素別オフセット](2026/2026-11-13-qwilight-element-offsets.md) |
 | 2026-11-13 | [不可視ノーツによる結果確定とCLEAR演出の遅れ](2026/2026-11-13-invisible-note-result-settlement.md) |

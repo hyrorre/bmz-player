@@ -8,6 +8,8 @@ use crate::storage::network_db::{IrJobKind, NetworkDatabase, NewIrScoreJob};
 use bmz_core::lane::KeyMode;
 use serde_json::{Value, json};
 
+pub(super) const SONG_ID: &str = "S1234567890abcdef123";
+
 fn payload(game: Game) -> IrScoreSubmission {
     let mode = match game {
         Game::Bms7k => KeyMode::K7,
@@ -44,7 +46,7 @@ fn payload(game: Game) -> IrScoreSubmission {
 fn matcher(game: Game, p: &IrScoreSubmission) -> ChartMatch {
     ChartMatch {
         match_type: if game.is_pms() { "tachiSongID" } else { "bmsChartHash" }.into(),
-        identifier: if game.is_pms() { "123".into() } else { p.chart.sha256.clone() },
+        identifier: if game.is_pms() { SONG_ID.into() } else { p.chart.sha256.clone() },
         difficulty: game.is_pms().then(|| "CHART".into()),
     }
 }
@@ -288,7 +290,7 @@ fn direct_manual_wire_contract_preserves_this_play_and_device() {
         assert!(s.get("ln_policy").is_none());
         if game.is_pms() {
             assert_eq!(s["matchType"], "tachiSongID");
-            assert_eq!(s["identifier"], "123");
+            assert_eq!(s["identifier"], SONG_ID);
             assert_eq!(s["difficulty"], "CHART");
         }
     }
@@ -359,7 +361,14 @@ fn lamps_and_arrangements_do_not_invent_defaults() {
 }
 
 fn chart(game: Game) -> Value {
-    json!({"game":game.as_str(),"chartID":"chart-1","song":{"id":123},"difficulty":"CHART","isPrimary":true,"data":{"hashSHA256":"ab".repeat(32),"notecount":100}})
+    json!({"game":game.as_str(),"chartID":"chart-1","song":{"id":SONG_ID},"difficulty":"CHART","isPrimary":true,"data":{"hashSHA256":"ab".repeat(32),"notecount":100}})
+}
+
+#[test]
+fn legacy_numeric_song_id_can_still_be_read() {
+    let mut legacy = chart(Game::PmsController);
+    legacy["song"]["id"] = json!(123);
+    assert_eq!(serde_json::from_value::<Chart>(legacy).unwrap().song.id, "123");
 }
 
 #[test]
@@ -383,6 +392,9 @@ fn pms_candidates_and_resolved_chart_must_agree() {
     assert!(validate_chart(&c, Game::PmsController, &"cd".repeat(32), 100, Some(&c)).is_err());
     let mut other = c.clone();
     other.chart_id = "other".into();
+    assert!(validate_chart(&other, Game::PmsController, &c.data.hash, 100, Some(&c)).is_err());
+    other.chart_id.clone_from(&c.chart_id);
+    other.song.id = "S1234567890abcdef124".into();
     assert!(validate_chart(&other, Game::PmsController, &c.data.hash, 100, Some(&c)).is_err());
     for notes in [json!(-1), json!(1.5), json!("100"), Value::Null] {
         let mut invalid = chart(Game::Bms7k);
@@ -742,14 +754,44 @@ async fn pms_worker_posts_verified_song_id_and_saved_device_only() {
         let requests = server.await.unwrap();
         assert_eq!(
             requests[1],
-            json!({"matchType":"tachiSongID","identifier":"123","difficulty":"CHART"})
+            json!({"matchType":"tachiSongID","identifier":SONG_ID,"difficulty":"CHART"})
         );
         assert_eq!(requests[2]["meta"]["game"], game.as_str());
         assert_eq!(requests[2]["scores"][0]["matchType"], "tachiSongID");
-        assert_eq!(requests[2]["scores"][0]["identifier"], "123");
+        assert_eq!(requests[2]["scores"][0]["identifier"], SONG_ID);
         assert_eq!(requests[2]["scores"][0]["difficulty"], "CHART");
         assert!(requests[2]["scores"][0]["judgements"].get("pgreat").is_none());
     }
+}
+
+#[tokio::test]
+async fn previously_failed_bms_submission_can_be_resent_with_a_string_song_id() {
+    let (origin, server) = server(vec![
+        ok("POST /api/v1/games/bms-7k/charts/resolve", json!({"chart":chart(Game::Bms7k)})),
+        accepted(),
+        ok(
+            "GET /api/v1/imports/import-1/poll-status",
+            json!({"importStatus":"completed","import":{"userID":42,"scoreIDs":["score-1"],"errors":[]}}),
+        ),
+    ])
+    .await;
+    let root = tempfile::tempdir().unwrap();
+    let (mut db, config, original) = setup(root.path(), &origin, Game::Bms7k);
+    db.mark_ir_score_job_rejected(job(&db).id, 100, "invalid type: string, expected u64").unwrap();
+    assert_eq!(run(&mut db, root.path(), &config, 110, false).await.processed, 0);
+
+    let report = resend_selected(&mut db, root.path(), &config, 110).await;
+    assert_eq!((report.processed, report.failed), (1, 0), "{report:?}");
+    assert_eq!(job(&db).status, "pending");
+    assert_eq!(job(&db).payload_json, original);
+    assert_eq!(run(&mut db, root.path(), &config, 115, false).await.submitted, 1);
+    assert_eq!(job(&db).status, "succeeded");
+
+    let requests = server.await.unwrap();
+    let chart_hash = "ab".repeat(32);
+    assert_eq!(requests[0], json!({"matchType":"bmsChartHash","identifier":chart_hash}));
+    assert_eq!(requests[1]["scores"][0]["matchType"], "bmsChartHash");
+    assert_eq!(requests[1]["scores"][0]["identifier"], chart_hash);
 }
 
 #[tokio::test]

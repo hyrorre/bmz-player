@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use reqwest::{Client, RequestBuilder, StatusCode};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 
 use super::convert::{ChartMatch, Game, ImportRequest};
 use crate::ir::types::{IrAuthTokens, IrPlayerInfo};
@@ -45,7 +45,22 @@ pub(crate) struct ChartData {
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct Song {
-    pub id: u64,
+    #[serde(deserialize_with = "deserialize_song_id")]
+    pub id: String,
+}
+
+fn deserialize_song_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum SongId {
+        Text(String),
+        Legacy(u64),
+    }
+
+    match SongId::deserialize(deserializer)? {
+        SongId::Text(id) => Ok(id),
+        SongId::Legacy(id) => Ok(id.to_string()),
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -252,7 +267,7 @@ impl BokutachiClient {
         let matcher = match &selected {
             Some(chart) => ChartMatch {
                 match_type: "tachiSongID".into(),
-                identifier: chart.song.id.to_string(),
+                identifier: chart.song.id.clone(),
                 difficulty: Some("CHART".into()),
             },
             None => ChartMatch {
