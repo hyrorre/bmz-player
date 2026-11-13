@@ -85,3 +85,5 @@ fmt、ワークスペースのcheck、全ターゲットClippyをWindowsで実�
 `--locked --offline --no-default-features`。スキャン・ライブラリDB・譜面素材のテストは
 116件通過、2件ignore。サンドボックス内でjunctionを作成できなかった重複rootのテストも、
 サンドボックス外の実行で通過した。
+ワークスペース全体のテストもサンドボックス外で直列実行し、全ターゲット通過。
+bmz-playerのlibは3,200件通過、87件ignoreだった。
