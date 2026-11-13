@@ -358,7 +358,6 @@ impl DiscoveryWalk<'_> {
             if is_excluded_name(&file_name) {
                 continue;
             }
-            let path = entry.path();
             let file_type = match entry.file_type() {
                 Ok(file_type) => file_type,
                 Err(error) => {
@@ -366,7 +365,7 @@ impl DiscoveryWalk<'_> {
                     record_discovery_issue(
                         &mut listing.issues,
                         root,
-                        &path,
+                        &entry.path(),
                         ScanDiscoveryOperation::ReadFileType,
                         error,
                     );
@@ -378,6 +377,7 @@ impl DiscoveryWalk<'_> {
                 if !self.follow_links {
                     continue;
                 }
+                let path = entry.path();
                 let target = match std::fs::metadata(&path) {
                     Ok(target) => target,
                     Err(error) => {
@@ -430,8 +430,11 @@ impl DiscoveryWalk<'_> {
                 if canonical.as_ref().is_some_and(|canonical| self.trees.contains(canonical)) {
                     continue;
                 }
-                listing.subdirs.push(DirectoryUnit { path, canonical });
-            } else if file_type.is_file() && crate::chart_source::is_archive_file(&path) {
+                listing.subdirs.push(DirectoryUnit { path: entry.path(), canonical });
+            } else if file_type.is_file()
+                && file_name.to_str().and_then(bmz_song_resource::archive_extension).is_some()
+            {
+                let path = entry.path();
                 if let Some(parent) = &unit.canonical {
                     listing.regular_files.push(parent.join(&file_name));
                 }
@@ -454,6 +457,7 @@ impl DiscoveryWalk<'_> {
                     }
                 }
             } else if file_type.is_file() && is_chart_file_name(&file_name) {
+                let path = entry.path();
                 let metadata = match entry.metadata() {
                     Ok(metadata) => metadata,
                     Err(error) => {
@@ -627,16 +631,11 @@ pub(crate) fn folder_has_document(folder: &Path) -> bool {
 }
 
 pub(super) fn is_chart_file_name(name: &std::ffi::OsStr) -> bool {
-    Path::new(name)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "bms" | "bme" | "bml" | "bmc" | "pms" | "bmson"
-            )
-        })
-        .unwrap_or(false)
+    Path::new(name).extension().and_then(|extension| extension.to_str()).is_some_and(|extension| {
+        ["bms", "bme", "bml", "bmc", "pms", "bmson"]
+            .iter()
+            .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+    })
 }
 
 /// Names that never hold charts, excluded on every platform by name alone, without
