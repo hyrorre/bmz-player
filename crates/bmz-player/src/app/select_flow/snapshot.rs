@@ -575,6 +575,11 @@ impl WinitApp {
         if let Some(provider) =
             crate::ir::provider_key::primary_provider_config(&self.boot.profile_config.ir)
         {
+            if crate::ir::bokutachi::is_config(provider) {
+                let mode = KeyMode::from_str_opt(&row.chart.as_ref()?.mode)?;
+                self.bokutachi_select_ranking_game(mode)?;
+                return row.score_sha256();
+            }
             let provenance =
                 row.chart.as_ref().map(|chart| chart.kaleid.clone()).unwrap_or_default();
             if crate::ir::kaleid::block_reason(provider, &provenance).is_some() {

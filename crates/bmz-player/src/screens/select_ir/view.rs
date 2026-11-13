@@ -229,8 +229,11 @@ impl SelectIrRanking {
         ir_config: &IrConfig,
         selected: Option<&SelectCourseIrTarget>,
     ) -> ResultIrSnapshot {
-        if enabled_provider(ir_config).is_none() {
+        let Some((provider, _)) = enabled_provider(ir_config) else {
             return ResultIrSnapshot::default();
+        };
+        if crate::ir::bokutachi::is_provider(&provider) {
+            return snapshot_with_provider(ResultIrSnapshot::default(), ir_config);
         }
         let Some(target) = selected else {
             return snapshot_with_provider(ResultIrSnapshot::default(), ir_config);

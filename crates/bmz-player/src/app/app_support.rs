@@ -15,6 +15,33 @@ pub(super) fn select_ir_cache_context(
     )
 }
 
+impl WinitApp {
+    pub(super) fn bokutachi_select_ranking_game(
+        &self,
+        mode: KeyMode,
+    ) -> Option<crate::ir::bokutachi::Game> {
+        use bmz_core::input::InputDeviceKind;
+        let device = if self.input_slots().device_id_for_player(1).is_some() {
+            InputDeviceKind::Controller
+        } else {
+            InputDeviceKind::Keyboard
+        };
+        crate::ir::bokutachi::Game::for_chart(mode, device)
+    }
+
+    pub(super) fn bokutachi_result_ranking_game(
+        &self,
+        finished: &FinishedPlaySession,
+    ) -> Option<crate::ir::bokutachi::Game> {
+        let mode = finished.applied_arrange.source_key_mode.unwrap_or(finished.summary.key_mode);
+        if finished.stored.score_history_id > 0 {
+            crate::ir::bokutachi::Game::for_chart(mode, finished.stored.device_type)
+        } else {
+            self.bokutachi_select_ranking_game(mode)
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CoursePlayMetrics {
     pub(super) total_notes: u32,

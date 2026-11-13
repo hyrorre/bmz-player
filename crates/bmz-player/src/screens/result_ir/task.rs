@@ -8,9 +8,7 @@ use super::*;
 ///
 /// prefetch が両方 OFF でも、パネル表示時のタブ選択で遅延取得できる。
 pub fn spawn_result_ir_task(
-    profile_root: PathBuf,
-    score_db_path: PathBuf,
-    network_db_path: PathBuf,
+    paths: &crate::paths::ProfilePaths,
     logs_dir: PathBuf,
     ir_config: &IrConfig,
     local_score_id: i64,
@@ -18,11 +16,12 @@ pub fn spawn_result_ir_task(
     ln_policy: LnScorePolicy,
     double_option: DoubleOptionScoreBucket,
     rule_mode: RuleMode,
+    bokutachi_game: Option<crate::ir::bokutachi::Game>,
 ) -> Option<ResultIrState> {
     spawn_result_ir_task_for_target(
-        profile_root,
-        score_db_path,
-        network_db_path,
+        paths.root_dir.clone(),
+        paths.score_db.clone(),
+        paths.network_db.clone(),
         logs_dir,
         ir_config,
         ResultIrTarget::Chart {
@@ -31,6 +30,7 @@ pub fn spawn_result_ir_task(
             ln_policy,
             double_option,
             rule_mode,
+            bokutachi_game,
         },
     )
 }
@@ -46,6 +46,7 @@ pub fn cached_result_ir_state(
     ln_policy: LnScorePolicy,
     double_option: DoubleOptionScoreBucket,
     rule_mode: RuleMode,
+    bokutachi_game: Option<crate::ir::bokutachi::Game>,
 ) -> Option<ResultIrState> {
     let provider = crate::ir::provider_key::primary_provider_config(ir_config)?;
     let provider_key = crate::ir::provider_key::configured_provider_key(provider)?;
@@ -75,12 +76,14 @@ pub fn cached_result_ir_state(
             provider: provider_key.to_string(),
             account_id: provider.account_id.clone(),
             base_url: provider.base_url.clone(),
+            ranking_primary: true,
             target: ResultIrTarget::Chart {
                 local_score_id: 0,
                 chart_sha256_hex,
                 ln_policy,
                 double_option,
                 rule_mode,
+                bokutachi_game,
             },
         },
         sender,
@@ -129,7 +132,8 @@ pub(super) fn spawn_result_ir_task_for_target(
 ) -> Option<ResultIrState> {
     // A submit-only provider still needs Result submission feedback, even when
     // no ranking provider is configured. This does not select a ranking primary.
-    let provider = crate::ir::provider_key::primary_provider_config(ir_config).or_else(|| {
+    let primary = crate::ir::provider_key::primary_provider_config(ir_config);
+    let provider = primary.or_else(|| {
         ir_config.providers.iter().find(|p| {
             p.enabled
                 && crate::ir::bokutachi::is_config(p)
@@ -143,6 +147,7 @@ pub(super) fn spawn_result_ir_task_for_target(
         provider: provider_key.to_string(),
         account_id: provider.account_id.clone(),
         base_url: provider.base_url.clone(),
+        ranking_primary: primary.is_some(),
         target,
     };
     let mut submission_targets = Vec::new();
@@ -167,7 +172,7 @@ pub(super) fn spawn_result_ir_task_for_target(
         provider_submissions.push(ResultIrProviderSubmission {
             provider_key: configured_key.to_string(),
             display_name: display_name.to_string(),
-            primary: configured_key == provider_key && !crate::ir::bokutachi::is_config(configured),
+            primary: configured_key == provider_key && query.ranking_primary,
             state: IrSubmitState::Sending,
         });
     }
@@ -202,6 +207,8 @@ pub(super) fn spawn_result_ir_task_for_target(
     let ir_config = ir_config.clone();
     let submit_query = query.clone();
     let submission_targets_for_task = submission_targets.clone();
+    let prefetch_global = query.supports_scope(IrRankingScope::Global);
+    let bokutachi_ranking = prefetch_global && crate::ir::bokutachi::is_provider(&query.provider);
     let bokutachi_targets: Vec<_> = submission_targets
         .iter()
         .filter(|target| crate::ir::bokutachi::is_provider(&target.provider))
@@ -214,11 +221,22 @@ pub(super) fn spawn_result_ir_task_for_target(
         // Observe the durable outbox while this Result is visible. Network polling
         // remains one GET per worker claim; dropping the view stops this observer.
         tokio::spawn(async move {
+            let mut refresh_ranking = bokutachi_ranking;
+            if bokutachi_ranking {
+                fetch_ranking_and_send(&query, IrRankingScope::Global, &sender).await;
+            }
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 for event in watch_result_submissions(&path, &query, &bokutachi_targets).await {
+                    let refresh = refresh_ranking
+                        && matches!(&event, ResultIrEvent::Submit { provider, submitted, .. }
+                            if provider == &query.provider && *submitted > 0);
                     if sender.send(event).is_err() {
                         return;
+                    }
+                    if refresh {
+                        refresh_ranking = false;
+                        fetch_ranking_and_send(&query, IrRankingScope::Global, &sender).await;
                     }
                 }
             }
@@ -226,7 +244,6 @@ pub(super) fn spawn_result_ir_task_for_target(
     }
     // global は Result スキンの NUMBER_IR_RANK / OPTION_IR_* 表示にも使うため、
     // prefetch 設定に関わらず常に取得する。rivals scope のみ設定に従う。
-    let prefetch_global = query.supports_scope(IrRankingScope::Global);
     let prefetch_rivals =
         query.supports_scope(IrRankingScope::SelfAndRivals) && state_prefetch_rivals(&ir_config);
     tokio::spawn(async move {
@@ -288,7 +305,7 @@ pub(super) fn spawn_result_ir_task_for_target(
                     }
                 }
 
-                if prefetch_global && included_global_ranking.is_none() {
+                if prefetch_global && !bokutachi_ranking && included_global_ranking.is_none() {
                     match stored_included_global_ranking(&network_db_path, &submit_query) {
                         Ok(Some(ranking)) => included_global_ranking = Some(ranking),
                         Ok(None) => {}
@@ -311,7 +328,7 @@ pub(super) fn spawn_result_ir_task_for_target(
                 start_ranking_prefetches_then(
                     &submit_query,
                     included_global_ranking,
-                    prefetch_global,
+                    prefetch_global && !bokutachi_ranking,
                     prefetch_rivals,
                     &submit_sender,
                     spawn_ranking_fetch,
@@ -390,7 +407,7 @@ pub(super) fn spawn_result_ir_task_for_target(
                 start_ranking_prefetches_then(
                     &submit_query,
                     None,
-                    prefetch_global,
+                    prefetch_global && !bokutachi_ranking,
                     prefetch_rivals,
                     &submit_sender,
                     spawn_ranking_fetch,
@@ -729,22 +746,25 @@ pub(super) async fn fetch_result_ranking(
             ln_policy,
             double_option,
             rule_mode,
+            bokutachi_game,
         } => {
-            let provenance = crate::storage::score_db::ScoreDatabase::open(
-                &query.profile_root.join("score.db"),
-            )?
-            .kaleid_evidence(*local_score_id)?
-            .map(|evidence| evidence.provenance)
-            .unwrap_or_default();
-            let blocked = if crate::ir::bms_ir::is_bms_ir_provider(&query.provider) {
-                crate::ir::kaleid::bms_ir_block_reason(&provenance)
-            } else if crate::ir::rian_ir::is_rian_ir_provider(&query.provider) {
-                crate::ir::kaleid::rian_ir_block_reason(&provenance)
-            } else {
-                None
-            };
-            if let Some(reason) = blocked {
-                anyhow::bail!(reason);
+            if !crate::ir::bokutachi::is_provider(&query.provider) {
+                let provenance = crate::storage::score_db::ScoreDatabase::open(
+                    &query.profile_root.join("score.db"),
+                )?
+                .kaleid_evidence(*local_score_id)?
+                .map(|evidence| evidence.provenance)
+                .unwrap_or_default();
+                let blocked = if crate::ir::bms_ir::is_bms_ir_provider(&query.provider) {
+                    crate::ir::kaleid::bms_ir_block_reason(&provenance)
+                } else if crate::ir::rian_ir::is_rian_ir_provider(&query.provider) {
+                    crate::ir::kaleid::rian_ir_block_reason(&provenance)
+                } else {
+                    None
+                };
+                if let Some(reason) = blocked {
+                    anyhow::bail!(reason);
+                }
             }
             let ranking = fetch_ranking(
                 &ResultIrQuery {
@@ -755,6 +775,7 @@ pub(super) async fn fetch_result_ranking(
                     ln_policy: *ln_policy,
                     double_option: *double_option,
                     rule_mode: *rule_mode,
+                    bokutachi_game: *bokutachi_game,
                 },
                 scope,
             )
@@ -885,12 +906,14 @@ mod tests {
             provider: "bmz-official".to_string(),
             account_id: "primary-account".to_string(),
             base_url: "https://ir.example.test".to_string(),
+            ranking_primary: true,
             target: ResultIrTarget::Chart {
                 local_score_id: 42,
                 chart_sha256_hex: "chart".to_string(),
                 ln_policy: LnScorePolicy::AutoLn,
                 double_option: DoubleOptionScoreBucket::Off,
                 rule_mode: RuleMode::Beatoraja,
+                bokutachi_game: None,
             },
         };
         let targets = vec![
@@ -929,12 +952,14 @@ mod tests {
             provider: crate::ir::rian_ir::RIAN_IR_PROVIDER.to_string(),
             account_id: String::new(),
             base_url: "https://rianir.link/".to_string(),
+            ranking_primary: true,
             target: ResultIrTarget::Chart {
                 local_score_id: 42,
                 chart_sha256_hex: "ab".repeat(32),
                 ln_policy: LnScorePolicy::AutoLn,
                 double_option: DoubleOptionScoreBucket::Off,
                 rule_mode: RuleMode::Beatoraja,
+                bokutachi_game: None,
             },
         };
         let (sender, receiver) = channel();

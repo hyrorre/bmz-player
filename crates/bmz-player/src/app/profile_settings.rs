@@ -7,6 +7,7 @@ pub(super) struct ProfileSettingsSnapshot {
     play: PlayDefaultsConfig,
     lane: LaneViewConfig,
     input: ProfileInputConfig,
+    ir_primary: Option<(String, String, String)>,
     show_fps: bool,
 }
 
@@ -18,6 +19,7 @@ impl ProfileSettingsSnapshot {
             play: profile.play.clone(),
             lane: profile.lane.clone(),
             input: profile.input.clone(),
+            ir_primary: ir_primary_identity(profile),
             show_fps: profile.ui.show_fps,
         }
     }
@@ -43,6 +45,9 @@ impl WinitApp {
         select_entry: Option<SettingsEntryId>,
     ) {
         let locale = self.boot.profile_config.ui.locale();
+        if before.ir_primary != ir_primary_identity(&self.boot.profile_config) {
+            self.select.select_ir.clear();
+        }
         self.renderer.set_default_font_coverage(locale.font_coverage());
         let locale_changed = locale != before.locale;
         if locale_changed {
@@ -104,6 +109,11 @@ impl WinitApp {
         self.sync_realtime_profile_settings();
         self.sync_discord_presence_config();
     }
+}
+
+fn ir_primary_identity(profile: &ProfileConfig) -> Option<(String, String, String)> {
+    let primary = crate::ir::provider_key::primary_provider_config(&profile.ir)?;
+    Some((primary.provider_key.clone(), primary.base_url.clone(), primary.account_id.clone()))
 }
 
 #[cfg(test)]

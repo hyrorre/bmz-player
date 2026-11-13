@@ -25,7 +25,9 @@ pub(super) fn spawn_fetch(
             // Self-and-Rivals / Rivals scope は要認証。未ログイン等で失敗しても
             // グローバルランキング表示は維持する。
             let (self_and_rivals, rivals) =
-                if crate::ir::rian_ir::is_rian_ir_provider(&query.provider) {
+                if crate::ir::rian_ir::is_rian_ir_provider(&query.provider)
+                    || crate::ir::bokutachi::is_provider(&query.provider)
+                {
                     (None, None)
                 } else {
                     let self_and_rivals = crate::ir::ranking::fetch_ranking_with_limit(

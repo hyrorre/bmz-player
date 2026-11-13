@@ -405,7 +405,13 @@ impl IrConfig {
         })
         .unwrap_or_else(IrProviderConfig::bokutachi);
         bokutachi.provider = crate::ir::bokutachi::PROVIDER.to_string();
-        bokutachi.role = IrProviderRoleConfig::SubmitOnly;
+        bokutachi.role = if !self.primary_provider.trim().is_empty()
+            && self.primary_provider.trim() == bokutachi.provider_key.trim()
+        {
+            IrProviderRoleConfig::Primary
+        } else {
+            IrProviderRoleConfig::SubmitOnly
+        };
         self.providers = Vec::with_capacity(remaining.len() + BUILTIN_IR_PROVIDER_COUNT);
         self.providers.push(bmz);
         self.providers.push(rian);

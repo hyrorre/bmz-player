@@ -386,16 +386,22 @@ fn pms_candidates_and_resolved_chart_must_agree() {
     let mut other = c.clone();
     other.chart_id = "other".into();
     assert!(select_pms_chart(vec![c.clone(), other], Game::PmsController, &c.data.hash).is_err());
-    assert!(validate_chart(&c, Game::PmsController, &c.data.hash, 100, Some(&c)).is_ok());
-    assert!(validate_chart(&c, Game::PmsController, &c.data.hash, 999, Some(&c)).is_err());
-    assert!(validate_chart(&c, Game::PmsKeyboard, &c.data.hash, 100, Some(&c)).is_err());
-    assert!(validate_chart(&c, Game::PmsController, &"cd".repeat(32), 100, Some(&c)).is_err());
+    assert!(validate_chart(&c, Game::PmsController, &c.data.hash, Some(100), Some(&c)).is_ok());
+    assert!(validate_chart(&c, Game::PmsController, &c.data.hash, Some(999), Some(&c)).is_err());
+    assert!(validate_chart(&c, Game::PmsKeyboard, &c.data.hash, Some(100), Some(&c)).is_err());
+    assert!(
+        validate_chart(&c, Game::PmsController, &"cd".repeat(32), Some(100), Some(&c)).is_err()
+    );
     let mut other = c.clone();
     other.chart_id = "other".into();
-    assert!(validate_chart(&other, Game::PmsController, &c.data.hash, 100, Some(&c)).is_err());
+    assert!(
+        validate_chart(&other, Game::PmsController, &c.data.hash, Some(100), Some(&c)).is_err()
+    );
     other.chart_id.clone_from(&c.chart_id);
     other.song.id = "S1234567890abcdef124".into();
-    assert!(validate_chart(&other, Game::PmsController, &c.data.hash, 100, Some(&c)).is_err());
+    assert!(
+        validate_chart(&other, Game::PmsController, &c.data.hash, Some(100), Some(&c)).is_err()
+    );
     for notes in [json!(-1), json!(1.5), json!("100"), Value::Null] {
         let mut invalid = chart(Game::Bms7k);
         invalid["data"]["notecount"] = notes;
@@ -1120,18 +1126,15 @@ async fn another_accounts_key_cannot_submit_old_jobs_and_unsupported_jobs_never_
         ln_policy: LnScorePolicy::ForceLn,
         double_option: crate::select_options::DoubleOptionScoreBucket::Off,
         rule_mode: bmz_gameplay::rule::RuleMode::Lr2Oraja,
+        bokutachi_game: Some(Game::Bms7k),
     };
-    for scope in
-        [crate::ir::types::IrRankingScope::Global, crate::ir::types::IrRankingScope::SelfAndRivals]
-    {
-        assert!(
-            crate::ir::ranking::fetch_ranking(&query, scope)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("not supported")
-        );
-    }
+    assert!(
+        crate::ir::ranking::fetch_ranking(&query, crate::ir::types::IrRankingScope::SelfAndRivals)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("not supported")
+    );
 }
 
 #[test]

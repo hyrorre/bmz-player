@@ -91,6 +91,7 @@ pub struct ResultIrRankingEntry {
 pub struct ResultIrLoadedChartRanking {
     pub chart_sha256_hex: String,
     pub ranking: ResultIrRanking,
+    pub bokutachi_game: Option<crate::ir::bokutachi::Game>,
 }
 
 pub use crate::ir::ranking::ChartRankingQuery as ResultIrQuery;
@@ -103,6 +104,7 @@ pub enum ResultIrTarget {
         ln_policy: LnScorePolicy,
         double_option: DoubleOptionScoreBucket,
         rule_mode: RuleMode,
+        bokutachi_game: Option<crate::ir::bokutachi::Game>,
     },
     Course {
         entry_kaleid: Vec<bmz_chart::kaleid::KaleidProvenance>,
@@ -161,6 +163,7 @@ impl ResultIrTarget {
                 ln_policy: state_ln_policy,
                 double_option: state_double_option,
                 rule_mode: state_rule_mode,
+                ..
             } if *state_score_id == local_score_id
                 && state_chart_sha256 == chart_sha256_hex
                 && *state_ln_policy == ln_policy
@@ -172,8 +175,12 @@ impl ResultIrTarget {
 
 impl ResultIrTaskQuery {
     fn supports_scope(&self, scope: IrRankingScope) -> bool {
+        if crate::ir::bokutachi::is_provider(&self.provider) {
+            return self.ranking_primary
+                && scope == IrRankingScope::Global
+                && matches!(&self.target, ResultIrTarget::Chart { bokutachi_game: Some(_), .. });
+        }
         self.target.supports_scope(scope)
-            && !crate::ir::bokutachi::is_provider(&self.provider)
             && (!crate::ir::rian_ir::is_rian_ir_provider(&self.provider)
                 || scope == IrRankingScope::Global)
     }
@@ -185,6 +192,7 @@ struct ResultIrTaskQuery {
     provider: String,
     account_id: String,
     base_url: String,
+    ranking_primary: bool,
     target: ResultIrTarget,
 }
 
@@ -240,6 +248,10 @@ impl ResultIrState {
     pub fn apply_select_cache(&mut self, lookup: crate::screens::select_ir::SelectIrResultLookup) {
         use crate::screens::select_ir::SelectIrResultLookup;
         if !self.awaiting_select_cache() {
+            return;
+        }
+        if !self.supports_tab(ResultRankingTab::Global) {
+            self.source = ResultIrSource::SelectCache { resolved: true };
             return;
         }
         match lookup {
@@ -565,12 +577,18 @@ impl ResultIrState {
         &self,
         ranking: &ResultIrRanking,
     ) -> Option<ResultIrLoadedChartRanking> {
-        let ResultIrTarget::Chart { chart_sha256_hex, .. } = &self.query.target else {
+        let ResultIrTarget::Chart { chart_sha256_hex, bokutachi_game, .. } = &self.query.target
+        else {
             return None;
         };
         Some(ResultIrLoadedChartRanking {
             chart_sha256_hex: chart_sha256_hex.clone(),
             ranking: ranking.clone(),
+            bokutachi_game: if crate::ir::bokutachi::is_provider(&self.query.provider) {
+                *bokutachi_game
+            } else {
+                None
+            },
         })
     }
 }
@@ -815,12 +833,14 @@ mod tests {
                 provider: "bmz-official".to_string(),
                 account_id: "account-1".to_string(),
                 base_url: "https://ir.example.test".to_string(),
+                ranking_primary: true,
                 target: ResultIrTarget::Chart {
                     local_score_id: 1,
                     chart_sha256_hex: "chart".to_string(),
                     ln_policy: LnScorePolicy::AutoLn,
                     double_option: DoubleOptionScoreBucket::Off,
                     rule_mode: RuleMode::Beatoraja,
+                    bokutachi_game: None,
                 },
             },
             sender,
@@ -969,6 +989,7 @@ mod tests {
             LnScorePolicy::AutoLn,
             DoubleOptionScoreBucket::Off,
             RuleMode::Beatoraja,
+            None,
         )
         .unwrap()
     }
@@ -1059,12 +1080,14 @@ mod tests {
             provider: "bmz-official".to_string(),
             account_id: "account-1".to_string(),
             base_url: "https://ir.example.test".to_string(),
+            ranking_primary: true,
             target: ResultIrTarget::Chart {
                 local_score_id: 2,
                 chart_sha256_hex: "current".to_string(),
                 ln_policy: LnScorePolicy::AutoLn,
                 double_option: DoubleOptionScoreBucket::Off,
                 rule_mode: RuleMode::Beatoraja,
+                bokutachi_game: None,
             },
         };
         let report = IrSyncReport {
@@ -1148,12 +1171,14 @@ mod tests {
             provider: "bmz-official".to_string(),
             account_id: "account-1".to_string(),
             base_url: "https://ir.example.test".to_string(),
+            ranking_primary: true,
             target: ResultIrTarget::Chart {
                 local_score_id: 2,
                 chart_sha256_hex: "current".to_string(),
                 ln_policy: LnScorePolicy::AutoLn,
                 double_option: DoubleOptionScoreBucket::Off,
                 rule_mode: RuleMode::Beatoraja,
+                bokutachi_game: None,
             },
         };
         let response = IrSubmitResponse {
@@ -1195,6 +1220,7 @@ mod tests {
             ln_policy: LnScorePolicy::AutoLn,
             double_option: DoubleOptionScoreBucket::Off,
             rule_mode: RuleMode::Beatoraja,
+            bokutachi_game: None,
         };
 
         assert!(target.matches_chart_result(

@@ -230,6 +230,7 @@ mod tests {
             LnScorePolicy::AutoLn,
             DoubleOptionScoreBucket::Off,
             bmz_gameplay::rule::RuleMode::Beatoraja,
+            None,
         )
         .unwrap();
         state.global = RankingLoadState::Loaded(ResultIrRanking {

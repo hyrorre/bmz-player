@@ -554,9 +554,7 @@ impl WinitApp {
             return;
         }
         self.result.result_ir = crate::screens::result_ir::spawn_result_ir_task(
-            self.boot.profile_paths.root_dir.clone(),
-            self.boot.profile_paths.score_db.clone(),
-            self.boot.profile_paths.network_db.clone(),
+            &self.boot.profile_paths,
             self.boot.app_paths.logs_dir.clone(),
             &self.boot.profile_config.ir,
             finished.stored.score_history_id,
@@ -564,6 +562,7 @@ impl WinitApp {
             finished.ln_policy,
             finished.double_option,
             finished.rule_mode,
+            self.bokutachi_result_ranking_game(finished),
         );
         if let Some(state) = self.result.result_ir.as_mut() {
             state.local_submission_notice = finished.summary.ir_last_error.clone();
@@ -587,6 +586,7 @@ impl WinitApp {
             finished.ln_policy,
             finished.double_option,
             finished.rule_mode,
+            self.bokutachi_result_ranking_game(finished),
         );
         let Some(mut state) = state else {
             return;
@@ -610,6 +610,7 @@ impl WinitApp {
         &mut self,
     ) -> Option<crate::screens::select_ir::SelectIrResultLookup> {
         let finished = self.result.finished_play.as_ref()?;
+        let bokutachi_game = self.bokutachi_result_ranking_game(finished);
         let context = select_ir_cache_context(
             self.boot.profile_config.play.ln_mode_policy,
             finished.ln_policy,
@@ -630,15 +631,33 @@ impl WinitApp {
             double_option,
             rule_mode,
             sha256,
+            bokutachi_game,
         ))
     }
 
     fn poll_result_ir_into_select_cache(&mut self) {
         let rankings = self.result.result_ir.as_mut().map(|state| state.poll()).unwrap_or_default();
         for ranking in rankings {
-            self.select
-                .select_ir
-                .cache_result_global_ranking(&ranking.chart_sha256_hex, &ranking.ranking);
+            if let Some(game) = ranking.bokutachi_game {
+                if let Some(finished) = &self.result.finished_play {
+                    let context = select_ir_cache_context(
+                        self.boot.profile_config.play.ln_mode_policy,
+                        finished.ln_policy,
+                        finished.double_option,
+                        finished.rule_mode,
+                    );
+                    self.select.select_ir.invalidate_bokutachi_chart(
+                        &self.boot.profile_config.ir,
+                        &context,
+                        game,
+                        finished.result.chart_sha256,
+                    );
+                }
+            } else {
+                self.select
+                    .select_ir
+                    .cache_result_global_ranking(&ranking.chart_sha256_hex, &ranking.ranking);
+            }
         }
     }
 
@@ -741,18 +760,19 @@ impl WinitApp {
                 Some(SelectItem::Chart(row)) => (
                     self.selected_chart_ir_sha256(),
                     row.chart.as_ref().map(|chart| chart.ln_profile).unwrap_or_default(),
-                    row.chart
-                        .as_ref()
-                        .and_then(|chart| KeyMode::from_str_opt(&chart.mode))
-                        .unwrap_or_default(),
+                    row.chart.as_ref().and_then(|chart| KeyMode::from_str_opt(&chart.mode)),
                 ),
-                _ => (None, crate::ln_policy::ChartLnProfile::default(), KeyMode::default()),
+                _ => (None, crate::ln_policy::ChartLnProfile::default(), None),
             };
         let configured_ln_policy = self.boot.profile_config.play.ln_mode_policy;
         let ln_policy = crate::ln_policy::score_ln_policy(configured_ln_policy, ln_profile);
-        let double_option =
-            self.select.double_option.normalize_for_key_mode(key_mode).score_bucket();
+        let double_option = self
+            .select
+            .double_option
+            .normalize_for_key_mode(key_mode.unwrap_or_default())
+            .score_bucket();
         let rule_mode = self.boot.profile_config.play.rule_mode;
+        let bokutachi_game = key_mode.and_then(|mode| self.bokutachi_select_ranking_game(mode));
         let context =
             select_ir_cache_context(configured_ln_policy, ln_policy, double_option, rule_mode);
         self.select.select_ir.update(
@@ -763,6 +783,7 @@ impl WinitApp {
             double_option,
             rule_mode,
             selected,
+            bokutachi_game,
         );
     }
 
