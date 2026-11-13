@@ -249,10 +249,32 @@ impl Renderer {
         height: u32,
         pixels: &[u8],
     ) -> Result<()> {
+        self.upsert_video_texture(id, width, height, video_texture::VideoFormat::Yuv420, pixels)
+    }
+
+    /// Upload tightly packed RGB24 and reconstruct an opaque RGBA texture on the GPU.
+    pub fn upsert_rgb24_texture(
+        &mut self,
+        id: TextureId,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+    ) -> Result<()> {
+        self.upsert_video_texture(id, width, height, video_texture::VideoFormat::Rgb24, pixels)
+    }
+
+    fn upsert_video_texture(
+        &mut self,
+        id: TextureId,
+        width: u32,
+        height: u32,
+        format: video_texture::VideoFormat,
+        pixels: &[u8],
+    ) -> Result<()> {
         self.gpu
             .as_mut()
-            .context("video planes require a GPU")?
-            .upsert_yuv420_texture(id, width, height, pixels)?;
+            .context("packed video textures require a GPU")?
+            .upsert_video_texture(id, width, height, format, pixels)?;
         self.forget_deferred_image(id);
         Ok(())
     }

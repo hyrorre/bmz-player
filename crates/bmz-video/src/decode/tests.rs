@@ -109,10 +109,26 @@ fn yuv_fast_path_requires_native_size_and_supported_color_metadata() {
     assert_eq!(frame.pixels[2048 * 1088], 128);
     assert_eq!(frame.pixels[2048 * 1088 * 5 / 4], 240);
     let scaled = playback_frame(&decoded, 10, &mut scaler, None, [1280, 720], true).unwrap();
-    assert_eq!(scaled.format, DecodedPixelFormat::Rgba);
+    assert_eq!(scaled.format, DecodedPixelFormat::Rgb24);
+    assert_eq!(scaled.pixels.len(), (scaled.width * scaled.height * 3) as usize);
     decoded.set_color_space(color::Space::BT709);
     let tagged = playback_frame(&decoded, 10, &mut scaler, None, [2048, 1088], true).unwrap();
-    assert_eq!(tagged.format, DecodedPixelFormat::Rgba);
+    assert_eq!(tagged.format, DecodedPixelFormat::Rgb24);
+}
+
+#[test]
+fn gpu_playback_emits_packed_rgb_and_leaves_alpha_to_the_draw() {
+    use ffmpeg_next::{format::Pixel, frame::Video};
+
+    bmz_ffmpeg::ensure_init().unwrap();
+    let mut decoded = Video::new(Pixel::RGBA, 5, 3);
+    decoded.data_mut(0).as_chunks_mut::<4>().0.fill([23, 97, 211, 72]);
+    let mut scaler = None;
+    let live = playback_frame(&decoded, 0, &mut scaler, None, [5, 3], true).unwrap();
+    assert_eq!(live.format, DecodedPixelFormat::Rgb24);
+    assert_eq!(live.pixels, [23, 97, 211].repeat(15));
+    let rgba = rgba_frame_from_video_with_scaler(&decoded, 0, &mut scaler, None, [0; 2]).unwrap();
+    assert_eq!(rgba.pixels, [23, 97, 211, 72].repeat(15));
 }
 
 #[test]
@@ -749,7 +765,7 @@ fn copy_rgba_frame_data_reuses_supplied_buffer() {
     let data = [1, 2, 3, 4, 5, 6, 7, 8];
     let buffer = Vec::with_capacity(64);
 
-    let copied = copy_rgba_frame_data_with_buffer(&data, 4, 4, 2, Some(buffer));
+    let copied = copy_packed_frame_data(&data, 4, 4, 2, Some(buffer));
 
     assert_eq!(copied, data);
     assert!(copied.capacity() >= 64);

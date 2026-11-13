@@ -98,6 +98,6 @@ pub struct PreparedTexture {
     pub(super) view: wgpu::TextureView,
     pub(super) width: u32,
     pub(super) height: u32,
-    pub(super) yuv: Option<Box<super::video_texture::VideoPlanes>>,
+    pub(super) video: Option<Box<super::video_texture::VideoTexture>>,
 }
 use super::*;

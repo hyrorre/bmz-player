@@ -15,7 +15,7 @@ pub(crate) struct ChannelDecodeState {
     finished_generation: AtomicU64,
     canvas_size: AtomicU64,
     recycled_pixels: Option<Mutex<Option<Vec<u8>>>>,
-    allow_yuv: bool,
+    gpu_playback: bool,
 }
 
 impl Default for ChannelDecodeState {
@@ -26,14 +26,15 @@ impl Default for ChannelDecodeState {
             finished_generation: AtomicU64::new(u64::MAX),
             canvas_size: AtomicU64::new(0),
             recycled_pixels: None,
-            allow_yuv: false,
+            gpu_playback: false,
         }
     }
 }
 
 impl ChannelDecodeState {
-    pub(crate) fn for_playback(canvas_size: [u32; 2], allow_yuv: bool) -> Self {
-        let state = Self { recycled_pixels: Some(Mutex::new(None)), allow_yuv, ..Self::default() };
+    pub(crate) fn for_playback(canvas_size: [u32; 2], gpu_playback: bool) -> Self {
+        let state =
+            Self { recycled_pixels: Some(Mutex::new(None)), gpu_playback, ..Self::default() };
         state.set_canvas_size(canvas_size);
         state
     }
@@ -162,7 +163,7 @@ pub(crate) fn decode_video_channel_pass(
     ictx: &mut ffmpeg_next::format::context::Input,
     decoder: &mut ffmpeg_next::decoder::Video,
     selected: &SelectedVideoStream,
-    scaler: &mut Option<RgbaVideoScaler>,
+    scaler: &mut Option<VideoScaler>,
     decoded: &mut ffmpeg_next::frame::Video,
     sender: &SyncSender<QueuedDecodedFrame>,
     stop_decode: &AtomicBool,
@@ -254,7 +255,7 @@ pub(crate) fn decode_video_channel_pass(
                 scaler,
                 channel.take_pixels(),
                 channel.canvas_size(),
-                channel.allow_yuv,
+                channel.gpu_playback,
             )?;
             match send_decoded_frame(sender, frame, generation, stop_decode, channel)? {
                 ChannelDecodePassEnd::Stop => return Ok(ChannelDecodePassEnd::Stop),
@@ -296,7 +297,7 @@ pub(crate) fn decode_video_channel_pass(
             scaler,
             channel.take_pixels(),
             channel.canvas_size(),
-            channel.allow_yuv,
+            channel.gpu_playback,
         )?;
         match send_decoded_frame(sender, frame, generation, stop_decode, channel)? {
             ChannelDecodePassEnd::Stop => return Ok(ChannelDecodePassEnd::Stop),
@@ -327,7 +328,7 @@ pub(crate) fn is_skippable_video_packet_error(
 
 pub(crate) fn publish_last_skipped_channel_frame(
     catch_up: &mut ChannelFrameCatchUp<(ffmpeg_next::frame::Video, i64)>,
-    scaler: &mut Option<RgbaVideoScaler>,
+    scaler: &mut Option<VideoScaler>,
     sender: &SyncSender<QueuedDecodedFrame>,
     generation: u64,
     stop_decode: &AtomicBool,
@@ -348,7 +349,7 @@ pub(crate) fn publish_last_skipped_channel_frame(
         scaler,
         channel.take_pixels(),
         channel.canvas_size(),
-        channel.allow_yuv,
+        channel.gpu_playback,
     )?;
     send_decoded_frame(sender, frame, generation, stop_decode, channel)
 }
