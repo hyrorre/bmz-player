@@ -34,7 +34,8 @@ fn build_result_ir_content(ui: &mut egui::Ui, state: &mut ResultIrState, text: L
         ui.separator();
     }
     for submission in &state.provider_submissions {
-        let dan = state.is_course() && crate::ir::bokutachi::is_provider(&submission.provider_key);
+        let bokutachi = crate::ir::bokutachi::is_provider(&submission.provider_key);
+        let dan = state.is_course() && bokutachi;
         ui.horizontal(|ui| {
             ui.strong(&submission.display_name);
             if dan {
@@ -46,7 +47,7 @@ fn build_result_ir_content(ui: &mut egui::Ui, state: &mut ResultIrState, text: L
         });
         if dan {
             match &submission.state {
-                IrSubmitState::Sending => {
+                IrSubmitState::Sending | IrSubmitState::BokutachiAccepted => {
                     ui.spinner();
                     ui.label(text.text("ir-bokutachi-dan-pending"));
                 }
@@ -72,6 +73,12 @@ fn build_result_ir_content(ui: &mut egui::Ui, state: &mut ResultIrState, text: L
             continue;
         }
         match &submission.state {
+            IrSubmitState::BokutachiAccepted => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(tr!(text, "ir-bokutachi-accepted"));
+                });
+            }
             IrSubmitState::Sending => {
                 ui.horizontal(|ui| {
                     ui.spinner();
@@ -93,16 +100,14 @@ fn build_result_ir_content(ui: &mut egui::Ui, state: &mut ResultIrState, text: L
                         ui.small(message.clone());
                     }
                 } else if *submitted > 0 {
-                    ui.colored_label(
-                        egui::Color32::LIGHT_GREEN,
-                        tr!(
-                            text,
-                            "result-ir-submitted",
-                            "submitted" => *submitted
-                        ),
-                    );
+                    let label = if bokutachi {
+                        tr!(text, "ir-queue-registered")
+                    } else {
+                        tr!(text, "result-ir-submitted", "submitted" => *submitted)
+                    };
+                    ui.colored_label(egui::Color32::LIGHT_GREEN, label);
                 } else if let Some(message) = message {
-                    if crate::ir::bokutachi::is_provider(&submission.provider_key) {
+                    if bokutachi {
                         ui.label(
                             if *status
                                 == Some(crate::storage::network_db::IrScoreJobStatus::NoChange)

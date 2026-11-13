@@ -790,7 +790,9 @@ async fn previously_failed_bms_submission_can_be_resent_with_a_string_song_id() 
     assert_eq!((report.processed, report.failed), (1, 0), "{report:?}");
     assert_eq!(job(&db).status, "pending");
     assert_eq!(job(&db).payload_json, original);
-    assert_eq!(run(&mut db, root.path(), &config, 115, false).await.submitted, 1);
+    assert!(super::sync::has_accepted_import(&db, job(&db).id).unwrap());
+    assert_eq!(run(&mut db, root.path(), &config, 111, false).await.processed, 0);
+    assert_eq!(run(&mut db, root.path(), &config, 112, false).await.submitted, 1);
     assert_eq!(job(&db).status, "succeeded");
 
     let requests = server.await.unwrap();

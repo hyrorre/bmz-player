@@ -71,6 +71,7 @@ pub fn cached_result_ir_state(
         global_skin_scroll_offset: 0,
         self_and_rivals_skin_scroll_offset: 0,
         source: ResultIrSource::SelectCache { resolved: false },
+        _bokutachi_result_lifetime: None,
         query: ResultIrTaskQuery {
             profile_root,
             provider: provider_key.to_string(),
@@ -177,6 +178,18 @@ pub(super) fn spawn_result_ir_task_for_target(
         });
     }
     let (sender, receiver) = channel();
+    let prefetch_global = query.supports_scope(IrRankingScope::Global);
+    let bokutachi_primary = crate::ir::bokutachi::is_provider(&query.provider);
+    let bokutachi_lifetime = super::bokutachi::spawn(
+        &network_db_path,
+        &score_db_path,
+        &logs_dir,
+        ir_config,
+        &query,
+        &submission_targets,
+        &sender,
+        prefetch_global && bokutachi_primary,
+    );
 
     let mut state = ResultIrState {
         local_submission_notice: None,
@@ -198,6 +211,7 @@ pub(super) fn spawn_result_ir_task_for_target(
         global_skin_scroll_offset: 0,
         self_and_rivals_skin_scroll_offset: 0,
         source: ResultIrSource::Submission,
+        _bokutachi_result_lifetime: bokutachi_lifetime,
         query: query.clone(),
         sender: sender.clone(),
         receiver,
@@ -206,42 +220,11 @@ pub(super) fn spawn_result_ir_task_for_target(
     let submit_sender = sender.clone();
     let ir_config = ir_config.clone();
     let submit_query = query.clone();
-    let submission_targets_for_task = submission_targets.clone();
-    let prefetch_global = query.supports_scope(IrRankingScope::Global);
-    let bokutachi_ranking = prefetch_global && crate::ir::bokutachi::is_provider(&query.provider);
-    let bokutachi_targets: Vec<_> = submission_targets
-        .iter()
-        .filter(|target| crate::ir::bokutachi::is_provider(&target.provider))
-        .cloned()
+    let submission_targets_for_task: Vec<_> = submission_targets
+        .into_iter()
+        .filter(|target| !crate::ir::bokutachi::is_provider(&target.provider))
         .collect();
-    if !bokutachi_targets.is_empty() {
-        let path = network_db_path.clone();
-        let query = query.clone();
-        let sender = sender.clone();
-        // Observe the durable outbox while this Result is visible. Network polling
-        // remains one GET per worker claim; dropping the view stops this observer.
-        tokio::spawn(async move {
-            let mut refresh_ranking = bokutachi_ranking;
-            if bokutachi_ranking {
-                fetch_ranking_and_send(&query, IrRankingScope::Global, &sender).await;
-            }
-            loop {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                for event in watch_result_submissions(&path, &query, &bokutachi_targets).await {
-                    let refresh = refresh_ranking
-                        && matches!(&event, ResultIrEvent::Submit { provider, submitted, .. }
-                            if provider == &query.provider && *submitted > 0);
-                    if sender.send(event).is_err() {
-                        return;
-                    }
-                    if refresh {
-                        refresh_ranking = false;
-                        fetch_ranking_and_send(&query, IrRankingScope::Global, &sender).await;
-                    }
-                }
-            }
-        });
-    }
+    let prefetch_submission_ranking = prefetch_global && !bokutachi_primary;
     // global は Result スキンの NUMBER_IR_RANK / OPTION_IR_* 表示にも使うため、
     // prefetch 設定に関わらず常に取得する。rivals scope のみ設定に従う。
     let prefetch_rivals =
@@ -250,6 +233,9 @@ pub(super) fn spawn_result_ir_task_for_target(
         let now = now_unix_seconds();
         let primary_outcome = async {
             crate::storage::migration::migrate_network_db(&network_db_path)?;
+            if bokutachi_primary {
+                return Ok(IrSyncReport::default());
+            }
             let mut network_db =
                 crate::storage::network_db::NetworkDatabase::open(&network_db_path)?;
             let (kind, local_score_id) = submit_query.target.submission_job();
@@ -279,7 +265,7 @@ pub(super) fn spawn_result_ir_task_for_target(
                 let mut included_global_ranking =
                     included_global_ranking_for_query(&submit_query, &report);
 
-                if primary_processed > 0 {
+                if !bokutachi_primary && primary_processed > 0 {
                     let _ = submit_sender.send(ResultIrEvent::Submit {
                         provider: submit_query.provider.clone(),
                         status: None,
@@ -287,7 +273,7 @@ pub(super) fn spawn_result_ir_task_for_target(
                         failed: report.failed,
                         message: report.messages.first().cloned(),
                     });
-                } else {
+                } else if !bokutachi_primary {
                     // 常駐同期が primary job を先に claim した場合だけ、そのjobの
                     // 完了を確認する。secondary provider の応答はランキング取得を待たせない。
                     let primary_target = ResultIrSubmissionTarget {
@@ -305,7 +291,7 @@ pub(super) fn spawn_result_ir_task_for_target(
                     }
                 }
 
-                if prefetch_global && !bokutachi_ranking && included_global_ranking.is_none() {
+                if prefetch_submission_ranking && included_global_ranking.is_none() {
                     match stored_included_global_ranking(&network_db_path, &submit_query) {
                         Ok(Some(ranking)) => included_global_ranking = Some(ranking),
                         Ok(None) => {}
@@ -328,7 +314,7 @@ pub(super) fn spawn_result_ir_task_for_target(
                 start_ranking_prefetches_then(
                     &submit_query,
                     included_global_ranking,
-                    prefetch_global && !bokutachi_ranking,
+                    prefetch_submission_ranking,
                     prefetch_rivals,
                     &submit_sender,
                     spawn_ranking_fetch,
@@ -407,7 +393,7 @@ pub(super) fn spawn_result_ir_task_for_target(
                 start_ranking_prefetches_then(
                     &submit_query,
                     None,
-                    prefetch_global && !bokutachi_ranking,
+                    prefetch_submission_ranking,
                     prefetch_rivals,
                     &submit_sender,
                     spawn_ranking_fetch,
@@ -1000,7 +986,9 @@ mod tests {
                 assert_eq!(scope, IrRankingScope::Global);
                 assert!(result.unwrap().entries.is_empty());
             }
-            ResultIrEvent::Submit { .. } => panic!("expected a ranking event"),
+            ResultIrEvent::Submit { .. } | ResultIrEvent::BokutachiAccepted { .. } => {
+                panic!("expected a ranking event")
+            }
         }
         assert!(!task.is_finished(), "follow-up work should still be pending");
         task.abort();

@@ -39,6 +39,7 @@ pub enum RankingLoadState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IrSubmitState {
     Sending,
+    BokutachiAccepted,
     Done { submitted: u32, failed: u32, message: Option<String>, status: Option<IrScoreJobStatus> },
 }
 
@@ -52,6 +53,9 @@ pub struct ResultIrProviderSubmission {
 
 #[derive(Debug)]
 pub enum ResultIrEvent {
+    BokutachiAccepted {
+        provider: String,
+    },
     Submit {
         provider: String,
         submitted: u32,
@@ -230,6 +234,7 @@ pub struct ResultIrState {
     global_skin_scroll_offset: usize,
     self_and_rivals_skin_scroll_offset: usize,
     source: ResultIrSource,
+    _bokutachi_result_lifetime: Option<tokio::sync::watch::Sender<()>>,
     query: ResultIrTaskQuery,
     sender: Sender<ResultIrEvent>,
     receiver: Receiver<ResultIrEvent>,
@@ -315,6 +320,18 @@ impl ResultIrState {
         let mut loaded_chart_rankings = Vec::new();
         while let Ok(event) = self.receiver.try_recv() {
             match event {
+                ResultIrEvent::BokutachiAccepted { provider } => {
+                    if let Some(submission) =
+                        self.provider_submissions.iter_mut().find(|s| s.provider_key == provider)
+                    {
+                        submission.state = IrSubmitState::BokutachiAccepted;
+                    }
+                    if provider == self.query.provider {
+                        self.submit = IrSubmitState::BokutachiAccepted;
+                        self.ir_connect_success_at = None;
+                        self.ir_connect_fail_at = None;
+                    }
+                }
                 ResultIrEvent::Submit { provider, submitted, failed, message, status } => {
                     let restricted_chart = failed > 0
                         && message
@@ -374,7 +391,10 @@ impl ResultIrState {
                             self.store_ranking(scope, ranking);
                         }
                         Err(error) => {
-                            if let Some(slot) = self.scope_slot(scope) {
+                            let keep_loaded = crate::ir::bokutachi::is_provider(&provider);
+                            if let Some(slot) = self.scope_slot(scope)
+                                && !(keep_loaded && matches!(slot, RankingLoadState::Loaded(_)))
+                            {
                                 *slot = RankingLoadState::Failed(error);
                             }
                         }
@@ -593,6 +613,7 @@ impl ResultIrState {
     }
 }
 
+mod bokutachi;
 mod snapshot;
 mod task;
 
@@ -828,6 +849,7 @@ mod tests {
             global_skin_scroll_offset: 3,
             self_and_rivals_skin_scroll_offset: 1,
             source: super::ResultIrSource::Submission,
+            _bokutachi_result_lifetime: None,
             query: ResultIrTaskQuery {
                 profile_root: PathBuf::new(),
                 provider: "bmz-official".to_string(),
@@ -1071,6 +1093,30 @@ mod tests {
 
         assert!(state.poll().is_empty());
         assert!(matches!(state.global, RankingLoadState::Loaded(_)));
+    }
+
+    #[test]
+    fn bokutachi_acceptance_and_refresh_failure_preserve_the_current_ranking() {
+        let mut state = cached_state();
+        state.query.provider = crate::ir::bokutachi::PROVIDER.to_string();
+        if let ResultIrTarget::Chart { bokutachi_game, .. } = &mut state.query.target {
+            *bokutachi_game = Some(crate::ir::bokutachi::Game::Bms7k);
+        }
+        state.global = RankingLoadState::Loaded(ranking_with_rank(IrRankingScope::Global, 3, 3));
+        let provider = state.query.provider.clone();
+        state.sender.send(ResultIrEvent::BokutachiAccepted { provider: provider.clone() }).unwrap();
+        state
+            .sender
+            .send(ResultIrEvent::Ranking {
+                provider,
+                scope: IrRankingScope::Global,
+                result: Err("temporary outage".into()),
+            })
+            .unwrap();
+
+        state.poll();
+        assert_eq!(state.submit, IrSubmitState::BokutachiAccepted);
+        assert_eq!(state.skin_snapshot().rank, Some(3));
     }
 
     #[test]

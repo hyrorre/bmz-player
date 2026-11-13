@@ -13,6 +13,7 @@ profile-ir-validate-key = 키 검증 후 저장
 profile-ir-bokutachi-help = submit_score 권한의 API 키로 연결합니다. 새 단곡과 코스 각 곡을 지원합니다: 7K/14K는 LR2oraja, 9K는 beatoraja, LN만 사용합니다. 각 곡의 램프는 풀 콤보 계열만 FULL COMBO이며 나머지는 NO PLAY입니다. PMS는 각 곡에 저장된 입력 장치를 사용합니다(Controller는 아케이드 크기 전제). 적격한 BMS 4곡 클리어는 개인 최고 기록이나 각 곡 전송과 별개로 단위를 갱신합니다. 14K의 2P MIRROR/FLIP은 단위 갱신 대상이 아닙니다. Bokutachi를 기본 IR로 선택하면 채보별 전체 랭킹이 표시됩니다.
 ir-bokutachi-no-change = 새 기록 추가가 확인되지 않음 (중복 등)
 ir-bokutachi-pending = 등록 확인 대기 중
+ir-bokutachi-accepted = 접수 완료 · 등록 확인 중
 ir-bokutachi-no-ranking = 이 결과에서는 Bokutachi 랭킹을 표시할 수 없습니다.
 profile-ir-delete-key = API 키 삭제
 profile-ir-check-key = 연결 확인

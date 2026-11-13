@@ -13,6 +13,7 @@ profile-ir-validate-key = キーを検証して保存
 profile-ir-bokutachi-help = submit_score権限のAPIキーで接続します。新規単曲とコース各曲に対応：7K／14KはLR2oraja、9Kはbeatoraja、LNのみ。コース各曲は原則NO PLAY、フルコンボ系のみFULL COMBOです。PMSは各曲に保存された入力機器へ送信します（Controller部門はACサイズが前提）。適格なBMSの4曲クリアでは、自己ベストや各曲送信と独立して段位を更新します。14Kの2P MIRROR・FLIPは段位対象外です。Primaryに選ぶと譜面別の全体ランキングを表示します。
 ir-bokutachi-no-change = 新規追加なし（重複等）
 ir-bokutachi-pending = 登録確認待ち
+ir-bokutachi-accepted = 受付済み・登録確認中
 ir-bokutachi-no-ranking = このリザルトではBokutachiのランキングを表示できません。
 profile-ir-delete-key = APIキーを削除
 profile-ir-check-key = 接続を再確認

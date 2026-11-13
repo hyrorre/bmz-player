@@ -13,6 +13,7 @@ profile-ir-validate-key = 验证并保存密钥
 profile-ir-bokutachi-help = 使用具有 submit_score 权限的 API 密钥连接。支持新单曲和组曲各曲：7K／14K 使用 LR2oraja，9K 使用 beatoraja，仅限 LN。各曲灯为 NO PLAY，满连类成绩为 FULL COMBO。PMS 使用各曲保存的输入设备分类（Controller 以街机尺寸为前提）。符合条件的 BMS 四曲通关会独立更新段位，无需刷新个人最佳或成功发送各曲。14K 的 2P MIRROR／FLIP 不支持段位更新。将 Bokutachi 设为主要 IR 可查看谱面总排行榜。
 ir-bokutachi-no-change = 未确认新增成绩（重复等原因）
 ir-bokutachi-pending = 等待注册确认
+ir-bokutachi-accepted = 已受理，正在确认注册
 ir-bokutachi-no-ranking = 此结果无法显示 Bokutachi 排行榜。
 profile-ir-delete-key = 删除 API 密钥
 profile-ir-check-key = 检查连接

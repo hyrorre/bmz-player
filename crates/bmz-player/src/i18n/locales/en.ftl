@@ -13,6 +13,7 @@ profile-ir-validate-key = Validate and save key
 profile-ir-bokutachi-help = Connect with an API key granting submit_score. New singles and course stages: 7K/14K with LR2oraja, 9K with beatoraja, LN only. Stage lamps are NO PLAY except FULL COMBO results. PMS uses each stage's saved input device (Controller assumes arcade size). Eligible four-chart BMS clears update classes independently of personal bests or stage submissions. 14K 2P MIRROR/FLIP cannot update classes. Select Bokutachi as Primary to see global chart rankings.
 ir-bokutachi-no-change = No new score confirmed (duplicates or other reasons)
 ir-bokutachi-pending = Awaiting registration confirmation
+ir-bokutachi-accepted = Accepted · Checking registration
 ir-bokutachi-no-ranking = Bokutachi rankings are unavailable for this result.
 profile-ir-delete-key = Delete API key
 profile-ir-check-key = Check connection

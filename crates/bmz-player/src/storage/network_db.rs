@@ -10,6 +10,7 @@ const SUCCEEDED_IR_SCORE_JOB_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
 const SUCCEEDED_IR_SCORE_JOB_RETAIN_RECENT_COUNT: u32 = 500;
 /// 恒久拒否されたjobの `next_attempt_at`（9999-12-31T23:59:59Z）。自動再試行はここに届かない。
 pub const IR_JOB_NO_AUTO_RETRY_AT: i64 = 253_402_300_799;
+pub(crate) const IR_JOB_SENDING_STALE_AFTER_SECONDS: i64 = 300;
 
 pub struct NetworkDatabase {
     conn: Connection,
