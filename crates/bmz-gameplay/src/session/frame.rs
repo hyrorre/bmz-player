@@ -584,7 +584,8 @@ pub fn result_is_settled(session: &GameSession, audio_now: TimeUs) -> bool {
 ///   記録済み入力には現在のオフセットを再適用しないため、負オフセット分は待たない。
 /// - 独立した対戦相手を持つ場合は、その採点も同じ条件で終わっていること。
 ///
-/// `E` は `chart.end_time`、`W` は適用済み判定窓の
+/// `E` は不可視ノーツを除く判定対象・地雷・LN終端の最終時刻
+/// （対象が無い譜面では従来の `chart.end_time`）、`W` は適用済み判定窓の
 /// [`JudgeWindows::result_settle_margin_us`]（ルール・キー種別・ランク・再生速度を反映済み）。
 /// 判定窓の境界 (`delta == W`) は Empty Poor として受け付けるため、比較は厳密な `>` にする。
 /// `PlayState` は確認しない。採点を閉じる判断は `Playing` の更新内でだけ行う。
@@ -592,8 +593,11 @@ pub fn natural_result_settled(session: &GameSession, audio_now: TimeUs) -> bool 
     if !session.judge.is_exhausted(&session.chart) {
         return false;
     }
-    let deadline =
-        session.chart.end_time.0.saturating_add(session.judge.window_set.result_settle_margin_us());
+    let deadline = session
+        .judge
+        .result_end_time(&session.chart)
+        .0
+        .saturating_add(session.judge.window_set.result_settle_margin_us());
     let primary_settled = if session.replay_player.is_some() && session.replay_lane_mask.is_none() {
         session
             .replay_player
@@ -623,8 +627,8 @@ fn battle_opponent_result_settled(opponent: &BattleOpponentSession, audio_now: T
         return false;
     }
     let deadline = opponent
-        .chart
-        .end_time
+        .judge
+        .result_end_time(&opponent.chart)
         .0
         .saturating_add(opponent.judge.window_set.result_settle_margin_us());
     let progress = match &opponent.replay_player {

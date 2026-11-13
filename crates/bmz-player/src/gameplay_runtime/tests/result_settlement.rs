@@ -141,7 +141,17 @@ fn last_point(
 #[test]
 fn settled_runtime_result_records_final_gauges_and_stays_fixed_until_finished() {
     let input = SharedInputBackend::default();
-    let session = single_note_session(input.clone());
+    let mut chart = single_note_chart();
+    let modified = Arc::make_mut(&mut chart);
+    let mut invisible = modified.lane_notes[Lane::Key1.index()][0].clone();
+    invisible.id = NoteId(2);
+    invisible.kind = NoteKind::Invisible;
+    invisible.time = TimeUs(5_000_000);
+    modified.lane_notes[Lane::Key1.index()].push(invisible);
+    modified.end_time = TimeUs(5_000_000);
+    let presentation_end = modified.end_time.0;
+    let mut session = prepared_with_chart(input.clone(), chart);
+    session.offsets.input_offset_us = 0;
     let windows = session.judge.window_set;
     let settle_margin = windows.result_settle_margin_us();
     let empty_poor_ms = windows.note.empty_poor_slow_us / 2_000;
@@ -210,10 +220,13 @@ fn settled_runtime_result_records_final_gauges_and_stays_fixed_until_finished() 
     );
 
     // Play keeps its existing 5s exit wait after the result settles.
-    driver.advance(END_US + bmz_gameplay::session::SESSION_END_MARGIN_US, Vec::new());
+    driver.advance(presentation_end + bmz_gameplay::session::SESSION_END_MARGIN_US, Vec::new());
     driver.client.poll();
     assert_eq!(driver.client.session.state, PlayState::Playing);
-    driver.advance(END_US + bmz_gameplay::session::SESSION_END_MARGIN_US + 1_000, Vec::new());
+    driver.advance(
+        presentation_end + bmz_gameplay::session::SESSION_END_MARGIN_US + 1_000,
+        Vec::new(),
+    );
     wait_until(|| {
         driver.client.poll();
         driver.client.session.state == PlayState::Finished

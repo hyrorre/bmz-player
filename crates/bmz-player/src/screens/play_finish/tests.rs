@@ -1192,16 +1192,23 @@ fn directly_owned_session_saves_its_settled_gauge_end_points() {
     };
     let mut session = session();
     session.state = PlayState::Ready;
-    session.autoplay = Some(bmz_gameplay::autoplay::AutoplayController::default());
+    let scoring_end = session.chart.end_time;
+    let chart = Arc::make_mut(&mut session.chart);
+    let mut invisible = chart.lane_notes[Lane::Key1.index()][0].clone();
+    invisible.id = NoteId(2);
+    invisible.kind = NoteKind::Invisible;
+    invisible.time = TimeUs(5_000_000);
+    chart.lane_notes[Lane::Key1.index()].push(invisible);
+    chart.end_time = TimeUs(5_000_000);
     let mut audio = bmz_audio::queue::ScheduledSoundQueue::new();
     session.audio_clock.pause_at(TimeUs(0));
     bmz_gameplay::session::advance_session_frame(&mut session, &mut audio);
-    let settled_at =
-        TimeUs(session.chart.end_time.0 + session.judge.window_set.result_settle_margin_us() + 1);
+    let settled_at = TimeUs(scoring_end.0 + session.judge.window_set.result_settle_margin_us() + 1);
     session.audio_clock.pause_at(settled_at);
     bmz_gameplay::session::advance_session_frame(&mut session, &mut audio);
     // The GameSession itself closed scoring; no gameplay worker is involved.
     assert_eq!(session.scoring_closed_at, Some(settled_at));
+    assert!(settled_at < session.chart.end_time);
     assert_eq!(session.state, PlayState::Playing);
     let expected: Vec<_> = session
         .gauge
@@ -1255,6 +1262,7 @@ fn directly_owned_session_saves_its_settled_gauge_end_points() {
         std::thread::sleep(Duration::from_millis(1));
     };
     assert_eq!(end_points(&finished.summary.graph), expected);
+    assert!(finished.stored.score_history_id > 0);
     assert_eq!(
         finished.gauge_carry.iter().map(|carry| carry.value).collect::<Vec<_>>(),
         expected.iter().map(|(_, _, value)| *value).collect::<Vec<_>>()
