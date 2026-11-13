@@ -20,7 +20,7 @@ pub async fn run_ir_command_with_paths_and_profile(
         IrCommand::Logout { provider } => logout(&profile_paths, &mut profile, &provider).await,
         IrCommand::Status => status(&profile_paths, &profile).await,
         IrCommand::Ranking { sha256, ln_policy, scope, limit } => {
-            ranking(&profile_paths, &profile, &sha256, &ln_policy, &scope, limit).await
+            ranking(app_paths, &profile_paths, &profile, &sha256, &ln_policy, &scope, limit).await
         }
         IrCommand::Sync => sync(app_paths, &profile_paths, &profile).await,
         IrCommand::UploadLocal {

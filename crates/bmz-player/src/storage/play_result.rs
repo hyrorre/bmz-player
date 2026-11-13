@@ -43,6 +43,8 @@ pub struct StorePlayResultRequest {
     pub rule_mode: String,
     pub assist_mask: u32,
     pub replay_events: Vec<ReplayEvent>,
+    pub branch_decisions: Option<Vec<bmz_core::replay::BranchDecision>>,
+    pub kaleid: Option<bmz_chart::kaleid::KaleidPlayEvidence>,
     pub arrange: ArrangeOption,
     pub arrange_2p: ArrangeOption,
     pub arrange_seed: Option<i64>,
@@ -143,6 +145,8 @@ pub fn store_play_result(
             arrange_pattern.clone(),
             replay_events.clone(),
         )
+        .with_branch_decisions(request.branch_decisions.clone())
+        .with_kaleid_evidence(request.kaleid.clone())
         .with_randomization(arrange_seed_2p, bms_random_choices.clone(), bms_switch_choices.clone())
         .with_seed_scheme(request.seed_scheme.clone())
         .with_s_random_schemes(request.s_random_scheme, request.s_random_scheme_2p)
@@ -179,7 +183,11 @@ pub fn store_play_result(
     );
     record.clear_type = request.mode.stored_clear_type(result.clear_type);
     let score_history_id = if request.update_score {
-        score_db.insert_score_with_mode(&record, request.mode.score_insert_mode())?
+        score_db.insert_score_with_kaleid(
+            &record,
+            request.mode.score_insert_mode(),
+            request.kaleid.as_ref(),
+        )?
     } else {
         score_db.update_score_clear_only(&record)?;
         0
@@ -223,6 +231,8 @@ pub fn store_play_result(
                 arrange_pattern.clone(),
                 replay_events.clone(),
             )
+            .with_branch_decisions(request.branch_decisions.clone())
+            .with_kaleid_evidence(request.kaleid.clone())
             .with_randomization(
                 arrange_seed_2p,
                 bms_random_choices.clone(),

@@ -141,7 +141,9 @@ impl MixerState {
             }
 
             let mut alive = true;
-            let sample_frames = sample.frame_count();
+            let sample_frames = voice.sound.sample_end_frames.map_or(sample.frame_count(), |end| {
+                sample.frame_count().min(usize::try_from(end).unwrap_or(usize::MAX))
+            });
             // 読込時リサンプル後はサンプルが出力レートと一致するため、補間不要の
             // ファストパス(整数インデックスで直接読み出し)で再生できる。
             let native_rate = sample.sample_rate() == output_sample_rate && playback_rate == 1.0;
@@ -310,6 +312,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn slice_bounds_belong_to_each_voice_and_preserve_an_earlier_tail() {
+        let mut bank = SampleBank::default();
+        bank.insert(
+            SoundId(1),
+            DecodedSample {
+                channels: 1,
+                sample_rate: 1_000,
+                frames: vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+            },
+        );
+        let mut mixer = MixerState::new(1_000);
+        let mut first = ScheduledSound::one_shot(0, SoundId(1), 1.0, 0.0);
+        first.sample_offset_frames = 1;
+        first.sample_end_frames = Some(4);
+        mixer.push_scheduled([first]);
+        let mut prefix = [0.0; 2];
+        mixer.mix_stereo(&bank, 0, &mut prefix);
+        assert_eq!(prefix, [0.2; 2]);
+        let mut next = ScheduledSound::one_shot(1, SoundId(1), 1.0, 0.0);
+        next.sample_offset_frames = 4;
+        next.sample_end_frames = Some(5);
+        mixer.push_scheduled([next]);
+        let mut output = [0.0; 6];
+        mixer.mix_stereo(&bank, 1, &mut output);
+        assert_eq!(output, [0.8, 0.8, 0.4, 0.4, 0.0, 0.0]);
+        assert!(mixer.voices.is_empty());
+    }
+
+    #[test]
     fn mix_stereo_adds_active_voice_samples() {
         let mut bank = SampleBank::default();
         bank.insert(
@@ -322,6 +353,7 @@ mod tests {
             start_time: None,
             start_frame: 10,
             sample_offset_frames: 0,
+            sample_end_frames: None,
             sound_id: SoundId(1),
             volume: 2.0,
             pan: 0.0,
@@ -352,6 +384,7 @@ mod tests {
             start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
+            sample_end_frames: None,
             sound_id: SoundId(1),
             volume: 1.0,
             pan: 0.0,
@@ -382,6 +415,7 @@ mod tests {
             start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
+            sample_end_frames: None,
             sound_id: SoundId(1),
             volume: 1.0,
             pan: 0.0,
@@ -414,6 +448,7 @@ mod tests {
             start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
+            sample_end_frames: None,
             sound_id: SoundId(1),
             volume: 1.0,
             pan: 0.0,
@@ -443,6 +478,7 @@ mod tests {
             start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
+            sample_end_frames: None,
             sound_id: SoundId(1),
             volume: 1.0,
             pan: 0.0,
@@ -476,6 +512,7 @@ mod tests {
             start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
+            sample_end_frames: None,
             sound_id: SoundId(1),
             volume: 1.0,
             pan: 0.0,
@@ -506,6 +543,7 @@ mod tests {
             start_time: None,
             start_frame: 10,
             sample_offset_frames: 0,
+            sample_end_frames: None,
             sound_id: SoundId(1),
             volume: 1.0,
             pan: 0.0,
@@ -540,6 +578,7 @@ mod tests {
             start_time: None,
             start_frame: 10,
             sample_offset_frames: 2,
+            sample_end_frames: None,
             sound_id: SoundId(1),
             volume: 1.0,
             pan: 0.0,
@@ -570,6 +609,7 @@ mod tests {
             start_time: None,
             start_frame: 0,
             sample_offset_frames: 0,
+            sample_end_frames: None,
             sound_id: SoundId(1),
             volume: 1.0,
             pan: 0.0,
@@ -604,6 +644,7 @@ mod tests {
             start_time: None,
             start_frame: 100,
             sample_offset_frames: 0,
+            sample_end_frames: None,
             sound_id: SoundId(1),
             volume: 1.0,
             pan: 0.0,
@@ -719,6 +760,7 @@ mod tests {
             start_time: None,
             start_frame,
             sample_offset_frames: 0,
+            sample_end_frames: None,
             sound_id: SoundId(sound_id),
             volume,
             pan: 0.0,

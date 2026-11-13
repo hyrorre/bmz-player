@@ -151,6 +151,18 @@ pub fn import_chart_bytes_with_assets(
     let mut chart =
         normalize::normalize_chart_with_assets(path, intermediate, &mut warnings, assets)?;
     chart.metadata.source_format = file_format.source_format();
+    if let Some(mut program) = chart.metadata.conditional.take() {
+        std::sync::Arc::make_mut(&mut program).set_bga_assets(&chart.bga_assets);
+        program.stabilize_default(&mut chart)?;
+        chart.sounds = program.all_sounds()?;
+        chart.metadata.conditional = Some(program);
+    }
+    for message in &chart.metadata.kaleid.diagnostics {
+        warnings.push(ImportWarning::ParserDiagnostic {
+            code: "KaleidPartial".into(),
+            message: message.clone(),
+        });
+    }
     Ok(ImportResult { chart, warnings, bms_random_choices, bms_switch_choices })
 }
 

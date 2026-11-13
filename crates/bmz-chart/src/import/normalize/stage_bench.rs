@@ -122,10 +122,11 @@ fn normalize_stage_timing() {
         for lane in Lane::ALL {
             let resolved = timed!(
                 "long notes",
-                normalize_lane_objects(
+                normalize_lane_objects_with_markers(
                     lane,
                     &lane_buckets[lane.index()],
                     intermediate.lnobj_wav_key,
+                    &intermediate.typed_lnobj,
                     &mut warnings,
                 )
             );
@@ -149,6 +150,18 @@ fn normalize_stage_timing() {
                 &sound_table,
                 &mut draft,
                 &mut warnings,
+                false,
+            )
+        );
+        let _ = timed!(
+            "long end sounds",
+            apply_layered_note_sounds(
+                &intermediate.long_end_sounds,
+                &intermediate.measures,
+                &sound_table,
+                &mut draft,
+                &mut warnings,
+                true,
             )
         );
         draft.bgm_events = timed!(

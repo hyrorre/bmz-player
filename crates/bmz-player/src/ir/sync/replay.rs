@@ -246,5 +246,8 @@ pub(super) fn ensure_score_payload_allowed(
     {
         bail!("rianIR local score backfill is disabled");
     }
+    if crate::ir::rian_ir::is_rian_ir_config(provider) {
+        crate::ir::rian_ir::ensure_score_payload_supported(payload)?;
+    }
     Ok(())
 }

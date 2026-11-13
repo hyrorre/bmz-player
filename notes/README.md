@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-13 | [Kaleidへのmain統合とBokutachi条件](2026/2026-11-13-kaleid-main-bokutachi.md) |
 | 2026-11-13 | [Qwilightプレイスキンの要素別オフセット](2026/2026-11-13-qwilight-element-offsets.md) |
 | 2026-11-13 | [不可視ノーツによる結果確定とCLEAR演出の遅れ](2026/2026-11-13-invisible-note-result-settlement.md) |
 | 2026-11-13 | [Qwilight CLEAR演出を結果確定時に開始する](2026/2026-11-13-qwilight-clear-settlement.md) |
@@ -75,6 +76,7 @@
 | 2026-11-08 | [音声予約の固定と選曲・HS変更時の移動](2026/2026-11-08-play-display-and-select-motion.md) |
 | 2026-11-08 | [AUTOの単一実効LN型をForce保存区分へ正規化](2026/2026-11-08-uniform-auto-ln-policy.md) |
 | 2026-11-08 | [書庫確認中のダウンロード一覧のpanic](2026/2026-11-08-download-list-validation.md) |
+| 2026-11-07 | [ED-rian KaleidBeat拡張の統合](2026/2026-11-07-kaleidbeat-ed-rian.md) |
 | 2026-11-07 | [EXTRA NOTEの配置改善（#61）](2026/2026-11-07-extra-note-placement.md) |
 | 2026-11-07 | [G-BATTLEで相手の判定が自分の判定表示へ混ざる問題](2026/2026-11-07-battle-judge-regions.md) |
 | 2026-11-07 | [Codex Securityの優先度中の指摘への対応](2026/2026-11-07-medium-security-fixes.md) |

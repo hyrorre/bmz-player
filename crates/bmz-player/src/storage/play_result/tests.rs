@@ -13,6 +13,8 @@ use crate::storage::migration::{SCORE_MIGRATIONS, run_migrations};
 
 #[test]
 fn store_play_result_writes_replay_and_score() {
+    let decisions =
+        vec![bmz_core::replay::BranchDecision { block: 0, branch: 1, time: TimeUs(10) }];
     let root = make_temp_dir("store-result");
     let paths = ProfilePaths {
         root_dir: root.clone(),
@@ -32,6 +34,19 @@ fn store_play_result_writes_replay_and_score() {
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let result = play_result(false);
+    let evidence = bmz_chart::kaleid::KaleidPlayEvidence {
+        provenance: bmz_chart::kaleid::KaleidProvenance {
+            diagnostics: vec!["unmatched free-zone marker ignored".into()],
+            ..bmz_chart::kaleid::KaleidProvenance::imported()
+        },
+        reference_total: 12,
+        actual_total: result.total_notes,
+        branches: decisions.clone(),
+        preplay_lamp: 5,
+        ended_at: TimeUs(20),
+        manually_stopped: true,
+        ..Default::default()
+    };
 
     let stored = store_play_result(
         &mut score_db,
@@ -48,6 +63,8 @@ fn store_play_result_writes_replay_and_score() {
             gauge_option: String::new(),
             rule_mode: String::new(),
             assist_mask: 0,
+            kaleid: Some(evidence.clone()),
+            branch_decisions: Some(decisions.clone()),
             replay_events: vec![ReplayEvent {
                 lane: Lane::Key1,
                 kind: InputKind::Press,
@@ -77,6 +94,12 @@ fn store_play_result_writes_replay_and_score() {
     assert!(!stored.replay_path.is_empty());
     assert!(root.join(&stored.replay_path).exists());
     let replay = crate::storage::replay::load_replay(&root.join(&stored.replay_path)).unwrap();
+    assert_eq!(replay.branch_decisions, Some(decisions));
+    assert_eq!(replay.kaleid.as_ref(), Some(&evidence));
+    assert_eq!(
+        score_db.kaleid_evidence(stored.score_history_id).unwrap().as_ref(),
+        Some(&evidence)
+    );
     assert_eq!(
         replay.effective_s_random_scheme().unwrap(),
         crate::screens::play_session::SRandomScheme::Lm120HzV1
@@ -131,6 +154,8 @@ fn store_play_result_skips_autoplay_replay_by_default() {
             gauge_option: String::new(),
             rule_mode: String::new(),
             assist_mask: 0,
+            kaleid: None,
+            branch_decisions: None,
             replay_events: Vec::new(),
             arrange: ArrangeOption::Normal,
             arrange_2p: ArrangeOption::Normal,
@@ -192,6 +217,8 @@ fn save_existing_replay_to_slot_overwrites_requested_slot() {
             gauge_option: String::new(),
             rule_mode: String::new(),
             assist_mask: 0,
+            kaleid: None,
+            branch_decisions: None,
             replay_events: vec![ReplayEvent {
                 lane: Lane::Key1,
                 kind: InputKind::Press,
@@ -279,6 +306,8 @@ fn store_play_result_saves_failed_replay_for_non_autoplay() {
             gauge_option: String::new(),
             rule_mode: String::new(),
             assist_mask: 0,
+            kaleid: None,
+            branch_decisions: None,
             replay_events: Vec::new(),
             arrange: ArrangeOption::Normal,
             arrange_2p: ArrangeOption::Normal,
@@ -342,6 +371,8 @@ fn store_play_result_course_stage_updates_single_best_with_rounded_clear() {
             gauge_option: String::new(),
             rule_mode: String::new(),
             assist_mask: 0,
+            kaleid: None,
+            branch_decisions: None,
             replay_events: Vec::new(),
             arrange: ArrangeOption::Normal,
             arrange_2p: ArrangeOption::Normal,
@@ -437,6 +468,8 @@ fn store_play_result_writes_history_and_default_slot_files() {
             gauge_option: String::new(),
             rule_mode: String::new(),
             assist_mask: 0,
+            kaleid: None,
+            branch_decisions: None,
             replay_events: Vec::new(),
             arrange: ArrangeOption::Normal,
             arrange_2p: ArrangeOption::Normal,
@@ -479,6 +512,8 @@ fn store_play_result_writes_history_and_default_slot_files() {
             gauge_option: String::new(),
             rule_mode: String::new(),
             assist_mask: 0,
+            kaleid: None,
+            branch_decisions: None,
             replay_events: Vec::new(),
             arrange: ArrangeOption::Normal,
             arrange_2p: ArrangeOption::Normal,
@@ -545,6 +580,8 @@ fn store_play_result_skips_slots_for_autoplay_when_disabled() {
             gauge_option: String::new(),
             rule_mode: String::new(),
             assist_mask: 0,
+            kaleid: None,
+            branch_decisions: None,
             replay_events: Vec::new(),
             arrange: ArrangeOption::Normal,
             arrange_2p: ArrangeOption::Normal,

@@ -66,6 +66,7 @@ fn independent_battle_opponent_replay_advances_without_taking_primary_lanes() {
     let mut session = session_with_autoplay(chart_with_keysound());
     session.autoplay = None;
     session.opponent.independent = Some(BattleOpponentSession {
+        conditional: Default::default(),
         chart: Arc::clone(&opponent_chart),
         key_mode: opponent_chart.metadata.key_mode,
         scored_total_notes: 1,
@@ -76,6 +77,8 @@ fn independent_battle_opponent_replay_advances_without_taking_primary_lanes() {
         gauge: GaugeState::new(bmz_core::clear::GaugeType::Normal, 160.0, 1),
         replay_judge_rate_percent: 100,
         replay_player: Some(ReplayPlayer {
+            kaleid: None,
+            branch_decisions: None,
             events: vec![bmz_core::replay::ReplayEvent {
                 lane: Lane::Key1,
                 kind: InputKind::Press,
@@ -145,6 +148,7 @@ fn independent_battle_opponent_without_replay_uses_autoplay() {
     session.autoplay = None;
     session.display_only_lane_mask[Lane::Key8.index()] = true;
     session.opponent.independent = Some(BattleOpponentSession {
+        conditional: Default::default(),
         chart: Arc::clone(&opponent_chart),
         key_mode: opponent_chart.metadata.key_mode,
         scored_total_notes: 1,
@@ -197,6 +201,7 @@ fn independent_battle_opponent_applies_hcn_hold_and_release_ticks() {
         let mut session = session_with_autoplay((*chart).clone());
         session.gauge = GaugeState::new(bmz_core::clear::GaugeType::Normal, 160.0, 100);
         session.opponent.independent = Some(BattleOpponentSession {
+            conditional: Default::default(),
             chart: Arc::clone(&chart),
             key_mode: chart.metadata.key_mode,
             scored_total_notes: 2,
@@ -208,6 +213,8 @@ fn independent_battle_opponent_applies_hcn_hold_and_release_ticks() {
             autoplay: (!release).then(AutoplayController::default),
             replay_judge_rate_percent: 100,
             replay_player: release.then(|| ReplayPlayer {
+                kaleid: None,
+                branch_decisions: None,
                 events: [(InputKind::Press, 0), (InputKind::Release, 100_000)]
                     .into_iter()
                     .map(|(kind, time)| bmz_core::replay::ReplayEvent {

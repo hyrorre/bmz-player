@@ -372,6 +372,8 @@ pub enum SkinPhase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlendMode {
     Normal,
+    /// Invert source RGB, preserve alpha, then use ordinary alpha blending (potion fallback).
+    InvertRgb,
     Add,
     /// LR2 `blend=3`: subtract source RGB weighted by alpha from the destination.
     Subtract,

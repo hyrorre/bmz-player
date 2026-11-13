@@ -23,6 +23,8 @@ pub(crate) fn stage(index: usize, mode: KeyMode) -> StageEvidence {
         completed: true,
         normal_score: true,
         has_bms_random: false,
+        kaleid: bmz_chart::kaleid::KaleidProvenance::imported(),
+        scored_notes: 100,
         arrange: ArrangeOption::Normal,
         arrange_2p: ArrangeOption::Normal,
         double_option: DoubleOption::Off,
@@ -42,6 +44,60 @@ fn play(mode: KeyMode) -> DanPlay {
         course_clear: true,
         course_failed: false,
         stages: std::array::from_fn(|i| stage(i, mode)),
+    }
+}
+
+#[test]
+fn dan_checks_kaleid_evidence_for_every_stage_including_force_ln_conversion() {
+    for index in 0..4 {
+        let mut p = play(KeyMode::K7);
+        p.stages[index].kaleid.source.hln = true;
+        assert!(p.request().is_ok());
+        p.stages[index].kaleid.effective.hln = true;
+        assert!(p.request().is_err());
+        p.stages[index].kaleid.effective.hln = false;
+        p.stages[index].kaleid.source.conditional = true;
+        assert!(p.request().is_err());
+        p.stages[index].kaleid = Default::default();
+        assert!(p.request().is_err());
+    }
+}
+
+#[tokio::test]
+async fn dan_converted_hln_requires_original_hash_and_registered_note_count() {
+    for matching in [true, false] {
+        let mut p = play(KeyMode::K14);
+        p.stages[2].kaleid.source.hln = true;
+        let chart = json!({"game":"bms-14k","chartID":"chart-hln","song":{"id":123},
+            "difficulty":"CHART","isPrimary":true,"data":{
+                "hashSHA256":p.stages[2].chart_sha256,"notecount":if matching {100} else {101}}});
+        let mut replies = vec![Reply {
+            path: "POST /api/v1/games/bms-14k/charts/resolve",
+            status: 200,
+            body: json!({"success":true,"body":{"chart":chart}}),
+            auth: false,
+            retry: None,
+        }];
+        if matching {
+            replies.push(reply(200, response("Successfully updated class.")));
+        }
+        let (origin, server) = server(replies).await;
+        let root = tempfile::tempdir().unwrap();
+        let (mut db, config, _) = setup(root.path(), &origin, Game::Bms14k);
+        let provider = &config.providers[0];
+        let (id, _) = enqueue(&mut db, provider);
+        let payload = DanJob::new(provider, 77, &Ok(p)).unwrap().unwrap();
+        db.conn()
+            .execute(
+                "UPDATE ir_score_jobs SET payload_json=?1 WHERE id=?2",
+                rusqlite::params![serde_json::to_string(&payload).unwrap(), id],
+            )
+            .unwrap();
+        run(&mut db, root.path(), &config, 100, false).await;
+        assert_eq!(saved(&db, id).0, if matching { "succeeded" } else { "ineligible" });
+        let requests = server.await.unwrap();
+        assert_eq!(requests[0]["identifier"], format!("{:064x}", 3));
+        assert_eq!(requests.len(), if matching { 2 } else { 1 });
     }
 }
 

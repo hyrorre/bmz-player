@@ -97,7 +97,7 @@ async fn step(
     ensure!(job.kind == IrJobKind::Score, "{}", super::unsupported());
     let payload: IrScoreSubmission =
         serde_json::from_str(&job.payload_json).context("Bokutachi: invalid stored play")?;
-    let ctx = context(&payload)?;
+    let ctx = super::convert::saved_context(&payload)?;
     ensure!(
         ctx.origin == crate::ir::credentials::credential_origin(&provider.base_url)?,
         "Bokutachi: job belongs to another origin"
@@ -137,6 +137,7 @@ async fn step(
         }
     }
     if progress.phase == "poll_failed" {
+        context(&payload)?;
         ensure!(
             explicit_resend,
             "Bokutachi: import failed; select this job and resend to restart registration: {}",
@@ -254,6 +255,7 @@ async fn step(
         }
         return Ok(());
     }
+    context(&payload)?;
     let credentials = crate::ir::credentials::load_credentials(root, &job.provider, &ctx.origin)?
         .context("Bokutachi: configure and validate the API key to resume")?;
     ensure!(

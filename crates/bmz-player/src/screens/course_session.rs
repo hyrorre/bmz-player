@@ -15,6 +15,8 @@ use crate::screens::result_model::{ResultJudgeCounts, ResultSummary};
 pub struct CourseStageChartInfo {
     pub play_level: String,
     pub difficulty_name: String,
+    /// Exact source import with this attempt's fixed RANDOM seed, even if unplayed.
+    pub kaleid: Option<bmz_chart::kaleid::KaleidProvenance>,
 }
 
 #[derive(Clone)]
@@ -150,7 +152,20 @@ impl ActiveCourseSession {
             .entry_results
             .iter()
             .fold(0u32, |total, r| total.saturating_add(r.finished.result.total_notes));
-        let total_notes = self.course_total_notes.max(played_total_notes);
+        // Replace each played DEFAULT estimate with its selected path. Unplayed
+        // stages retain DEFAULT counts, including when a previous stage failed.
+        let adjustment: i64 = self
+            .entry_results
+            .iter()
+            .filter_map(|entry| {
+                entry.finished.conditional_reference_total.map(|reference| {
+                    i64::from(entry.finished.result.total_notes) - i64::from(reference)
+                })
+            })
+            .sum();
+        let total_notes = (i64::from(self.course_total_notes) + adjustment)
+            .clamp(i64::from(played_total_notes), i64::from(u32::MAX))
+            as u32;
         let course_failed = played_entries < total_entries
             || self.entry_results.iter().any(|r| r.finished.result.clear_type == ClearType::Failed);
         let played_bp = self
@@ -335,6 +350,7 @@ fn stage_charts_from_results(
         let played = CourseStageChartInfo {
             play_level: summary.play_level.clone(),
             difficulty_name: summary.difficulty_name.clone(),
+            kaleid: stage_charts.get(index).and_then(|stage| stage.kaleid.clone()),
         };
         match stage_charts.get_mut(index) {
             Some(stage) => *stage = played,
@@ -462,6 +478,7 @@ mod tests {
                 CourseEntryResult {
                     chart_id: i as i64 + 1,
                     finished: FinishedPlaySession {
+                        conditional_reference_total: None,
                         result,
                         stored: StoredPlayResult {
                             score_history_id: 0,
@@ -724,6 +741,7 @@ mod tests {
                 CourseEntryResult {
                     chart_id: i as i64 + 1,
                     finished: FinishedPlaySession {
+                        conditional_reference_total: None,
                         result,
                         stored,
                         summary,
@@ -788,6 +806,7 @@ mod tests {
         let library = |level: &str| CourseStageChartInfo {
             play_level: level.to_string(),
             difficulty_name: "ANOTHER".to_string(),
+            kaleid: None,
         };
         session.stage_charts = vec![library("1"), library("2"), library("3"), library("4")];
         session.entry_results[0].finished.summary.play_level = "11".to_string();
@@ -896,6 +915,20 @@ mod tests {
             assert!(result.course_failed);
             assert!(!result.course_clear);
             assert!(result.trophy_results.iter().all(|trophy| !trophy.achieved));
+        }
+    }
+
+    #[test]
+    fn selected_path_counts_replace_played_defaults_but_keep_unplayed_stages() {
+        for actual in [50, 150] {
+            let mut session =
+                make_partial_session(2, vec![(make_score(actual, 0), actual, ClearType::Max)]);
+            session.course_total_notes = 200;
+            session.entry_results[0].finished.conditional_reference_total = Some(100);
+            let result = session.into_result();
+            assert_eq!(result.total_notes, actual + 100);
+            assert_eq!(result.max_ex_score, (actual + 100) * 2);
+            assert_eq!(result.bp, 100);
         }
     }
 

@@ -28,7 +28,7 @@ fn payload(game: Game) -> IrScoreSubmission {
     };
     serde_json::from_value(json!({
         "client": {"name":"BMZ", "version":"0.5.1", "platform":"test"},
-        "chart": {"sha256":"ab".repeat(32), "ln_profile":{"has_undefined_ln":true,"has_defined_ln":true,"has_defined_cn":true,"has_defined_hcn":true},
+        "chart": {"kaleid":bmz_chart::kaleid::KaleidProvenance::imported(), "sha256":"ab".repeat(32), "ln_profile":{"has_undefined_ln":true,"has_defined_ln":true,"has_defined_cn":true,"has_defined_hcn":true},
             "mode":mode.as_str(), "notes":{"total":999,"ln":0,"cn":0,"hcn":0,"mine":0}, "features":{"random":false,"stop":false,"ln":true,"cn":true,"hcn":true,"mine":false}},
         "rule": {"play_mode":"single", "key_mode":mode.as_str(), "gauge":"Hard", "ln_policy":"ForceLn", "effective_ln_mode":"ln", "judge_algorithm":"bmz_v1", "scoring":"bms_ex_score_v1", "rule_mode":if game.is_pms() {"Beatoraja"} else {"Lr2Oraja"}},
         "result": {"clear":"Hard", "played_at":1794182400i64, "judges":{
@@ -46,6 +46,89 @@ fn matcher(game: Game, p: &IrScoreSubmission) -> ChartMatch {
         match_type: if game.is_pms() { "tachiSongID" } else { "bmsChartHash" }.into(),
         identifier: if game.is_pms() { "123".into() } else { p.chart.sha256.clone() },
         difficulty: game.is_pms().then(|| "CHART".into()),
+    }
+}
+
+#[test]
+fn kaleid_requires_effective_ln_and_preserves_original_feature_exclusions() {
+    use crate::ir::types::IrEffectiveLnMode;
+    use bmz_chart::kaleid::{KaleidFeatures, KaleidProvenance};
+    for game in [Game::Bms7k, Game::Bms14k, Game::PmsController, Game::PmsKeyboard] {
+        let mut p = payload(game);
+        p.chart.kaleid.source =
+            KaleidFeatures { hln: true, typed_end: true, bar_line: true, ..Default::default() };
+        p.chart.kaleid.declared.hln = true;
+        p.chart.ln_profile.has_defined_hln = true;
+        let original = p.chart.sha256.clone();
+        assert!(context(&p).is_ok()); // HLN converted to FORCE LN.
+        assert!(crate::ir::bms_ir::ensure_score_payload_supported(&p).is_err());
+        assert!(convert(&p, matcher(game, &p)).is_ok());
+        assert_eq!(p.chart.sha256, original);
+        for flags in [
+            KaleidFeatures { conditional: true, ..Default::default() },
+            KaleidFeatures { free_zone: true, ..Default::default() },
+            KaleidFeatures { potion: true, ..Default::default() },
+            KaleidFeatures { dummy: true, ..Default::default() },
+        ] {
+            for source in [true, false] {
+                let mut bad = p.clone();
+                if source {
+                    bad.chart.kaleid.source = bad.chart.kaleid.source.union(flags);
+                } else {
+                    bad.chart.kaleid.effective = flags;
+                }
+                assert!(context(&bad).is_err());
+            }
+        }
+        for mode in [IrEffectiveLnMode::Cn, IrEffectiveLnMode::Hcn, IrEffectiveLnMode::Hln] {
+            let mut bad = p.clone();
+            bad.rule.effective_ln_mode = mode;
+            assert!(context(&bad).is_err());
+        }
+        p.chart.kaleid.effective.hln = true;
+        assert!(context(&p).is_err());
+        p.chart.kaleid.effective.hln = false;
+        p.rule.ln_policy = LnScorePolicy::ForceHln;
+        assert!(context(&p).is_err());
+        p.rule.ln_policy = LnScorePolicy::ForceLn;
+        for provenance in [
+            KaleidProvenance::default(),
+            KaleidProvenance { version: 2, ..KaleidProvenance::imported() },
+            KaleidProvenance {
+                diagnostics: vec!["invalid extension".into()],
+                ..KaleidProvenance::imported()
+            },
+        ] {
+            p.chart.kaleid = provenance;
+            assert!(context(&p).is_err());
+        }
+    }
+}
+
+#[tokio::test]
+async fn rejected_kaleid_queue_stops_before_network_and_explicit_retry_keeps_the_reason() {
+    for provenance in [
+        bmz_chart::kaleid::KaleidProvenance::default(),
+        bmz_chart::kaleid::KaleidProvenance {
+            source: bmz_chart::kaleid::KaleidFeatures { conditional: true, ..Default::default() },
+            ..bmz_chart::kaleid::KaleidProvenance::imported()
+        },
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let (mut db, config, json) = setup(root.path(), "http://127.0.0.1:1", Game::Bms7k);
+        let mut p: IrScoreSubmission = serde_json::from_str(&json).unwrap();
+        p.chart.kaleid = provenance;
+        db.conn()
+            .execute(
+                "UPDATE ir_score_jobs SET payload_json = ?1",
+                [serde_json::to_string(&p).unwrap()],
+            )
+            .unwrap();
+        assert_eq!(run(&mut db, root.path(), &config, 100, false).await.failed, 1);
+        assert!(job(&db).last_error.contains("Bokutachi:"));
+        assert!(!job(&db).last_error.contains("connect"));
+        assert_eq!(run(&mut db, root.path(), &config, 1000, false).await.processed, 0);
+        assert_eq!(resend_selected(&mut db, root.path(), &config, 1001).await.failed, 1);
     }
 }
 
@@ -575,6 +658,55 @@ fn accepted() -> Reply {
     reply.auth = true;
     reply.status = 202;
     reply
+}
+
+#[tokio::test]
+async fn converted_hln_matches_registered_counts_and_old_accepted_imports_only_poll() {
+    for matching in [true, false] {
+        let mut registered = chart(Game::Bms7k);
+        if !matching {
+            registered["data"]["notecount"] = json!(101);
+        }
+        let mut replies =
+            vec![ok("POST /api/v1/games/bms-7k/charts/resolve", json!({"chart":registered}))];
+        if matching {
+            replies.push(accepted());
+            replies.push(ok("GET /api/v1/imports/import-1/poll-status", json!({
+                "importStatus":"completed", "import":{"userID":42,"scoreIDs":["hln-ln-score"],"errors":[]}
+            })));
+        }
+        let (origin, server) = server(replies).await;
+        let root = tempfile::tempdir().unwrap();
+        let (mut db, config, json) = setup(root.path(), &origin, Game::Bms7k);
+        let mut p: IrScoreSubmission = serde_json::from_str(&json).unwrap();
+        p.chart.kaleid.source.hln = true;
+        p.chart.ln_profile.has_defined_hln = true;
+        db.conn()
+            .execute(
+                "UPDATE ir_score_jobs SET payload_json = ?1",
+                [serde_json::to_string(&p).unwrap()],
+            )
+            .unwrap();
+        run(&mut db, root.path(), &config, 100, false).await;
+        if matching {
+            // Model an import already accepted by an older client. Checking its
+            // status must remain possible without enabling a new POST.
+            p.chart.kaleid = Default::default();
+            db.conn()
+                .execute(
+                    "UPDATE ir_score_jobs SET payload_json = ?1",
+                    [serde_json::to_string(&p).unwrap()],
+                )
+                .unwrap();
+            assert_eq!(run(&mut db, root.path(), &config, 110, false).await.submitted, 1);
+        } else {
+            assert_eq!(job(&db).status, "ineligible");
+            assert_eq!(run(&mut db, root.path(), &config, 110, false).await.processed, 0);
+        }
+        let requests = server.await.unwrap();
+        assert_eq!(requests[0]["identifier"], p.chart.sha256);
+        assert_eq!(requests.len(), if matching { 3 } else { 1 });
+    }
 }
 
 fn error(path: &'static str, status: u16, auth: bool, retry: Option<&'static str>) -> Reply {

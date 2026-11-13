@@ -116,6 +116,34 @@ pub(super) fn prepare_bms_source(
     prepared
 }
 
+/// Resolve static branches before Kaleid compilation; choices are consumed once.
+pub(super) fn resolve_kaleid_source(
+    raw_text: &str,
+    pms_standard: bool,
+    random_source: &BmsRandomSource,
+    bms_random_choices: &mut Vec<i32>,
+    bms_switch_choices: &mut Vec<u64>,
+    warnings: &mut Vec<ImportWarning>,
+) -> String {
+    let mut text = String::with_capacity(raw_text.len());
+    let mut random = BeatorajaRandomResolver::new(random_source);
+    let mut line_number = 0;
+    for raw_line in raw_text.lines() {
+        if pms_standard && is_pms_bme_upper_channel_line(raw_line) {
+            continue;
+        }
+        line_number += 1;
+        let normalized = normalize_beatoraja_separator_line(raw_line);
+        let line = strip_cr(&normalized);
+        if random.keep_line(line, line_number, bms_random_choices, bms_switch_choices, warnings) {
+            text.push_str(strip_cr(line));
+        }
+        text.push('\n');
+    }
+    random.finish(warnings);
+    text
+}
+
 /// What `str::lines` leaves of `line + "\n"`.
 fn strip_cr(line: &str) -> &str {
     line.strip_suffix('\r').unwrap_or(line)

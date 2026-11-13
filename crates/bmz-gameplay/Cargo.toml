@@ -13,3 +13,6 @@ tracing.workspace = true
 bmz-core = { path = "../bmz-core" }
 bmz-chart = { path = "../bmz-chart" }
 bmz-audio = { path = "../bmz-audio" }
+
+[dev-dependencies]
+tempfile = "3"

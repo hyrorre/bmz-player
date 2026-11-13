@@ -1277,4 +1277,13 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
                 WHERE normal_best_eligible = 1;",
         ],
     },
+    Migration {
+        version: 36,
+        // Evidence belongs to a real play, never to a synthetic combination of best metrics.
+        // Missing rows identify legacy/imported histories with unknown interpretation.
+        statements: &["CREATE TABLE score_kaleid_plays (
+            score_history_id INTEGER PRIMARY KEY REFERENCES score_history(id) ON DELETE CASCADE,
+            evidence_json TEXT NOT NULL
+        );"],
+    },
 ];

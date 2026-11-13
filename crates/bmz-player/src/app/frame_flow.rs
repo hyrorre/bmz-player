@@ -515,6 +515,12 @@ impl WinitApp {
             &self.boot.profile_config.ir,
             score_id,
             crate::screens::result_ir::ResultIrCourseHashes {
+                entry_kaleid: self
+                    .result
+                    .finished_course
+                    .as_ref()
+                    .map(|course| self.course_kaleid_provenance(course))
+                    .unwrap_or_default(),
                 local: course_hash,
                 rian_v1: rian_course_hash_v1,
                 bms_ir: bms_ir_course_key,
@@ -733,7 +739,7 @@ impl WinitApp {
         let (selected, ln_profile, key_mode) =
             match self.select.select_items.get(self.select.selected_index) {
                 Some(SelectItem::Chart(row)) => (
-                    row.score_sha256(),
+                    self.selected_chart_ir_sha256(),
                     row.chart.as_ref().map(|chart| chart.ln_profile).unwrap_or_default(),
                     row.chart
                         .as_ref()

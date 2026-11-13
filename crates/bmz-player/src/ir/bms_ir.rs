@@ -122,11 +122,13 @@ pub fn fixed_base_url(requested: Option<&str>) -> Result<String> {
 pub fn score_submission_supported(
     rule_mode: RuleMode,
     source_format: ChartSourceFormat,
-    _source_ln_profile: ChartLnProfile,
-    _ln_policy: LnScorePolicy,
+    source_ln_profile: ChartLnProfile,
+    ln_policy: LnScorePolicy,
     double_option: DoubleOption,
 ) -> bool {
-    matches!(rule_mode, RuleMode::Beatoraja | RuleMode::Lr2Oraja)
+    !source_ln_profile.has_defined_hln
+        && ln_policy != LnScorePolicy::ForceHln
+        && matches!(rule_mode, RuleMode::Beatoraja | RuleMode::Lr2Oraja)
         && matches!(
             source_format,
             ChartSourceFormat::Bms | ChartSourceFormat::Bmson | ChartSourceFormat::Pms
@@ -143,6 +145,13 @@ pub fn score_submission_supported(
 pub fn ensure_score_payload_supported(payload: &IrScoreSubmission) -> Result<()> {
     if crate::ir::backfill::is_local_backfill_submission(payload) {
         bail!("BMS-IR local score backfill is disabled");
+    }
+    if let Some(reason) = super::kaleid::bms_ir_block_reason(&payload.chart.kaleid) {
+        bail!(reason);
+    }
+    if payload.chart.ln_profile.has_defined_hln || payload.rule.ln_policy == LnScorePolicy::ForceHln
+    {
+        bail!("BMS-IR acceptance of HLN charts, including FORCE conversions, is unconfirmed");
     }
     if !matches!(payload.rule.rule_mode.as_str(), "Beatoraja" | "Lr2Oraja") {
         bail!("BMS-IR rule mode is not supported");
@@ -814,6 +823,7 @@ mod tests {
                 platform: "test".to_string(),
             },
             chart: IrChartPayload {
+                kaleid: bmz_chart::kaleid::KaleidProvenance::imported(),
                 source_format: "bms".to_string(),
                 sha256: "ab".repeat(32),
                 md5: Some("cd".repeat(16)),

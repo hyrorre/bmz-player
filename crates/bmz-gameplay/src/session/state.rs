@@ -90,6 +90,7 @@ pub struct FrameTimes {
 #[derive(Debug, Clone, Default)]
 pub struct BgmScheduler {
     pub next_index: usize,
+    pub(super) skip: std::collections::HashSet<usize>,
 }
 
 /// キー音自動再生用のレーン別カーソル。押下有無に関わらず、譜面の生タイミング
@@ -97,6 +98,7 @@ pub struct BgmScheduler {
 #[derive(Debug, Clone, Default)]
 pub struct AutoKeysoundScheduler {
     pub next_note_index: [usize; LANE_COUNT],
+    pub(super) skip: std::collections::HashSet<(NoteId, SoundId)>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -147,6 +149,7 @@ impl AssistRuntime {
 }
 
 pub struct GameSession {
+    pub conditional: super::conditional::ConditionalRuntime,
     /// SessionMode is owned by the app crate; keep its stable skin/API index so
     /// Result can preserve the mode even when a battle target is attached.
     pub session_mode_index: u8,
@@ -372,6 +375,7 @@ impl GameSession {
 /// G-BATTLE opponent state. The opponent uses its own chart and judge cursor so
 /// its arrangement never changes the primary player's score chart.
 pub struct BattleOpponentSession {
+    pub conditional: super::conditional::ConditionalRuntime,
     pub chart: Arc<PlayableChart>,
     pub key_mode: KeyMode,
     pub scored_total_notes: u32,
@@ -466,7 +470,10 @@ impl BgmScheduler {
     /// Starts scheduling at `start_time` without recreating BGM events that
     /// have already passed. Events exactly on the boundary remain playable.
     pub fn starting_at(chart: &PlayableChart, start_time: TimeUs) -> Self {
-        Self { next_index: chart.bgm_events.partition_point(|event| event.time < start_time) }
+        Self {
+            next_index: chart.bgm_events.partition_point(|event| event.time < start_time),
+            ..Self::default()
+        }
     }
 
     /// Starts scheduling at `start_time` and recreates only BGM voices that
@@ -514,6 +521,7 @@ impl BgmScheduler {
                         start_time: clock.time_to_instant(start_time),
                         start_frame: clock.start_output_frame,
                         sample_offset_frames,
+                        sample_end_frames: None,
                         sound_id: event.sound,
                         volume: (volume * chart_volume).clamp(0.0, 1.0),
                         pan: 0.0,
@@ -522,7 +530,8 @@ impl BgmScheduler {
                         fade_out_frames: 0,
                         catch_up: true,
                         restart_policy: RestartPolicy::StopSameSound,
-                    },
+                    }
+                    .with_chart_slice(chart, clock.sample_rate),
                 ))
             })
             .collect::<Vec<_>>();
@@ -543,30 +552,39 @@ impl BgmScheduler {
                 break;
             }
 
+            if self.skip.remove(&self.next_index) {
+                self.next_index += 1;
+                continue;
+            }
+
             let chart_volume = bmz_chart::volume::chart_channel_volume_factor(
                 bmz_chart::volume::chart_volume_at_time(&chart.bgm_volume_events, event.time),
             );
-            audio.schedule(ScheduledSound {
-                immediate: !clock.schedule_ahead,
-                start_time: clock
-                    .schedule_ahead
-                    .then(|| clock.time_to_instant(event.time))
-                    .flatten(),
-                start_frame: if clock.schedule_ahead {
-                    clock.time_to_output_frame(event.time)
-                } else {
-                    0
-                },
-                sample_offset_frames: 0,
-                sound_id: event.sound,
-                volume: (volume * chart_volume).clamp(0.0, 1.0),
-                pan: 0.0,
-                loop_playback: false,
-                fade_in_frames: 0,
-                fade_out_frames: 0,
-                catch_up: clock.schedule_ahead,
-                restart_policy: RestartPolicy::StopSameSound,
-            });
+            audio.schedule(
+                ScheduledSound {
+                    immediate: !clock.schedule_ahead,
+                    start_time: clock
+                        .schedule_ahead
+                        .then(|| clock.time_to_instant(event.time))
+                        .flatten(),
+                    start_frame: if clock.schedule_ahead {
+                        clock.time_to_output_frame(event.time)
+                    } else {
+                        0
+                    },
+                    sample_offset_frames: 0,
+                    sample_end_frames: None,
+                    sound_id: event.sound,
+                    volume: (volume * chart_volume).clamp(0.0, 1.0),
+                    pan: 0.0,
+                    loop_playback: false,
+                    fade_in_frames: 0,
+                    fade_out_frames: 0,
+                    catch_up: clock.schedule_ahead,
+                    restart_policy: RestartPolicy::StopSameSound,
+                }
+                .with_chart_slice(chart, clock.sample_rate),
+            );
 
             self.next_index += 1;
         }
@@ -617,31 +635,38 @@ impl AutoKeysoundScheduler {
                     bmz_chart::volume::chart_volume_at_time(&chart.key_volume_events, note.time),
                 );
                 for sound_id in note.sounds() {
-                    audio.schedule(ScheduledSound {
-                        immediate: !clock.schedule_ahead,
-                        start_time: clock
-                            .schedule_ahead
-                            .then(|| clock.time_to_instant(note.time))
-                            .flatten(),
-                        start_frame: if clock.schedule_ahead {
-                            clock.time_to_output_frame(note.time)
-                        } else {
-                            0
-                        },
-                        sample_offset_frames: 0,
-                        sound_id,
-                        volume: (volume * chart_volume).clamp(0.0, 1.0),
-                        pan: 0.0,
-                        loop_playback: false,
-                        fade_in_frames: 0,
-                        fade_out_frames: 0,
-                        // Keysounds must start at the sample head. catch_up seek
-                        // into short kick/bass WAVs sounds like a pitch change;
-                        // a few ms late from-head is preferable and keeps manual
-                        // key-press latency the same path.
-                        catch_up: false,
-                        restart_policy: RestartPolicy::StopSameSound,
-                    });
+                    if self.skip.remove(&(note.id, sound_id)) {
+                        continue;
+                    }
+                    audio.schedule(
+                        ScheduledSound {
+                            immediate: !clock.schedule_ahead,
+                            start_time: clock
+                                .schedule_ahead
+                                .then(|| clock.time_to_instant(note.time))
+                                .flatten(),
+                            start_frame: if clock.schedule_ahead {
+                                clock.time_to_output_frame(note.time)
+                            } else {
+                                0
+                            },
+                            sample_offset_frames: 0,
+                            sample_end_frames: None,
+                            sound_id,
+                            volume: (volume * chart_volume).clamp(0.0, 1.0),
+                            pan: 0.0,
+                            loop_playback: false,
+                            fade_in_frames: 0,
+                            fade_out_frames: 0,
+                            // Keysounds must start at the sample head. catch_up seek
+                            // into short kick/bass WAVs sounds like a pitch change;
+                            // a few ms late from-head is preferable and keeps manual
+                            // key-press latency the same path.
+                            catch_up: false,
+                            restart_policy: RestartPolicy::StopSameSound,
+                        }
+                        .with_chart_slice(chart, clock.sample_rate),
+                    );
                 }
             }
         }
@@ -652,6 +677,18 @@ pub fn compute_frame_times(session: &GameSession) -> FrameTimes {
     let audio_now = session.audio_clock.now();
     let schedule_ahead = schedule_ahead_us(&session.audio_clock);
     let audio_schedule_until = TimeUs(audio_now.0.saturating_add(schedule_ahead));
+    if let Some(end) = session
+        .replay_player
+        .as_ref()
+        .and_then(|p| p.kaleid.as_ref())
+        .filter(|evidence| evidence.manually_stopped && session.replay_lane_mask.is_none())
+        .map(|evidence| evidence.ended_at)
+    {
+        return FrameTimes {
+            audio_now: audio_now.min(end),
+            audio_schedule_until: audio_schedule_until.min(end),
+        };
+    }
     FrameTimes { audio_now, audio_schedule_until }
 }
 

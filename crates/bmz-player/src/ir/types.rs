@@ -20,6 +20,7 @@ pub enum IrEffectiveLnMode {
     Ln,
     Cn,
     Hcn,
+    Hln,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +47,8 @@ pub struct IrClientInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IrChartPayload {
+    #[serde(default)]
+    pub kaleid: bmz_chart::kaleid::KaleidProvenance,
     /// Original chart file syntax. Empty only on queue jobs created before this field existed.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_format: String,
@@ -107,6 +110,8 @@ pub struct IrChartLnProfile {
     pub has_defined_ln: bool,
     pub has_defined_cn: bool,
     pub has_defined_hcn: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_defined_hln: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
@@ -115,11 +120,23 @@ pub struct IrChartNotes {
     pub ln: u32,
     pub cn: u32,
     pub hcn: u32,
+    #[serde(default)]
+    pub hln: u32,
     pub mine: u32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct IrChartFeatures {
+    #[serde(default)]
+    pub hln: bool,
+    #[serde(default)]
+    pub conditional: bool,
+    #[serde(default)]
+    pub free_zone: bool,
+    #[serde(default)]
+    pub potion: bool,
+    #[serde(default)]
+    pub dummy: bool,
     pub random: bool,
     pub stop: bool,
     pub ln: bool,

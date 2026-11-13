@@ -107,6 +107,7 @@ pub fn spawn_course_result_ir_task(
         logs_dir,
         ir_config,
         ResultIrTarget::Course {
+            entry_kaleid: hashes.entry_kaleid,
             local_score_id,
             course_hash: hashes.local,
             rian_course_hash_v1: hashes.rian_v1,
@@ -722,7 +723,29 @@ pub(super) async fn fetch_result_ranking(
     scope: IrRankingScope,
 ) -> anyhow::Result<ResultIrRanking> {
     match &query.target {
-        ResultIrTarget::Chart { chart_sha256_hex, ln_policy, double_option, rule_mode, .. } => {
+        ResultIrTarget::Chart {
+            local_score_id,
+            chart_sha256_hex,
+            ln_policy,
+            double_option,
+            rule_mode,
+        } => {
+            let provenance = crate::storage::score_db::ScoreDatabase::open(
+                &query.profile_root.join("score.db"),
+            )?
+            .kaleid_evidence(*local_score_id)?
+            .map(|evidence| evidence.provenance)
+            .unwrap_or_default();
+            let blocked = if crate::ir::bms_ir::is_bms_ir_provider(&query.provider) {
+                crate::ir::kaleid::bms_ir_block_reason(&provenance)
+            } else if crate::ir::rian_ir::is_rian_ir_provider(&query.provider) {
+                crate::ir::kaleid::rian_ir_block_reason(&provenance)
+            } else {
+                None
+            };
+            if let Some(reason) = blocked {
+                anyhow::bail!(reason);
+            }
             let ranking = fetch_ranking(
                 &ResultIrQuery {
                     profile_root: query.profile_root.clone(),
@@ -739,6 +762,7 @@ pub(super) async fn fetch_result_ranking(
             Ok(chart_ranking_to_result_ir_ranking(&ranking))
         }
         ResultIrTarget::Course {
+            entry_kaleid,
             course_hash,
             rian_course_hash_v1,
             bms_ir_course_key,
@@ -747,6 +771,24 @@ pub(super) async fn fetch_result_ranking(
             rule_mode,
             ..
         } => {
+            if crate::ir::bms_ir::is_bms_ir_provider(&query.provider) {
+                anyhow::ensure!(
+                    !entry_kaleid.is_empty(),
+                    "BMS-IR: コース各曲の拡張解釈情報がありません。"
+                );
+            }
+            for provenance in entry_kaleid {
+                let blocked = if crate::ir::bms_ir::is_bms_ir_provider(&query.provider) {
+                    crate::ir::kaleid::bms_ir_block_reason(provenance)
+                } else if crate::ir::rian_ir::is_rian_ir_provider(&query.provider) {
+                    crate::ir::kaleid::rian_ir_block_reason(provenance)
+                } else {
+                    None
+                };
+                if let Some(reason) = blocked {
+                    anyhow::bail!(reason);
+                }
+            }
             if scope != IrRankingScope::Global {
                 anyhow::bail!("course IR ranking supports global scope only");
             }

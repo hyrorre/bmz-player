@@ -363,6 +363,13 @@ impl GaugeState {
         self.auto_shift_if_needed();
     }
 
+    /// Direct recovery affects every living gauge; it cannot revive a failed gauge.
+    pub fn apply_potion(&mut self, recovery: f64) {
+        for gauge in &mut self.gauges {
+            gauge.apply_potion(recovery);
+        }
+    }
+
     /// HCN 押下中のゲージ増加 1 tick。beatoraja `JudgeManager` は
     /// `mpassingcount` が +200ms を超えるたびに GREAT を rate 0.5 で適用する。
     pub fn apply_hcn_hold(&mut self) {

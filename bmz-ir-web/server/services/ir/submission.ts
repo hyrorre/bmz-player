@@ -537,15 +537,18 @@ async function upsertChart(payload: IrScoreSubmission, doubleOption: IrDoubleOpt
     lnNotes: notes.ln,
     cnNotes: notes.cn,
     hcnNotes: notes.hcn,
+    hlnNotes: notes.hln,
     mineNotes: notes.mine,
     hasStop: features.stop,
     hasUndefinedLn: profile.has_undefined_ln,
     hasDefinedLn: profile.has_defined_ln,
     hasDefinedCn: profile.has_defined_cn,
     hasDefinedHcn: profile.has_defined_hcn,
+    hasDefinedHln: profile.has_defined_hln,
     hasLn: features.ln ?? profile.has_defined_ln ?? profile.has_undefined_ln,
     hasCn: features.cn ?? profile.has_defined_cn,
     hasHcn: features.hcn ?? profile.has_defined_hcn,
+    hasHln: features.hln ?? profile.has_defined_hln,
     hasMine: features.mine,
   }
   const values = {
@@ -562,6 +565,7 @@ async function upsertChart(payload: IrScoreSubmission, doubleOption: IrDoubleOpt
     lnNotes: reported.lnNotes ?? 0,
     cnNotes: reported.cnNotes ?? 0,
     hcnNotes: reported.hcnNotes ?? 0,
+    hlnNotes: reported.hlnNotes ?? 0,
     mineNotes: reported.mineNotes ?? 0,
     hasRandom: features.random ?? false,
     hasStop: reported.hasStop ?? false,
@@ -569,9 +573,21 @@ async function upsertChart(payload: IrScoreSubmission, doubleOption: IrDoubleOpt
     hasDefinedLn: reported.hasDefinedLn ?? false,
     hasDefinedCn: reported.hasDefinedCn ?? false,
     hasDefinedHcn: reported.hasDefinedHcn ?? false,
+    hasDefinedHln: reported.hasDefinedHln ?? false,
     hasLn: reported.hasLn ?? false,
     hasCn: reported.hasCn ?? false,
     hasHcn: reported.hasHcn ?? false,
+    hasHln: reported.hasHln ?? false,
+    hasConditional: features.conditional ?? false,
+    // Interpretation of the original source belongs to the chart. Selected/converted
+    // features and diagnostics belong to the signed evidence of each individual play.
+    kaleid: payload.chart.kaleid
+      ? {
+          version: payload.chart.kaleid.version,
+          declared: { ...payload.chart.kaleid.declared },
+          source: { ...payload.chart.kaleid.source },
+        }
+      : {},
     hasMine: reported.hasMine ?? false,
     sourceUrl: payload.chart.urls?.source ?? null,
     appendUrl: payload.chart.urls?.append ?? null,
@@ -609,6 +625,11 @@ async function upsertChart(payload: IrScoreSubmission, doubleOption: IrDoubleOpt
       set: {
         ...blanks,
         hasRandom: sql`${charts.hasRandom} or excluded.has_random`,
+        hasConditional: sql`${charts.hasConditional} or excluded.has_conditional`,
+        hasDefinedHln: sql`${charts.hasDefinedHln} or excluded.has_defined_hln`,
+        hasHln: sql`${charts.hasHln} or excluded.has_hln`,
+        kaleid: sql`case when coalesce(json_extract(${charts.kaleid}, '$.version'), 0) = 0
+          then excluded.kaleid else json_remove(${charts.kaleid}, '$.effective', '$.diagnostics') end`,
       },
     })
     .returning({
@@ -621,19 +642,23 @@ async function upsertChart(payload: IrScoreSubmission, doubleOption: IrDoubleOpt
       lnNotes: charts.lnNotes,
       cnNotes: charts.cnNotes,
       hcnNotes: charts.hcnNotes,
+      hlnNotes: charts.hlnNotes,
       mineNotes: charts.mineNotes,
       hasStop: charts.hasStop,
       hasUndefinedLn: charts.hasUndefinedLn,
       hasDefinedLn: charts.hasDefinedLn,
       hasDefinedCn: charts.hasDefinedCn,
       hasDefinedHcn: charts.hasDefinedHcn,
+      hasDefinedHln: charts.hasDefinedHln,
       hasLn: charts.hasLn,
       hasCn: charts.hasCn,
       hasHcn: charts.hasHcn,
+      hasHln: charts.hasHln,
+      hasConditional: charts.hasConditional,
       hasMine: charts.hasMine,
       hasRandom: charts.hasRandom,
     })
-  if (stored && !stored.hasRandom) {
+  if (stored && !stored.hasRandom && !stored.hasConditional) {
     const fields = (Object.keys(reported) as (keyof typeof reported)[]).filter(
       (key) => reported[key] != null && reported[key] !== stored[key],
     )

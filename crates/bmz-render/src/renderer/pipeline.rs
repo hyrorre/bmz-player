@@ -213,7 +213,15 @@ pub(super) fn create_image_pipeline(
     bind_group_layout: &wgpu::BindGroupLayout,
     blend_mode: BlendMode,
 ) -> wgpu::RenderPipeline {
+    let inverted_source;
     let shader_source = match blend_mode {
+        BlendMode::InvertRgb => {
+            inverted_source = IMAGE_SHADER.replace(
+                "return textureSample(image_texture, image_sampler, input.uv) * input.tint;",
+                "let pixel = textureSample(image_texture, image_sampler, input.uv);\n    return vec4<f32>(vec3<f32>(1.0) - pixel.rgb, pixel.a) * input.tint;",
+            );
+            inverted_source.as_str()
+        }
         BlendMode::LayerMask => IMAGE_SHADER_LAYER,
         BlendMode::Normal
         | BlendMode::Add
@@ -228,6 +236,7 @@ pub(super) fn create_image_pipeline(
         if matches!(blend_mode, BlendMode::Composite(_)) { "fs_composite" } else { "fs_main" };
     let label = match blend_mode {
         BlendMode::Normal => "bmz-render image pipeline",
+        BlendMode::InvertRgb => "bmz-render inverted RGB image pipeline",
         BlendMode::Add => "bmz-render additive image pipeline",
         BlendMode::Subtract => "bmz-render subtractive image pipeline",
         BlendMode::Multiply => "bmz-render multiply image pipeline",
@@ -372,7 +381,9 @@ pub(super) fn image_blend_state(blend_mode: BlendMode) -> wgpu::BlendState {
             };
             wgpu::BlendState { color, alpha }
         }
-        BlendMode::Normal | BlendMode::LayerMask => wgpu::BlendState::ALPHA_BLENDING,
+        BlendMode::Normal | BlendMode::InvertRgb | BlendMode::LayerMask => {
+            wgpu::BlendState::ALPHA_BLENDING
+        }
         BlendMode::Subtract => wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::SrcAlpha,

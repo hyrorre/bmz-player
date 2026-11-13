@@ -46,6 +46,35 @@ pub struct ScoreDatabase {
     conn: Connection,
 }
 
+impl ScoreDatabase {
+    pub fn store_kaleid_evidence(
+        &self,
+        history_id: i64,
+        evidence: &bmz_chart::kaleid::KaleidPlayEvidence,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO score_kaleid_plays(score_history_id, evidence_json) VALUES (?1, ?2)",
+            params![history_id, serde_json::to_string(evidence)?],
+        )?;
+        Ok(())
+    }
+
+    pub fn kaleid_evidence(
+        &self,
+        history_id: i64,
+    ) -> Result<Option<bmz_chart::kaleid::KaleidPlayEvidence>> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT evidence_json FROM score_kaleid_plays WHERE score_history_id = ?1",
+                [history_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        json.map(|json| serde_json::from_str(&json).map_err(Into::into)).transpose()
+    }
+}
+
 /// Each score key occupies four SQLite bind variables. Keep batches below the
 /// historical 999-variable default while leaving room for future predicates.
 const SCORE_KEY_LOOKUP_BATCH_SIZE: usize = 200;

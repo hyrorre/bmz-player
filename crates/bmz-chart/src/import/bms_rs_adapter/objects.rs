@@ -59,7 +59,14 @@ pub(super) fn build_resources(bms: &Bms) -> IntermediateResources {
             sv.value().as_ref().ok().map(|v| StopDef { key: id.as_u16(), value: v.get() as u64 })
         })
         .collect();
-    IntermediateResources { wavs, bmps, bpm_table, stop_table, swbga_defs: build_swbga_defs(bms) }
+    IntermediateResources {
+        wavs,
+        bmps,
+        bpm_table,
+        stop_table,
+        swbga_defs: build_swbga_defs(bms),
+        metric_sound_slices: Vec::new(),
+    }
 }
 
 pub(super) fn build_swbga_defs(bms: &Bms) -> Vec<super::super::intermediate::SwBgaDef> {

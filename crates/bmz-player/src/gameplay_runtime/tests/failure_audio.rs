@@ -86,6 +86,8 @@ fn optional_play_behaviors_missed_keysound_reaches_audio_in_normal_and_replay() 
             runtime.session.audio_mix.bgm_volume = 0.0;
             if replay {
                 runtime.session.replay_player = Some(bmz_gameplay::replay::ReplayPlayer {
+                    kaleid: None,
+                    branch_decisions: None,
                     events: Vec::new(),
                     next_index: 0,
                     next_scoring_time: None,
@@ -118,6 +120,8 @@ fn optional_play_behaviors_hcn_miss_plays_then_mutes_and_resumes_on_press() {
             runtime.session.audio_mix.bgm_volume = 0.0;
             if replay {
                 runtime.session.replay_player = Some(bmz_gameplay::replay::ReplayPlayer {
+                    kaleid: None,
+                    branch_decisions: None,
                     events: vec![bmz_core::replay::ReplayEvent {
                         lane: Lane::Key4,
                         kind: InputKind::Press,
@@ -366,6 +370,8 @@ fn replay_gauge_failure_stops_audio_and_autoplay_completion_keeps_tails() {
         let mut processor = audio.processor();
         if replay {
             runtime.session.replay_player = Some(bmz_gameplay::replay::ReplayPlayer {
+                kaleid: None,
+                branch_decisions: None,
                 events: Vec::new(),
                 next_index: 0,
                 next_scoring_time: None,

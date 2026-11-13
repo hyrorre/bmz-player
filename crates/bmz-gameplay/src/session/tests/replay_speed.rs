@@ -100,6 +100,7 @@ fn replay_session(mode: LongNoteMode, opponent: bool) -> GameSession {
     };
     if opponent {
         session.opponent.independent = Some(BattleOpponentSession {
+            conditional: Default::default(),
             chart: Arc::clone(&session.chart),
             key_mode: session.primary_key_mode,
             scored_total_notes: session.scored_total_notes,
@@ -185,19 +186,21 @@ fn playback_trace(
             ));
         }
     }
-    assert!(
+    assert_eq!(
         if opponent {
             session.opponent.independent.as_ref().unwrap().score.past_notes
         } else {
             session.score.past_notes
-        } > 0
+        },
+        session.scored_total_notes,
+        "all notes must be settled, including missed notes: mode={mode:?}, opponent={opponent}"
     );
     trace
 }
 
 #[test]
 fn replay_scoring_is_independent_of_speed_frame_cadence_and_visual_offset() {
-    for mode in [LongNoteMode::Ln, LongNoteMode::Cn, LongNoteMode::Hcn] {
+    for mode in [LongNoteMode::Ln, LongNoteMode::Cn, LongNoteMode::Hcn, LongNoteMode::Hln] {
         for opponent in [false, true] {
             let baseline = playback_trace(mode, &[100], 0, opponent, None);
             for offset in [0, -20_000] {
@@ -242,7 +245,7 @@ fn practice_human_input_keeps_speed_scaled_judge_windows() {
 
 #[test]
 fn replay_long_note_end_boundaries_keep_the_same_scoring_at_every_speed() {
-    for mode in [LongNoteMode::Ln, LongNoteMode::Cn, LongNoteMode::Hcn] {
+    for mode in [LongNoteMode::Ln, LongNoteMode::Cn, LongNoteMode::Hcn, LongNoteMode::Hln] {
         for end_time in [983_999, 984_000, 1_000_000, 1_016_000, 1_016_001] {
             for opponent in [false, true] {
                 let baseline = playback_trace(mode, &[100], 0, opponent, Some(end_time));
@@ -254,6 +257,129 @@ fn replay_long_note_end_boundaries_keep_the_same_scoring_at_every_speed() {
                     );
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn hln_full_replay_settles_misses_and_finishes() {
+    for no_inputs in [false, true] {
+        let mut session = replay_session(LongNoteMode::Hln, false);
+        if no_inputs {
+            session.replay_player.as_mut().unwrap().events.clear();
+        }
+        let mut audio = TestAudio::default();
+        for now in (0..=10_000_000).step_by(10_000) {
+            session.audio_clock.pause_at(TimeUs(now));
+            advance_session_frame(&mut session, &mut audio);
+        }
+        assert_eq!(session.result_judgements[&NoteId(5)].judge, Judge::Poor);
+        assert_eq!(session.score.past_notes, 5);
+        assert!(session.judge.is_exhausted(&session.chart));
+        assert_eq!(session.state, PlayState::Finished);
+        if no_inputs {
+            assert_eq!(session.score.ex_score(), 0);
+            assert_eq!(session.score.bp(), 5);
+        }
+    }
+}
+
+fn autoplay_battle_session(chart: PlayableChart) -> GameSession {
+    let mut session = session_with_autoplay(chart);
+    let mut opponent = replay_session(LongNoteMode::Hln, true).opponent.independent.unwrap();
+    opponent.chart = session.chart.clone();
+    opponent.scored_total_notes = session.scored_total_notes;
+    opponent.replay_player = None;
+    opponent.autoplay = Some(AutoplayController::default());
+    session.opponent.independent = Some(opponent);
+    session
+}
+
+#[test]
+fn battle_viewer_seek_starts_the_opponent_clock_at_the_restored_prefix() {
+    let mut chart = (*replay_session(LongNoteMode::Hln, false).chart).clone();
+    for note in chart.lane_notes.iter_mut().flatten() {
+        note.time.0 += 119_500_000;
+    }
+    for pair in &mut chart.long_notes {
+        pair.start_time.0 += 119_500_000;
+        pair.end_time.0 += 119_500_000;
+    }
+    chart.end_time.0 += 119_500_000;
+    let mut session = autoplay_battle_session(chart);
+    prepare_viewer_seek(&mut session, TimeUs(120_000_000));
+    let opponent = session.opponent.independent.as_ref().unwrap();
+    assert_eq!(opponent.conditional.processed_time, Some(TimeUs(119_999_999)));
+    assert_eq!(
+        super::super::frame::next_battle_opponent_time(opponent, TimeUs(120_000_000)),
+        Some(TimeUs(120_000_000))
+    );
+    session.audio_clock.pause_at(TimeUs(130_000_000));
+    advance_session_frame(&mut session, &mut TestAudio::default());
+    let opponent = session.opponent.independent.as_ref().unwrap();
+    assert_eq!(opponent.score.past_notes, 5);
+    assert_eq!(opponent.score.ex_score(), 10);
+}
+
+#[test]
+fn battle_clock_jumps_over_idle_time_without_losing_later_notes() {
+    let mut chart = (*replay_session(LongNoteMode::Hln, false).chart).clone();
+    let mut note = chart.lane_notes[Lane::Key1.index()].last().unwrap().clone();
+    note.id = NoteId(7);
+    note.time = TimeUs(120_000_000);
+    chart.lane_notes[Lane::Key1.index()].push(note);
+    chart.total_notes += 1;
+    chart.end_time = TimeUs(120_000_000);
+    let mut session = autoplay_battle_session(chart);
+    let mut audio = TestAudio::default();
+    session.audio_clock.pause_at(TimeUs(4_000_000));
+    advance_session_frame(&mut session, &mut audio);
+    let opponent = session.opponent.independent.as_ref().unwrap();
+    assert_eq!(opponent.score.past_notes, 5);
+    // A 116-second idle gap requires one update, not 116,000 empty judge passes.
+    assert_eq!(
+        super::super::frame::next_battle_opponent_time(opponent, TimeUs(120_000_000)),
+        Some(TimeUs(120_000_000))
+    );
+    session.audio_clock.pause_at(TimeUs(120_000_000));
+    advance_session_frame(&mut session, &mut audio);
+    assert_eq!(session.opponent.independent.as_ref().unwrap().score.past_notes, 6);
+}
+
+#[test]
+fn battle_first_update_sets_auto_before_input_settles_an_empty_zone() {
+    let chart = super::conditional::imported("#000SF:01\n#00011:00010000");
+    let mut session = autoplay_battle_session(chart);
+    session.audio_clock.pause_at(TimeUs(1_000_000));
+    advance_session_frame(&mut session, &mut TestAudio::default());
+    let opponent = session.opponent.independent.as_ref().unwrap();
+    assert_eq!(opponent.score.past_notes, 2);
+    assert_eq!(opponent.score.ex_score(), 4);
+}
+
+#[test]
+fn battle_autoplay_long_stall_keeps_holds_and_branch_evaluation() {
+    let chart = super::conditional::imported(
+        "#HLNOBJ ZZ\n#HCNOBJ YY\n#00011:01ZZ\n#00012:01YY\n#CONDITIONAL 60\n#WHEN SCORE>=6\n#06111:0101\n#DEFAULT\n#06111:01\n#ENDCONDITIONAL",
+    );
+    let mut baseline = None;
+    for step in [16_000, 125_000_000] {
+        let mut session = autoplay_battle_session(chart.clone());
+        let mut audio = TestAudio::default();
+        for now in (0..125_000_000).step_by(step) {
+            session.audio_clock.pause_at(TimeUs(now));
+            advance_session_frame(&mut session, &mut audio);
+        }
+        session.audio_clock.pause_at(TimeUs(125_000_000));
+        advance_session_frame(&mut session, &mut audio);
+        let opponent = session.opponent.independent.as_ref().unwrap();
+        assert_eq!(opponent.conditional.decisions[0].branch, 0);
+        assert_eq!(opponent.score.past_notes, 5);
+        let state = format!("{:?}|{}", opponent.score, opponent.gauge.current().value);
+        if let Some(baseline) = &baseline {
+            assert_eq!(&state, baseline);
+        } else {
+            baseline = Some(state);
         }
     }
 }

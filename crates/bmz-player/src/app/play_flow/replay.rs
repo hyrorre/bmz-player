@@ -127,11 +127,7 @@ impl WinitApp {
                 return false;
             }
         };
-        let player = bmz_gameplay::replay::ReplayPlayer {
-            events: replay_file.events.clone(),
-            next_index: 0,
-            next_scoring_time: None,
-        };
+        let player = replay_file.player();
         let freq_semitones = replay_file.recorded_freq_semitones();
         let options = PlayStartOptions {
             read_archive_assets: true,
@@ -255,11 +251,7 @@ impl WinitApp {
                 return false;
             }
         };
-        let player = bmz_gameplay::replay::ReplayPlayer {
-            events: replay_file.events.clone(),
-            next_index: 0,
-            next_scoring_time: None,
-        };
+        let player = replay_file.player();
         let freq_semitones = replay_file.recorded_freq_semitones();
         let options = PlayStartOptions {
             read_archive_assets: true,

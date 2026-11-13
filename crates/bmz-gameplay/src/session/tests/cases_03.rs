@@ -111,6 +111,7 @@ fn viewer_seek_prefills_independent_battle_opponent() {
     let window = JudgeWindow::symmetric(16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000);
     let mut session = session_with_autoplay(chart_with_keysound());
     session.opponent.independent = Some(BattleOpponentSession {
+        conditional: Default::default(),
         chart: Arc::clone(&opponent_chart),
         key_mode: opponent_chart.metadata.key_mode,
         scored_total_notes: 1,

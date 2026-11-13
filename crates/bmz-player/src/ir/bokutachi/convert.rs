@@ -77,6 +77,16 @@ pub struct CourseStageContext {
 }
 
 pub(crate) fn context(payload: &IrScoreSubmission) -> Result<PlayContext> {
+    let context = saved_context(payload)?;
+    if let Some(reason) = crate::ir::kaleid::bokutachi_block_reason(&payload.chart.kaleid) {
+        bail!(reason);
+    }
+    Ok(context)
+}
+
+/// Existing accepted imports may still be polled. Every new or repeated POST
+/// must go through `context`, including jobs with a prepared wire request.
+pub(super) fn saved_context(payload: &IrScoreSubmission) -> Result<PlayContext> {
     let context: PlayContext = serde_json::from_value(
         payload
             .play_options
@@ -101,7 +111,8 @@ pub(crate) fn context(payload: &IrScoreSubmission) -> Result<PlayContext> {
         "Bokutachi: invalid display battle scoring scope"
     );
     ensure!(
-        payload.rule.ln_policy == LnScorePolicy::ForceLn,
+        payload.rule.ln_policy == LnScorePolicy::ForceLn
+            && payload.rule.effective_ln_mode == crate::ir::types::IrEffectiveLnMode::Ln,
         "Bokutachi: the saved score must use LN only"
     );
     ensure!(

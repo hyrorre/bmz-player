@@ -85,3 +85,32 @@ fn declared_asset_lookup_keeps_declared_bga_paths_without_probing_files() {
     assert_eq!(without_assets(&declared), without_assets(&resolved));
     assert_eq!(declared.chart.bga_asset_by_bmp_key, resolved.chart.bga_asset_by_bmp_key);
 }
+
+#[test]
+fn conditional_branches_reuse_import_asset_paths_after_files_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("song.bmc");
+    let movie = dir.path().join("movie.mp4");
+    std::fs::write(&movie, b"mp4").unwrap();
+    let text = b"#BPM 120\n#BMP01 movie.mpg\n#CONDITIONAL 1\n#WHEN AUTO==1\n#00204:01\n#DEFAULT\n#00304:01\n#ENDCONDITIONAL\n";
+    let import = |assets| {
+        import_chart_bytes_with_assets(&path, text, BmsRandomSource::Seed(None), assets)
+            .unwrap()
+            .chart
+    };
+    let resolved = import(AssetLookup::Resolve { warn_missing: true });
+    let declared = import(AssetLookup::Declared);
+    assert_eq!(resolved.bga_assets[0].path, movie);
+    assert_eq!(declared.bga_assets[0].path, dir.path().join("movie.mpg"));
+    // A branch must neither repeat disk probes nor change the preloaded BGA's path.
+    std::fs::remove_file(&movie).unwrap();
+    for chart in [resolved, declared] {
+        let program = chart.metadata.conditional.as_ref().unwrap();
+        for choice in [None, Some(0), Some(1)] {
+            let branch = program.materialize(&[choice]).unwrap();
+            assert_eq!(branch.bga_assets[0].path, chart.bga_assets[0].path);
+            assert_eq!(branch.bga_assets[0].kind, chart.bga_assets[0].kind);
+            assert_eq!(branch.bga_asset_by_bmp_key, chart.bga_asset_by_bmp_key);
+        }
+    }
+}

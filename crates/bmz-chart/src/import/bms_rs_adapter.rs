@@ -63,6 +63,9 @@ use super::intermediate::{
 use crate::model::{JudgeRankKind, JudgeRankSpec, LongNoteMode};
 
 mod compat;
+mod kaleid;
+mod long_end;
+mod long_note_headers;
 mod metadata;
 mod objects;
 mod prepare;
@@ -245,16 +248,151 @@ fn import_with_layout<T: KeyLayoutMapper>(
 ) -> Result<IntermediateChart, ImportError> {
     let identity = compute_chart_identity(bytes);
     let raw_text = decode_bms_text(bytes, warnings);
-    let source = prepare_bms_source(
+    let pms_standard = layout == ChartKeyLayout::pms(PmsKeyLayout::Standard);
+    if !kaleid::needs_interpretation(&raw_text, layout) {
+        // Keep main's single-pass preparation for ordinary charts.
+        let source = prepare_bms_source(
+            &raw_text,
+            pms_standard,
+            random_source,
+            bms_random_choices,
+            bms_switch_choices,
+            warnings,
+        );
+        return parse_prepared_with_layout::<T>(
+            source_path,
+            layout,
+            source,
+            &[],
+            identity,
+            random_source,
+            warnings,
+        )
+        .map(|(chart, _)| chart);
+    }
+    let text = resolve_kaleid_source(
         &raw_text,
-        layout == ChartKeyLayout::pms(PmsKeyLayout::Standard),
+        pms_standard,
         random_source,
         bms_random_choices,
         bms_switch_choices,
         warnings,
     );
-    drop(raw_text);
+    let mut bms_headers = BTreeMap::new();
+    for line in raw_text.lines() {
+        insert_bms_header_line(&mut bms_headers, line);
+    }
+    let has_bms_random = raw_text.lines().any(declares_bms_random);
+    crate::conditional::compile(&text, source_path, |text| {
+        let mut chart = parse_resolved_with_layout::<T>(
+            source_path,
+            layout,
+            text,
+            identity.clone(),
+            random_source,
+            warnings,
+        )?;
+        apply_raw_judge_rank_headers(&mut chart, &bms_headers);
+        if chart.metadata.source_url.is_empty() {
+            chart.metadata.source_url = bms_headers.get("URL").cloned().unwrap_or_default();
+        }
+        chart.metadata.append_url = append_url_from_headers(&bms_headers);
+        chart.metadata.bms_headers = bms_headers.clone();
+        chart.metadata.has_bms_random = has_bms_random;
+        Ok(chart)
+    })
+}
 
+fn parse_resolved_with_layout<T: KeyLayoutMapper>(
+    source_path: &Path,
+    layout: ChartKeyLayout,
+    text: &str,
+    identity: ChartIdentity,
+    random_source: &BmsRandomSource,
+    warnings: &mut Vec<ImportWarning>,
+) -> Result<IntermediateChart, ImportError> {
+    let (hln_parse_text, hln_mode) = long_note_headers::preprocess(text);
+    let kaleid = kaleid::extract::<T>(&hln_parse_text, layout);
+    let source = prepare_bms_source(
+        &kaleid.text,
+        false,
+        random_source,
+        &mut Vec::new(),
+        &mut Vec::new(),
+        warnings,
+    );
+    let (mut intermediate, base62_obj_ids) = parse_prepared_with_layout::<T>(
+        source_path,
+        layout,
+        source,
+        &kaleid.objects,
+        identity,
+        random_source,
+        warnings,
+    )?;
+    intermediate.metadata.kaleid.source = kaleid.features;
+    intermediate.metadata.kaleid.declared = kaleid.features;
+    intermediate.metadata.kaleid.diagnostics = kaleid.diagnostics;
+    intermediate.typed_lnobj = long_end::typed_markers(text, base62_obj_ids, warnings);
+    for warning in warnings.iter() {
+        if let ImportWarning::ParserDiagnostic { code, message } = warning
+            && matches!(code.as_str(), "InvalidCnobj" | "InvalidHcnobj" | "InvalidHlnobj")
+        {
+            intermediate.metadata.kaleid.diagnostics.push(message.clone());
+        }
+    }
+    for line in text.lines() {
+        let Some(body) = line.trim().strip_prefix('#') else { continue };
+        let (command, value) = body.split_once(char::is_whitespace).unwrap_or((body, ""));
+        let command = command.to_ascii_uppercase();
+        if command == "LNMODE" && !matches!(value.trim(), "1" | "2" | "3" | "4") {
+            intermediate
+                .metadata
+                .kaleid
+                .diagnostics
+                .push(format!("invalid #LNMODE {value}; ignored"));
+        }
+        if matches!(
+            command.as_str(),
+            "BMD" | "SOUNDFONT" | "TARGETHASH" | "LOADINGFILE" | "READYFILE" | "BGAOVERFLOW"
+        ) {
+            intermediate
+                .metadata
+                .kaleid
+                .diagnostics
+                .push(format!("unsupported #{command}; ignored"));
+        }
+    }
+    intermediate.metadata.kaleid.declared.typed_end = !intermediate.typed_lnobj.is_empty();
+    intermediate.metadata.kaleid.declared.hln |=
+        intermediate.typed_lnobj.iter().any(|(_, mode)| *mode == LongNoteMode::Hln);
+    intermediate.metadata.kaleid.source.typed_end = intermediate.objects.iter().any(|object| {
+        matches!(object.kind, IntermediateObjectKind::VisibleNote { wav_key: Some(key), .. }
+            if intermediate.typed_lnobj.iter().any(|(marker, _)| *marker == key))
+    });
+    intermediate.metadata.kaleid.source.hln = intermediate.objects.iter().any(|object|
+        matches!(object.kind, IntermediateObjectKind::LongChannelNote { .. } if hln_mode)
+        || matches!(object.kind, IntermediateObjectKind::VisibleNote { wav_key: Some(key), .. }
+            if intermediate.typed_lnobj.iter().any(|(marker, mode)| *marker == key && *mode == LongNoteMode::Hln)));
+    long_end::restore_marker_overlays::<T>(text, layout, base62_obj_ids, &mut intermediate);
+    if hln_mode {
+        intermediate.metadata.kaleid.declared.hln = true;
+        intermediate.metadata.long_note_mode = LongNoteMode::Hln;
+        intermediate.metadata.long_note_mode_defined = true;
+    }
+    Ok(intermediate)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_prepared_with_layout<T: KeyLayoutMapper>(
+    source_path: &Path,
+    layout: ChartKeyLayout,
+    source: PreparedBmsSource,
+    kaleid_objects: &[IntermediateObject],
+    identity: ChartIdentity,
+    random_source: &BmsRandomSource,
+    warnings: &mut Vec<ImportWarning>,
+) -> Result<(IntermediateChart, bool), ImportError> {
     let BmsOutput { bms, warnings: bms_warnings } = parse_bms::<T, _, _, _>(
         &source.parse_text,
         default_config_with_rng(JavaRandom::new(random_source_seed(random_source) as i64))
@@ -280,6 +418,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
     // after an undefined object.
     let source_texts = source_text_objects(&source.source_texts, base62_obj_ids, warnings);
     extra_objects.extend(source_texts.objects);
+    extra_objects.extend_from_slice(kaleid_objects);
     bms.text.text_events.clear();
 
     let mut intermediate = build_intermediate_from_bms_with_extra_objects::<T>(
@@ -304,7 +443,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
     intermediate.metadata.append_url = append_url_from_headers(&bms_headers);
     intermediate.metadata.bms_headers = bms_headers;
     intermediate.identity = identity;
-    Ok(intermediate)
+    Ok((intermediate, base62_obj_ids))
 }
 
 pub(crate) fn build_intermediate_from_bms<T: KeyLayoutMapper>(
@@ -351,6 +490,8 @@ fn build_intermediate_from_bms_with_extra_objects<T: KeyLayoutMapper>(
         objects,
         layered_note_sounds: Vec::new(),
         lnobj_wav_key: None, // bms-rs 側で吸収済み
+        typed_lnobj: Vec::new(),
+        long_end_sounds: Vec::new(),
     };
 
     intermediate.metadata.has_bga = intermediate
@@ -364,7 +505,9 @@ fn build_intermediate_from_bms_with_extra_objects<T: KeyLayoutMapper>(
             IntermediateObjectKind::VisibleNote { lane, .. }
             | IntermediateObjectKind::InvisibleNote { lane, .. }
             | IntermediateObjectKind::LongChannelNote { lane, .. }
-            | IntermediateObjectKind::MineNote { lane, .. } => Some(lane),
+            | IntermediateObjectKind::MineNote { lane, .. }
+            | IntermediateObjectKind::KaleidNote { lane, .. }
+            | IntermediateObjectKind::FreeZone { lane, .. } => Some(lane),
             _ => None,
         }),
     );

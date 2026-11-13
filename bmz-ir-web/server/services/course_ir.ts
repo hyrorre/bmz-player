@@ -34,12 +34,14 @@ const LN_POLICY_ALIASES = new Map([
   ['ForceLn', 'ForceLn'],
   ['ForceCn', 'ForceCn'],
   ['ForceHcn', 'ForceHcn'],
+  ['ForceHln', 'ForceHln'],
   ['auto_ln', 'AutoLn'],
   ['auto_cn', 'AutoCn'],
   ['auto_hcn', 'AutoHcn'],
   ['force_ln', 'ForceLn'],
   ['force_cn', 'ForceCn'],
   ['force_hcn', 'ForceHcn'],
+  ['force_hln', 'ForceHln'],
 ])
 const DEVICE_TYPES = new Set(['keyboard', 'controller'])
 type CourseDeviceType = 'keyboard' | 'controller'

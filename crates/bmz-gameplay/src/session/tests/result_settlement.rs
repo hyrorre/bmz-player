@@ -312,6 +312,7 @@ fn independent_opponent_waits_for_its_scoring_tick_but_not_invisible_notes() {
     let (mut session, keys) = dx_human_session(with_trailing_invisible(tap_chart(TimeUs(0))), 0);
     let (rival, _) = dx_human_session(with_trailing_invisible(tap_chart(TimeUs(1_100_500))), 0);
     session.opponent.independent = Some(BattleOpponentSession {
+        conditional: Default::default(),
         judge: rival.judge,
         chart: rival.chart,
         key_mode: rival.primary_key_mode,

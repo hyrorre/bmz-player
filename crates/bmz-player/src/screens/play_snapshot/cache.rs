@@ -28,6 +28,7 @@ pub struct PlaySkinChartFacts {
 #[derive(Debug, Clone)]
 pub struct PlayRenderSnapshotCache {
     pub(crate) skin_chart: Arc<PlaySkinChartFacts>,
+    pub(super) conditional_revision: usize,
     pub(super) judge_graph_density: Arc<[u8]>,
     pub(super) bpm_graph_segments: Arc<[bmz_render::chart_graph::BpmGraphSegment]>,
     /// All notes unjudged; the gameplay thread publishes later judge states.
@@ -64,12 +65,16 @@ pub(super) struct BgaEventCache {
 }
 
 impl PlayRenderSnapshotCache {
+    pub fn for_updated_chart(&self, chart: &PlayableChart) -> Self {
+        let mut cache = Self::from_chart(chart);
+        cache.judge_graph_density = self.judge_graph_density.clone();
+        cache
+    }
     pub(crate) fn bga_event_at(&self, kind: BgaEventKind, time: TimeUs) -> Option<&BgaEvent> {
         let events = self.bga_events.events(kind);
         let end = events.partition_point(|event| event.time <= time);
         events[..end].last()
     }
-
     pub fn from_chart(chart: &PlayableChart) -> Self {
         let judge_graph_density = Arc::from(build_judge_graph_density(chart).into_boxed_slice());
         let bpm_graph_segments = Arc::from(build_bpm_graph_segments(chart).into_boxed_slice());
@@ -126,6 +131,7 @@ impl PlayRenderSnapshotCache {
                 max_bpm,
                 main_bpm: chart.metadata.initial_bpm as f32,
             }),
+            conditional_revision: chart.metadata.conditional_revision,
             judge_graph_density,
             bpm_graph_segments,
             play_note_graphs,

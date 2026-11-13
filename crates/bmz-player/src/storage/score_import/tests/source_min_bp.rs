@@ -214,7 +214,8 @@ fn reimport_repairs_v33_import_without_inventing_missing_bp_during_migration() {
     // Remove later columns and indices to construct the actual pre-v34 schema.
     db.conn_mut()
         .execute_batch(
-            "DROP INDEX idx_score_history_device_best;
+            "DROP TABLE score_kaleid_plays;
+             DROP INDEX idx_score_history_device_best;
         ALTER TABLE score_history DROP COLUMN normal_best_eligible;
         ALTER TABLE score_history DROP COLUMN source_min_bp;
         PRAGMA user_version = 33;",

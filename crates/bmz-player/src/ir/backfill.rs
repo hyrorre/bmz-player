@@ -273,8 +273,25 @@ pub(crate) fn enqueue_local_score_jobs_with_scan(
                 break 'scan;
             }
 
-            let payload =
+            let mut payload =
                 build_local_score_submission(&row, &chart, analysis.as_ref(), replay_hash);
+            // A rescan describes the current importer, never the historical play.
+            match score_db.kaleid_evidence(row.id) {
+                Ok(Some(evidence)) => {
+                    payload.chart.kaleid = evidence.provenance.clone();
+                    payload.chart.notes.total = evidence.actual_total;
+                    payload.result.notes = evidence.actual_total;
+                    payload.result.pass_notes =
+                        Some(judged_note_count(&row).min(evidence.actual_total));
+                    payload.play_options.insert("kaleid".into(), serde_json::json!(evidence));
+                }
+                Ok(None) => payload.chart.kaleid = Default::default(),
+                Err(error) => {
+                    processed.insert(row.id);
+                    report.record_invalid(row.id, &error);
+                    continue;
+                }
+            }
             let new_job = NewIrScoreJob {
                 provider: target.provider_key.clone(),
                 account_id: target.account_id.clone(),
@@ -859,6 +876,7 @@ fn chart_payload_from_library(
     let gauge_total = gauge_total_for_chart(metadata_total, score_total_notes);
 
     IrChartPayload {
+        kaleid: chart.kaleid.clone(),
         source_format: String::new(),
         sha256: hash_to_hex(&chart.sha256),
         md5: Some(hash_to_hex(&chart.md5)),
@@ -869,6 +887,7 @@ fn chart_payload_from_library(
             has_defined_ln: chart.ln_profile.has_defined_ln,
             has_defined_cn: chart.ln_profile.has_defined_cn,
             has_defined_hcn: chart.ln_profile.has_defined_hcn,
+            has_defined_hln: chart.ln_profile.has_defined_hln,
         },
         title: chart.title.clone(),
         subtitle: chart.subtitle.clone(),
@@ -881,8 +900,26 @@ fn chart_payload_from_library(
         total: Some(gauge_total),
         judge: chart.judge_rank,
         bpm: Some(IrChartBpm { min: Some(chart.min_bpm), max: Some(chart.max_bpm) }),
-        notes: IrChartNotes { total: score_total_notes, ln, cn, hcn, mine: mine_notes },
+        notes: IrChartNotes {
+            total: score_total_notes,
+            ln,
+            cn,
+            hcn,
+            hln: match ln_policy {
+                LnScorePolicy::ForceHln => chart.ln_counts.total_pairs(),
+                LnScorePolicy::AutoLn | LnScorePolicy::AutoCn | LnScorePolicy::AutoHcn => {
+                    chart.ln_counts.defined_hln_pairs
+                }
+                _ => 0,
+            },
+            mine: mine_notes,
+        },
         features: IrChartFeatures {
+            hln: chart.kaleid.effective.hln,
+            conditional: chart.kaleid.source.conditional,
+            free_zone: chart.kaleid.effective.free_zone,
+            potion: chart.kaleid.effective.potion,
+            dummy: chart.kaleid.effective.dummy,
             random: false,
             stop: false,
             ln: chart.ln_profile.has_undefined_ln || chart.ln_profile.has_defined_ln,
@@ -901,6 +938,7 @@ fn long_note_counts_for_policy(chart: &ChartListItem, policy: LnScorePolicy) -> 
         LnScorePolicy::ForceLn => (total, 0, 0),
         LnScorePolicy::ForceCn => (total, total, 0),
         LnScorePolicy::ForceHcn => (total, 0, total),
+        LnScorePolicy::ForceHln => (total, 0, 0),
         LnScorePolicy::AutoLn | LnScorePolicy::AutoCn | LnScorePolicy::AutoHcn => {
             (total, chart.ln_counts.defined_cn_pairs, chart.ln_counts.defined_hcn_pairs)
         }
@@ -915,6 +953,7 @@ fn effective_ln_mode_payload(
         LongNoteMode::Ln => IrEffectiveLnMode::Ln,
         LongNoteMode::Cn => IrEffectiveLnMode::Cn,
         LongNoteMode::Hcn => IrEffectiveLnMode::Hcn,
+        LongNoteMode::Hln => IrEffectiveLnMode::Hln,
     }
 }
 

@@ -74,7 +74,15 @@ impl AutoplayController {
                         device_kind: InputDeviceKind::Keyboard,
                         scratch_direction: None,
                     }),
-                    NoteKind::Invisible | NoteKind::Mine => {}
+                    NoteKind::Invisible
+                    | NoteKind::Mine
+                    | NoteKind::Potion
+                    | NoteKind::DummyTap
+                    | NoteKind::DummyLongStart
+                    | NoteKind::DummyLongEnd
+                    | NoteKind::DummyMine
+                    | NoteKind::DummyPotion
+                    | NoteKind::FreeZoneEnd => {}
                 }
             }
         }

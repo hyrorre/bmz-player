@@ -1,4 +1,17 @@
 use super::*;
+
+#[test]
+fn bmc_archive_entries_are_scanned_with_the_same_hidden_file_rules() {
+    for (name, accepted) in
+        [("song/chart.BMC", true), ("__MACOSX/chart.bmc", false), ("song/._chart.bmc", false)]
+    {
+        assert_eq!(
+            ArchiveEntry { name: name.into(), size: 10, is_directory: false }.is_chart(),
+            accepted
+        );
+    }
+    assert!(!ArchiveEntry { name: "chart.bmc".into(), size: 0, is_directory: true }.is_chart());
+}
 use std::sync::atomic::AtomicU64;
 mod extra_formats;
 

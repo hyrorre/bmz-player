@@ -230,8 +230,9 @@ mod ranking;
 mod request;
 
 pub use request::{
-    body_for_rule_mode, body_for_rule_name, course_submission_supported, is_rian_ir_config,
-    is_rian_ir_provider, score_duration_plausible, score_submission_supported,
+    body_for_rule_mode, body_for_rule_name, course_submission_supported,
+    ensure_score_payload_supported, is_rian_ir_config, is_rian_ir_provider,
+    score_duration_plausible, score_submission_supported,
 };
 
 #[cfg(test)]
@@ -254,6 +255,7 @@ mod tests {
                 platform: "test".to_string(),
             },
             chart: IrChartPayload {
+                kaleid: bmz_chart::kaleid::KaleidProvenance::imported(),
                 source_format: "bms".to_string(),
                 sha256: "ab".repeat(32),
                 md5: Some("cd".repeat(16)),
@@ -395,6 +397,7 @@ mod tests {
     fn legacy_queued_score_keeps_legacy_duration_shape() {
         let mut payload = sample_payload();
         payload.chart.length_ms = None;
+        payload.chart.kaleid = Default::default();
 
         let request = score_request(&payload, "player", "token").unwrap();
 
@@ -403,6 +406,25 @@ mod tests {
         assert!(request.get("length_ms").is_none());
         assert!(request.get("play_duration_ms").is_none());
         assert!(request.get("has_random").is_none());
+    }
+
+    #[test]
+    fn hln_force_conversion_and_conditional_use_server_canonical_fields() {
+        let mut payload = sample_payload();
+        payload.chart.ln_profile = IrChartLnProfile { has_defined_hln: true, ..Default::default() };
+        payload.chart.kaleid.source.hln = true;
+        payload.rule.ln_policy = LnScorePolicy::ForceHln;
+        let request = score_request(&payload, "player", "token").unwrap();
+        assert_eq!(request["song_ln_mode"], 4);
+        assert_eq!(request["ln_mode"], 4);
+        payload.rule.ln_policy = LnScorePolicy::ForceCn;
+        payload.chart.kaleid.source.conditional = true;
+        payload.result.duration_ms = Some(1_000);
+        let request = score_request(&payload, "player", "token").unwrap();
+        assert_eq!(request["song_ln_mode"], 4);
+        assert_eq!(request["ln_mode"], 2);
+        assert_eq!(request["has_conditional"], true);
+        assert_eq!(request["has_random"], true);
     }
 
     #[test]

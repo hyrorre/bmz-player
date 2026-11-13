@@ -959,4 +959,12 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             "ALTER TABLE chart_files ADD COLUMN failed_import_version INTEGER NOT NULL DEFAULT 0;",
         ],
     },
+    Migration {
+        version: 38,
+        statements: &[
+            "ALTER TABLE charts ADD COLUMN has_defined_hln INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE charts ADD COLUMN defined_hln_pairs INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE charts ADD COLUMN kaleid_json TEXT NOT NULL DEFAULT '{}';",
+        ],
+    },
 ];

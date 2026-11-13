@@ -35,6 +35,8 @@ use crate::storage::score_db::{ScoreDatabase, ScoreKey};
 
 #[derive(Debug, Clone)]
 pub struct FinishedPlaySession {
+    /// Initial DEFAULT count, for replacing this stage's course-wide estimate.
+    pub conditional_reference_total: Option<u32>,
     pub bokutachi_dan_stage: Option<crate::ir::bokutachi::dan::StageEvidence>,
     pub result: PlayResult,
     pub stored: StoredPlayResult,
@@ -251,6 +253,9 @@ pub struct FinishSessionSnapshot {
     result: PlayResult,
     primary_key_mode: KeyMode,
     replay_events: Vec<ReplayEvent>,
+    branch_decisions: Option<Vec<bmz_core::replay::BranchDecision>>,
+    reference_total: Option<u32>,
+    kaleid: bmz_chart::kaleid::KaleidPlayEvidence,
     replay_playback: bool,
     replay_lane_mask: bool,
     bokutachi_scoring_scope: Option<crate::ir::bokutachi::ScoringScope>,
@@ -382,6 +387,39 @@ impl FinishSessionSnapshot {
             result: play_result_from_session(session),
             primary_key_mode: session.primary_key_mode,
             replay_events: session.replay_recorder.events.clone(),
+            branch_decisions: session
+                .chart
+                .metadata
+                .conditional
+                .as_ref()
+                .map(|_| session.conditional.decisions.clone()),
+            reference_total: session.conditional.reference_total,
+            kaleid: bmz_chart::kaleid::KaleidPlayEvidence {
+                provenance: session.chart.metadata.kaleid.clone(),
+                reference_total: session
+                    .conditional
+                    .reference_total
+                    .unwrap_or(session.scored_total_notes),
+                actual_total: session.scored_total_notes,
+                preplay_lamp: session.conditional.best_lamp,
+                branches: session.conditional.decisions.clone(),
+                evaluations: session.conditional.evaluations.clone(),
+                ended_at: session.audio_clock.now().max(TimeUs(0)),
+                manually_stopped: session.manually_stopped,
+                options: std::collections::BTreeMap::from([
+                    ("judge_windows".into(), serde_json::json!(session.base_judge_windows)),
+                    ("rule_mode".into(), serde_json::json!(session.rule_mode.as_str())),
+                    (
+                        "autoplay".into(),
+                        serde_json::json!(
+                            session.autoplay.as_ref().is_some_and(|auto| auto.is_full())
+                        ),
+                    ),
+                    ("input_offset_us".into(), serde_json::json!(session.offsets.input_offset_us)),
+                    ("assist_mask".into(), serde_json::json!(session.assist.effective_mask)),
+                    ("session_mode".into(), serde_json::json!(session.session_mode_index)),
+                ]),
+            },
             replay_playback: session.replay_player.is_some() && session.replay_lane_mask.is_none(),
             replay_lane_mask: session.replay_lane_mask.is_some(),
             rule_mode: session.rule_mode,
@@ -535,6 +573,8 @@ fn finish_session_snapshot_result(
                     rule_mode: snapshot.rule_mode.as_str().to_string(),
                     assist_mask: crate::assist::recorded_mask(snapshot.assist),
                     replay_events: snapshot.replay_events.clone(),
+                    branch_decisions: snapshot.branch_decisions.clone(),
+                    kaleid: Some(snapshot.kaleid.clone()),
                     arrange,
                     arrange_2p: applied_arrange.arrange_2p,
                     arrange_seed,
@@ -557,6 +597,12 @@ fn finish_session_snapshot_result(
             )?
         };
     let mut summary = ResultSummary::from_play_result(&result, &stored, &snapshot.chart);
+    if let Some(reference_total) = snapshot.reference_total {
+        summary.total_gauge = bmz_gameplay::gauge::gauge_total_for_chart(
+            snapshot.chart.metadata.total,
+            reference_total,
+        ) as f32;
+    }
     summary.last_played_at =
         score_data_changed.then_some(stored.played_at).filter(|date| *date > 0);
     summary.skin_attempt = snapshot.skin_attempt;
@@ -628,6 +674,7 @@ fn finish_session_snapshot_result(
     }
 
     Ok(FinishedPlaySession {
+        conditional_reference_total: snapshot.reference_total,
         bokutachi_dan_stage: (finish_mode == FinishResultMode::CourseStage).then(|| {
             crate::ir::bokutachi::dan::StageEvidence {
                 chart_md5: crate::storage::common::hash_to_hex(&snapshot.chart.identity.file_md5),
@@ -650,6 +697,8 @@ fn finish_session_snapshot_result(
                     && snapshot.assist.score_update_enabled()
                     && stored.score_history_id > 0,
                 has_bms_random: snapshot.chart.metadata.has_bms_random,
+                kaleid: snapshot.chart.metadata.kaleid.clone(),
+                scored_notes: result.total_notes,
                 arrange: applied_arrange.arrange,
                 arrange_2p: applied_arrange.arrange_2p,
                 double_option: applied_arrange.double_option,
@@ -758,19 +807,6 @@ fn enqueue_ir_jobs(
                             previous_best,
                         )
                     })
-                && (!crate::ir::rian_ir::is_rian_ir_config(provider)
-                    || crate::ir::rian_ir::score_submission_supported(
-                        score_key.ln_policy,
-                        applied_arrange.double_option,
-                    ))
-                && (!crate::ir::bms_ir::is_bms_ir_config(provider)
-                    || crate::ir::bms_ir::score_submission_supported(
-                        snapshot.rule_mode,
-                        snapshot.chart.metadata.source_format,
-                        source_ln_profile,
-                        score_key.ln_policy,
-                        applied_arrange.double_option,
-                    ))
         })
         .collect();
     if enabled.is_empty() {
@@ -784,7 +820,7 @@ fn enqueue_ir_jobs(
             return;
         }
     };
-    let payload = build_score_submission(
+    let mut payload = build_score_submission(
         &snapshot.chart,
         result,
         IrSubmissionContext {
@@ -820,11 +856,32 @@ fn enqueue_ir_jobs(
             replay_hash: stored.replay_sha256.clone(),
         },
     );
+    // play_options is signed and persisted; `evidence` is reserved for the signature envelope.
+    payload.play_options.insert("kaleid".into(), serde_json::json!(snapshot.kaleid));
     let Ok(payload_json) = serde_json::to_string(&payload) else {
         summary.ir_last_error = Some("failed to serialize IR payload".to_string());
         return;
     };
     for provider in enabled {
+        if let Some(reason) =
+            crate::ir::kaleid::block_reason(provider, &snapshot.chart.metadata.kaleid)
+        {
+            summary.ir_last_error = Some(reason.to_string());
+            tracing::info!(provider = %provider.provider, reason, "IR submission unavailable; local result retained");
+            continue;
+        }
+        let eligibility = if crate::ir::bms_ir::is_bms_ir_config(provider) {
+            crate::ir::bms_ir::ensure_score_payload_supported(&payload)
+        } else if crate::ir::rian_ir::is_rian_ir_config(provider) {
+            crate::ir::rian_ir::ensure_score_payload_supported(&payload)
+        } else {
+            Ok(())
+        };
+        if let Err(error) = eligibility {
+            summary.ir_last_error = Some(error.to_string());
+            tracing::info!(provider = %provider.provider, %error, "IR submission unavailable; local result retained");
+            continue;
+        }
         let bokutachi_payload = if crate::ir::bokutachi::is_config(provider) {
             let prepared = (|| -> anyhow::Result<String> {
                 use crate::ir::bokutachi::{CourseStageContext, Game, PlayContext};
@@ -902,7 +959,8 @@ fn enqueue_ir_jobs(
                 result.clear_type.as_str(),
                 chart_length_ms,
                 play_duration_ms,
-                snapshot.chart.metadata.has_bms_random,
+                snapshot.chart.metadata.has_bms_random
+                    || snapshot.chart.metadata.kaleid.source.conditional,
             )
         {
             let error = format!(

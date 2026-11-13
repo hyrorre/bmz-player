@@ -35,6 +35,10 @@ pub struct StageEvidence {
     pub completed: bool,
     pub normal_score: bool,
     pub has_bms_random: bool,
+    #[serde(default)]
+    pub kaleid: bmz_chart::kaleid::KaleidProvenance,
+    #[serde(default)]
+    pub scored_notes: u32,
     pub arrange: ArrangeOption,
     pub arrange_2p: ArrangeOption,
     pub double_option: DoubleOption,
@@ -246,6 +250,9 @@ impl DanPlay {
             "Bokutachi dan: the API accepts only packed option 0 or 1 (no 2P MIRROR or FLIP)"
         );
         for stage in &self.stages {
+            if let Some(reason) = crate::ir::kaleid::bokutachi_block_reason(&stage.kaleid) {
+                bail!(reason);
+            }
             ensure!(
                 valid_hash(&stage.chart_md5, 32) && valid_hash(&stage.chart_sha256, 64),
                 "Bokutachi dan: original chart MD5/SHA256 is missing or invalid"
@@ -414,21 +421,30 @@ pub(crate) async fn step(
         )?;
         return Ok(());
     }
-    let result = super::BokutachiClient::new(&saved.origin)?
-        .submit_dan(&credentials.access_token, request)
-        .await
-        .map_err(|error| {
-            if crate::ir::http_error::status_code_from_error(&error)
-                == Some(reqwest::StatusCode::NOT_FOUND)
-            {
-                super::client::IneligibleChart(
-                    "Bokutachi dan: unsupported course; class was not updated".into(),
-                )
-                .into()
-            } else {
-                error
-            }
-        })?;
+    let client = super::BokutachiClient::new(&saved.origin)?;
+    // The dan endpoint accepts MD5s but does not verify converted HLN note counts.
+    // Resolve those exact original charts before allowing the additional mode.
+    for stage in play.stages.iter().filter(|stage| stage.kaleid.source.hln) {
+        ensure!(stage.scored_notes > 0, "Bokutachi dan: missing converted HLN note count");
+        let game = if stage.primary_key_mode == KeyMode::K14 {
+            super::Game::Bms14k
+        } else {
+            super::Game::Bms7k
+        };
+        client.resolve(game, &stage.chart_sha256, stage.scored_notes).await?;
+    }
+    let result = client.submit_dan(&credentials.access_token, request).await.map_err(|error| {
+        if crate::ir::http_error::status_code_from_error(&error)
+            == Some(reqwest::StatusCode::NOT_FOUND)
+        {
+            super::client::IneligibleChart(
+                "Bokutachi dan: unsupported course; class was not updated".into(),
+            )
+            .into()
+        } else {
+            error
+        }
+    })?;
     use crate::storage::network_db::IrScoreJobStatus;
     let (status, message) = match &result {
         DanOutcome::Updated { set, value } => {

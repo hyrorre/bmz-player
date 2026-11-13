@@ -332,7 +332,15 @@ fn load_chart_samples_in_order(
         if state.budget.check().is_err() {
             break;
         }
-        let report = load_asset(engine, asset, loader, volwav, &mut state);
+        let mut asset = asset.clone();
+        if chart.metadata.conditional.is_some()
+            && chart.metadata.source_format == bmz_chart::model::ChartSourceFormat::Bmson
+        {
+            // Shared PCM is loaded once. Each scheduled voice owns its selected slice,
+            // so rebuilding later branches cannot alter already-playing tails.
+            asset.slice = None;
+        }
+        let report = load_asset(engine, &asset, loader, volwav, &mut state);
         if index + 1 > reported {
             on_progress(index + 1, total);
         }

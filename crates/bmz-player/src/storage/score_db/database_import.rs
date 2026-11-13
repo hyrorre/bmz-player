@@ -64,12 +64,21 @@ impl ScoreDatabase {
         record: &ScoreRecord,
         mode: ScoreInsertMode,
     ) -> Result<i64> {
-        self.insert_score_with_origin(record, mode, false)
+        self.insert_score_with_origin(record, mode, false, None)
+    }
+
+    pub fn insert_score_with_kaleid(
+        &mut self,
+        record: &ScoreRecord,
+        mode: ScoreInsertMode,
+        evidence: Option<&bmz_chart::kaleid::KaleidPlayEvidence>,
+    ) -> Result<i64> {
+        self.insert_score_with_origin(record, mode, false, evidence)
     }
 
     /// A beatoraja-family score-table snapshot, not an individual attempt.
     pub fn insert_imported_aggregate_score(&mut self, record: &ScoreRecord) -> Result<i64> {
-        self.insert_score_with_origin(record, ScoreInsertMode::Full, true)
+        self.insert_score_with_origin(record, ScoreInsertMode::Full, true, None)
     }
 
     fn insert_score_with_origin(
@@ -77,6 +86,7 @@ impl ScoreDatabase {
         record: &ScoreRecord,
         mode: ScoreInsertMode,
         aggregate: bool,
+        evidence: Option<&bmz_chart::kaleid::KaleidPlayEvidence>,
     ) -> Result<i64> {
         if aggregate {
             ensure_beatoraja_aggregate_source(record)?;
@@ -100,6 +110,12 @@ impl ScoreDatabase {
             )?;
         }
         insert_score_history_ir_identity(&tx, history_id)?;
+        if let Some(evidence) = evidence {
+            tx.execute(
+                "INSERT INTO score_kaleid_plays(score_history_id, evidence_json) VALUES (?1, ?2)",
+                params![history_id, serde_json::to_string(evidence)?],
+            )?;
+        }
         if aggregate {
             mark_score_history_aggregate(&tx, history_id)?;
         }

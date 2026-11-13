@@ -177,6 +177,7 @@ fn test_row() -> BackfillScoreRow {
 
 fn test_chart() -> ChartListItem {
     ChartListItem {
+        kaleid: bmz_chart::kaleid::KaleidProvenance::imported(),
         chart_id: 7,
         md5: [1; 16],
         sha256: [2; 32],
@@ -206,6 +207,7 @@ fn test_chart() -> ChartListItem {
         judge_rank: Some(100),
         bms_total: 300.0,
         ln_profile: crate::ln_policy::ChartLnProfile {
+            has_defined_hln: false,
             has_undefined_ln: false,
             has_defined_ln: false,
             has_defined_cn: true,

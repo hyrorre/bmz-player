@@ -185,6 +185,7 @@ struct ActiveLoudnessVoice {
     next_output_frame: u64,
     sound_id: SoundId,
     sample_frame: usize,
+    sample_end: usize,
     volume: f32,
 }
 
@@ -219,10 +220,12 @@ pub fn analyze_chart_loudness(
         while next_event < events.len() && events[next_event].start_frame < chunk_end_frame {
             let event = events[next_event];
             if samples.get(event.sound_id).is_some() && event.volume > 0.0 {
+                let (start, end) = analysis_slice(chart, event.sound_id, sample_rate);
                 active.push(ActiveLoudnessVoice {
                     next_output_frame: event.start_frame,
                     sound_id: event.sound_id,
-                    sample_frame: 0,
+                    sample_frame: start,
+                    sample_end: end,
                     volume: event.volume,
                 });
             }
@@ -233,7 +236,8 @@ pub fn analyze_chart_loudness(
             let Some(sample) = samples.get(voice.sound_id) else {
                 return false;
             };
-            if voice.sample_frame >= sample.frame_count() {
+            let end = voice.sample_end.min(sample.frame_count());
+            if voice.sample_frame >= end {
                 return false;
             }
             let start_offset = voice.next_output_frame.saturating_sub(output_frame) as usize;
@@ -243,11 +247,13 @@ pub fn analyze_chart_loudness(
             let mixed_frames = sample.mix_stereo_into(
                 voice.sample_frame,
                 voice.volume,
-                &mut mixed_chunk[start_offset * 2..chunk_frames * 2],
+                &mut mixed_chunk[start_offset * 2
+                    ..(start_offset + (chunk_frames - start_offset).min(end - voice.sample_frame))
+                        * 2],
             );
             voice.sample_frame += mixed_frames;
             voice.next_output_frame += mixed_frames as u64;
-            voice.sample_frame < sample.frame_count()
+            voice.sample_frame < end
         });
 
         loudness.push_interleaved_stereo(&mixed_chunk[..chunk_frames * 2]);
@@ -406,12 +412,26 @@ fn analysis_duration_frames(
         .iter()
         .filter_map(|event| {
             let sample = samples.get(event.sound_id)?;
-            Some(event.start_frame.saturating_add(sample.frame_count() as u64))
+            let (start, end) = analysis_slice(chart, event.sound_id, sample_rate);
+            Some(
+                event
+                    .start_frame
+                    .saturating_add(end.min(sample.frame_count()).saturating_sub(start) as u64),
+            )
         })
         .max()
         .unwrap_or(0);
     let max_duration = (MAX_ANALYSIS_DURATION_US as u128 * sample_rate as u128 / 1_000_000) as u64;
     chart_end.max(sample_end).min(max_duration)
+}
+
+fn analysis_slice(chart: &PlayableChart, sound_id: SoundId, sample_rate: u32) -> (usize, usize) {
+    let sound = crate::queue::ScheduledSound::one_shot(0, sound_id, 1.0, 0.0)
+        .with_chart_slice(chart, sample_rate);
+    (
+        usize::try_from(sound.sample_offset_frames).unwrap_or(usize::MAX),
+        sound.sample_end_frames.and_then(|end| usize::try_from(end).ok()).unwrap_or(usize::MAX),
+    )
 }
 
 fn time_to_frame(time: TimeUs, sample_rate: u32) -> u64 {
@@ -821,6 +841,7 @@ mod tests {
                 key_mode: bmz_core::lane::KeyMode::K7,
                 long_note_mode: bmz_chart::model::LongNoteMode::Ln,
                 long_note_mode_defined: false,
+                ..ChartMetadata::default()
             },
             lane_notes: std::array::from_fn(|_| Vec::new()),
             long_notes: Vec::new(),

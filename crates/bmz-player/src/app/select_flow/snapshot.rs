@@ -14,7 +14,7 @@ impl WinitApp {
             self.select.select_ir.active_rival_display_name().map(str::to_string);
         let rival = match selected {
             Some(SelectItem::Chart(row)) if active_rival_name.is_some() => {
-                row.score_sha256().and_then(|sha256| {
+                self.selected_chart_ir_sha256().and_then(|sha256| {
                     let policy = crate::ln_policy::score_ln_policy(
                         self.boot.profile_config.play.ln_mode_policy,
                         row.chart.as_ref().map(|chart| chart.ln_profile).unwrap_or_default(),
@@ -29,7 +29,7 @@ impl WinitApp {
             _ => self
                 .select
                 .select_ir
-                .rival_for(&self.boot.profile_config.ir, self.selected_chart_sha256()),
+                .rival_for(&self.boot.profile_config.ir, self.selected_chart_ir_sha256()),
         };
         let rival_selected = active_rival_name.is_some() || rival.is_some();
         let rival_name = active_rival_name.unwrap_or_default();
@@ -38,7 +38,7 @@ impl WinitApp {
             .select_ir
             .resolved_target_for(
                 &self.boot.profile_config.ir,
-                self.selected_chart_sha256(),
+                self.selected_chart_ir_sha256(),
                 self.select.target_option,
                 match selected {
                     Some(SelectItem::Chart(row)) => {
@@ -522,7 +522,7 @@ impl WinitApp {
                 || {
                     self.select.select_ir.snapshot_for_binding(
                         &self.boot.profile_config.ir,
-                        self.selected_chart_sha256(),
+                        self.selected_chart_ir_sha256(),
                         select_ir_scope_binding,
                     )
                 },
@@ -567,6 +567,23 @@ impl WinitApp {
         }
     }
 
+    pub(super) fn selected_chart_ir_sha256(&self) -> Option<[u8; 32]> {
+        let SelectItem::Chart(row) = self.select.select_items.get(self.select.selected_index)?
+        else {
+            return None;
+        };
+        if let Some(provider) =
+            crate::ir::provider_key::primary_provider_config(&self.boot.profile_config.ir)
+        {
+            let provenance =
+                row.chart.as_ref().map(|chart| chart.kaleid.clone()).unwrap_or_default();
+            if crate::ir::kaleid::block_reason(provider, &provenance).is_some() {
+                return None;
+            }
+        }
+        row.score_sha256()
+    }
+
     pub(super) fn selected_course_ir_target(
         &self,
     ) -> Option<crate::screens::select_ir::SelectCourseIrTarget> {
@@ -574,6 +591,24 @@ impl WinitApp {
         else {
             return None;
         };
+        if let Some(provider) =
+            crate::ir::provider_key::primary_provider_config(&self.boot.profile_config.ir)
+            && (crate::ir::bms_ir::is_bms_ir_config(provider)
+                || crate::ir::rian_ir::is_rian_ir_config(provider))
+        {
+            let course = self.boot.library_db.course_by_id(row.course_id).ok()??;
+            for entry in &course.definition.entries {
+                let provenance = entry
+                    .chart_id
+                    .and_then(|id| self.boot.library_db.list_charts_by_ids(&[id]).ok())
+                    .and_then(|mut rows| rows.pop())
+                    .map(|chart| chart.kaleid)
+                    .unwrap_or_default();
+                if crate::ir::kaleid::block_reason(provider, &provenance).is_some() {
+                    return None;
+                }
+            }
+        }
         Some(crate::screens::select_ir::SelectCourseIrTarget {
             course_hash: row.course_hash.clone()?,
             rian_course_hash_v1: row.rian_course_hash_v1.clone()?,

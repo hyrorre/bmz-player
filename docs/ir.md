@@ -1,5 +1,12 @@
 # BMZ IR（Internet Ranking）
 
+Kaleid拡張・部分対応もBMZ IRの原本単位ランキングへ集約します。HLN構成、
+解釈情報、採択経路を保持し、ノーツ数が異なる枝の独立ベストを許容します。
+実プレイのEX・判定数等の整合性検査は維持します。サーバー変更はSQLite migration
+0017が必要です。機能別のBMS-IR・rianIR・Bokutachi条件は[Kaleid拡張](kaleid.md)を参照。
+play_options.kaleidはdevice evidenceとは別の署名対象です。play_options上限は128KiB、
+リクエスト全体の既存256KiB上限は維持します。
+
 BMZ公式IRのAPIと、BMZ Player側のIRクライアントの現在の仕様をまとめた文書です。
 rianIRとの互換は[rianIR互換プロバイダー](rian-ir.md)、アシスト・特殊モードを含むスコアの保存・送信条件は[スコア保存・アシスト・IR送信条件](score-persistence.md)を参照してください。
 Bokutachiへの新規7K／14K／9K単曲・コース各曲の送信と、BMS 7K／14Kの段位更新は[Bokutachi](bokutachi.md)を参照してください。APIキーで接続する送信専用プロバイダーです。

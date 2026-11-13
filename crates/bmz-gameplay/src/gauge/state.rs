@@ -115,6 +115,13 @@ impl SingleGaugeState {
         self.apply_death_threshold();
     }
 
+    pub fn apply_potion(&mut self, recovery: f64) {
+        if self.value > 0.0 && recovery.is_finite() && recovery > 0.0 {
+            self.value =
+                (self.value + recovery as f32).clamp(self.definition.min, self.definition.max);
+        }
+    }
+
     fn apply_death_threshold(&mut self) {
         if self.value > self.definition.min && self.value < self.definition.death {
             self.value = self.definition.min;

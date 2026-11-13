@@ -1,4 +1,8 @@
-# LN / CN / HCNの扱い
+# LN / CN / HCN / HLNの扱い
+
+HLN（LNMODE 4、HLNOBJ、BMSON ln_type/t=4）の状態遷移・終端音・IR条件は
+[Kaleid拡張](kaleid.md)を参照します。AUTOは元HLNを維持し、FORCE LN/CN/HCNは
+HLNも変換します。設定は既存6個のままで、内部ForceHlnは集約用の値です。
 
 BMZはbeatoraja完全互換ではなく、譜面が宣言したLNMODEとユーザーの希望するLNMODEを分けて扱います。
 ユーザーはprofileの設定で、譜面のLN宣言を尊重するか、特定のLN種別へ強制するかを選べます。
@@ -6,10 +10,10 @@ BMZはbeatoraja完全互換ではなく、譜面が宣言したLNMODEとユー�
 ## 用語
 
 - undefined LN: BMS側に`#LNMODE`などの明示的なLN種別宣言が無いlong noteです。現在のBMSで主流の形です。
-- defined LN/CN/HCN: BMS / BMSON側が明示した`LN`, `CN`, `HCN`のlong noteです。
+- defined LN/CN/HCN/HLN: BMS / BMSON側が明示した`LN`, `CN`, `HCN`, `HLN`のlong noteです。
 - profile policy: ユーザーが`profile.toml`に設定する希望です。
 - score policy: score DBの保存キーに使う、実プレイ結果の区別単位です。
-- effective LN mode: 実際に降らせるLN種別です。`LN`, `CN`, `HCN`のいずれかです。
+- effective LN mode: 実際に降らせるLN種別です。`LN`, `CN`, `HCN`, `HLN`、混在は`Mixed`です。
 
 ## プロファイル設定
 
@@ -37,6 +41,7 @@ BMSフォルダスキャン時に、各譜面のlong note構成を`library.db`�
 - `has_defined_ln`
 - `has_defined_cn`
 - `has_defined_hcn`
+- `has_defined_hln`
 
 BMZ内部では`ChartLnProfile`として扱います。
 
@@ -55,6 +60,7 @@ score DBには`LnScorePolicy`を保存します。
 - `ForceLn`
 - `ForceCn`
 - `ForceHcn`
+- `ForceHln`（元HLNのみのAUTO集約用。設定値ではありません）
 
 score policyはprofile policyとchart LN profileから決めます。
 
@@ -65,10 +71,12 @@ score policyはprofile policyとchart LN profileから決めます。
 | defined LNのみ | `ForceLn` | `ForceLn` | `ForceLn` | `ForceLn` | `ForceCn` | `ForceHcn` |
 | defined CNのみ | `ForceCn` | `ForceCn` | `ForceCn` | `ForceLn` | `ForceCn` | `ForceHcn` |
 | defined HCNのみ | `ForceHcn` | `ForceHcn` | `ForceHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
-| defined LN/CN/HCN混在 | `AutoLn` | `AutoLn` | `AutoLn` | `ForceLn` | `ForceCn` | `ForceHcn` |
+| defined HLNのみ | `ForceHln` | `ForceHln` | `ForceHln` | `ForceLn` | `ForceCn` | `ForceHcn` |
+| defined LN/CN/HCN/HLN混在 | `AutoLn` | `AutoLn` | `AutoLn` | `ForceLn` | `ForceCn` | `ForceHcn` |
 | undefined + defined LNのみ | `ForceLn` | `AutoCn` | `AutoHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
 | undefined + defined CNのみ | `AutoLn` | `ForceCn` | `AutoHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
 | undefined + defined HCNのみ | `AutoLn` | `AutoCn` | `ForceHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
+| undefined + defined HLNのみ | `AutoLn` | `AutoCn` | `AutoHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
 | undefined + 複数のdefined種別 | `AutoLn` | `AutoCn` | `AutoHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
 
 補足:

@@ -417,6 +417,12 @@ pub fn build_game_session_with_input_backend(
         ),
         options.judge_constraint,
     );
+    let base_judge_windows = replay_player
+        .as_ref()
+        .and_then(|player| player.kaleid.as_ref())
+        .and_then(|evidence| evidence.options.get("judge_windows"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or(base_judge_windows);
     let base_judge_window = base_judge_windows.note;
 
     let gauge_total =
@@ -477,6 +483,13 @@ pub fn build_game_session_with_input_backend(
             let key_mode = chart.metadata.key_mode;
             let scored_total_notes = scored_note_count(&chart);
             let base_judge_windows = judge_windows_for_keymode_and_rule_mode(key_mode, rule_mode);
+            let base_judge_windows = opponent
+                .replay_player
+                .as_ref()
+                .and_then(|player| player.kaleid.as_ref())
+                .and_then(|evidence| evidence.options.get("judge_windows"))
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+                .unwrap_or(base_judge_windows);
             let judge_rate = if opponent.replay_player.is_some() {
                 opponent.replay_judge_rate_percent
             } else {
@@ -489,6 +502,9 @@ pub fn build_game_session_with_input_backend(
                 rule_mode,
             );
             bmz_gameplay::session::BattleOpponentSession {
+                conditional: bmz_gameplay::session::conditional::ConditionalRuntime::from_player(
+                    opponent.replay_player.as_ref(),
+                ),
                 judge: JudgeEngine::new_with_window_set_algorithm_and_keymode(
                     scale_judge_windows_for_playback_rate(
                         judge_windows_for_rule_mode_and_keymode(
@@ -569,6 +585,9 @@ pub fn build_game_session_with_input_backend(
     let result_wait_end_time = (profile.play.wait_all_notes_result && !session_mode.is_practice())
         .then(|| result_wait_end_time(&chart));
     GameSession {
+        conditional: bmz_gameplay::session::conditional::ConditionalRuntime::from_player(
+            replay_player.as_ref(),
+        ),
         gauge,
         judge,
         base_judge_window,
@@ -686,25 +705,7 @@ fn result_wait_end_time(chart: &PlayableChart) -> TimeUs {
 }
 
 fn chart_last_placement_time(chart: &PlayableChart, include_layer2: bool) -> TimeUs {
-    // beatoraja BMSModel.getLastTime(): note/hidden note, BGM, base/layer BGA.
-    // Poor-only/timing events and PCM tails do not extend the chart length.
-    chart
-        .lane_notes
-        .iter()
-        .flatten()
-        .map(|note| note.time)
-        .chain(chart.bgm_events.iter().map(|event| event.time))
-        .chain(chart.bga_events.iter().filter_map(|event| {
-            use bmz_chart::model::BgaEventKind;
-            match event.kind {
-                BgaEventKind::Base | BgaEventKind::Layer => Some(event.time),
-                BgaEventKind::Layer2 if include_layer2 => Some(event.time),
-                _ => None,
-            }
-        }))
-        .chain(std::iter::once(chart.end_time))
-        .max()
-        .unwrap_or(chart.end_time)
+    chart.last_placement_time(include_layer2)
 }
 
 pub(super) fn hsfix_index_from_option(option: HsFixOption) -> i32 {

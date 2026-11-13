@@ -40,12 +40,15 @@ pub fn schedule_keysounds(session: &mut GameSession, audio: &mut dyn AudioSchedu
         // sounds like a pitch change. A few ms late from-head is preferable
         // and keeps key-press latency low (no extra buffering).
         for sound_id in note.sounds() {
-            audio.schedule(ScheduledSound {
-                // Input offsets belong to scoring, not to output latency.
-                // Never wait for a frame derived from the old song/device anchor.
-                restart_policy: RestartPolicy::StopSameSound,
-                ..ScheduledSound::immediate(sound_id, volume, 0.0)
-            });
+            audio.schedule(
+                ScheduledSound {
+                    // Input offsets belong to scoring, not to output latency.
+                    // Never wait for a frame derived from the old song/device anchor.
+                    restart_policy: RestartPolicy::StopSameSound,
+                    ..ScheduledSound::immediate(sound_id, volume, 0.0)
+                }
+                .with_chart_slice(&session.chart, session.audio_clock.sample_rate),
+            );
         }
     }
 }

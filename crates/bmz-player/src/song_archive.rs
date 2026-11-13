@@ -156,7 +156,7 @@ impl ArchiveEntry {
                 .split('/')
                 .any(|component| component == "__MACOSX" || component.starts_with("._"))
             && Path::new(&self.name).extension().and_then(|ext| ext.to_str()).is_some_and(|ext| {
-                ["bms", "bme", "bml", "pms", "bmson"]
+                ["bms", "bme", "bml", "bmc", "pms", "bmson"]
                     .iter()
                     .any(|candidate| ext.eq_ignore_ascii_case(candidate))
             })

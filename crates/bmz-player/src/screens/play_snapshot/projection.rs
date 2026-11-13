@@ -2,17 +2,21 @@
 //! No judgement engine, input queue, replay recorder or audio commands live here.
 use super::*;
 use bmz_core::ids::NoteId;
+use bmz_gameplay::judge::model::HlnBodyVisualState;
 use bmz_gameplay::judge::model::{JudgeWindows, LaneJudgeState};
 use bmz_gameplay::session::HcnLaneTimer;
+use std::borrow::Cow;
 use std::time::Instant;
 
 pub(super) struct PlayfieldJudgeView<'a> {
+    pub hln_bodies: Cow<'a, [HlnBodyVisualState]>,
     pub lanes: &'a [LaneJudgeState; LANE_COUNT],
     pub judged_notes: &'a HashMap<NoteId, Judge>,
     pub window_set: JudgeWindows,
 }
 
 pub(super) struct PlayfieldView<'a> {
+    pub player_two: bool,
     pub chart: &'a PlayableChart,
     pub timing_map: &'a TimingMap,
     pub judge: PlayfieldJudgeView<'a>,
@@ -29,9 +33,11 @@ pub(super) struct PlayfieldView<'a> {
 impl<'a> From<&'a GameSession> for PlayfieldView<'a> {
     fn from(session: &'a GameSession) -> Self {
         Self {
+            player_two: false,
             chart: &session.chart,
             timing_map: &session.timing_map,
             judge: PlayfieldJudgeView {
+                hln_bodies: Cow::Owned(session.judge.hln_body_visuals().collect()),
                 lanes: &session.judge.lanes,
                 judged_notes: &session.judge.judged_notes,
                 window_set: session.judge.window_set,
@@ -51,10 +57,12 @@ impl<'a> From<&'a GameSession> for PlayfieldView<'a> {
 /// Three instances are allocated at play start. The producer can update one
 /// only when its Arc has no consumers; maps retain their chart-sized capacity.
 pub(crate) struct PlayfieldProjection {
+    opponent: Option<OpponentProjection>,
     chart: Arc<PlayableChart>,
     timing_map: Arc<TimingMap>,
     cache: PlayRenderSnapshotCache,
     judged_notes: HashMap<NoteId, Judge>,
+    hln_bodies: Vec<HlnBodyVisualState>,
     lanes: [LaneJudgeState; LANE_COUNT],
     window_set: JudgeWindows,
     lane_hcn_timer: [Option<HcnLaneTimer>; LANE_COUNT],
@@ -81,10 +89,12 @@ impl PlayfieldProjection {
         let capacity = session.chart.lane_notes.iter().map(Vec::len).sum();
         std::array::from_fn(|_| {
             let mut projection = Self {
+                opponent: None,
                 chart: session.chart.clone(),
                 timing_map: timing_map.clone(),
                 cache: cache.clone(),
                 judged_notes: HashMap::with_capacity(capacity),
+                hln_bodies: Vec::new(),
                 lanes: session.judge.lanes,
                 window_set: session.judge.window_set,
                 lane_hcn_timer: session.lane_hcn_timer,
@@ -110,6 +120,23 @@ impl PlayfieldProjection {
     }
 
     pub(crate) fn update(&mut self, session: &GameSession, time: TimeUs) {
+        if let Some(opponent) = session.opponent.independent.as_ref().filter(|opponent| {
+            !opponent.display_uses_primary_arrangement
+                || opponent.chart.metadata.kaleid.source.conditional
+        }) {
+            let projection =
+                self.opponent.get_or_insert_with(|| OpponentProjection::new(opponent, &self.cache));
+            projection.update(opponent);
+        } else {
+            self.opponent = None;
+        }
+        if !Arc::ptr_eq(&self.chart, &session.chart) {
+            self.chart = session.chart.clone();
+            self.timing_map = Arc::new(session.timing_map.clone());
+            self.cache = self.cache.for_updated_chart(&session.chart);
+        }
+        self.hln_bodies.clear();
+        self.hln_bodies.extend(session.judge.hln_body_visuals());
         if self.judged_notes.capacity() == session.judge.judged_notes.capacity() {
             // Equal-sized tables can copy buckets without rehashing. Retain the
             // preallocated pool capacity while the producer's map is growing.
@@ -192,9 +219,11 @@ impl PlayfieldProjection {
             self.cache.end_of_note_time,
         );
         let view = PlayfieldView {
+            player_two: false,
             chart: &self.chart,
             timing_map: &self.timing_map,
             judge: PlayfieldJudgeView {
+                hln_bodies: Cow::Borrowed(&self.hln_bodies),
                 lanes: &self.lanes,
                 judged_notes: &self.judged_notes,
                 window_set: self.window_set,
@@ -216,6 +245,10 @@ impl PlayfieldProjection {
         for mines in &mut snapshot.visible_mines {
             mines.clear();
         }
+        for potions in &mut snapshot.visible_potions {
+            potions.clear();
+        }
+        snapshot.visible_free_zones.clear();
         snapshot.visible_long_notes.clear();
         snapshot.bar_lines.clear();
         snapshot.bpm_lines.clear();
@@ -271,6 +304,102 @@ impl PlayfieldProjection {
             &self.cache,
             lane_now,
         );
+        if let Some(opponent) = &self.opponent {
+            for lane in &Lane::ALL[8..] {
+                snapshot.visible_notes[lane.index()].clear();
+                snapshot.visible_mines[lane.index()].clear();
+                snapshot.visible_potions[lane.index()].clear();
+            }
+            snapshot.visible_long_notes.retain(|note| note.lane.index() < 8);
+            snapshot.visible_free_zones.retain(|zone| zone.lane.index() < 8);
+            let opponent_view = PlayfieldView {
+                player_two: true,
+                chart: &opponent.chart,
+                timing_map: &opponent.timing_map,
+                judge: PlayfieldJudgeView {
+                    hln_bodies: Cow::Borrowed(&opponent.hln_bodies),
+                    lanes: &opponent.lanes,
+                    judged_notes: &opponent.judged_notes,
+                    window_set: opponent.window_set,
+                },
+                lane_hcn_timer: &opponent.lane_hcn_timer,
+                ..view
+            };
+            super::build::visible::populate_visible_playfield(
+                snapshot,
+                &opponent_view,
+                chart_now,
+                &opponent.cache,
+                lane_now,
+            );
+        }
+    }
+}
+
+struct OpponentProjection {
+    chart: Arc<PlayableChart>,
+    timing_map: TimingMap,
+    cache: PlayRenderSnapshotCache,
+    judged_notes: HashMap<NoteId, Judge>,
+    hln_bodies: Vec<HlnBodyVisualState>,
+    lanes: [LaneJudgeState; LANE_COUNT],
+    window_set: JudgeWindows,
+    lane_hcn_timer: [Option<HcnLaneTimer>; LANE_COUNT],
+}
+
+impl OpponentProjection {
+    fn new(
+        opponent: &bmz_gameplay::session::BattleOpponentSession,
+        cache: &PlayRenderSnapshotCache,
+    ) -> Self {
+        Self {
+            chart: opponent.chart.clone(),
+            timing_map: TimingMap::from_chart_timing_events(
+                opponent.chart.metadata.initial_bpm,
+                &opponent.chart.timing_events,
+            ),
+            cache: cache.for_updated_chart(&opponent.chart),
+            judged_notes: HashMap::new(),
+            hln_bodies: Vec::new(),
+            lanes: opponent.judge.lanes,
+            window_set: opponent.judge.window_set,
+            lane_hcn_timer: opponent.lane_hcn_timer,
+        }
+    }
+    fn update(&mut self, opponent: &bmz_gameplay::session::BattleOpponentSession) {
+        if !Arc::ptr_eq(&self.chart, &opponent.chart) {
+            self.chart = opponent.chart.clone();
+            self.timing_map = TimingMap::from_chart_timing_events(
+                opponent.chart.metadata.initial_bpm,
+                &opponent.chart.timing_events,
+            );
+            self.cache = self.cache.for_updated_chart(&opponent.chart);
+        }
+        self.judged_notes.clone_from(&opponent.judge.judged_notes);
+        self.hln_bodies.clear();
+        self.hln_bodies.extend(opponent.judge.hln_body_visuals());
+        self.lanes = opponent.judge.lanes;
+        self.window_set = opponent.judge.window_set;
+        self.lane_hcn_timer = opponent.lane_hcn_timer;
+    }
+}
+
+impl PlayfieldView<'_> {
+    pub(super) fn output_lane(&self, lane: Lane) -> Lane {
+        if !self.player_two {
+            return lane;
+        }
+        match lane {
+            Lane::Scratch => Lane::Scratch2,
+            Lane::Key1 => Lane::Key8,
+            Lane::Key2 => Lane::Key9,
+            Lane::Key3 => Lane::Key10,
+            Lane::Key4 => Lane::Key11,
+            Lane::Key5 => Lane::Key12,
+            Lane::Key6 => Lane::Key13,
+            Lane::Key7 => Lane::Key14,
+            lane => lane,
+        }
     }
 }
 
