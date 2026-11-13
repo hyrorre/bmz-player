@@ -24,6 +24,7 @@ pub struct DynamicTimerRuntime {
     judge_lane: JudgeLaneRuntime,
     gauge_animation: GaugeAnimationRuntime,
     hit_error: HitErrorVisualizerRuntime,
+    qwilight: crate::skin::qwilight_animation::KeyAnimationRuntime,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -143,6 +144,7 @@ impl Default for DynamicTimerRuntime {
             judge_lane: JudgeLaneRuntime::default(),
             gauge_animation: GaugeAnimationRuntime::default(),
             hit_error: HitErrorVisualizerRuntime::default(),
+            qwilight: Default::default(),
         }
     }
 }
@@ -194,6 +196,7 @@ impl DynamicTimerRuntime {
 
     /// observe 条件を評価し、`state.dynamic_timer_ms` を更新する。
     pub fn advance(&mut self, document: &SkinDocument, state: &mut SkinDrawState, now_ms: i32) {
+        self.qwilight.advance(document, state, now_ms);
         self.gauge_animation.advance(document, state);
         self.hit_error.advance(document, state);
         self.ensure_runtime_flags(document);
@@ -309,6 +312,7 @@ impl DynamicTimerRuntime {
         now_us: i64,
     ) {
         self.judge_lane.ingest(judgements, key_mode, region_count, now_us);
+        self.qwilight.ingest(judgements, now_us);
     }
 
     fn advance_keybeam(&mut self, state: &mut SkinDrawState) {

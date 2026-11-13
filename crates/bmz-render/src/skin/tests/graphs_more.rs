@@ -1,6 +1,26 @@
 use super::*;
 
 #[test]
+fn qwilight_gauge_uses_full_source_and_bmz_percent_range() {
+    let document:SkinDocument=serde_json::from_value(serde_json::json!({
+        "w":100,"h":100,"graph":[{"id":"g","src":"1","w":-1,"h":-1,"angle":1,"type":107,"isRefNum":true,"min":0,"max":100}],
+        "destination":[{"id":"g","dst":[{"x":10,"y":10,"w":10,"h":80}]}]
+    })).unwrap();
+    let state = SkinDrawState { gauge: 25.0, ..Default::default() };
+    let items = document.static_render_items(
+        &mock_source("1", 32.0, 256.0),
+        &state,
+        &SkinTextState::default(),
+    );
+    let SkinRenderItem::Image { rect, uv, .. } = items[0] else { panic!("gauge") };
+    assert!(approx_eq(rect.height, 0.2));
+    assert!(approx_eq(rect.y, 0.7));
+    assert_eq!(uv.width, 1.0);
+    assert_eq!(uv.height, 0.25);
+    assert_eq!(uv.y, 0.75);
+}
+
+#[test]
 fn integer_graphs_normalize_integer_properties() {
     let mut graph: SkinGraphDef =
         serde_json::from_str(r#"{"id":"bar","type":74,"isRefNum":1,"min":0,"max":1200}"#).unwrap();

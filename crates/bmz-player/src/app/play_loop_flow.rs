@@ -120,6 +120,9 @@ impl WinitApp {
                     if let Err(error) = active_play.running.pause_audio() {
                         tracing::warn!(%error, "failed to stop practice audio at round end");
                     }
+                    let result_settled_elapsed_at_finish_ms = snapshot.result_settled_elapsed_ms;
+                    let completion_remaining_ms =
+                        self.natural_finish_completion_remaining_ms(&snapshot);
                     self.apply_profile_fast_slow_filter(&mut snapshot);
                     self.apply_play_table_text(&mut snapshot);
                     self.play.last_play_snapshot = Some(snapshot);
@@ -130,7 +133,11 @@ impl WinitApp {
                     self.play.play_ending = Some(if failed {
                         practice_failed_ending(now)
                     } else {
-                        practice_natural_finish_ending(now)
+                        PlayEndingTransition {
+                            completion_remaining_ms,
+                            result_settled_elapsed_at_finish_ms,
+                            ..practice_natural_finish_ending(now)
+                        }
                     });
                     self.update_play_ending_snapshot();
                     return;
@@ -195,7 +202,9 @@ impl WinitApp {
                 snapshot.backbmp_background = backbmp_background;
                 snapshot.course_stage = course_stage;
                 snapshot.course_titles = course_titles.clone();
-                let full_combo_elapsed_at_finish_ms = snapshot.full_combo_elapsed_ms;
+                let completion_remaining_ms =
+                    self.natural_finish_completion_remaining_ms(&snapshot);
+                let result_settled_elapsed_at_finish_ms = snapshot.result_settled_elapsed_ms;
                 self.apply_profile_fast_slow_filter(&mut snapshot);
                 self.apply_play_table_text(&mut snapshot);
                 self.play.last_play_snapshot = Some(snapshot);
@@ -220,7 +229,8 @@ impl WinitApp {
                         self.viewer_mode,
                         self.skip_result,
                     ),
-                    full_combo_elapsed_at_finish_ms,
+                    completion_remaining_ms,
+                    result_settled_elapsed_at_finish_ms,
                     finished: early_finished,
                 });
                 self.update_play_ending_snapshot();
@@ -1185,6 +1195,9 @@ impl WinitApp {
             backbmp_background: self.play.play_backbmp_loaded,
             failed_elapsed_ms: ending.failed.then_some(elapsed_since_ms(ending.started_at)),
             music_end_elapsed_ms: ending.music_end_started_at.map(elapsed_since_ms),
+            result_settled_elapsed_ms: ending
+                .result_settled_elapsed_at_finish_ms
+                .map(|elapsed| elapsed.saturating_add(elapsed_since_ms(ending.started_at))),
             fadeout_elapsed_ms: ending.fadeout_started_at.map(elapsed_since_ms),
         };
 
@@ -1202,6 +1215,7 @@ impl WinitApp {
             snapshot.stagefile_image_size = stagefile_image_size;
             snapshot.failed_elapsed_ms = timers.failed_elapsed_ms;
             snapshot.music_end_elapsed_ms = timers.music_end_elapsed_ms;
+            snapshot.result_settled_elapsed_ms = timers.result_settled_elapsed_ms;
             snapshot.fadeout_elapsed_ms = timers.fadeout_elapsed_ms;
             return;
         };

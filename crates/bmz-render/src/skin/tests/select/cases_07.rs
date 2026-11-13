@@ -175,6 +175,8 @@ fn skin_gauge_sprite_selects_exhard_nodes_and_tip_frame() {
     document.gauge.as_mut().unwrap().nodes = (0..36).map(|index| format!("node-{index}")).collect();
     document.image = (0..36)
         .map(|index| SkinImageDef {
+            qwilight_animation: None,
+            qwilight_frame_cells: Vec::new(),
             lr2_button: false,
             lr2_panel: None,
             lr2_clip: false,

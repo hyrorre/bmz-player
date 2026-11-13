@@ -152,6 +152,8 @@ pub struct SkinSourceAssetCache {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SkinSourceAssetCacheKey {
+    /// Ordered frame identities and grid layout; file keys have no sequence.
+    pub(super) frames: Option<(u32, Vec<SkinSourceAssetCacheKey>)>,
     pub(super) color_key: Option<[u8; 3]>,
     pub(super) path: PathBuf,
     pub(super) modified: Option<SystemTime>,

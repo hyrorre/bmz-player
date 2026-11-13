@@ -14,6 +14,7 @@ impl Renderer {
             gpu.upsert_rgba_texture(texture.id, texture.width, texture.height, &texture.rgba)?;
         }
         self.gpu = Some(gpu);
+        self.deferred.forget_gpu();
         self.install_pending_sprite_sheets();
         Ok(())
     }
@@ -59,6 +60,7 @@ impl Renderer {
             }
         }
         self.gpu = Some(gpu);
+        self.deferred.forget_gpu();
         self.install_pending_sprite_sheets();
         Ok(())
     }
@@ -77,6 +79,7 @@ impl Renderer {
         animation: std::sync::Arc<crate::assets::AnimatedImage>,
     ) -> Result<SkinImageSize> {
         let Some(limit) = self.max_texture_dimension_2d() else {
+            self.forget_deferred_image(id);
             self.pending_textures.retain(|texture| texture.id != id);
             self.pending_sprite_sheets.retain(|sheet| sheet.id != id);
             let (width, height) =
@@ -132,6 +135,7 @@ impl Renderer {
     /// Drop GPU resources that depend on the window surface while the app still
     /// owns the native window.
     pub fn detach_surface(&mut self) {
+        self.deferred.forget_gpu();
         self.pending_egui = None;
         let Some(gpu) = self.gpu.take() else {
             return;
@@ -154,6 +158,7 @@ impl Renderer {
             self.pending_sprite_sheets.retain(|sheet| sheet.id != id);
             self.pending_textures.push(PendingTexture { id, width, height, rgba });
         }
+        self.forget_deferred_image(id);
         Ok(())
     }
 
@@ -171,6 +176,7 @@ impl Renderer {
             self.pending_sprite_sheets.retain(|sheet| sheet.id != id);
             self.pending_textures.push(PendingTexture { id, width, height, rgba: rgba.to_vec() });
         }
+        self.forget_deferred_image(id);
         Ok(())
     }
 
@@ -194,6 +200,7 @@ impl Renderer {
         if let Some(gpu) = &mut self.gpu {
             gpu.image_textures.insert(id, prepared);
             gpu.image_bind_group_cache.retain(|(texture_id, _), _| *texture_id != id);
+            self.forget_deferred_image(id);
         } else {
             tracing::warn!(
                 texture_id = id.0,
@@ -224,6 +231,7 @@ impl Renderer {
             gpu.image_textures.remove(&id);
             gpu.image_bind_group_cache.retain(|(texture, _), _| *texture != id);
         }
+        self.forget_deferred_image(id);
     }
 
     pub fn load_png_texture(&mut self, id: TextureId, path: &std::path::Path) -> Result<()> {
@@ -404,26 +412,31 @@ impl Renderer {
             self.play_dynamic_timer_runtime.reset();
         }
         self.play_skin_context = skin_context;
+        self.deferred.forget_sequences();
     }
 
     pub fn set_select_skin_context(&mut self, skin_context: SkinContext) {
         self.select_dynamic_timer_runtime.reset();
         self.select_skin_context = skin_context;
+        self.deferred.forget_sequences();
     }
 
     pub fn set_decide_skin_context(&mut self, skin_context: SkinContext) {
         self.decide_dynamic_timer_runtime.reset();
         self.decide_skin_context = skin_context;
+        self.deferred.forget_sequences();
     }
 
     pub fn set_result_skin_context(&mut self, skin_context: SkinContext) {
         self.result_skin_context = skin_context;
         self.result_dynamic_timer_runtime.reset_for_document(self.result_skin_context.document());
+        self.deferred.forget_sequences();
     }
 
     /// Refresh load-time values without restarting Result timers or event state.
     pub fn refresh_result_skin_context(&mut self, skin_context: SkinContext) {
         self.result_skin_context = skin_context;
+        self.deferred.forget_sequences();
     }
 
     /// リザルトスキンが定義する内部 runtime event を dispatch する。
@@ -624,8 +637,31 @@ impl Renderer {
         self.play_skin_context.set_user_selected_options(enabled_options)
     }
 
+    /// Updates only layout; texture handles, fonts and animation timers stay installed.
+    pub fn set_play_qwilight_offsets(
+        &mut self,
+        values: &std::collections::BTreeMap<i32, bmz_skin_document::QwilightOffsetValue>,
+    ) -> bool {
+        let updated = self.play_skin_context.apply_qwilight_offsets(values);
+        if updated {
+            self.deferred.forget_sequences();
+        }
+        updated
+    }
+
     pub fn play_skin_timer_animation_duration_ms(&self, timer: i32) -> i32 {
         self.play_skin_context.timer_animation_duration_ms(timer)
+    }
+
+    /// Result-settled animation a cleared finish without a full combo
+    /// waits for. Zero unless the skin opts in with `bmzPlayClearCompletion`,
+    /// so other skins keep beatoraja's `finishmargin`.
+    pub fn play_skin_clear_completion_ms(&self) -> i32 {
+        if self.play_skin_document().is_some_and(|document| document.bmz_play_clear_completion) {
+            self.play_skin_timer_animation_duration_ms(crate::skin::SKIN_TIMER_BMZ_RESULT_SETTLED)
+        } else {
+            0
+        }
     }
 
     /// 決定スキンの document。
@@ -855,6 +891,7 @@ impl Renderer {
         &mut self,
         notify: impl FnOnce(),
     ) -> Result<RenderSurfaceStatus> {
+        self.prepare_deferred_images();
         let Some(gpu) = &mut self.gpu else {
             return Ok(RenderSurfaceStatus::SkippedNoSurface);
         };

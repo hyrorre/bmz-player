@@ -60,7 +60,11 @@ pub(in crate::ui) fn build_scene_skin_defs(
             path_cache.get_or_resolve(slot, access.paths, skin_path, access.grants)
         };
         changed |= fill_missing_skin_defaults_with_context(defs, path_context, options, files);
-        let any_match = defs.property.iter().any(|prop| editor.matches(&prop.name))
+        let locale = text.locale();
+        let property_matches = |prop: &SkinPropertyDef| {
+            editor.matches(&prop.name) || editor.matches(defs.property_label(&prop.name, locale))
+        };
+        let any_match = defs.property.iter().any(property_matches)
             || defs.filepath.iter().any(|file| editor.matches(&file.name))
             || defs
                 .offset
@@ -80,18 +84,23 @@ pub(in crate::ui) fn build_scene_skin_defs(
                     + ui.spacing().item_spacing.y
                     + ui.spacing().interact_size.y;
                 for (index, prop) in defs.property.iter().enumerate() {
-                    if !editor.matches(&prop.name) {
+                    if !property_matches(prop) {
                         continue;
                     }
-                    let combo_width =
-                        combo_width_for_labels(ui, prop.item.iter().map(|item| item.name.as_str()));
+                    let item_labels: Vec<&str> = prop
+                        .item
+                        .iter()
+                        .map(|item| defs.item_label(&prop.name, &item.name, locale))
+                        .collect();
+                    let combo_width = combo_width_for_labels(ui, item_labels.iter().copied());
                     show_culled_skin_row(ui, (index, prop.name.as_str()), row_height, |ui| {
                         let mut selected = options
                             .get(&prop.name)
                             .cloned()
                             .unwrap_or_else(|| property_default(prop));
                         let before = selected.clone();
-                        ui.add(egui::Label::new(&prop.name).truncate()).on_hover_text(&prop.name);
+                        let label = defs.property_label(&prop.name, locale);
+                        ui.add(egui::Label::new(label).truncate()).on_hover_text(label);
                         ui.horizontal(|ui| {
                             let previous = previous_property_selection(prop, &selected);
                             if ui
@@ -102,16 +111,18 @@ pub(in crate::ui) fn build_scene_skin_defs(
                             {
                                 selected = previous.to_string();
                             }
+                            let selected_label =
+                                defs.item_label(&prop.name, &selected, locale).to_string();
                             egui::ComboBox::from_id_salt("selection")
-                                .selected_text(&selected)
+                                .selected_text(selected_label)
                                 .width(combo_width)
                                 .truncate()
                                 .show_ui(ui, |ui| {
-                                    for item in &prop.item {
+                                    for (item, label) in prop.item.iter().zip(&item_labels) {
                                         ui.selectable_value(
                                             &mut selected,
                                             item.name.clone(),
-                                            &item.name,
+                                            *label,
                                         );
                                     }
                                 });
@@ -132,6 +143,10 @@ pub(in crate::ui) fn build_scene_skin_defs(
                     });
                 }
             });
+        }
+        if defs.qwilight {
+            ui.add_space(4.0);
+            changed |= build_qwilight_lane_cover_tools(ui, slot, access.paths, options, text);
         }
         if !defs.filepath.is_empty() {
             ui.add_space(8.0);

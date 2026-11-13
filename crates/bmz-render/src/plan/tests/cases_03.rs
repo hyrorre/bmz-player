@@ -1019,6 +1019,114 @@ fn play_plan_falls_back_to_black_fade_without_timer_two_destination() {
 }
 
 #[test]
+fn play_entry_fade_uses_scene_time_without_skin_offsets() {
+    for (duration, elapsed, seamless, expected_alpha) in [
+        (500, -1, false, Some(1.0)),
+        (500, 0, false, Some(1.0)),
+        (500, 250_000, false, Some(0.5)),
+        (500, 500_000, false, None),
+        (500, 1_000_000, false, None),
+        (500, 0, true, None),
+        (0, 0, false, None),
+        (-1, 0, false, None),
+    ] {
+        let document: SkinDocument = serde_json::from_value(serde_json::json!({
+            "type": 0, "w": 100, "h": 100, "bmzPlayFadein": duration
+        }))
+        .unwrap();
+        let skin = SkinContext::from_manifest_and_document(SkinManifest::default(), document, []);
+        let mut snapshot = RenderSnapshot {
+            time: TimeUs(-500_000),
+            play_elapsed_time: TimeUs(elapsed),
+            seamless_play_entry: seamless,
+            ..RenderSnapshot::default()
+        };
+        snapshot
+            .skin_offsets
+            .set(10, crate::skin_offset::SkinOffsetValue { x: 200, y: 300, ..Default::default() });
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
+        let fades: Vec<_> = plan
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Rect { rect, color }
+                    if color.r == 0.0
+                        && color.g == 0.0
+                        && color.b == 0.0
+                        && rect.width == 1.0
+                        && rect.height == 1.0 =>
+                {
+                    assert_eq!((rect.x, rect.y), (0.0, 0.0));
+                    Some(color.a)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            fades,
+            expected_alpha.into_iter().collect::<Vec<_>>(),
+            "duration={duration} elapsed={elapsed} seamless={seamless}"
+        );
+    }
+}
+
+#[test]
+fn play_failed_fade_requires_opt_in_and_respects_skin_close_animation() {
+    for (duration, elapsed, skin_close, expected) in [
+        (0, 250, false, None),
+        (500, 0, false, Some(0.0)),
+        (500, 250, false, Some(0.5)),
+        (500, 500, false, Some(1.0)),
+        (1000, 250, false, Some(0.25)),
+        (500, 250, true, None),
+    ] {
+        let document: SkinDocument = serde_json::from_value(serde_json::json!({
+            "type": 0, "w": 100, "h": 100, "bmzPlayFadeout": duration,
+            "destination": if skin_close {
+                serde_json::json!([{ "id": -110, "timer": 3, "dst": [
+                    { "time": 0, "x": 0, "y": 0, "w": 100, "h": 100 }
+                ] }])
+            } else { serde_json::json!([]) }
+        }))
+        .unwrap();
+        let skin = SkinContext::from_manifest_and_document(SkinManifest::default(), document, []);
+        let mut snapshot =
+            RenderSnapshot { failed_elapsed_ms: Some(elapsed), ..RenderSnapshot::default() };
+        snapshot
+            .skin_offsets
+            .set(10, crate::skin_offset::SkinOffsetValue { x: 200, y: 300, ..Default::default() });
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
+        let fades: Vec<_> = plan
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Rect { rect, color }
+                    if rect.x == 0.0
+                        && rect.y == 0.0
+                        && rect.width == 1.0
+                        && rect.height == 1.0
+                        && color.r == 0.0
+                        && color.g == 0.0
+                        && color.b == 0.0 =>
+                {
+                    Some(color.a)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fades, expected.into_iter().collect::<Vec<_>>());
+    }
+}
+
+#[test]
 fn play_skin_timer_two_destination_disables_default_black_fade() {
     let document: SkinDocument = serde_json::from_str(
         r#"

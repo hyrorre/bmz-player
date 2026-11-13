@@ -15,20 +15,45 @@ pub(super) fn decode_skin_sources(
     warn_missing_required: bool,
     source_cache: Option<&SharedSkinSourceAssetCache>,
     texture_cache: Option<&SharedSkinGpuTextureCache>,
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> DecodedSources {
     let tasks = collect_source_tasks(document, skin_root, resolved_files, path_context);
     let task_count = tasks.len();
     let started_at = Instant::now();
+    let deferred_bytes = std::sync::atomic::AtomicUsize::new(0);
     let mut pairs: Vec<_> = tasks
         .into_par_iter()
         .filter_map(|task| {
-            decode_source_task(
+            if cancelled() {
+                return None;
+            }
+            let decoded = decode_source_task(
                 task,
                 required_sources,
                 warn_missing_required,
                 source_cache,
                 texture_cache,
-            )
+            )?;
+            if let Some(image) = &decoded.deferred
+                && deferred_bytes
+                    .try_update(
+                        std::sync::atomic::Ordering::Relaxed,
+                        std::sync::atomic::Ordering::Relaxed,
+                        |bytes| {
+                            bytes
+                                .checked_add(image.stored_bytes())
+                                .filter(|bytes| *bytes <= 512 * 1024 * 1024)
+                        },
+                    )
+                    .is_err()
+            {
+                tracing::warn!(
+                    source_id = %decoded.source_id,
+                    "deferred skin images exceed 512 MiB"
+                );
+                return None;
+            }
+            Some(decoded)
         })
         .collect();
     let decode_us = elapsed_us(started_at);
@@ -47,6 +72,36 @@ fn collect_source_tasks(
         .iter()
         .enumerate()
         .filter_map(|(index, source)| {
+            if let Some(frames) = document.source_frames.get(&source.id) {
+                let context = path_context?;
+                if frames.paths.is_empty() || frames.paths.len() > 4096 || frames.columns == 0 {
+                    tracing::warn!(source_id = %source.id, "invalid skin frame sequence");
+                    return None;
+                }
+                let paths = frames
+                    .paths
+                    .iter()
+                    .map(|path| {
+                        if path == "bmz://lr2/empty" {
+                            Ok(PathBuf::from(path))
+                        } else {
+                            context.resolve_asset(path)
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>();
+                return match paths {
+                    Ok(paths) => Some(SourceDecodeTask::Frames {
+                        index,
+                        source_id: source.id.clone(),
+                        paths,
+                        columns: frames.columns,
+                    }),
+                    Err(error) => {
+                        tracing::warn!(source_id = %source.id, %error, "invalid skin frame asset");
+                        None
+                    }
+                };
+            }
             if let Some(asset) = lr2_builtin_source_asset(&source.path) {
                 return Some(SourceDecodeTask::Builtin {
                     index,
@@ -68,6 +123,13 @@ fn collect_source_tasks(
                 .map(str::to_ascii_lowercase)
                 .unwrap_or_default();
             if is_skin_static_source_extension(&extension) {
+                if document.deferred_sources.contains(&source.id) {
+                    return Some(SourceDecodeTask::Deferred {
+                        index,
+                        source_id: source.id.clone(),
+                        path,
+                    });
+                }
                 Some(SourceDecodeTask::File {
                     index,
                     source_id: source.id.clone(),
@@ -96,9 +158,69 @@ fn decode_source_task(
     texture_cache: Option<&SharedSkinGpuTextureCache>,
 ) -> Option<DecodedSourceResult> {
     match task {
+        SourceDecodeTask::Deferred { index, source_id, path } => {
+            let asset = bmz_render::assets::load_static_rgba_image_with_color_key(&path, None)
+                .and_then(|image| bmz_render::assets::deferred::DeferredImage::encode(&image));
+            match asset {
+                Ok(image) => Some(DecodedSourceResult {
+                    size: SkinImageSize { width: image.width as f32, height: image.height as f32 },
+                    deferred: Some(Arc::new(image)),
+                    index,
+                    source_id,
+                    path,
+                    asset: None,
+                    animation: None,
+                    texture_lease: None,
+                    is_video: false,
+                    cached_texture: None,
+                    cache_key: None,
+                    source_status: Some(SourceCacheStatus::Uncacheable),
+                    texture_status: Some(TextureCacheStatus::Uncacheable),
+                }),
+                Err(error) => {
+                    tracing::warn!(%source_id, %error, "failed to compress skin frame");
+                    None
+                }
+            }
+        }
+        SourceDecodeTask::Frames { index, source_id, paths, columns } => {
+            let path = paths.first()?.clone();
+            let key = skin_frame_sequence_cache_key(&paths, columns);
+            let (cached, key, texture_status) = lookup_source_texture_cache_key(texture_cache, key);
+            if let Some(cached) = cached {
+                return Some(cached_source_result(
+                    index,
+                    source_id,
+                    path,
+                    cached,
+                    key,
+                    false,
+                    texture_status,
+                ));
+            }
+            match load_source_asset_with_cache_key(key.clone(), source_cache, || {
+                load_frame_sequence(&paths, columns)
+            }) {
+                Ok((asset, source_status)) => Some(asset_source_result(
+                    index,
+                    source_id,
+                    path,
+                    asset,
+                    key,
+                    false,
+                    source_status,
+                    texture_status,
+                )),
+                Err(error) => {
+                    tracing::warn!(%source_id, %error, "failed to assemble skin frames");
+                    None
+                }
+            }
+        }
         SourceDecodeTask::Builtin { index, source_id, path, asset } => {
             let size = SkinImageSize { width: asset.width as f32, height: asset.height as f32 };
             Some(DecodedSourceResult {
+                deferred: None,
                 texture_lease: None,
                 index,
                 source_id,
@@ -127,6 +249,77 @@ fn decode_source_task(
             decode_video_source(index, source_id, path, source_cache, texture_cache)
         }
     }
+}
+
+/// Frame sequences keep their specified grid, so numbers and animation indices
+/// refer to the same cells on every GPU. Inputs and output have explicit limits.
+fn load_frame_sequence(paths: &[PathBuf], columns: u32) -> Result<RgbaImageAsset> {
+    anyhow::ensure!(
+        !paths.is_empty() && paths.len() <= 4096 && columns > 0 && columns as usize <= paths.len(),
+        "invalid skin frame grid"
+    );
+    // A repeated path (held or padding frame) is decoded once.
+    let mut images = Vec::new();
+    let mut cell_images = Vec::with_capacity(paths.len());
+    let mut decoded = HashMap::new();
+    let mut bytes = 0usize;
+    for path in paths {
+        if let Some(&index) = decoded.get(path) {
+            cell_images.push(index);
+            continue;
+        }
+        let image = match lr2_builtin_source_asset(&path.to_string_lossy()) {
+            Some(image) => image,
+            None => bmz_render::assets::load_static_rgba_image_with_color_key(path, None)?,
+        };
+        bytes = bytes.saturating_add(image.pixels.len());
+        anyhow::ensure!(bytes <= 128 * 1024 * 1024, "skin frame input exceeds memory budget");
+        decoded.insert(path, images.len());
+        cell_images.push(images.len());
+        images.push(image);
+    }
+    let cell_w = images.iter().map(|image| image.width).max().unwrap();
+    let cell_h = images.iter().map(|image| image.height).max().unwrap();
+    let rows = (paths.len() as u32).div_ceil(columns);
+    let width = cell_w.checked_mul(columns).context("skin frame width overflow")?;
+    let height = cell_h.checked_mul(rows).context("skin frame height overflow")?;
+    let byte_count = u64::from(width) * u64::from(height) * 4;
+    anyhow::ensure!(
+        width <= 16384 && height <= 16384 && byte_count <= 128 * 1024 * 1024,
+        "skin frame atlas exceeds size limit"
+    );
+    let mut pixels = vec![0; byte_count as usize];
+    // Qwilight stretches each complete frame into the same destination.
+    // Uniform atlas UVs require smaller frames to fill their cell too.
+    let images = images
+        .into_iter()
+        .map(|image| {
+            if image.width == cell_w && image.height == cell_h {
+                return Ok(image);
+            }
+            let rgba = image::RgbaImage::from_raw(image.width, image.height, image.pixels)
+                .context("invalid skin frame pixels")?;
+            let resized = image::imageops::resize(
+                &rgba,
+                cell_w,
+                cell_h,
+                image::imageops::FilterType::Triangle,
+            );
+            Ok(RgbaImageAsset { width: cell_w, height: cell_h, pixels: resized.into_raw() })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for (i, &index) in cell_images.iter().enumerate() {
+        let image = &images[index];
+        let x = (i as u32 % columns) * cell_w;
+        let y = (i as u32 / columns) * cell_h;
+        for row in 0..image.height {
+            let from = (row * image.width * 4) as usize;
+            let to = ((y + row) * width * 4 + x * 4) as usize;
+            let len = (image.width * 4) as usize;
+            pixels[to..to + len].copy_from_slice(&image.pixels[from..from + len]);
+        }
+    }
+    Ok(RgbaImageAsset { width, height, pixels })
 }
 
 fn decode_file_source(
@@ -176,6 +369,7 @@ fn decode_file_source(
             let (width, height) =
                 bmz_render::assets::sprite_sheet::provisional_sprite_sheet_size(&animation);
             Some(DecodedSourceResult {
+                deferred: None,
                 texture_lease: None,
                 index,
                 source_id,
@@ -311,6 +505,7 @@ fn cached_source_result(
     texture_status: TextureCacheStatus,
 ) -> DecodedSourceResult {
     DecodedSourceResult {
+        deferred: None,
         index,
         source_id,
         path,
@@ -338,6 +533,7 @@ fn asset_source_result(
 ) -> DecodedSourceResult {
     let size = SkinImageSize { width: asset.width as f32, height: asset.height as f32 };
     DecodedSourceResult {
+        deferred: None,
         index,
         source_id,
         path,

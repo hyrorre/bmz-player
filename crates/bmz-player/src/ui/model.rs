@@ -58,11 +58,15 @@ impl SkinReloadRequest {
 #[derive(Clone, Default)]
 pub struct SceneSkinDefs {
     pub property: Vec<SkinPropertyDef>,
+    /// Localized display text keyed by property name. Saved values keep the names.
+    pub property_labels: HashMap<String, SkinPropertyLabels>,
     pub filepath: Vec<SkinFilepathDef>,
     pub offset: Vec<SkinOffsetDef>,
     /// Skin header name / author (LR2 text 50 / 51 in the embedded skin settings).
     pub name: String,
     pub author: String,
+    /// Qwilight play skin: lane cover images can be added to the shared folder.
+    pub qwilight: bool,
 }
 
 impl SceneSkinDefs {
@@ -71,10 +75,12 @@ impl SceneSkinDefs {
         match document {
             Some(doc) => Self {
                 property: doc.property.clone(),
+                property_labels: doc.property_labels.clone(),
                 filepath: doc.filepath.clone(),
                 offset: doc.offset.clone(),
                 name: doc.name.clone(),
                 author: doc.author.clone(),
+                qwilight: false,
             },
             None => Self::default(),
         }
@@ -86,6 +92,36 @@ impl SceneSkinDefs {
         let mut defs = Self::from_document(document);
         defs.append_play_common_offsets();
         defs
+    }
+
+    /// Qwilight の変換結果に対応する要素がある共通 offset だけを出す。
+    /// Judge Detail（FAST/SLOW 等）と小節線は描画しないため除く。
+    pub fn from_qwilight_play_document(document: Option<&SkinDocument>) -> Self {
+        let mut defs = Self::from_document(document);
+        defs.offset.extend(
+            beatoraja_play_common_offsets()
+                .into_iter()
+                .filter(|offset| QWILIGHT_PLAY_COMMON_OFFSETS.contains(&offset.id)),
+        );
+        defs.qwilight = true;
+        defs
+    }
+
+    /// Display name of a property for the UI locale; the saved key otherwise.
+    pub fn property_label<'a>(&'a self, property: &'a str, locale: AppLocale) -> &'a str {
+        self.property_labels
+            .get(property)
+            .and_then(|labels| localized_label(&labels.name, locale))
+            .unwrap_or(property)
+    }
+
+    /// Display name of a property's item for the UI locale; the saved name otherwise.
+    pub fn item_label<'a>(&'a self, property: &str, item: &'a str, locale: AppLocale) -> &'a str {
+        self.property_labels
+            .get(property)
+            .and_then(|labels| labels.items.get(item))
+            .and_then(|labels| localized_label(labels, locale))
+            .unwrap_or(item)
     }
 
     pub(super) fn is_empty(&self) -> bool {
@@ -115,6 +151,18 @@ impl SceneSkinDefs {
             self.offset.push(bar_line);
         }
     }
+}
+
+/// All offset(%) は描画全体へ、Notes / Judge offset は変換時に付けた offset ID で効く。
+const QWILIGHT_PLAY_COMMON_OFFSETS: [i32; 3] = [10, 30, 32];
+
+fn localized_label(labels: &HashMap<String, String>, locale: AppLocale) -> Option<&str> {
+    locale
+        .fallback_chain()
+        .iter()
+        .find_map(|locale| labels.get(locale.code()))
+        .map(String::as_str)
+        .filter(|label| !label.trim().is_empty())
 }
 
 pub(super) fn beatoraja_play_common_offsets() -> [SkinOffsetDef; 4] {

@@ -1,4 +1,4 @@
-//! Read-only skin assets, including LR2's folder-shaped legacy DX archives.
+//! Read-only skin assets, including LR2's folder-shaped DX archives and Qwilight ZIPs.
 //! No files are extracted. Callers enforce their roots with `resolve_with`.
 
 use std::fs;
@@ -7,6 +7,8 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 mod dxa;
+mod zip_assets;
+pub use zip_assets::zip_entry_names;
 mod path_context;
 mod path_policy;
 #[cfg(test)]
@@ -15,13 +17,19 @@ mod path_policy_tests;
 pub use path_context::{SkinPathContext, canonicalize_skin_path};
 pub use path_policy::SkinPathPolicy;
 
-/// A physical file or a file inside a DX archive. The logical identity includes
+/// A physical file or a file inside a DX/ZIP archive. The logical identity includes
 /// the entry name; the backing file supplies metadata for cache invalidation.
 #[derive(Debug, Clone)]
 pub struct SkinAsset {
     logical: PathBuf,
     backing: PathBuf,
-    entry: Option<dxa::Entry>,
+    entry: Option<ArchiveEntry>,
+}
+
+#[derive(Debug, Clone)]
+enum ArchiveEntry {
+    Dxa(dxa::Entry),
+    Zip(String),
 }
 
 impl SkinAsset {
@@ -34,6 +42,15 @@ impl SkinAsset {
     pub fn resolve_with(path: &Path, mut allowed: impl FnMut(&Path) -> bool) -> Result<Self> {
         let normalized = ordinary_windows_path(path);
         let path = normalized.as_path();
+        if let Some((archive, entry)) = zip_assets::split_path(path)? {
+            let backing = fs::canonicalize(case_insensitive_path(&archive, &mut allowed))?;
+            if !allowed(&backing) {
+                bail!("skin archive escapes allowed roots: {}", backing.display());
+            }
+            let name = zip_assets::find_entry(&backing, &entry)?;
+            let logical = PathBuf::from(format!("{}!skin/{name}", backing.display()));
+            return Ok(Self { logical, backing, entry: Some(ArchiveEntry::Zip(name)) });
+        }
         let physical = case_insensitive_path(path, &mut allowed);
         if physical.is_file() {
             let backing = fs::canonicalize(&physical)?;
@@ -60,7 +77,7 @@ impl SkinAsset {
             let entry = dxa::find_entry(&backing, &requested)
                 .with_context(|| format!("failed to resolve DXA asset: {}", path.display()))?;
             let logical = backing.with_extension("").join(&entry.name);
-            return Ok(Self { logical, backing, entry: Some(entry) });
+            return Ok(Self { logical, backing, entry: Some(ArchiveEntry::Dxa(entry)) });
         }
         Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -83,7 +100,8 @@ impl SkinAsset {
 
     pub fn read(&self) -> Result<Vec<u8>> {
         match &self.entry {
-            Some(entry) => dxa::read_entry(&self.backing, entry),
+            Some(ArchiveEntry::Dxa(entry)) => dxa::read_entry(&self.backing, entry),
+            Some(ArchiveEntry::Zip(name)) => zip_assets::read_entry(&self.backing, name),
             None => fs::read(&self.backing)
                 .with_context(|| format!("failed to read skin asset: {}", self.backing.display())),
         }

@@ -363,13 +363,22 @@ macro_rules! skin_document_render_play_judge_methods {
                 .map(|(index, digit)| {
                     let digit_position =
                         if compact_digits { index } else { shiftbase + index } as i32;
+                    let enlarge = value.qwilight_animation.as_ref().map_or(0, |a| {
+                        (f64::from(a.enlarge)
+                            * (1.0
+                                - f64::from(elapsed_ms.max(0)) * f64::from(a.fps)
+                                    / (a.count.max(1) as f64 * 1000.0))
+                                .clamp(0.0, 1.0))
+                        .round() as i32
+                    });
                     let rect = normalize_skin_frame_rect(
                         ResolvedSkinFrame {
                             x: base_frame.x + frame.x + digit_step * digit_position - shift
-                                + lr2_center_shift,
-                            y: base_frame.y + frame.y,
-                            w: frame.w,
-                            h: frame.h,
+                                + lr2_center_shift
+                                - enlarge,
+                            y: base_frame.y + frame.y - enlarge,
+                            w: frame.w + 2 * enlarge,
+                            h: frame.h + 2 * enlarge,
                             ..frame
                         },
                         self.w,

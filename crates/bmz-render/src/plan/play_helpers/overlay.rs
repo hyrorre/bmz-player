@@ -1,14 +1,31 @@
 use super::*;
 
-pub(super) fn push_default_play_fadeout_overlay(
+pub(super) fn push_play_entry_fade(
     commands: &mut Vec<DrawCommand>,
     snapshot: &RenderSnapshot,
+    duration_ms: i32,
 ) {
-    let Some(elapsed_ms) = snapshot.fadeout_elapsed_ms else {
+    if duration_ms <= 0 || snapshot.seamless_play_entry {
         return;
-    };
-    let alpha = (elapsed_ms as f32 / crate::snapshot::DEFAULT_PLAY_FADEOUT_DURATION_MS as f32)
-        .clamp(0.0, 1.0);
+    }
+    let elapsed_us = snapshot.play_elapsed_time.0.max(0);
+    let duration_us = i64::from(duration_ms) * 1000;
+    if elapsed_us >= duration_us {
+        return;
+    }
+    // Outside the skin's coordinates: All/LIFT offsets cannot expose the edges.
+    commands.push(DrawCommand::Rect {
+        rect: Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+        color: Color::rgba(0.0, 0.0, 0.0, 1.0 - elapsed_us as f32 / duration_us as f32),
+    });
+}
+
+pub(super) fn push_play_fadeout_overlay(
+    commands: &mut Vec<DrawCommand>,
+    elapsed_ms: i32,
+    duration_ms: i32,
+) {
+    let alpha = (elapsed_ms as f32 / duration_ms.max(1) as f32).clamp(0.0, 1.0);
     commands.push(DrawCommand::Rect {
         rect: Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
         color: Color::rgba(0.0, 0.0, 0.0, alpha),

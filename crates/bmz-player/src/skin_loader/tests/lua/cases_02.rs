@@ -193,7 +193,7 @@ fn ecfn_play7_judge_combo_x_matches_beatoraja_layout_when_available() {
 }
 
 #[test]
-fn ecfn_play7_pre_notes_judge_line_renders_in_front_when_available() {
+fn ecfn_play7_pre_notes_judge_line_preserves_skin_order_when_available() {
     use std::collections::HashMap;
 
     use bmz_render::skin::{
@@ -253,7 +253,7 @@ fn ecfn_play7_pre_notes_judge_line_renders_in_front_when_available() {
     );
 
     assert!(
-        behind.iter().all(|item| !matches!(
+        front.iter().all(|item| !matches!(
             item,
             SkinRenderItem::Image {
                 texture,
@@ -263,10 +263,10 @@ fn ecfn_play7_pre_notes_judge_line_renders_in_front_when_available() {
                 && (rect.y - 715.0 / 1080.0).abs() < 0.001
                 && (rect.height - 8.0 / 1080.0).abs() < 0.001
         )),
-        "ECFN judge line should not remain behind notes"
+        "ECFN judge line must not be moved in front of notes"
     );
     assert!(
-        front.iter().any(|item| matches!(
+        behind.iter().any(|item| matches!(
             item,
             SkinRenderItem::Image {
                 texture,
@@ -279,7 +279,7 @@ fn ecfn_play7_pre_notes_judge_line_renders_in_front_when_available() {
                 && (uv.x - 16.0 / system_size.width).abs() < 0.001
                 && uv.y.abs() < 0.001
         )),
-        "expected ECFN id=15 judge line in front items; got {front:?}"
+        "expected ECFN id=15 judge line behind notes with the original crop; got {behind:?}"
     );
 }
 

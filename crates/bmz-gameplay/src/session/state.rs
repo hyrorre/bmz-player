@@ -316,6 +316,8 @@ pub struct GameSession {
     /// 停止境界で一度だけ設定する。以後の入力はスコア・ゲージ・コンボ・判定詳細・
     /// 記録用リプレイを変更せず、表示とキー音だけを進める。新しいセッションでは `None`。
     pub scoring_closed_at: Option<TimeUs>,
+    /// Natural result settlement for play effects. Manual exits and failures do not start it.
+    pub natural_result_settled_at: Option<TimeUs>,
     /// HCN ゲージ増減の前回更新時刻。
     pub last_hcn_gauge_at: Option<TimeUs>,
 }

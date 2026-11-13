@@ -57,6 +57,7 @@ fn prepared_exit_advances_scene_time_turntable_and_preserves_input_timer_identit
                 backbmp_background: false,
                 failed_elapsed_ms: None,
                 music_end_elapsed_ms: None,
+                result_settled_elapsed_ms: None,
                 fadeout_elapsed_ms: Some(0),
             },
             &cache,
@@ -267,6 +268,7 @@ fn refresh_play_ending_snapshot_advances_note_scroll_with_audio_clock() {
         backbmp_background: false,
         failed_elapsed_ms: None,
         music_end_elapsed_ms: None,
+        result_settled_elapsed_ms: None,
         fadeout_elapsed_ms: None,
     };
     let early = refresh_play_ending_snapshot_with_session(
@@ -290,6 +292,35 @@ fn refresh_play_ending_snapshot_advances_note_scroll_with_audio_clock() {
     );
     assert_eq!(later.time, TimeUs(750_000));
     assert_eq!(later.visible_notes[Lane::Key1.index()][0].y, 0.125);
+}
+
+#[test]
+fn clear_completion_keeps_advancing_when_practice_stops_the_audio_clock() {
+    let profile = ProfileConfig::new_default("default", "Default", 1);
+    let mut session =
+        build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+    session.natural_result_settled_at = Some(TimeUs(1_200_000));
+    session.audio_clock.pause_at(TimeUs(6_000_000));
+    session.state = PlayState::Finished;
+    for elapsed in [4800, 4900, 5000] {
+        let snapshot = refresh_play_ending_snapshot_with_session(
+            &mut session,
+            None,
+            None,
+            None,
+            &BgaFrameCatalog::new(),
+            PlayEndingSkinTimers {
+                play_elapsed_time: TimeUs(6_000_000 + i64::from(elapsed - 4800) * 1000),
+                ready_elapsed_time: None,
+                backbmp_background: false,
+                failed_elapsed_ms: None,
+                music_end_elapsed_ms: Some(elapsed - 4800),
+                result_settled_elapsed_ms: Some(elapsed),
+                fadeout_elapsed_ms: None,
+            },
+        );
+        assert_eq!(snapshot.result_settled_elapsed_ms, Some(elapsed));
+    }
 }
 
 #[test]
@@ -319,6 +350,7 @@ fn refresh_play_ending_snapshot_expires_old_judgements() {
         backbmp_background: false,
         failed_elapsed_ms: None,
         music_end_elapsed_ms: None,
+        result_settled_elapsed_ms: None,
         fadeout_elapsed_ms: None,
     };
     let visible = refresh_play_ending_snapshot_with_session(

@@ -317,6 +317,8 @@ pub struct PlayNoteGraphs {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RenderSnapshot {
+    /// Actual output PCM, 32 logarithmic frequency bands normalized to 0..1.
+    pub audio_spectrum: [f32; 32],
     /// Physical output dimensions injected by Renderer before skin evaluation.
     pub screen_size: [u32; 2],
     /// 表示オフセットを含まない譜面時刻。判定演出・BGA・skin timer の基準に使う。
@@ -528,6 +530,8 @@ pub struct RenderSnapshot {
     pub failed_elapsed_ms: Option<i32>,
     /// Music end timer elapsed ms (skin timer 908). None while inactive.
     pub music_end_elapsed_ms: Option<i32>,
+    /// Natural result settlement elapsed ms (BMZ skin timer 19075). OFF on abort/failure.
+    pub result_settled_elapsed_ms: Option<i32>,
     /// Gauge increase timer elapsed ms (skin timer 42/43). None while inactive.
     pub gauge_increase_elapsed_ms: Option<i32>,
     /// Gauge max timer elapsed ms (skin timer 44/45). None while inactive.

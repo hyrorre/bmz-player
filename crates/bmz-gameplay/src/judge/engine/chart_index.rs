@@ -11,6 +11,7 @@ pub(super) struct ChartIndex {
     hcn: Vec<usize>,
     hcn_prefix_end: Vec<TimeUs>,
     hcn_sorted: bool,
+    result_end_time: TimeUs,
 }
 
 impl JudgeEngine {
@@ -44,13 +45,27 @@ impl JudgeEngine {
             })
             .collect();
         self.judged_notes.reserve(count.saturating_sub(self.judged_notes.len()));
-        self.chart_index =
-            Some(Arc::new(ChartIndex { chart, notes, hcn, hcn_prefix_end, hcn_sorted }));
+        let result_end_time = result_end_time(&chart);
+        self.chart_index = Some(Arc::new(ChartIndex {
+            chart,
+            notes,
+            hcn,
+            hcn_prefix_end,
+            hcn_sorted,
+            result_end_time,
+        }));
         self
     }
 
     fn matching_index(&self, chart: &PlayableChart) -> Option<&ChartIndex> {
         self.chart_index.as_deref().filter(|index| std::ptr::eq(index.chart.as_ref(), chart))
+    }
+
+    /// Last event that can affect scoring or gauges. Invisible notes only change keysounds.
+    /// Keep the presentation end separately, and retain its fallback for unscored charts.
+    pub(crate) fn result_end_time(&self, chart: &PlayableChart) -> TimeUs {
+        self.matching_index(chart)
+            .map_or_else(|| result_end_time(chart), |index| index.result_end_time)
     }
 
     pub fn note_by_id<'a>(&self, chart: &'a PlayableChart, id: NoteId) -> Option<&'a NoteEvent> {
@@ -78,4 +93,17 @@ impl JudgeEngine {
         };
         range.map(move |i| &chart.long_notes[indices.map_or(i, |indices| indices[i])])
     }
+}
+
+fn result_end_time(chart: &PlayableChart) -> TimeUs {
+    chart
+        .lane_notes
+        .iter()
+        .flatten()
+        .filter(|note| note.kind != NoteKind::Invisible)
+        .map(|note| note.time)
+        // Missed/early-released HCNs can keep changing the gauge until their tail.
+        .chain(chart.long_notes.iter().map(|pair| pair.end_time))
+        .max()
+        .unwrap_or(chart.end_time)
 }

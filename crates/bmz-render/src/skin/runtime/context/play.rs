@@ -256,6 +256,33 @@ impl SkinContext {
         })
     }
 
+    /// Texture order of every source-list `qwilightAnimation`, in playback
+    /// direction, and whether it wraps around. Used to decode upcoming frames.
+    pub(crate) fn qwilight_animation_texture_sequences(&self) -> Vec<(Vec<SkinTextureId>, bool)> {
+        let Some(document) = self.document.as_ref() else {
+            return Vec::new();
+        };
+        document
+            .image
+            .iter()
+            .filter_map(|image| image.qwilight_animation.as_ref())
+            .filter(|animation| !animation.sources.is_empty())
+            .map(|animation| {
+                let mut textures: Vec<_> = animation
+                    .sources
+                    .iter()
+                    .filter_map(|source| self.document_sources.get(source))
+                    .map(|source| source.texture)
+                    .collect();
+                if animation.mode == "reverse" {
+                    textures.reverse();
+                }
+                let wraps = !matches!(animation.mode.as_str(), "once" | "clear" | "reverse");
+                (textures, wraps)
+            })
+            .collect()
+    }
+
     pub fn has_timer_destination(&self, timer: i32) -> bool {
         self.document.as_ref().is_some_and(|document| {
             let enabled_options = document.enabled_options();

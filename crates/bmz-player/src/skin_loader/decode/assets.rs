@@ -1,12 +1,15 @@
 use crate::skin_loader::*;
 
 pub(in crate::skin_loader) enum SourceDecodeTask {
+    Deferred { index: usize, source_id: String, path: PathBuf },
+    Frames { index: usize, source_id: String, paths: Vec<PathBuf>, columns: u32 },
     File { index: usize, source_id: String, path: PathBuf, color_key: Option<[u8; 3]> },
     Video { index: usize, source_id: String, path: PathBuf },
     Builtin { index: usize, source_id: String, path: PathBuf, asset: RgbaImageAsset },
 }
 
 pub(in crate::skin_loader) struct DecodedSourceResult {
+    pub(in crate::skin_loader) deferred: Option<Arc<bmz_render::assets::deferred::DeferredImage>>,
     pub(in crate::skin_loader) texture_lease: Option<Arc<()>>,
     pub(in crate::skin_loader) index: usize,
     pub(in crate::skin_loader) source_id: String,

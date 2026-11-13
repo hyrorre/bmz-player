@@ -258,6 +258,7 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         }
     });
     let mut snapshot = RenderSnapshot {
+        audio_spectrum: [0.0; 32],
         stagefile_override: None,
         screen_size: [0, 0],
         time: chart_now,
@@ -488,6 +489,11 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         fadeout_elapsed_ms: None,
         failed_elapsed_ms: None,
         music_end_elapsed_ms: None,
+        result_settled_elapsed_ms: result_settled_elapsed_ms(
+            chart_now,
+            session.natural_result_settled_at,
+            session.audio_clock.playback_rate_percent(),
+        ),
         gauge_increase_elapsed_ms: optional_skin_timer_elapsed_ms(
             chart_now,
             session.gauge_increase_started_at,

@@ -213,6 +213,16 @@ impl WgpuRenderer {
             &image_bind_group_layout,
             BlendMode::LayerMask,
         );
+        let image_composite_pipelines = (0..=12)
+            .map(|mode| {
+                create_image_pipeline(
+                    &device,
+                    config.format,
+                    &image_bind_group_layout,
+                    BlendMode::Composite(mode),
+                )
+            })
+            .collect();
         let upscale_pipeline =
             create_upscale_pipeline(&device, config.format, &image_bind_group_layout);
         let upscale_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -247,6 +257,7 @@ impl WgpuRenderer {
             image_subtract_pipeline,
             image_premultiplied_pipeline,
             image_layer_pipeline,
+            image_composite_pipelines,
             image_bind_group_layout,
             image_sampler,
             image_sampler_linear,

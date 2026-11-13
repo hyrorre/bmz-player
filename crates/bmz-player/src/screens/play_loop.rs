@@ -423,6 +423,7 @@ pub struct PlayEndingSkinTimers {
     pub backbmp_background: bool,
     pub failed_elapsed_ms: Option<i32>,
     pub music_end_elapsed_ms: Option<i32>,
+    pub result_settled_elapsed_ms: Option<i32>,
     pub fadeout_elapsed_ms: Option<i32>,
 }
 
@@ -452,6 +453,7 @@ pub fn refresh_play_ending_snapshot(
     snapshot.backbmp_background = timers.backbmp_background;
     snapshot.failed_elapsed_ms = timers.failed_elapsed_ms;
     snapshot.music_end_elapsed_ms = timers.music_end_elapsed_ms;
+    snapshot.result_settled_elapsed_ms = timers.result_settled_elapsed_ms;
     snapshot.fadeout_elapsed_ms = timers.fadeout_elapsed_ms;
     apply_play_arrange_to_snapshot(&mut snapshot, &running.applied_arrange);
     apply_running_play_target_to_snapshot(&mut snapshot, running);
@@ -528,6 +530,9 @@ pub fn refresh_play_ending_snapshot_with_session_cached(
     } else {
         crate::screens::play_snapshot::refresh_play_skin_visuals(&mut snapshot, session);
     }
+    // Visual refresh recomputes chart timers; exits must keep the wall-clock
+    // continuation even when Practice has stopped the audio clock.
+    snapshot.result_settled_elapsed_ms = timers.result_settled_elapsed_ms;
     snapshot
 }
 

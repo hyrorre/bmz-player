@@ -325,7 +325,9 @@ pub(super) struct SkinRuntimeState {
     pub(super) scene_entry_waits: HashSet<SkinKind>,
     pub(super) lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
     pub(super) skin_catalog: SkinCatalogState,
-    pub(super) skin_defs_cache: BTreeMap<(String, bool), SceneSkinDefs>,
+    /// Path, Play flag and, for Qwilight play skins, the options they were evaluated with.
+    pub(super) skin_defs_cache:
+        BTreeMap<(String, bool, Option<BTreeMap<String, String>>), SceneSkinDefs>,
     pub(super) skin_header_checks: BTreeMap<String, Result<(), String>>,
     pub(super) default_skin_manifest: Option<SkinManifest>,
     /// skin decode/upload channel、共有cache、pending世代をまとめた非同期pipeline。

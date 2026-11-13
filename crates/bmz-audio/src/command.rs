@@ -254,6 +254,7 @@ impl AudioCommandQueueInner {
 #[derive(Debug, Clone)]
 pub struct AudioEngineHandle {
     engine: Arc<Mutex<AudioEngine>>,
+    spectrum: Arc<crate::spectrum::AudioSpectrum>,
     inner: Arc<AudioCommandQueueInner>,
     cancelled: Option<Arc<AtomicBool>>,
 }
@@ -269,7 +270,12 @@ impl AudioEngineHandle {
     /// Commands retain the play lifetime. Retirement rejects both queued commands
     /// and concurrent producers without waiting for gameplay or the callback.
     pub fn for_play(&self, cancelled: Arc<AtomicBool>) -> Self {
-        Self { engine: self.engine.clone(), inner: self.inner.clone(), cancelled: Some(cancelled) }
+        Self {
+            engine: self.engine.clone(),
+            spectrum: self.spectrum.clone(),
+            inner: self.inner.clone(),
+            cancelled: Some(cancelled),
+        }
     }
     pub fn new(engine: AudioEngine) -> Self {
         Self::with_capacity(engine, DEFAULT_AUDIO_COMMAND_QUEUE_CAPACITY)
@@ -283,6 +289,7 @@ impl AudioEngineHandle {
         let output_sample_rate = engine.output_sample_rate();
         let idle = engine.is_idle();
         Self {
+            spectrum: engine.spectrum().clone(),
             engine: Arc::new(Mutex::new(engine)),
             inner: Arc::new(AudioCommandQueueInner {
                 queue: Mutex::new(VecDeque::with_capacity(capacity.max(1))),
@@ -303,6 +310,10 @@ impl AudioEngineHandle {
             inner: Arc::clone(&self.inner),
             command_scratch: Vec::with_capacity(self.inner.capacity),
         }
+    }
+
+    pub fn spectrum(&self) -> &Arc<crate::spectrum::AudioSpectrum> {
+        &self.spectrum
     }
 
     pub fn output_sample_rate(&self) -> u32 {

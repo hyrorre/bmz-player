@@ -16,6 +16,7 @@ mlua.workspace = true
 # Direct dependency exposes the exact Lua headers through DEP_LUA_INCLUDE.
 mlua-sys = { version = "0.6", features = ["lua54", "vendored"] }
 serde_json.workspace = true
+serde_yaml_ng = "0.10"
 serde_path_to_error.workspace = true
 tracing.workspace = true
 

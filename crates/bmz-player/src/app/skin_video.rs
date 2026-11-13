@@ -193,6 +193,7 @@ pub(super) fn play_skin_video_draw_state(
         fadeout_ms: snapshot.fadeout_elapsed_ms,
         failed_ms: snapshot.failed_elapsed_ms,
         music_end_ms: snapshot.music_end_elapsed_ms,
+        result_settled_ms: snapshot.result_settled_elapsed_ms,
         skin_offsets: snapshot.skin_offsets,
         hispeed: snapshot.hispeed,
         hispeed_display: snapshot.hispeed_display,

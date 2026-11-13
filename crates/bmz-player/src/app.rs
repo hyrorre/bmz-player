@@ -147,17 +147,16 @@ use crate::screens::settings_model::{
 use crate::select_options::{
     ArrangeOption, DoubleOption, HsFixOption, ResolvedTarget, SessionMode, TargetOption,
 };
-#[cfg(test)]
-use crate::skin_loader::install_decoded_skin;
 use crate::skin_loader::{
     BeatorajaSkinDecodeRequest, DecodedSkin, PreparedSource, SharedSkinGpuTextureCache,
-    SkinFontCacheKey, SkinKind, UploadedSkin, decode_beatoraja_skin_request,
-    default_play_skin_document_path_from_paths, default_skin_document_path_from_paths,
-    enabled_options_from_selections, install_decoded_font, is_decodable_skin_path,
-    is_json_skin_path, is_lr2_skin_path, is_lua_skin_path,
+    SkinFontCacheKey, SkinKind, UploadedSkin, default_play_skin_document_path_from_paths,
+    default_skin_document_path_from_paths, enabled_options_from_selections, install_decoded_font,
+    is_decodable_skin_path, is_json_skin_path, is_lr2_skin_path, is_lua_skin_path,
     load_default_skin_into_renderer_from_paths, play_skin_selection_for_session,
     set_decoded_skin_context, upload_decoded_skin_with_texture_cache,
 };
+#[cfg(test)]
+use crate::skin_loader::{decode_beatoraja_skin_request, install_decoded_skin};
 use crate::song_download::{
     ChartDownloadRequest, MissingChartAction, choose_missing_chart_action, open_browser_urls,
 };

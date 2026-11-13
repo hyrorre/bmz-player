@@ -46,6 +46,22 @@ fn tap_chart(time: TimeUs) -> PlayableChart {
     chart
 }
 
+fn with_trailing_invisible(mut chart: PlayableChart) -> PlayableChart {
+    chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+        id: NoteId(99),
+        lane: Lane::Key1,
+        kind: NoteKind::Invisible,
+        tick: ChartTick(960),
+        time: TimeUs(5_000_000),
+        sound: Some(SoundId(8)),
+        layered_sounds: Vec::new(),
+        damage: None,
+    });
+    chart.sounds.push(SoundAssetRef { id: SoundId(8), path: "invisible.wav".into(), slice: None });
+    chart.end_time = TimeUs(5_000_000);
+    chart
+}
+
 /// DX 7KEY・等速の人間プレー。`W` は DX NOTE の BAD / 空POOR SLOW 側 200ms。
 fn dx_human_session(chart: PlayableChart, input_offset_us: i64) -> (GameSession, SharedBackend) {
     let mut session = session_with_autoplay(chart);
@@ -88,7 +104,8 @@ fn empty_poor_count(session: &GameSession) -> u32 {
 #[test]
 fn dx_negative_input_offset_scores_late_empty_poor_before_settling() {
     let end = 1_000_000;
-    let (mut session, keys) = dx_human_session(tap_chart(TimeUs(end)), -20_000);
+    let (mut session, keys) =
+        dx_human_session(with_trailing_invisible(tap_chart(TimeUs(end))), -20_000);
     let mut audio = TestAudio::default();
     assert_eq!(session.judge.window_set.result_settle_margin_us(), 200_000);
 
@@ -119,16 +136,25 @@ fn dx_negative_input_offset_scores_late_empty_poor_before_settling() {
     // 境界 E+W-O では、同時刻に取得した入力がまだ境界上の空POORになり得る。
     advance_at(&mut session, &mut audio, end + 220_000);
     assert_eq!(session.scoring_closed_at, None);
+    assert_eq!(session.natural_result_settled_at, None);
     advance_at(&mut session, &mut audio, end + 220_001);
     assert_eq!(session.scoring_closed_at, Some(TimeUs(end + 220_001)));
+    assert_eq!(session.natural_result_settled_at, session.scoring_closed_at);
     assert_eq!(session.state, PlayState::Playing);
+    // Later offset changes and the terminal transition must not restart the effect.
+    session.offsets.input_offset_us = -300_000;
+    let finished_at = session.chart.end_time.0 + SESSION_END_MARGIN_US + 1;
+    advance_at(&mut session, &mut audio, finished_at);
+    assert_eq!(session.state, PlayState::Finished);
+    assert_eq!(session.natural_result_settled_at, Some(TimeUs(end + 220_001)));
 }
 
 #[test]
 fn full_replay_settles_only_after_the_processed_tick_passes_the_window() {
     // E=1100.5ms, W=200ms。audio_now=1300.6ms では 1300ms tick までしか処理していない。
     let end = 1_100_500;
-    let (mut session, _keys) = dx_human_session(tap_chart(TimeUs(end)), -20_000);
+    let (mut session, _keys) =
+        dx_human_session(with_trailing_invisible(tap_chart(TimeUs(end))), -20_000);
     let event = |kind, time| bmz_core::replay::ReplayEvent {
         lane: Lane::Key1,
         kind,
@@ -153,16 +179,18 @@ fn full_replay_settles_only_after_the_processed_tick_passes_the_window() {
     assert_eq!(empty_poor_count(&session), 0);
     // 外側の時計は E+W を超えているが、処理済み tick はまだ超えていない。
     assert_eq!(session.scoring_closed_at, None);
+    assert_eq!(session.natural_result_settled_at, None);
 
     advance_at(&mut session, &mut audio, 1_301_000);
     assert_eq!(empty_poor_count(&session), 1);
     // 記録済み入力に現在の -20ms を再適用しないため、負オフセット分は待たない。
     assert_eq!(session.scoring_closed_at, Some(TimeUs(1_301_000)));
+    assert_eq!(session.natural_result_settled_at, session.scoring_closed_at);
 }
 
 #[test]
 fn settled_scoring_ignores_old_inputs_offset_changes_and_late_stop_requests() {
-    let (mut session, keys) = dx_human_session(tap_chart(TimeUs(0)), 0);
+    let (mut session, keys) = dx_human_session(with_trailing_invisible(tap_chart(TimeUs(0))), 0);
     let mut audio = TestAudio::default();
     keys.press();
     advance_at(&mut session, &mut audio, 0);
@@ -199,8 +227,18 @@ fn settled_scoring_ignores_old_inputs_offset_changes_and_late_stop_requests() {
     assert_eq!(session.state, PlayState::Playing);
     assert!(!session.manually_stopped);
 
+    keys.release();
+    advance_at(&mut session, &mut audio, 5_000_000);
+    audio.scheduled.clear();
+    keys.press();
+    let frame = advance_at(&mut session, &mut audio, 5_200_000);
+    assert!(frame.judgements.is_empty());
+    assert!(audio.scheduled.iter().any(|sound| sound.sound_id == SoundId(8)));
+    assert_eq!(session.state, PlayState::Playing);
+
     // 従来の5秒待機による Finished 遷移でも、確定時刻と採点結果を変えない。
-    advance_at(&mut session, &mut audio, SESSION_END_MARGIN_US + 1);
+    let finished_at = session.chart.end_time.0 + SESSION_END_MARGIN_US + 1;
+    advance_at(&mut session, &mut audio, finished_at);
     assert_eq!(session.state, PlayState::Finished);
     assert_eq!(session.scoring_closed_at, Some(TimeUs(200_001)));
     assert_eq!(format!("{:?}", session.score), format!("{score:?}"));
@@ -209,6 +247,100 @@ fn settled_scoring_ignores_old_inputs_offset_changes_and_late_stop_requests() {
     assert_eq!(session.result_judgements, judgements);
     assert_eq!(session.replay_recorder.events, recorded);
     assert_eq!((session.display_combo(), session.display_max_combo()), combo);
+}
+
+#[test]
+fn trailing_invisible_does_not_skip_a_late_mine_or_its_input_window() {
+    let mut chart = tap_chart(TimeUs(0));
+    chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+        id: NoteId(2),
+        lane: Lane::Key1,
+        kind: NoteKind::Mine,
+        tick: ChartTick(192),
+        time: TimeUs(1_000_000),
+        sound: None,
+        layered_sounds: Vec::new(),
+        damage: Some(8.0),
+    });
+    let (mut session, keys) = dx_human_session(with_trailing_invisible(chart), -20_000);
+    let mut audio = TestAudio::default();
+    keys.press();
+    advance_at(&mut session, &mut audio, 20_000);
+    keys.release();
+    advance_at(&mut session, &mut audio, 30_000);
+    advance_at(&mut session, &mut audio, 220_001);
+    assert!(session.judge.is_exhausted(&session.chart));
+    assert_eq!(session.scoring_closed_at, None);
+    let gauge = session.gauge.current().value;
+    let mine_window = session.judge.window_set.note.mine_hit_us;
+    keys.press();
+    let frame = advance_at(&mut session, &mut audio, 1_000_000 + mine_window + 20_000);
+    assert_eq!(frame.mine_hits.len(), 1);
+    assert!(session.gauge.current().value < gauge);
+    advance_at(&mut session, &mut audio, 1_220_000);
+    assert_eq!(session.scoring_closed_at, None);
+    advance_at(&mut session, &mut audio, 1_220_001);
+    assert_eq!(session.scoring_closed_at, Some(TimeUs(1_220_001)));
+}
+
+#[test]
+fn missed_long_notes_keep_settlement_past_the_tail_in_every_mode() {
+    for mode in [LongNoteMode::Ln, LongNoteMode::Cn, LongNoteMode::Hcn] {
+        let mut chart = chart_with_hcn_long_note();
+        chart.long_notes[0].mode = Some(mode);
+        let (mut session, _keys) = dx_human_session(with_trailing_invisible(chart), 0);
+        let mut audio = TestAudio::default();
+        advance_at(&mut session, &mut audio, 200_001);
+        let gauge = session.gauge.current().value;
+        advance_at(&mut session, &mut audio, 900_000);
+        assert_eq!(session.scoring_closed_at, None, "{mode:?}");
+        if mode == LongNoteMode::Hcn {
+            assert!(session.gauge.current().value < gauge);
+        }
+        advance_at(&mut session, &mut audio, 1_200_000);
+        assert_eq!(session.scoring_closed_at, None, "{mode:?}");
+        advance_at(&mut session, &mut audio, 1_200_001);
+        assert_eq!(session.scoring_closed_at, Some(TimeUs(1_200_001)), "{mode:?}");
+        let carry = session.gauge.carry_values();
+        advance_at(&mut session, &mut audio, 5_000_001);
+        assert_eq!(session.gauge.carry_values(), carry, "{mode:?}");
+    }
+}
+
+#[test]
+fn independent_opponent_waits_for_its_scoring_tick_but_not_invisible_notes() {
+    let (mut session, keys) = dx_human_session(with_trailing_invisible(tap_chart(TimeUs(0))), 0);
+    let (rival, _) = dx_human_session(with_trailing_invisible(tap_chart(TimeUs(1_100_500))), 0);
+    session.opponent.independent = Some(BattleOpponentSession {
+        judge: rival.judge,
+        chart: rival.chart,
+        key_mode: rival.primary_key_mode,
+        scored_total_notes: rival.scored_total_notes,
+        base_judge_windows: rival.base_judge_windows,
+        rule_mode: rival.rule_mode,
+        score: rival.score,
+        gauge: rival.gauge,
+        replay_player: Some(ReplayPlayer::default()),
+        replay_judge_rate_percent: 100,
+        autoplay: None,
+        display_uses_primary_arrangement: false,
+        publish_display_judgements: true,
+        gauge_increase_started_at: None,
+        gauge_max_started_at: None,
+        full_combo_started_at: None,
+        lane_keyon_started_at: Default::default(),
+        lane_hcn_timer: Default::default(),
+        last_hcn_gauge_at: None,
+    });
+    let mut audio = TestAudio::default();
+    keys.press();
+    advance_at(&mut session, &mut audio, 0);
+    advance_at(&mut session, &mut audio, 200_001);
+    assert_eq!(session.scoring_closed_at, None);
+    advance_at(&mut session, &mut audio, 1_300_600);
+    assert_eq!(session.scoring_closed_at, None);
+    advance_at(&mut session, &mut audio, 1_301_000);
+    assert_eq!(session.scoring_closed_at, Some(TimeUs(1_301_000)));
 }
 
 #[test]
@@ -412,6 +544,8 @@ fn practice_round_end_finishes_a_run_whose_notes_were_all_processed() {
     assert!(!session.manually_stopped);
     // Practice は直後に時計を止めるため、更新を経ずに停止境界で結果を取得できる。
     assert_eq!(session.result_settled_at(), Some(TimeUs(50_000)));
+    advance_at(&mut session, &mut audio, 50_000);
+    assert_eq!(session.natural_result_settled_at, None);
 
     // ノーツが残る間は従来どおり途中中断になる。
     let (mut session, _keys) = dx_human_session(tap_chart(TimeUs(1_000_000)), 0);
@@ -419,4 +553,61 @@ fn practice_round_end_finishes_a_run_whose_notes_were_all_processed() {
     assert!(session.request_practice_round_end());
     assert_eq!(session.state, PlayState::Failed);
     assert!(session.manually_stopped);
+    advance_at(&mut session, &mut audio, 300_000);
+    assert_eq!(session.natural_result_settled_at, None);
+}
+
+#[test]
+#[ignore = "requires BMZ_RESULT_SETTLEMENT_CHART pointing to a chart with trailing invisible notes"]
+fn installed_chart_settles_before_trailing_invisible_notes() {
+    let path = std::env::var_os("BMZ_RESULT_SETTLEMENT_CHART").expect("chart path is required");
+    let chart =
+        bmz_chart::import::import_chart(std::path::Path::new(&path), None, false).unwrap().chart;
+    let mut session = session_with_autoplay(chart);
+    session.judge = session.judge.with_chart_index(Arc::clone(&session.chart));
+    let scoring_end = session.judge.result_end_time(&session.chart);
+    assert!(session.chart.end_time.0 - scoring_end.0 > 1_000_000);
+    let first = session
+        .chart
+        .lane_notes
+        .iter()
+        .flatten()
+        .filter(|note| note.kind == NoteKind::Tap)
+        .map(|note| note.time)
+        .min()
+        .unwrap();
+    let mut audio = TestAudio::default();
+    let autoplay = session.autoplay.take();
+    let first_miss = first.0 + session.judge.window_set.result_settle_margin_us() + 1;
+    advance_at(&mut session, &mut audio, first_miss);
+    session.autoplay = autoplay;
+    for now in (first_miss + 1000..=session.chart.end_time.0).step_by(1000) {
+        advance_at(&mut session, &mut audio, now);
+        if session.scoring_closed_at.is_some() {
+            break;
+        }
+    }
+    let settled =
+        session.scoring_closed_at.expect("natural result must settle before the invisible notes");
+    let margin = session.judge.window_set.result_settle_margin_us();
+    assert!(settled.0 > scoring_end.0 + margin);
+    assert!(settled.0 <= scoring_end.0 + margin + 1000);
+    assert!(settled < session.chart.end_time);
+    assert_eq!(session.natural_result_settled_at, Some(settled));
+    assert_eq!(session.full_combo_started_at, None);
+    let result = crate::result::PlayResult::from_states(
+        &session.chart,
+        &session.score,
+        &session.gauge,
+        session.state,
+        false,
+    );
+    println!(
+        "title={}; scoring_end_us={}; presentation_end_us={}; settled_us={}; result={:?}",
+        session.chart.metadata.title,
+        scoring_end.0,
+        session.chart.end_time.0,
+        settled.0,
+        result.clear_type
+    );
 }

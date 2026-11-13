@@ -30,3 +30,5 @@ mod cases_03;
 mod cases_04;
 #[path = "tests/lr2_skin_settings.rs"]
 mod lr2_skin_settings;
+#[path = "tests/qwilight_lane_cover.rs"]
+mod qwilight_lane_cover;

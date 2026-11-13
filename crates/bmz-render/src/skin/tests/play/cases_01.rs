@@ -732,8 +732,8 @@ fn static_render_items_split_at_notes_marker() {
 }
 
 #[test]
-fn pre_notes_lift_line_at_note_origin_renders_in_front() {
-    let document: SkinDocument = serde_json::from_str(
+fn lift_judge_line_at_note_origin_follows_destination_order() {
+    let mut document: SkinDocument = serde_json::from_str(
         r#"
             {
                 "type": 0,
@@ -761,19 +761,24 @@ fn pre_notes_lift_line_at_note_origin_renders_in_front() {
     .unwrap();
     let sources = mock_source("1", 720.0, 720.0);
 
-    let (behind, front, failed_overlay) = document.static_render_items_split(
-        &sources,
-        &SkinDrawState::default(),
-        &SkinTextState::default(),
-    );
-
-    assert_eq!(behind.len(), 1, "ordinary pre-notes items stay behind notes");
-    assert_eq!(front.len(), 1, "ECFN-style judge line is drawn in front of notes");
-    assert!(failed_overlay.is_empty());
-    assert!(matches!(
-        front.first(),
-        Some(SkinRenderItem::Image { rect, .. })
-            if approx_eq(rect.y, 355.0 / 720.0)
-                && approx_eq(rect.height, 8.0 / 720.0)
-    ));
+    for after_notes in [false, true] {
+        if after_notes {
+            document.destination.swap(1, 2);
+        }
+        let (behind, front, failed_overlay) = document.static_render_items_split(
+            &sources,
+            &SkinDrawState::default(),
+            &SkinTextState::default(),
+        );
+        assert_eq!(behind.len(), if after_notes { 1 } else { 2 });
+        assert_eq!(front.len(), usize::from(after_notes));
+        assert!(failed_overlay.is_empty());
+        let line = if after_notes { front.first() } else { behind.last() };
+        assert!(matches!(
+            line,
+            Some(SkinRenderItem::Image { rect, .. })
+                if approx_eq(rect.y, 355.0 / 720.0)
+                    && approx_eq(rect.height, 8.0 / 720.0)
+        ));
+    }
 }

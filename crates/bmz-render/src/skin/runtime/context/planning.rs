@@ -9,6 +9,7 @@ pub(in crate::skin) struct DestinationObjectIndices {
     pub(in crate::skin) judge: Option<usize>,
     pub(in crate::skin) panel: Option<usize>,
     pub(in crate::skin) hiterror_visualizer: Option<usize>,
+    pub(in crate::skin) qwilight_visualizer: Option<usize>,
     pub(in crate::skin) timingvisualizer: Option<usize>,
     pub(in crate::skin) timingdistributiongraph: Option<usize>,
     pub(in crate::skin) gaugegraph: Option<usize>,
@@ -32,6 +33,10 @@ impl DestinationObjectIndices {
             panel: document.panel.iter().position(|item| item.id == destination.id),
             hiterror_visualizer: document
                 .hiterror_visualizer
+                .iter()
+                .position(|item| item.id == destination.id),
+            qwilight_visualizer: document
+                .qwilight_visualizer
                 .iter()
                 .position(|item| item.id == destination.id),
             timingvisualizer: document

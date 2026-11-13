@@ -90,6 +90,7 @@ use chart_text::*;
 use display::*;
 use scroll::*;
 use state::*;
+pub(crate) use timers::play_completion_remaining_ms;
 use timers::*;
 use visuals::*;
 

@@ -443,6 +443,7 @@ fn play_scene_keeps_decide_bgm_for_ready_fade() {
 #[test]
 fn decide_bgm_fade_out_spans_ready_to_chart_start() {
     assert_eq!(decide_bgm_fade_out_frames(TimeUs(-1_500_000), 48_000), 72_000);
+    assert_eq!(decide_bgm_fade_out_frames(TimeUs(-1_000_000), 48_000), 48_000);
     assert_eq!(decide_bgm_fade_out_frames(TimeUs(-6_500_000), 48_000), 312_000);
 }
 

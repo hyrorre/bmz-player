@@ -49,6 +49,8 @@ mod document_render;
 mod lr2_scene;
 #[path = "skin/pm_chara.rs"]
 mod pm_chara;
+#[path = "skin/qwilight_animation.rs"]
+mod qwilight_animation;
 mod runtime;
 mod select_state;
 #[path = "skin/state_values/bpm_change.rs"]
