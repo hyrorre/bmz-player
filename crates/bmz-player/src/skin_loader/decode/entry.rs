@@ -66,27 +66,28 @@ fn decode_configured_play_skin(context: &SkinPathContext) -> Result<DecodedSkin>
 }
 
 pub fn apply_beatoraja_json_skin(renderer: &mut Renderer, skin_path: &Path) -> Result<()> {
-    apply_beatoraja_json_skin_for_kind(renderer, skin_path, SkinKind::Play)
+    apply_beatoraja_json_skin_for_kind(renderer, &resolve_app_paths()?, skin_path, SkinKind::Play)
 }
 
 pub fn apply_beatoraja_select_json_skin(renderer: &mut Renderer, skin_path: &Path) -> Result<()> {
-    apply_beatoraja_json_skin_for_kind(renderer, skin_path, SkinKind::Select)
+    apply_beatoraja_json_skin_for_kind(renderer, &resolve_app_paths()?, skin_path, SkinKind::Select)
 }
 
 pub fn apply_beatoraja_result_json_skin(renderer: &mut Renderer, skin_path: &Path) -> Result<()> {
-    apply_beatoraja_json_skin_for_kind(renderer, skin_path, SkinKind::Result)
+    apply_beatoraja_json_skin_for_kind(renderer, &resolve_app_paths()?, skin_path, SkinKind::Result)
 }
 
 pub fn apply_beatoraja_decide_json_skin(renderer: &mut Renderer, skin_path: &Path) -> Result<()> {
-    apply_beatoraja_json_skin_for_kind(renderer, skin_path, SkinKind::Decide)
+    apply_beatoraja_json_skin_for_kind(renderer, &resolve_app_paths()?, skin_path, SkinKind::Decide)
 }
 
 pub(in crate::skin_loader) fn apply_beatoraja_json_skin_for_kind(
     renderer: &mut Renderer,
+    app_paths: &AppPaths,
     skin_path: &Path,
     kind: SkinKind,
 ) -> Result<()> {
-    let manifest = load_default_skin_into_renderer(renderer)?;
+    let manifest = load_default_skin_into_renderer_from_paths(renderer, app_paths)?;
     let decoded = decode_beatoraja_skin(skin_path, kind)?;
     install_decoded_skin(renderer, decoded, manifest)
 }

@@ -23,7 +23,7 @@ fn bundled_textures_load_from_resolved_runtime_resource_dir() {
 
 #[test]
 fn default_skin_root_contains_json_documents() {
-    let root = default_skin_root();
+    let root = test_app_paths().default_skin_root();
     for file_name in ["select.json", "decide.json", "result.json", "play7.json"] {
         assert!(root.join(file_name).is_file(), "missing bundled default {file_name}");
     }
@@ -283,7 +283,8 @@ fn external_beatoraja_json_requires_explicit_selection_when_available() {
     let error =
         apply_skin_from_config(&mut renderer, &app_paths, skin_path.to_str().unwrap()).unwrap_err();
     assert!(error.to_string().contains("skin path escapes skin root"), "{error:#}");
-    apply_beatoraja_json_skin(&mut renderer, &skin_path).unwrap();
+    apply_beatoraja_json_skin_for_kind(&mut renderer, &app_paths, &skin_path, SkinKind::Play)
+        .unwrap();
 }
 
 #[test]

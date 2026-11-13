@@ -159,7 +159,13 @@ fn wmii_fhd_lr2skin_can_be_applied_when_available() {
     }
     let mut renderer = Renderer::default();
 
-    apply_beatoraja_json_skin(&mut renderer, &skin_path).unwrap();
+    apply_beatoraja_json_skin_for_kind(
+        &mut renderer,
+        &test_app_paths(),
+        &skin_path,
+        SkinKind::Play,
+    )
+    .unwrap();
 }
 
 #[test]
