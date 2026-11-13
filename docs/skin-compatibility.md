@@ -32,9 +32,12 @@ FAST/SLOW回数・判定誤差ms・PGREAT対その他判定の比率（RATE）�
 フルコン・全PGREAT・通常クリアの画像演出、再生倍率・ゲージ%・目標差、判定内訳の帯、進行バー・つまみ、
 AUTOPLAYとレーン別FAST/SLOW、キー画像の往復、コンボの画像・拡大、拍連動の装飾とゲージ、CanvasCompositeの合成にも対応します。
 レーン別FAST/SLOWはBMZのAuto／閾値設定に従い、表示対象外の判定では直前の演出を解除・延長しません。
+進行バーと判定内訳の帯はプレイ中の値を毎フレーム反映します。
+`Hide Turntable`の幅0レーンと、フレームごとに寸法が異なる画像列にも対応します。
 時間表示は経過／残りを選べ、追加表示もON/OFFできます。詳しいBMZ値との対応は[スキン仕様](skin.md#qwilightのプレイスキン)を参照してください。
 [タイミングとフェードの検証記録](../notes/2026/2026-11-13-qwilight-timing-and-fades.md)を参照してください。
 テーマ、選曲・リザルト、Qwilight固有のオンライン・ポーズ・カメラ・設定用UI、専用SE、独自のカバー高さ・開閉操作は対象外です。
+QMAX_Humanoidの判定画像列は128 MiBの画像列上限を超えるため、現時点では読み込めません。
 [仕様と制限](skin.md#qwilightのプレイスキン)、[実素材テスト](../crates/bmz-player/src/skin_loader/tests/qwilight.rs)、
 [実装記録](../notes/2026/2026-11-10-qwilight-play-skins.md)を参照してください。
 

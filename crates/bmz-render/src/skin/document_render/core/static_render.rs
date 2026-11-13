@@ -42,6 +42,7 @@ pub(in crate::skin::document_render) fn fixed_image_destination_cacheable(
         return false;
     };
     image.cycle <= 0
+        && image.qwilight_animation.is_none()
         && image.ref_id == 0
         && image.act.is_none_or(|id| bmz_skin_document::lua_act_callback_id(id).is_some())
         && !matches!(image.src.as_str(), "100" | "101" | "102")

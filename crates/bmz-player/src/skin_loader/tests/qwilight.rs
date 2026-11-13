@@ -9,6 +9,40 @@ use bmz_render::snapshot::{
 mod visual_regressions;
 
 #[test]
+fn qwilight_unequal_frame_sizes_fill_each_atlas_cell() {
+    use std::io::Write;
+    let root = unique_test_dir("qwilight-unequal-frames");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("skin.yaml");
+    fs::write(&path, "format: {zip: skin}\nframe: {main-frame: 2}\nlambda:\n  drawing1: 1, 2, 3, 4, 5, 10\n  pipeline: 3, 7\npoint: {noteLength: 20}\n").unwrap();
+    let mut zip = zip::ZipWriter::new(fs::File::create(root.join("skin.zip")).unwrap());
+    let red = [255, 0, 0, 255];
+    let blue = [0, 0, 255, 255];
+    for (entry, width, height, color) in [
+        ("Note/N 1 0 0.png", 2, 2, [255; 4]),
+        ("Main/M 1 0.png", 4, 2, red),
+        ("Main/M 1 1.png", 2, 4, blue),
+    ] {
+        zip.start_file(entry, zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(&png_bytes(width, height, color)).unwrap();
+    }
+    zip.finish().unwrap();
+    let decoded = decode_qwilight(&path, &root, 7, BTreeMap::new());
+    let beam = decoded.document.image.iter().find(|image| image.id == "qw-lane-3-0").unwrap();
+    let source = decoded.sources.iter().find(|source| source.source_id == beam.src).unwrap();
+    let asset = source.asset.as_ref().unwrap();
+    assert_eq!((beam.divx, beam.divy), (2, 2));
+    assert_eq!((asset.width, asset.height), (8, 8));
+    for y in 0..8 {
+        for x in 0..8 {
+            let i = (y * 8 + x) * 4;
+            let expected = if x < 4 && y < 4 { red } else { blue };
+            assert_eq!(&asset.pixels[i..i + 4], &expected, "pixel ({x}, {y})");
+        }
+    }
+}
+
+#[test]
 fn qwilight_zip_frames_decode_without_song_registry_and_options_change_layout() {
     use std::io::{Cursor, Write};
     let root = unique_test_dir("qwilight-synthetic");
@@ -672,4 +706,40 @@ fn qwilight_installed_customization_gpu() {
         assert!(lower < upper / 10, "{name}: the lane cover must stay above its edge");
         assert!(skin_vs_added > 5_000, "{name}: the added image must replace the skin's");
     }
+}
+
+#[test]
+#[ignore = "requires installed Qwilight skins and GPU; set BMZ_QWILIGHT_SKIN_ROOT and BMZ_QWILIGHT_PREVIEW_DIR"]
+fn qwilight_cr_minimal_hidden_turntable_gpu() {
+    let root = PathBuf::from(
+        std::env::var_os("BMZ_QWILIGHT_SKIN_ROOT").expect("set BMZ_QWILIGHT_SKIN_ROOT"),
+    );
+    let output = PathBuf::from(
+        std::env::var_os("BMZ_QWILIGHT_PREVIEW_DIR").expect("set BMZ_QWILIGHT_PREVIEW_DIR"),
+    );
+    fs::create_dir_all(&output).unwrap();
+    let roots = [root.clone()];
+    let options = BTreeMap::from([("ターンテーブルの隠し設定".into(), "Hide Turntable".into())]);
+    let shown = render_installed_qwilight(
+        &root,
+        &roots,
+        "CR_minimal",
+        KeyMode::K7,
+        7,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        0.0,
+    );
+    let hidden = render_installed_qwilight(
+        &root,
+        &roots,
+        "CR_minimal",
+        KeyMode::K7,
+        7,
+        &options,
+        &BTreeMap::new(),
+        0.0,
+    );
+    assert!(changed_pixels(&shown, &hidden, (0, 1280), (0, 720)) > 1000);
+    save_preview(&output, "CR_minimal-hide-turntable.png", &hidden);
 }

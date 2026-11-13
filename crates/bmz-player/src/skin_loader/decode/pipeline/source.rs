@@ -261,7 +261,22 @@ fn load_frame_sequence(paths: &[PathBuf], columns: u32) -> Result<RgbaImageAsset
         "skin frame atlas exceeds size limit"
     );
     let mut pixels = vec![0; byte_count as usize];
-    for (i, image) in images.iter().enumerate() {
+    for (i, image) in images.into_iter().enumerate() {
+        // Qwilight stretches each complete frame into the same destination.
+        // Uniform atlas UVs require smaller frames to fill their cell too.
+        let image = if image.width != cell_w || image.height != cell_h {
+            let rgba = image::RgbaImage::from_raw(image.width, image.height, image.pixels)
+                .context("invalid skin frame pixels")?;
+            let resized = image::imageops::resize(
+                &rgba,
+                cell_w,
+                cell_h,
+                image::imageops::FilterType::Triangle,
+            );
+            RgbaImageAsset { width: cell_w, height: cell_h, pixels: resized.into_raw() }
+        } else {
+            image
+        };
         let x = (i as u32 % columns) * cell_w;
         let y = (i as u32 / columns) * cell_h;
         for row in 0..image.height {

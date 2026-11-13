@@ -184,6 +184,37 @@ fn qwilight_skin_functions_can_override_layout_builtins() {
 }
 
 #[test]
+fn qwilight_hidden_scratches_keep_lane_and_timer_indices() {
+    let yaml = "format: {}\nframe: {}\nlambda:\n  configure-comment-0: Turntable\n  configure-0: Show, Hide\n  drawingInputMode11: Scratch(), 2, 3, 2, 5, 2, 3, 2\n  drawingInputMode13: Scratch(), 2, 3, 2, 5, 2, 3, 2\n  drawingInputModeSystem: 1\npoint:\n  noteLength: 20, ~, ~, ~, ~, ~, ~, ~, ~, ~, ~, ~, ~, ~, ~, ~, ~, ~, ~, ~, 0\n";
+    let lua = "function Scratch() if configures[1] == 1 then return 21 else return 1 end end";
+    for mode in [7, 14] {
+        for (option, width) in [("Show", 20.0), ("Hide", 0.0)] {
+            let (_root, mut eval) =
+                evaluator(yaml, lua, BTreeMap::from([("Turntable".into(), option.into())]));
+            let layout = layout::Layout::build(&mut eval, mode).unwrap();
+            assert_eq!(layout.lanes.len(), if mode == 7 { 8 } else { 16 });
+            assert_eq!(layout.p1_width, 140.0 + width);
+            for (i, lane) in layout.lanes.iter().enumerate() {
+                let scratch = i % 8 == 7;
+                assert_eq!(lane.width, if scratch { width } else { 20.0 });
+                assert_eq!(lane.timer_index, (i / 8 * 10 + (i + 1) % 8) as i32);
+            }
+            assert_eq!(layout.lanes[0].x, width);
+            assert_eq!(layout.lanes[7].x, 0.0);
+        }
+    }
+    // Hidden lanes are valid, but negative and excessive widths remain errors.
+    for width in [-1, 4097] {
+        let (_root, mut eval) = evaluator(
+            &format!("format: {{}}\nframe: {{}}\nlambda: {{}}\npoint: {{noteLength: {width}}}"),
+            "",
+            BTreeMap::new(),
+        );
+        assert!(layout::Layout::build(&mut eval, 7).is_err());
+    }
+}
+
+#[test]
 fn qwilight_lua_keyword_spacing_preserves_strings_and_comments() {
     let source =
         "if 3then return '3then', [=[4then]=] end -- 9then\n--[==[5then]==]\nlocal a3then = 0x3def";
@@ -221,6 +252,42 @@ fn qwilight_layout_vm_has_no_host_io_and_cannot_catch_budget_exhaustion() {
     .exec()
     .unwrap();
     assert!(lua.load("while true do pcall(function() while true do end end) end").exec().is_err());
+}
+
+#[test]
+#[ignore = "requires installed Qwilight play skins via BMZ_QWILIGHT_SKIN_ROOT"]
+fn installed_qwilight_hidden_turntables_preserve_note_lanes() {
+    let root = std::path::PathBuf::from(
+        std::env::var_os("BMZ_QWILIGHT_SKIN_ROOT").expect("set BMZ_QWILIGHT_SKIN_ROOT"),
+    );
+    for name in ["CR_minimal", "QMAX_Humanoid"] {
+        let context =
+            SkinPathContext::new(&root.join(name).join(format!("{name}.yaml")), [root.clone()])
+                .unwrap();
+        for mode in [5, 7, 10, 14] {
+            let state = LuaLoadRuntimeState {
+                number_values: BTreeMap::from([(SKIN_REF_BMZ_KEY_MODE, mode)]),
+                ..Default::default()
+            };
+            for choice in ["Show Turntable", "Hide Turntable"] {
+                let options = BTreeMap::from([("ターンテーブルの隠し設定".into(), choice.into())]);
+                let loaded = load_qwilight_play_skin(&context, &options, &state)
+                    .unwrap_or_else(|e| panic!("{name} {mode}K {choice}: {e:#}"));
+                let note = loaded.document.note.as_ref().unwrap();
+                let lane_count = mode as usize + if mode >= 10 { 2 } else { 1 };
+                assert_eq!(note.note.len(), lane_count);
+                assert_eq!(note.dst.len(), lane_count);
+                for (i, entry) in note.dst.iter().enumerate() {
+                    let bmz_skin_document::SkinDstEntry::Frame(frame) = entry else {
+                        panic!("lane frame")
+                    };
+                    let hidden = choice == "Hide Turntable"
+                        && (i == lane_count - 1 || (mode >= 10 && i == lane_count / 2 - 1));
+                    assert_eq!(frame.w == Some(0), hidden, "{name} {mode}K {choice} lane {i}");
+                }
+            }
+        }
+    }
 }
 
 #[test]

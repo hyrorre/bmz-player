@@ -71,3 +71,50 @@
 
 実ウィンドウでのプレイ、終了演出のフレーム時間の計測、macOS / Linuxは未確認。
 先読みの効果は条件を揃えた計測をしていないため、性能改善の数値はない。
+
+## 同日の追加レビュー対応
+
+`447dd2b4`までをmainのmerge base `b31b83b5`と比較したレビューで、追加の3件を確認した。
+
+- 進行バー・判定比率の画像は`cycle=0`でも状態に依存する。Playで使う静的画像キャッシュから
+  `qwilight_animation`のある画像を除き、開始時に描画が空でも、その後の値を反映する。
+- CR_minimal / QMAX_Humanoidの`Hide Turntable`は幅0のdrawingへ切り替える。
+  レーン幅の検証で0を許可し、非表示レーンも配列に残してノーツと入力timerの対応を保つ。
+  負の幅・4096を超える幅は引き続き拒否する。
+- フレーム寸法が違う画像列は、各画像を最大寸法のセル全体へ拡大してからatlasへ配置する。
+  同じ寸法の画像はそのまま使う。QMAXの180×1446 / 170×1800の組合せでも、
+  押下画像を左上へ詰めた結果として右側に余白が生じないようにする。
+
+3件とも自動回帰テストを追加し、修正前のコードで失敗することを確認した。
+実素材を使わないテストでは、同じSkinContextを通した進捗0→50%→75%と判定比率の変化、
+SP / DPの非表示スクラッチと入力timerの対応、横長・縦長フレームを含むZIPの展開後RGBAを検査する。
+実素材用には、2スキン×5K / 7K / 10K / 14K×Show / Hideの定義読み込みと、
+CR_minimalの7KでShow / Hideを比較するGPUオフスクリーンテストを追加した。
+
+QMAX_Humanoid全体のGPUテストも試したが、既存の判定画像列（1020×300、120フレーム、
+atlasの11×11セルで約141 MiB）が128 MiB上限を超え、6種類の判定素材の読み込みで失敗した。
+この制限は今回の3件とは別であり、上限の緩和や失敗を許容する変更はしていない。
+QMAX_HumanoidはShow / Hideの定義読み込み、画像列の縮小問題は独立したZIP fixtureのRGBAで検証する。
+
+仕様は[スキン仕様](../../docs/skin.md#qwilightのプレイスキン)と
+[互換対応状況](../../docs/skin-compatibility.md)へ反映した。
+
+追加修正の検証結果（Windows）：
+
+- `cargo fmt --check`、`cargo check --workspace --locked`、
+  `cargo clippy --workspace --all-targets --locked -- -D warnings`、
+  `cargo build -p bmz-player --locked`：成功。
+- `cargo test --workspace --locked --no-fail-fast -- --test-threads=4`を実行。
+  制限された実行環境ではbmz-playerの139件とbmz-renderの3件が通信・ファイル操作等で失敗した。
+  通常環境で失敗したテストだけを再実行し、139件・3件とも成功した。
+  bmz-playerの更新ダウンロード検証1件は制限環境でローカルサーバーの受信待ちが残ったため、
+  自分のテストプロセスの実行ファイル・引数・親PIDを確認して終了し、その1件も通常環境で成功した。
+  ログのテスト名を集計して、bmz-playerの全3206件が3122成功・84 ignoredとして確認できることを検査した。
+  他crateとdoc testは完走し、bmz-renderは再実行分を合わせ1037成功・25 ignored。
+- 実素材のShow / Hide定義読み込み：CR_minimal / QMAX_Humanoidの全16条件で成功。
+- Qwilight関連の実素材GPUを含む31件、およびCR_minimalのShow / Hide GPU比較1件が成功。
+  出力画像も目視確認した。実ウィンドウでのプレイとmacOS / Linuxは未確認。
+
+追加検証のログはGit管理外の`.local/qwilight-followup-*.log`、
+`.local/qwilight-review-regressions-{before,after}.log`、`.local/qwilight-hidden-*.log`、
+画像は`.local/qwilight-review-followup-previews/`に保存した。

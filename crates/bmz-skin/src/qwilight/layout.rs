@@ -74,7 +74,9 @@ impl Layout {
             .iter()
             .map(|&v| eval.lane_value("noteLength", v, 50.0))
             .collect::<Result<Vec<_>>>()?;
-        ensure!(widths.iter().all(|v| *v > 0.0 && *v <= 4096.0), "invalid Qwilight lane widths");
+        // Hide Turntable uses zero-width drawings. Keep those logical lanes so
+        // note indices and key/judgment timers do not shift when hidden.
+        ensure!(widths.iter().all(|v| (0.0..=4096.0).contains(v)), "invalid Qwilight lane widths");
         let half = if scratches == 2 { count / 2 } else { count };
         let mut cursor = 0.0;
         let mut positions = Vec::new();
