@@ -298,9 +298,6 @@ fn upload_video_bga_frame(
         DecodedPixelFormat::Yuv420 => {
             renderer.upsert_yuv420_texture(texture_id, frame.width, frame.height, &frame.pixels)
         }
-        DecodedPixelFormat::Rgb24 => {
-            renderer.upsert_rgb24_texture(texture_id, frame.width, frame.height, &frame.pixels)
-        }
         DecodedPixelFormat::Rgba => {
             renderer.upsert_rgba_texture_ref(texture_id, frame.width, frame.height, &frame.pixels)
         }

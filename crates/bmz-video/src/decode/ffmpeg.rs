@@ -161,7 +161,7 @@ pub(crate) fn rgba_frame_from_video(
     rgba_frame_from_video_with_scaler(decoded, pts_us, &mut scaler, None, [0; 2])
 }
 
-pub(crate) struct VideoScaler {
+pub(crate) struct RgbaVideoScaler {
     pub(super) context: ffmpeg_next::software::scaling::context::Context,
     pub(super) output: ffmpeg_next::frame::Video,
 }
@@ -184,17 +184,17 @@ fn video_output_size([width, height]: [u32; 2], [canvas_w, canvas_h]: [u32; 2]) 
 pub(crate) fn playback_frame(
     decoded: &ffmpeg_next::frame::Video,
     pts_us: i64,
-    scaler: &mut Option<VideoScaler>,
+    scaler: &mut Option<RgbaVideoScaler>,
     mut pixels: Option<Vec<u8>>,
     canvas_size: [u32; 2],
-    gpu_playback: bool,
+    allow_yuv: bool,
 ) -> Result<DecodedFrame> {
     use ffmpeg_next::{color, format::Pixel};
     let [width, height] = [decoded.width(), decoded.height()];
     validate_video_dimensions(width, height)?;
     // The existing swscale conversion uses limited-range BT.601 for untagged
     // 8-bit YUV. Keep other matrices and ranges on the existing conversion path.
-    if gpu_playback
+    if allow_yuv
         && decoded.format() == Pixel::YUV420P
         && matches!(decoded.color_range(), color::Range::Unspecified | color::Range::MPEG)
         && matches!(
@@ -241,47 +241,16 @@ pub(crate) fn playback_frame(
             format: DecodedPixelFormat::Yuv420,
         });
     }
-    packed_frame_from_video(
-        decoded,
-        pts_us,
-        scaler,
-        pixels,
-        canvas_size,
-        if gpu_playback { PackedVideoFormat::Rgb24 } else { PackedVideoFormat::Rgba },
-    )
+    rgba_frame_from_video_with_scaler(decoded, pts_us, scaler, pixels, canvas_size)
 }
 
 pub(crate) fn rgba_frame_from_video_with_scaler(
     decoded: &ffmpeg_next::frame::Video,
     pts_us: i64,
-    scaler: &mut Option<VideoScaler>,
+    scaler: &mut Option<RgbaVideoScaler>,
     rgba_buffer: Option<Vec<u8>>,
     canvas_size: [u32; 2],
 ) -> Result<DecodedFrame> {
-    packed_frame_from_video(
-        decoded,
-        pts_us,
-        scaler,
-        rgba_buffer,
-        canvas_size,
-        PackedVideoFormat::Rgba,
-    )
-}
-
-enum PackedVideoFormat {
-    Rgb24,
-    Rgba,
-}
-
-fn packed_frame_from_video(
-    decoded: &ffmpeg_next::frame::Video,
-    pts_us: i64,
-    scaler: &mut Option<VideoScaler>,
-    pixels: Option<Vec<u8>>,
-    canvas_size: [u32; 2],
-    format: PackedVideoFormat,
-) -> Result<DecodedFrame> {
-    use ffmpeg_next::format::Pixel;
     let w = decoded.width();
     let h = decoded.height();
     validate_video_dimensions(w, h)?;
@@ -293,43 +262,33 @@ fn packed_frame_from_video(
         height: h,
     };
     let [width, height] = video_output_size([w, h], canvas_size);
-    let (pixel_format, format, bytes_per_pixel) = match format {
-        PackedVideoFormat::Rgb24 => (Pixel::RGB24, DecodedPixelFormat::Rgb24, 3),
-        PackedVideoFormat::Rgba => (Pixel::RGBA, DecodedPixelFormat::Rgba, 4),
-    };
     if scaler.as_ref().is_none_or(|scaler| {
         scaler.context.input() != &input
             || scaler.context.output().width != width
             || scaler.context.output().height != height
-            || scaler.context.output().format != pixel_format
     }) {
         let context = ffmpeg_next::software::scaling::context::Context::get(
             decoded.format(),
             w,
             h,
-            pixel_format,
+            ffmpeg_next::format::Pixel::RGBA,
             width,
             height,
             ffmpeg_next::software::scaling::flag::Flags::FAST_BILINEAR,
         )?;
         // The decoder owns this scratch frame. Keep its allocation when the
-        // scaler input changes without changing the output format or dimensions.
+        // scaler input changes without a change in the RGBA output dimensions.
         let output = scaler
             .take()
-            .filter(|scaler| {
-                scaler.output.width() == width
-                    && scaler.output.height() == height
-                    && scaler.output.format() == pixel_format
-            })
+            .filter(|scaler| scaler.output.width() == width && scaler.output.height() == height)
             .map_or_else(ffmpeg_next::frame::Video::empty, |scaler| scaler.output);
-        *scaler = Some(VideoScaler { context, output });
+        *scaler = Some(RgbaVideoScaler { context, output });
         tracing::debug!(
             source_width = w,
             source_height = h,
             width,
             height,
-            ?format,
-            "configured packed video scaler"
+            "configured video RGBA scaler"
         );
     }
 
@@ -338,10 +297,18 @@ fn packed_frame_from_video(
 
     let data = scaler.output.data(0);
     let stride = scaler.output.stride(0);
-    let row_bytes = (width as usize) * bytes_per_pixel;
-    let pixels = copy_packed_frame_data(data, stride, row_bytes, height as usize, pixels);
+    let row_bytes = (width as usize) * 4;
+    let rgba =
+        copy_rgba_frame_data_with_buffer(data, stride, row_bytes, height as usize, rgba_buffer);
 
-    Ok(DecodedFrame { pts_us, pixels, width, height, source_size: [w, h], format })
+    Ok(DecodedFrame {
+        pts_us,
+        pixels: rgba,
+        width,
+        height,
+        source_size: [w, h],
+        format: DecodedPixelFormat::Rgba,
+    })
 }
 
 #[cfg(test)]
@@ -351,35 +318,35 @@ pub(crate) fn copy_rgba_frame_data(
     row_bytes: usize,
     rows: usize,
 ) -> Vec<u8> {
-    copy_packed_frame_data(data, stride, row_bytes, rows, None)
+    copy_rgba_frame_data_with_buffer(data, stride, row_bytes, rows, None)
 }
 
-pub(crate) fn copy_packed_frame_data(
+pub(crate) fn copy_rgba_frame_data_with_buffer(
     data: &[u8],
     stride: usize,
     row_bytes: usize,
     rows: usize,
-    buffer: Option<Vec<u8>>,
+    rgba_buffer: Option<Vec<u8>>,
 ) -> Vec<u8> {
     let total_bytes = row_bytes.saturating_mul(rows);
-    let mut pixels = buffer.unwrap_or_default();
-    pixels.clear();
+    let mut rgba = rgba_buffer.unwrap_or_default();
+    rgba.clear();
     if stride == row_bytes
         && let Some(contiguous) = data.get(..total_bytes)
     {
-        pixels.extend_from_slice(contiguous);
-        return pixels;
+        rgba.extend_from_slice(contiguous);
+        return rgba;
     }
 
-    pixels.resize(total_bytes, 0);
+    rgba.resize(total_bytes, 0);
     for row in 0..rows {
         let src_start = row.saturating_mul(stride);
         let dst_start = row * row_bytes;
         let Some(src) = data.get(src_start..src_start + row_bytes) else {
             break;
         };
-        let dst = &mut pixels[dst_start..dst_start + row_bytes];
+        let dst = &mut rgba[dst_start..dst_start + row_bytes];
         dst.copy_from_slice(src);
     }
-    pixels
+    rgba
 }

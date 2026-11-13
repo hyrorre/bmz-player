@@ -30,8 +30,6 @@ pub struct DecodedFrame {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecodedPixelFormat {
     Rgba,
-    /// Packed RGB bytes for opaque live BGA.
-    Rgb24,
     /// Tightly packed Y, U, then V planes, using limited-range BT.601.
     Yuv420,
 }
@@ -152,7 +150,7 @@ impl VideoTimestampNormalizer {
 
 #[derive(Default)]
 struct VideoDecodeContext {
-    scaler: Option<VideoScaler>,
+    scaler: Option<RgbaVideoScaler>,
     timestamp_normalizer: VideoTimestampNormalizer,
 }
 
@@ -187,7 +185,7 @@ impl VideoBgaDecoder {
         Self::open_inner(path, false, ChannelDecodeState::for_playback(canvas_size, false))
     }
 
-    /// Use packed YUV420 or RGB24 for the live renderer.
+    /// Allow packed YUV420 for the live renderer when the source is eligible.
     pub fn open_for_gpu_playback(path: &Path, canvas_size: [u32; 2]) -> Result<Self> {
         Self::open_inner(path, false, ChannelDecodeState::for_playback(canvas_size, true))
     }

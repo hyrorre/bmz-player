@@ -167,7 +167,7 @@ pub(super) fn create_rgba_texture(
     write_rgba_texture(queue, &texture, width, height, rgba);
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     tracing::debug!(texture_id = id.0, width, height, "registered render image texture");
-    Ok(PreparedTexture { texture, view, width, height, video: None })
+    Ok(PreparedTexture { texture, view, width, height, yuv: None })
 }
 
 pub(super) fn validate_rgba_texture_for_device(
