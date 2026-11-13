@@ -663,6 +663,7 @@ mod tests {
     #[test]
     fn bokutachi_outbox_is_selectable_without_a_ranking_primary() {
         let mut config = logged_in(IrProviderConfig::bokutachi(), "bokutachi");
+        config.primary_provider.clear();
         assert!(primary_target(&config).is_none());
         let target = queue_target(&config, "").unwrap();
         assert_eq!(target.provider_key, "bokutachi");
@@ -691,6 +692,11 @@ mod tests {
         let bms_ir = logged_in(IrProviderConfig::bms_ir(), "bms-test");
         let target = primary_target(&bms_ir).unwrap();
         assert!(!target.can_upload && target.can_download);
+
+        let bokutachi = logged_in(IrProviderConfig::bokutachi(), "bokutachi");
+        let target = primary_target(&bokutachi).unwrap();
+        assert_eq!(target.provider_key, "bokutachi");
+        assert!(!target.can_upload && !target.can_download);
 
         // 未ログイン（アカウント未確定）や無効のproviderは対象にしない。
         let mut anonymous = logged_in(IrProviderConfig::bmz_ir(), "bmz-test");
