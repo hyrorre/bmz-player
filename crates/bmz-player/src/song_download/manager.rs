@@ -611,7 +611,7 @@ impl Drop for ChartDownloadManager {
 }
 
 fn requests_share_transfer(a: &ChartDownloadRequest, b: &ChartDownloadRequest) -> bool {
-    if a.download_root != b.download_root || a.keeps_archive() != b.keeps_archive() {
+    if a.save_dir != b.save_dir || a.keeps_archive() != b.keeps_archive() {
         return false;
     }
     let same_hash = a.identity.overlaps(&b.identity);
@@ -664,7 +664,7 @@ mod tests {
                     sha256: crate::storage::common::hash_to_hex(&sha),
                 },
                 title: "Chart".into(),
-                download_root: root.path().join("songs"),
+                save_dir: root.path().join("songs/http"),
             };
             let (task_id, merged) = manager.submit(request.clone());
             assert!(!merged);
@@ -797,6 +797,49 @@ mod tests {
         let (other, merged) = manager.submit(r);
         assert!(!merged);
         assert_ne!(other, id);
+    }
+
+    #[test]
+    fn scan_start_failure_keeps_saved_artifacts_for_manual_retry() {
+        for keep_archive in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let saved = root.path().join(if keep_archive { "saved.zip" } else { "saved" });
+            let chart = if keep_archive { saved.clone() } else { saved.join("chart.bms") };
+            std::fs::create_dir_all(chart.parent().unwrap()).unwrap();
+            std::fs::write(&chart, b"saved bytes").unwrap();
+            let mut manager = ChartDownloadManager::default();
+            let mut request = request(root.path(), "https://test.invalid/{md5}", 1);
+            request.keep_archive = keep_archive;
+            let (id, _) = manager.submit(request);
+            // Supply the completed transfer through the same channel consumed by poll().
+            let (tx, rx) = mpsc::channel();
+            tx.send(Ok(finished_result(&manager.tasks[0], &saved))).unwrap();
+            manager.tasks[0].worker = Some(rx);
+            manager.tasks[0].control.set_state(DownloadState::Scanning);
+            manager.queues[0].clear();
+            manager.active.push(0);
+            manager.poll(1);
+            assert_eq!(manager.take_scan_requests().len(), 1);
+
+            manager.finish_scan(id, &[], Some("failed to spawn song scan thread: thread limit"));
+            assert_eq!(manager.task(id).unwrap().state(), DownloadState::Failed);
+            manager.retry(id);
+            let task = manager.task(id).unwrap();
+            assert_eq!(task.state(), DownloadState::Scanning);
+            assert!(task.error.is_none());
+            assert!(task.finished_at.is_none());
+            assert!(!task.registration_missing);
+            let requests = manager.take_scan_requests();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].0, id);
+            assert_eq!(requests[0].1.scan_path, saved);
+            assert!(manager.queues.iter().all(|queue| queue.is_empty()));
+            assert_eq!(std::fs::read(&chart).unwrap(), b"saved bytes");
+
+            let identity = manager.task(id).unwrap().requests[0].identity.clone();
+            manager.finish_scan(id, &[identity], None);
+            assert_eq!(manager.task(id).unwrap().state(), DownloadState::Completed);
+        }
     }
 
     #[test]

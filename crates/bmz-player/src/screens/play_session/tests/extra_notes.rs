@@ -111,6 +111,7 @@ fn extra_notes_g_battle_keeps_opponent_display_and_judgement_unmodified() {
         assist: AssistOptionConfig { extra_note_depth: 2, ..Default::default() },
         battle_opponent: Some(BattleOpponentOptions {
             replay_player: None,
+            replay_judge_rate_percent: 100,
             gauge: None,
             arrange: ArrangeOption::Normal,
             arrange_2p: ArrangeOption::Normal,

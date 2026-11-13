@@ -123,7 +123,7 @@ These skins are bundled with BMZ Player:
 - **Rm-skin**: play screens from 4 keys to 9 buttons
 - **Luxe Flat**: song select, decide, and result screens
 
-To change skins, open Settings → **Skins**, choose a screen in **Target** (such as Song Select or the 7K play screen), and pick a skin.
+Open Settings → **Skins**. Choose a screen (such as Song Select or 7K play) in the left dropdown, then pick a skin in the right dropdown.
 Each skin's own options can be changed on the same page.
 
 ### Add other skins
@@ -144,6 +144,22 @@ With an IR account, your scores are registered in an online ranking where you ca
 After you log in, your scores are submitted automatically.
 BMZ Player also supports rianIR and BMS-IR, and you can log in to them on the same page.
 
+For Bokutachi, enter an API key with `submit_score` permission and select “Validate and save key”. Use “Check connection” to validate it again or “Delete API key” to remove it.
+
+Bokutachi supports new normal singles and course stages: 7K/14K with LR2oraja and 9K with beatoraja, saved with LN-only scoring. AUTO(LN) is eligible when it produces that saved scoring mode. Key conversions, original RANDOM/SWITCH branches and past-history uploads are excluded. RANDOM lane arrangements are allowed. A display-only 7K G-BATTLE is eligible when your scoring lanes can be verified.
+
+Each course stage submits its own single-chart result. Lamps are NO PLAY except full-combo results, which use FULL COMBO. COMPLETE SONG uses that stage's actual completion; UPDATE SCORE compares its individual metrics, using the same saved input-device division for PMS. A later failure does not cancel earlier submissions. Stages of unregistered, three-chart or five-chart courses can also qualify.
+
+Eligible registered four-chart BMS 7K/14K courses update your class after a complete LN-only, LR2oraja dan-gauge clear. The course must permit IR submission. Class updates are independent of stage submissions and single-chart or course-total personal bests. The current API excludes 14K 2P MIRROR, both-side MIRROR, FLIP and arrangements that differ between stages. CN/HCN and non-LR2 gauge constraints are also excluded.
+
+Class results distinguish updated, unchanged, not updated, ineligible and failed. Retries after restarting retain the original chart order and conditions. 9K supports stage scores only. Arbitrary course totals, personal bests and rankings are not registered.
+
+PMS uses the input device division saved with the play: Controller or Keyboard. Tachi's Controller division assumes an arcade-size controller; BMZ does not measure its physical size. UPDATE SCORE compares past local results from the same device division.
+
+Unregistered charts or scoring note-count mismatches stop submission with a reason. Accepted imports await registration confirmation, which resumes after restarting. “No new score confirmed” is a final outcome and does not prove a duplicate. Select Bokutachi in the send queue and use the Completed filter to see final outcomes. Ranking, rival and battle-data downloads and replay uploads are unsupported.
+
+To check an ineligible Bokutachi chart again, select its score in the send queue and resend it individually. An individual resend can also restart registration after a confirmed server-side import failure. Ordinary network failures resume confirmation of the accepted import. Bulk sync does not recheck ineligible charts or restart failed imports. PMS UPDATE SCORE excludes external scores imported from beatoraja and other players from its comparison.
+
 ### Uploading and downloading past scores
 
 Settings → **IR** → "Bulk score operations" offers two actions.
@@ -156,7 +172,7 @@ Pressing a button opens a confirmation window. For the upload, it shows how many
 - With many scores, it can take from a few minutes to well over half an hour. Progress is shown on the same page, and the work continues even if you close the settings window.
 - Press "Cancel" to stop at any time. Running it again continues where it stopped.
 - You cannot switch profiles while it is running.
-- Bulk operations work only for your Primary IR. Uploading local scores is available for BMZ IR only, and downloading works with every IR except rianIR. The buttons are disabled when you are not logged in.
+- Bulk operations work only for your Primary IR. Uploading local scores is available for BMZ IR only, and downloading is available for BMZ IR and BMS-IR. The buttons are disabled when you are not logged in.
 
 You are notified when it finishes.
 

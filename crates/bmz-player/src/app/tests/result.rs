@@ -403,8 +403,11 @@ fn replay_slot_digits_accept_top_row_and_numpad() {
         (KeyCode::Digit3, KeyCode::Numpad3, 2),
         (KeyCode::Digit4, KeyCode::Numpad4, 3),
     ] {
-        assert_eq!(digit_to_replay_slot(PhysicalKey::Code(normal)), Some(expected));
-        assert_eq!(digit_to_replay_slot(PhysicalKey::Code(numpad)), Some(expected));
+        let keys = default_select_keys();
+        for code in [normal, numpad] {
+            let control = physical_key_to_control(PhysicalKey::Code(code)).unwrap();
+            assert_eq!(digit_to_replay_slot(&resolve_physical(&keys, &control)), Some(expected));
+        }
     }
 }
 
@@ -1107,19 +1110,6 @@ fn result_action_rejects_releases_repeats_and_other_keys() {
 }
 
 #[test]
-fn result_exit_skip_key_accepts_enter_and_escape_only_on_pressed() {
-    assert!(result_exit_skip_key(PhysicalKey::Code(KeyCode::Enter), ElementState::Pressed, false));
-    assert!(result_exit_skip_key(PhysicalKey::Code(KeyCode::Escape), ElementState::Pressed, false));
-    assert!(!result_exit_skip_key(
-        PhysicalKey::Code(KeyCode::Enter),
-        ElementState::Released,
-        false
-    ));
-    assert!(!result_exit_skip_key(PhysicalKey::Code(KeyCode::Escape), ElementState::Pressed, true));
-    assert!(!result_exit_skip_key(PhysicalKey::Code(KeyCode::Space), ElementState::Pressed, false));
-}
-
-#[test]
 fn result_exit_skip_waits_for_animation_and_holds_final_frame_once() {
     let animation_duration = Duration::from_millis(1_000);
     let fadeout = Duration::from_millis(3_000);
@@ -1269,17 +1259,14 @@ fn result_panel_toggle_requires_supported_skin_and_ir() {
 #[test]
 fn result_panel_arrow_keys_match_luxe_flat_direction() {
     assert_eq!(
-        result_panel_for_control(&PhysicalControl::KeyboardKey("ArrowLeft".to_string())),
+        result_panel_for_control(&resolve_named(&default_select_keys(), "ArrowLeft")),
         Some(2)
     );
     assert_eq!(
-        result_panel_for_control(&PhysicalControl::KeyboardKey("ArrowRight".to_string())),
+        result_panel_for_control(&resolve_named(&default_select_keys(), "ArrowRight")),
         Some(1)
     );
-    assert_eq!(
-        result_panel_for_control(&PhysicalControl::KeyboardKey("ArrowUp".to_string())),
-        None
-    );
+    assert_eq!(result_panel_for_control(&resolve_named(&default_select_keys(), "ArrowUp")), None);
 }
 
 #[test]
@@ -1345,13 +1332,13 @@ fn result_ir_scroll_supports_panel_and_always_visible_skins() {
 #[test]
 fn result_ir_scroll_controls_match_select_navigation() {
     let keys = default_select_keys();
-    assert_eq!(result_ir_scroll_rows_for_control("ArrowUp", &keys), Some(-1));
-    assert_eq!(result_ir_scroll_rows_for_control("ArrowDown", &keys), Some(1));
-    assert_eq!(result_ir_scroll_rows_for_control("DPadUp", &keys), None);
-    assert_eq!(result_ir_scroll_rows_for_control("DPadDown", &keys), None);
-    assert_eq!(result_ir_scroll_rows_for_control("Axis1+", &keys), Some(-1));
-    assert_eq!(result_ir_scroll_rows_for_control("Axis1-", &keys), Some(1));
-    assert_eq!(result_ir_scroll_rows_for_control("Button1", &keys), None);
+    assert_eq!(result_ir_scroll_rows_for_control(&resolve_named(&keys, "ArrowUp")), Some(-1));
+    assert_eq!(result_ir_scroll_rows_for_control(&resolve_named(&keys, "ArrowDown")), Some(1));
+    assert_eq!(result_ir_scroll_rows_for_control(&resolve_named(&keys, "DPadUp")), None);
+    assert_eq!(result_ir_scroll_rows_for_control(&resolve_named(&keys, "DPadDown")), None);
+    assert_eq!(result_ir_scroll_rows_for_control(&resolve_named(&keys, "Axis1+")), Some(-1));
+    assert_eq!(result_ir_scroll_rows_for_control(&resolve_named(&keys, "Axis1-")), Some(1));
+    assert_eq!(result_ir_scroll_rows_for_control(&resolve_named(&keys, "Button1")), None);
 }
 
 #[test]
@@ -1543,4 +1530,142 @@ fn rank_se_is_used_only_after_result_bgms_and_never_downgrades_rank() {
         result_entry_sound_for_result(ClearType::Normal, 0, 0, |_| true),
         SoundType::ResultBgmClear
     );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "creates an isolated Winit event loop; run alone"]
+fn result_and_select_entries_reuse_skin_decodes_started_ahead() {
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    let event_loop =
+        EventLoop::<AppUserEvent>::with_user_event().with_any_thread(true).build().unwrap();
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    let mut boot = data.boot();
+    boot.app_config.input.gamepad_enabled = false;
+    let (maintenance_tx, _) = tokio::sync::watch::channel(false);
+    let mut app = WinitApp::new(
+        boot,
+        AppOptions { viewer_play: true, ..Default::default() },
+        Instant::now(),
+        None,
+        None,
+        Arc::new(AtomicBool::new(false)),
+        event_loop.create_proxy(),
+        LogBuffer::default(),
+        maintenance_tx,
+        None,
+    )
+    .unwrap();
+    app.viewer_mode = false;
+    app.viewer_waiting = false;
+    let finished = debug_boot_finished_play_session();
+    let upload = |kind: SkinKind, generation: u64| {
+        let now = Instant::now();
+        PendingUploadResult {
+            generation,
+            path: "prewarmed.json".into(),
+            kind,
+            queued_at: now,
+            decode_started_at: now,
+            decode_finished_at: now,
+            upload_started_at: now,
+            upload_finished_at: now,
+            uploaded: Err(anyhow::anyhow!("injected completion")),
+        }
+    };
+
+    // Finalization queues the load without publishing the result to Play.
+    app.prewarm_result_skin_for_finished_play(&finished);
+    assert!(app.result.finished_play.is_none());
+    let prewarmed = app.skin.skin_pipeline.generation(SkinKind::Result);
+    assert_eq!(app.skin.result_skin_prewarm.as_ref().map(|p| p.generation), Some(prewarmed));
+    // The Finished frame delivers the result already saved at settlement.
+    app.prewarm_result_skin_for_finished_play(&finished);
+    assert_eq!(app.skin.skin_pipeline.generation(SkinKind::Result), prewarmed);
+    // Its upload is held outside Result and installs at entry without a wait.
+    assert!(app.hold_prewarmed_upload(upload(SkinKind::Result, prewarmed)).is_none());
+    app.result.finished_play = Some(finished.clone());
+    app.ensure_result_skin_ready_for_entry(ResultSkinSlot::Normal);
+    assert_eq!(app.skin.skin_pipeline.generation(SkinKind::Result), prewarmed);
+    assert!(app.skin.result_skin_prewarm.is_none());
+    assert!(!app.scene_skin_entry_waiting(SkinKind::Result));
+
+    // Result being ready starts the Select load, held while Result is shown.
+    let select = app.skin.select_skin_prewarm.as_ref().map(|p| p.generation).unwrap();
+    assert_eq!(app.skin.skin_pipeline.generation(SkinKind::Select), select);
+    assert!(app.hold_prewarmed_upload(upload(SkinKind::Select, select)).is_none());
+    app.reload_skin_for_scene_entry(SkinKind::Select);
+    assert_eq!(app.skin.skin_pipeline.generation(SkinKind::Select), select);
+    assert!(app.skin.select_skin_prewarm.is_none());
+    assert!(!app.scene_skin_entry_waiting(SkinKind::Select));
+
+    // Inputs that changed during Result load Select again at entry.
+    app.prewarm_select_skin_for_result_exit();
+    let select = app.skin.select_skin_prewarm.as_ref().map(|p| p.generation).unwrap();
+    assert!(app.hold_prewarmed_upload(upload(SkinKind::Select, select)).is_none());
+    app.select.player_stats.play_count += 1;
+    app.reload_skin_for_scene_entry(SkinKind::Select);
+    assert!(app.skin.skin_pipeline.generation(SkinKind::Select) > select);
+
+    // A Play started from Result drops the Select load still in flight.
+    app.prewarm_select_skin_for_result_exit();
+    let select = app.skin.select_skin_prewarm.as_ref().map(|p| p.generation).unwrap();
+    app.discard_skin_prewarm(SkinKind::Select);
+    assert!(app.skin.skin_pipeline.generation(SkinKind::Select) > select);
+    assert!(!app.skin.skin_pipeline.is_pending(SkinKind::Select));
+
+    // A Result upload that has not arrived by entry is not waited for.
+    app.result.finished_play = None;
+    app.prewarm_result_skin_for_finished_play(&finished);
+    let prewarmed = app.skin.skin_pipeline.generation(SkinKind::Result);
+    app.result.finished_play = Some(finished.clone());
+    app.ensure_result_skin_ready_for_entry(ResultSkinSlot::Normal);
+    assert!(app.skin.skin_pipeline.generation(SkinKind::Result) > prewarmed);
+
+    // A skin setting change during the ending drops the prewarmed load.
+    app.result.finished_play = None;
+    app.prewarm_result_skin_for_finished_play(&finished);
+    let prewarmed = app.skin.skin_pipeline.generation(SkinKind::Result);
+    assert!(app.hold_prewarmed_upload(upload(SkinKind::Result, prewarmed)).is_none());
+    app.skin.last_result_skin_signature = None;
+    app.result.finished_play = Some(finished.clone());
+    app.ensure_result_skin_ready_for_entry(ResultSkinSlot::Normal);
+    assert!(app.skin.skin_pipeline.generation(SkinKind::Result) > prewarmed);
+
+    // Viewer plays never show Result, so nothing is queued for them.
+    app.result.finished_play = None;
+    app.viewer_mode = true;
+    let before = app.skin.skin_pipeline.generation(SkinKind::Result);
+    app.prewarm_result_skin_for_finished_play(&finished);
+    assert_eq!(app.skin.skin_pipeline.generation(SkinKind::Result), before);
+    assert!(app.skin.result_skin_prewarm.is_none());
+}
+
+#[test]
+fn cached_result_ir_covers_unsaved_autoplay_and_replay_except_folder_autoplay() {
+    use crate::app::result_support::cached_result_ir_applies;
+    // オートプレイ・リプレイ再生 (コース中の単曲リザルトを含む)。
+    assert!(cached_result_ir_applies(true, false, false, false));
+    assert!(cached_result_ir_applies(false, true, false, false));
+    // フォルダ連続オートプレイは IR を扱わない。
+    assert!(!cached_result_ir_applies(true, false, true, false));
+    // プラクティス・保存しない変換・Viewer / latency 検証は対象外。
+    assert!(!cached_result_ir_applies(false, false, false, false));
+    assert!(!cached_result_ir_applies(true, false, false, true));
+}
+
+#[test]
+fn folder_autoplay_result_does_not_wait_for_hour_long_skin_scene() {
+    // mz-select / Luxez-Flat などのリザルトスキンは入力待ちのため scene に1時間を宣言する。
+    let document: SkinDocument =
+        serde_json::from_str(r#"{ "type": 7, "scene": 3600000 }"#).unwrap();
+    let skin = result_auto_exit_duration_for_document(Some(&document), false, false);
+    assert_eq!(skin, Some(Duration::from_secs(3600)));
+    assert_eq!(autoplay_folder_result_exit_duration(skin), FALLBACK_RESULT_SCENE_DURATION);
+    // 短い scene はスキンの時間のまま、scene 0 はフォールバック時間で次の曲へ進む。
+    assert_eq!(
+        autoplay_folder_result_exit_duration(Some(Duration::from_secs(3))),
+        Duration::from_secs(3)
+    );
+    assert_eq!(autoplay_folder_result_exit_duration(None), FALLBACK_RESULT_SCENE_DURATION);
 }

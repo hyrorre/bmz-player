@@ -30,11 +30,29 @@ impl IrJobKind {
 impl IrScoreJobStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::NotCleared => "not_cleared",
+            Self::NoChange => "no_change",
+            Self::Ineligible => "ineligible",
             Self::Pending => "pending",
             Self::Sending => "sending",
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
         }
+    }
+}
+
+impl IrScoreJobStatus {
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "pending" => Self::Pending,
+            "sending" => Self::Sending,
+            "succeeded" => Self::Succeeded,
+            "failed" => Self::Failed,
+            "ineligible" => Self::Ineligible,
+            "no_change" => Self::NoChange,
+            "not_cleared" => Self::NotCleared,
+            _ => return None,
+        })
     }
 }
 
@@ -45,6 +63,8 @@ pub enum IrJobRetryFilter {
     RespectBackoff,
     /// `failed` jobも再試行時刻に関係なく対象にする。
     IgnoreBackoff,
+    /// Explicit resend of one selected job; may restart a confirmed failed import.
+    ExplicitResend,
     /// 再試行時刻は無視するが、`updated_at` が指定時刻以降の `failed` jobは除く。
     /// 1回の手動実行で各jobを最大1回だけ送るために使う（失敗時に `updated_at` が進む）。
     FailedBefore(i64),
@@ -61,7 +81,9 @@ impl IrJobRetryFilter {
             Self::RespectBackoff => {
                 "status IN ('pending', 'failed') AND next_attempt_at <= ?1".to_string()
             }
-            Self::IgnoreBackoff => "status IN ('pending', 'failed')".to_string(),
+            Self::IgnoreBackoff | Self::ExplicitResend => {
+                "status IN ('pending', 'failed')".to_string()
+            }
             Self::FailedBefore(since) => {
                 format!("status = 'pending' OR (status = 'failed' AND updated_at < {since})")
             }
@@ -123,7 +145,7 @@ pub struct IrScoreJobListFilter<'a> {
     pub account_id: Option<&'a str>,
     /// 空なら全kind。
     pub kinds: &'a [IrJobKind],
-    /// 空なら `succeeded` 以外（キューに残っているもの）。
+    /// 空なら `succeeded` / `no_change` 以外（キューに残っているもの）。
     pub statuses: &'a [IrScoreJobStatus],
     pub limit: u32,
     pub offset: u32,

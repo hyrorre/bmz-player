@@ -11,6 +11,10 @@ use crate::table_cmd::{
     TableFetchDownloadBatchResult, TableFetchDownloadOutcome, TableFetchOutcome,
 };
 
+#[path = "table_fetch_runtime/store.rs"]
+mod store;
+pub(super) use store::{PendingTableStore, TableStoreCompletion};
+
 pub(super) enum TableFetchWorkerEvent {
     Downloaded(TableFetchDownloadOutcome),
     Finished(Result<TableFetchDownloadBatchResult>),
@@ -38,11 +42,11 @@ pub(super) enum RianTableFetchOutcome {
 
 /// 通常の難易度表と rianIR 表を取得する background worker のライフサイクル。
 ///
-/// DBへの保存と選曲一覧の再構築は `WinitApp` に残し、この型は channel、queue、
-/// progress、identity変更時の世代状態だけを所有する。
+/// DB保存は同時1件のworkerへ渡す。開始と結果の適用はSelect中だけ行う。
 pub(super) struct TableFetchRuntime {
     pub(super) startup_urls: Option<Vec<String>>,
     pub(super) pending: Option<Receiver<TableFetchWorkerEvent>>,
+    pub(super) pending_store: Option<PendingTableStore>,
     pub(super) pending_urls: HashSet<String>,
     pub(super) queued_urls: Vec<String>,
     pub(super) progress: Option<TableFetchProgress>,
@@ -62,6 +66,7 @@ impl TableFetchRuntime {
         Self {
             startup_urls: Some(startup_urls),
             pending: None,
+            pending_store: None,
             pending_urls: HashSet::new(),
             queued_urls: Vec::new(),
             progress: None,
@@ -85,18 +90,23 @@ impl TableFetchRuntime {
     }
 }
 
-pub(super) fn startup_difficulty_table_fetch_urls_for_boot(boot: &BootstrappedApp) -> Vec<String> {
-    let fetched_source_urls: HashSet<String> =
-        match boot.library_db.list_difficulty_table_sources_with_current_download_metadata() {
-            Ok(source_urls) => source_urls.into_iter().collect(),
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    "failed to list difficulty tables with current download metadata"
-                );
-                HashSet::new()
-            }
-        };
+pub(super) fn startup_difficulty_table_fetch_urls_for_boot(
+    boot: &BootstrappedApp,
+    startup: std::time::Instant,
+) -> Vec<String> {
+    let phase = super::StartupPhase::begin(startup, "startup_difficulty_table_download_metadata");
+    let fetched_source_urls: HashSet<String> = match phase
+        .result(boot.library_db.list_difficulty_table_sources_with_current_download_metadata())
+    {
+        Ok(source_urls) => source_urls.into_iter().collect(),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "failed to list difficulty tables with current download metadata"
+            );
+            HashSet::new()
+        }
+    };
     startup_difficulty_table_fetch_urls(&boot.app_config, &fetched_source_urls)
 }
 

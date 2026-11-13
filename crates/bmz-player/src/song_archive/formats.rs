@@ -24,6 +24,8 @@ impl Backend {
         let mut magic = [0; 8];
         let len = file.read(&mut magic)?;
         file.seek(SeekFrom::Start(0))?;
+        // An unknown signature is not `unsupported`: a truncated or damaged archive looks
+        // the same, and its existing registrations must survive until it is repaired.
         let format = ArchiveFormat::from_signature(&magic[..len]).ok_or_else(|| {
             anyhow::anyhow!("unsupported song archive signature (SFX is unsupported)")
         })?;
@@ -34,23 +36,36 @@ impl Backend {
             }
             ArchiveFormat::Rar => {
                 let archive =
-                    rars::ArchiveReader::read_reader_with_options(file, rar_options(control))?;
-                ensure!(archive.sfx_offset() == 0, "self-extracting archives are unsupported");
+                    rars::ArchiveReader::read_reader_with_options(file, rar_options(control))
+                        .map_err(|error| match error.kind() {
+                            rars::ErrorKind::UnsupportedFormat
+                            | rars::ErrorKind::UnsupportedFeature
+                            | rars::ErrorKind::PasswordRequired => {
+                                super::unsupported(error.to_string())
+                            }
+                            _ => error.into(),
+                        })?;
+                if archive.sfx_offset() != 0 {
+                    return Err(super::unsupported("self-extracting archives are unsupported"));
+                }
                 let volume = match &archive {
                     rars::Archive::Rar13(archive) => archive.main.is_volume(),
                     rars::Archive::Rar15To40(archive) => archive.main.is_volume(),
                     rars::Archive::Rar50Plus(archive) => archive.main.is_volume(),
-                    _ => anyhow::bail!("unsupported RAR archive version"),
+                    _ => return Err(super::unsupported("unsupported RAR archive version")),
                 };
-                ensure!(!volume, "split song archives are unsupported");
+                if volume {
+                    return Err(super::unsupported("split song archives are unsupported"));
+                }
                 let mut entries = Vec::new();
                 for member in archive.members() {
                     let meta = &member.meta;
-                    ensure!(!meta.is_encrypted, "encrypted song archives are unsupported");
-                    ensure!(
-                        !meta.is_split_before && !meta.is_split_after,
-                        "split song archives are unsupported"
-                    );
+                    if meta.is_encrypted {
+                        return Err(super::unsupported("encrypted song archives are unsupported"));
+                    }
+                    if meta.is_split_before || meta.is_split_after {
+                        return Err(super::unsupported("split song archives are unsupported"));
+                    }
                     ensure!(!meta.is_redirection, "archive links are unsupported");
                     if matches!(meta.attr_source(), rars::AttrSource::Unix) {
                         safety::regular_mode(meta.file_attr as u32, meta.is_directory)?;

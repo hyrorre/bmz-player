@@ -78,7 +78,10 @@ impl WinitApp {
                 || before.play.seven_to_nine_type
                     != self.boot.profile_config.play.seven_to_nine_type
                 || before.play.seven_to_nine_rule_mode
-                    != self.boot.profile_config.play.seven_to_nine_rule_mode)
+                    != self.boot.profile_config.play.seven_to_nine_rule_mode
+                || before.play.s_random_correction
+                    != self.boot.profile_config.play.s_random_correction
+                || before.play.freq_semitones != self.boot.profile_config.play.freq_semitones)
         {
             self.invalidate_play_preload();
             self.play.play_media_cache = None;

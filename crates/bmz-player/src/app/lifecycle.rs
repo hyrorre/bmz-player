@@ -12,7 +12,10 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
         match cause {
             StartCause::Init => {
-                tracing::info!("winit app init");
+                tracing::info!(
+                    startup_elapsed_ms = self.smoke.startup_started_at.elapsed().as_millis(),
+                    "winit app init"
+                );
                 self.ensure_window(event_loop);
             }
             StartCause::ResumeTimeReached { start, requested_resume } => {
@@ -183,8 +186,10 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 if self.select.key_config_edit.is_none()
                     && event.state == ElementState::Pressed
                     && !event.repeat
-                    && physical_key_name(event.physical_key)
-                        .is_some_and(|control| self.select.select_keys.is_screenshot(&control))
+                    && self
+                        .resolve_control_event(ControlInputEvent::keyboard(&event))
+                        .scene()
+                        .has_shortcut(InputActionConfig::Screenshot)
                 {
                     self.request_manual_screenshot();
                     return;
@@ -324,9 +329,22 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // Windows' move/resize modal loop delivers redraws without
+                // about_to_wait. Keep the same bounded recovery active there.
+                self.update_surface_recovery();
+                if self.shutdown_requested.load(Ordering::SeqCst) {
+                    event_loop.exit();
+                    return;
+                }
                 let limit_start = Instant::now();
                 if !self.begin_scheduled_frame(event_loop) {
                     return;
+                }
+                if !self.smoke.first_present_logged && self.smoke.first_present_phase.is_none() {
+                    self.smoke.first_present_phase = Some(StartupPhase::begin(
+                        self.smoke.startup_started_at,
+                        "first_surface_frame",
+                    ));
                 }
                 // 通常起動は最初の Select 描画後に direct boot するが、Viewer は
                 // 初回 surface frame から Play を描く。system sound を待たず、
@@ -356,6 +374,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 // otherwise reload latency includes the frame limiter wait.
                 let drain_start = Instant::now();
                 let skin_drain_stats = self.drain_pending_skins();
+                self.poll_scene_skin_entries();
                 let drain_us = instant_elapsed_us_u64(drain_start);
                 let input_start = Instant::now();
                 self.sync_input_capture_target();
@@ -388,6 +407,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     self.advance_select_ir_battle_hold();
                     self.advance_select_analog_scroll();
                     self.advance_detail_value_repeat();
+                    self.flush_lr2_freq_slider_save();
                 }
                 self.advance_result_ir_scroll_hold();
                 self.advance_result_ir_analog_scroll();
@@ -400,6 +420,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.poll_play_preload();
                 self.refresh_play_target_from_source();
                 self.poll_select_maintenance();
+                self.poll_select_list();
                 self.poll_select_ir_battle_replay();
                 self.poll_select_battle_preview();
                 let background_us = instant_elapsed_us_u64(background_start);
@@ -633,6 +654,12 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.update_surface_recovery();
+        if self.shutdown_requested.load(Ordering::SeqCst) {
+            tracing::info!("shutdown requested; exiting cleanly");
+            event_loop.exit();
+            return;
+        }
         self.update_event_loop_probe_context();
         if std::mem::take(&mut self.ui.device_events_reconfigure_pending) {
             self.configure_device_events(event_loop);
@@ -659,11 +686,6 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 );
             }
         }
-        if self.shutdown_requested.load(Ordering::SeqCst) {
-            tracing::info!("shutdown requested; exiting cleanly");
-            event_loop.exit();
-            return;
-        }
         self.schedule_next_frame(event_loop);
     }
 
@@ -673,6 +695,28 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
 }
 
 impl WinitApp {
+    fn update_surface_recovery(&mut self) {
+        if self.renderer.surface_drawing_suspended()
+            && let Some(window) = &self.window
+        {
+            let size = window.inner_size();
+            self.renderer.update_surface_physical_size(SurfaceSize {
+                width: size.width,
+                height: size.height,
+            });
+        }
+        if self.renderer.retry_surface_configuration(Instant::now()) {
+            self.refresh_skin_screen_size();
+            self.update_search_ime_cursor_area();
+            self.frame.request_immediate_frame();
+        }
+        if let Some(error) = self.renderer.take_surface_failure() {
+            tracing::error!(%error, physical_size = ?self.window.as_ref().map(|window| window.inner_size()), "surface recovery failed; requesting orderly shutdown");
+            self.surface_error = Some(error);
+            self.shutdown_requested.store(true, Ordering::SeqCst);
+        }
+    }
+
     fn update_event_loop_probe_context(&mut self) {
         if self.event_loop_probe.is_none() {
             return;
@@ -720,6 +764,7 @@ impl WinitApp {
         self.jobs.ir_manual.shutdown(std::time::Duration::from_secs(3));
         self.flush_pending_screenshots("app exit");
         self.save_configs_for_exit(self.active_hispeed(), "game exit");
+        self.jobs.config_saver.shutdown();
         self.wait_for_pending_play_result_on_exit();
         // Queue screenshot/replay retention decisions before closing the OBS worker.
         if let Some(obs) = &self.integrations.obs_controller {

@@ -24,7 +24,7 @@ pub struct HcnLaneTimer {
 pub fn update_hcn_lane_timers(session: &mut GameSession, audio_now: TimeUs) {
     let mut next: [Option<HcnLaneTimer>; LANE_COUNT] = [None; LANE_COUNT];
     let mut next_muted: [Option<bool>; LANE_COUNT] = [None; LANE_COUNT];
-    for pair in &session.chart.long_notes {
+    for pair in session.judge.hcn_pairs_at(&session.chart, audio_now) {
         let idx = pair.lane.index();
         if next[idx].is_some() {
             continue;
@@ -47,8 +47,8 @@ pub fn update_hcn_lane_timers(session: &mut GameSession, audio_now: TimeUs) {
         // のときのみキー音音量を制御する。
         if matches!(end_judge, Some(Judge::Bad | Judge::Poor | Judge::EmptyPoor))
             && session
-                .chart
-                .note_by_id(pair.start_note_id)
+                .judge
+                .note_by_id(&session.chart, pair.start_note_id)
                 .is_some_and(|note| note.sounds().next().is_some())
         {
             let muted = !inclease;
@@ -83,7 +83,7 @@ pub fn update_hcn_lane_timers(session: &mut GameSession, audio_now: TimeUs) {
                         * chart_volume)
                         .clamp(0.0, 1.0)
                 };
-                if let Some(note) = session.chart.note_by_id(pair.start_note_id) {
+                if let Some(note) = session.judge.note_by_id(&session.chart, pair.start_note_id) {
                     session
                         .pending_keysound_volumes
                         .extend(note.sounds().map(|sound_id| (sound_id, volume)));
@@ -150,7 +150,7 @@ fn advance_hcn_counter(timer: &mut HcnLaneTimer, delta_us: i64) -> i64 {
 
 pub(super) fn update_battle_opponent_hcn(opponent: &mut BattleOpponentSession, now: TimeUs) {
     let mut next = [None; LANE_COUNT];
-    for pair in &opponent.chart.long_notes {
+    for pair in opponent.judge.hcn_pairs_at(&opponent.chart, now) {
         let idx = pair.lane.index();
         if next[idx].is_some() {
             continue;

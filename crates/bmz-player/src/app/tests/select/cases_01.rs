@@ -155,16 +155,16 @@ fn select_keyboard_prefers_custom_7k_bindings_over_default_14k_keys() {
         }
     }
     profile.input.play.insert("7k".into(), PlayModeInputConfig { bindings, ..Default::default() });
-    let keys = SelectKeyBindings::from_profile(&profile.input);
+    let keys = SceneInputResolver::from_profile(&profile.input);
     // N/L are also default 14K Key8/Key11. Preserve the selected 7K meaning.
-    assert!(keys.is_key4("N"));
-    assert!(!keys.is_key8("N"));
-    assert_eq!(keys.ui_lane_for_control("N"), Some(Lane::Key4));
-    assert!(keys.is_key7("L"));
-    assert!(!keys.is_ui_key4("L"));
-    assert_eq!(keys.ui_lane_for_control("L"), Some(Lane::Key7));
+    assert!(resolve_named(&keys, "N").select_lane().map(|lane| lane.lane) == Some(Lane::Key4));
+    assert!(!(resolve_named(&keys, "N").select_lane().map(|lane| lane.lane) == Some(Lane::Key8)));
+    assert_eq!(resolve_named(&keys, "N").ui_lane(), Some(Lane::Key4));
+    assert!(resolve_named(&keys, "L").select_lane().map(|lane| lane.lane) == Some(Lane::Key7));
+    assert!(!resolve_named(&keys, "L").is_ui_key(4));
+    assert_eq!(resolve_named(&keys, "L").ui_lane(), Some(Lane::Key7));
     // Nonconflicting DP keys and the existing BMZ option mapping remain available.
-    assert!(keys.is_key9("K"));
+    assert!(resolve_named(&keys, "K").select_lane().map(|lane| lane.lane) == Some(Lane::Key9));
     assert!(keys.option_hint().contains("K3/K4:GAUGE"));
     assert!(keys.option_hint().contains("K6:DP OPT"));
     assert!(keys.option_hint().contains("K7:AUTOPLAY"));
@@ -176,7 +176,7 @@ fn select_option_gamepad_lane_distinguishes_same_buttons_by_device() {
     let control = "Button1";
 
     assert_eq!(
-        select_option_lane_for_gamepad(
+        option_lane_for(
             &profile.input,
             crate::input::gamepad::GamepadSlotMap::from_slot_ids([Some(0), Some(1)]),
             DeviceId(16),
@@ -185,7 +185,7 @@ fn select_option_gamepad_lane_distinguishes_same_buttons_by_device() {
         Some(Lane::Key1)
     );
     assert_eq!(
-        select_option_lane_for_gamepad(
+        option_lane_for(
             &profile.input,
             crate::input::gamepad::GamepadSlotMap::from_slot_ids([Some(0), Some(1)]),
             DeviceId(17),
@@ -194,7 +194,7 @@ fn select_option_gamepad_lane_distinguishes_same_buttons_by_device() {
         Some(Lane::Key8)
     );
     assert_eq!(
-        select_option_lane_for_gamepad(
+        option_lane_for(
             &profile.input,
             crate::input::gamepad::GamepadSlotMap::from_slot_ids([Some(1), Some(0)]),
             DeviceId(16),
@@ -230,11 +230,11 @@ fn select_row_click_enters_only_when_row_is_already_selected() {
 fn select_key_bindings_identify_e_action_controls() {
     let keys = default_select_keys();
 
-    assert_eq!(keys.e_action_for_control("Q"), Some(InputActionConfig::E1));
-    assert_eq!(keys.e_action_for_control("W"), Some(InputActionConfig::E2));
-    assert_eq!(keys.e_action_for_control("E"), Some(InputActionConfig::E3));
-    assert_eq!(keys.e_action_for_control("R"), Some(InputActionConfig::E4));
-    assert_eq!(keys.e_action_for_control("Slash"), None);
+    assert_eq!(resolve_named(&keys, "Q").e_action(), Some(InputActionConfig::E1));
+    assert_eq!(resolve_named(&keys, "W").e_action(), Some(InputActionConfig::E2));
+    assert_eq!(resolve_named(&keys, "E").e_action(), Some(InputActionConfig::E3));
+    assert_eq!(resolve_named(&keys, "R").e_action(), Some(InputActionConfig::E4));
+    assert_eq!(resolve_named(&keys, "Slash").e_action(), None);
 }
 
 #[test]
@@ -401,7 +401,7 @@ fn select_action_maps_configurable_shortcuts() {
             Some(expected),
         );
     }
-    assert!(keys.is_screenshot("F12"));
+    assert!(resolve_named(&keys, "F12").has_shortcut(InputActionConfig::Screenshot));
 }
 
 #[test]
@@ -417,7 +417,7 @@ fn configurable_key_config_shortcut_replaces_digit_six() {
         "A",
     )
     .unwrap();
-    let keys = SelectKeyBindings::from_profile(&input);
+    let keys = SceneInputResolver::from_profile(&input);
 
     assert_eq!(
         select_action(PhysicalKey::Code(KeyCode::KeyA), ElementState::Pressed, false, &keys),
@@ -442,7 +442,7 @@ fn configurable_select_shortcut_replaces_its_default_key() {
         "A",
     )
     .unwrap();
-    let keys = SelectKeyBindings::from_profile(&input);
+    let keys = SceneInputResolver::from_profile(&input);
 
     assert_eq!(
         select_action(PhysicalKey::Code(KeyCode::KeyA), ElementState::Pressed, false, &keys),
@@ -467,7 +467,7 @@ fn configurable_mode_filter_shortcut_replaces_digit_one() {
         "A",
     )
     .unwrap();
-    let keys = SelectKeyBindings::from_profile(&input);
+    let keys = SceneInputResolver::from_profile(&input);
 
     assert_eq!(
         select_action(PhysicalKey::Code(KeyCode::KeyA), ElementState::Pressed, false, &keys),
@@ -536,21 +536,22 @@ fn deprecated_select_enter_and_option_bga_bindings_are_ignored() {
             scratch: None,
         });
     }
-    let keys = SelectKeyBindings::from_profile(&input);
+    let keys = SceneInputResolver::from_profile(&input);
 
     assert_eq!(
         select_action(PhysicalKey::Code(KeyCode::KeyA), ElementState::Pressed, false, &keys),
         None,
     );
-    assert_ne!(keys.cycle_bga(), Some("A"));
+    assert!(!resolve_named(&keys, "A").is_ui_key(1));
+    assert!(!resolve_named(&keys, "A").has_shortcut(InputActionConfig::SelectOptionBga));
 }
 
 #[test]
 fn select_control_action_uses_key2_binding_for_controller_back() {
     let input = crate::config::play_input::default_profile_input();
-    let keys = SelectKeyBindings::from_profile(&input);
+    let keys = SceneInputResolver::from_profile(&input);
 
-    assert!(keys.is_back("Button2"));
+    assert!(resolve_named(&keys, "Button2").is_back());
     assert_eq!(select_control_action("Button2", &keys), Some(SelectAction::ExitFolder));
     assert_eq!(select_control_action("Button1", &keys), Some(SelectAction::EnterOrPlay));
 }

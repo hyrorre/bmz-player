@@ -41,11 +41,14 @@ mod build;
 mod cache;
 mod chart_text;
 mod display;
+mod hispeed_transition;
 mod missed_notes;
 mod projection;
 mod scroll;
 mod state;
+mod timers;
 mod visuals;
+pub(crate) use hispeed_transition::HispeedTransition;
 pub(crate) use projection::{PlayfieldProjection, ProjectionClock};
 
 pub use bga::{bga_texture_id, display_bga_frame, display_video_bga_frame};
@@ -87,6 +90,7 @@ use chart_text::*;
 use display::*;
 use scroll::*;
 use state::*;
+use timers::*;
 use visuals::*;
 
 #[cfg(test)]

@@ -1,5 +1,63 @@
 use super::*;
 
+#[test]
+fn freq_recorded_inputs_reproduce_score_and_gauge_for_player_and_opponent() {
+    let new_session = || {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.autoplay = None;
+        session.base_judge_windows = crate::judge::window::judge_windows_for_keymode_and_rule_mode(
+            bmz_core::lane::KeyMode::K7,
+            RuleMode::Beatoraja,
+        );
+        session
+    };
+    let mut recorded = new_session();
+    recorded.audio_clock.set_playback_rate_percent(200);
+    sync_judge_windows(&mut recorded, TimeUs(30_000));
+    let input = human_press(TimeUs(30_000));
+    recorded.replay_recorder.record(input);
+    let judgements = process_session_input(&mut recorded, input);
+    assert_eq!(judgements[0].judge, Judge::PGreat);
+    assert_eq!(recorded.score.ex_score(), 2);
+
+    for opponent in [false, true] {
+        for viewing_rate in [25, 100, 200, 300] {
+            let mut session = new_session();
+            let replay = ReplayPlayer {
+                events: recorded.replay_recorder.events.clone(),
+                ..Default::default()
+            };
+            if opponent {
+                let mut rival =
+                    replay_session(LongNoteMode::Ln, true).opponent.independent.take().unwrap();
+                rival.chart = session.chart.clone();
+                rival.judge = session.judge;
+                rival.base_judge_windows = session.base_judge_windows;
+                rival.gauge = session.gauge.clone();
+                rival.replay_player = Some(replay);
+                rival.replay_judge_rate_percent = 200;
+                session = new_session();
+                session.opponent.independent = Some(rival);
+            } else {
+                session.replay_player = Some(replay);
+                session.replay_judge_rate_percent = 200;
+            }
+            session.audio_clock.set_playback_rate_percent(viewing_rate);
+            session.audio_clock.pause_at(TimeUs(100_000));
+            advance_session_frame(&mut session, &mut TestAudio::default());
+            let (score, gauge) = if opponent {
+                let rival = session.opponent.independent.as_ref().unwrap();
+                (&rival.score, &rival.gauge)
+            } else {
+                (&session.score, &session.gauge)
+            };
+            assert_eq!(format!("{score:?}"), format!("{:?}", recorded.score));
+            assert_eq!(score.ex_score(), recorded.score.ex_score());
+            assert_eq!(gauge.current().value, recorded.gauge.current().value);
+        }
+    }
+}
+
 fn replay_session(mode: LongNoteMode, opponent: bool) -> GameSession {
     let mut chart = chart_with_hcn_long_note();
     chart.long_notes[0].mode = Some(mode);
@@ -52,6 +110,7 @@ fn replay_session(mode: LongNoteMode, opponent: bool) -> GameSession {
             score: ScoreState::default(),
             gauge: session.gauge.clone(),
             replay_player: Some(replay),
+            replay_judge_rate_percent: 100,
             autoplay: None,
             display_uses_primary_arrangement: false,
             publish_display_judgements: true,

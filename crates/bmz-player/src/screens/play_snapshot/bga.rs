@@ -195,9 +195,7 @@ pub(super) fn current_bga_frame(
     kind: BgaEventKind,
     bga_frames: &BgaFrameCatalog,
 ) -> Option<DisplayBgaFrame> {
-    let events = cache.bga_events.events(kind);
-    let end = events.partition_point(|event| event.time <= render_now);
-    let event = events[..end].last()?;
+    let event = cache.bga_event_at(kind, render_now)?;
     let asset = event.asset?;
     let mut frame = bga_frames.get(&asset).copied()?;
     let tint = bga_tint_at_time(cache, kind, render_now);

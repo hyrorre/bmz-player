@@ -113,7 +113,7 @@ pub fn lane_binding_for_key_mode_with_slots(
                     return None;
                 }
                 Some(BindingEntry {
-                    device: binding_device_from_config(&entry.device, slots),
+                    device: binding_device_from_config(&entry.device, slots)?,
                     control: control_from_config(&entry.device, &entry.control),
                     lane: lane_value,
                     scratch_direction: scratch_direction_from_binding(lane, &entry),
@@ -152,7 +152,7 @@ pub fn lane_binding_for_play_option_scratch_with_slots(
             .filter_map(|entry| {
                 let lane = entry.lane?;
                 Some(BindingEntry {
-                    device: binding_device_from_config(&entry.device, slots),
+                    device: binding_device_from_config(&entry.device, slots)?,
                     control: control_from_config(&entry.device, &entry.control),
                     lane: lane_from_config(lane),
                     scratch_direction: scratch_direction_from_binding(lane, &entry),
@@ -186,7 +186,23 @@ fn infer_scratch_direction_from_control(control: &str) -> Option<ScratchDirectio
     }
 }
 
+/// 設定対象モードの binding を継承込みで返す。
+///
+/// 明示的な未割り当ての marker (`control = ""`) は含めない。
 pub fn resolve_play_bindings(
+    input: &ProfileInputConfig,
+    key_mode: KeyMode,
+) -> Result<Vec<BindingConfigEntry>, InheritError> {
+    let mut bindings = resolve_play_bindings_with_markers(input, key_mode)?;
+    bindings.retain(|entry| !entry.control.is_empty());
+    Ok(bindings)
+}
+
+/// [`resolve_play_bindings`] と同じだが、明示的な未割り当ての marker (`control = ""`) を残す。
+///
+/// marker はコントローラーのレーン単位で「設定なし (継承)」と「明示的な未割り当て」を
+/// 区別するために使う。設定の書き換えと、選曲入力の 7K / 14K 間のフォールバック判定だけが読む。
+pub fn resolve_play_bindings_with_markers(
     input: &ProfileInputConfig,
     key_mode: KeyMode,
 ) -> Result<Vec<BindingConfigEntry>, InheritError> {

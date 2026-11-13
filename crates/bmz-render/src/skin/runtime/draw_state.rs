@@ -133,6 +133,9 @@ pub struct SkinDrawState {
     /// 各レーンのkeyoff(離した直後の演出)タイマー経過ms。Noneなら非アクティブ。
     /// beatoraja の TIMER_KEYOFF_1P_KEY1..7 (121..127) / SCRATCH (120) に対応。
     pub keyoff_ms: [Option<i32>; LANE_COUNT],
+    /// Stable input timer identities; the source clock may differ from scene time.
+    pub keyon_started_us: [Option<i64>; LANE_COUNT],
+    pub keyoff_started_us: [Option<i64>; LANE_COUNT],
     /// PeacefulPlay互換キービームの押下中表示状態。renderer runtimeが更新する。
     pub keybeam_hold_active: [bool; LANE_COUNT],
     /// PeacefulPlay互換キービームの解放フェード表示状態。renderer runtimeが更新する。
@@ -298,6 +301,8 @@ pub struct SkinDrawState {
     pub select_master_volume: f32,
     pub select_key_volume: f32,
     pub select_bgm_volume: f32,
+    /// profile の FREQ（半音、-12..=12）。LR2 number 66 / slider 26 が読む。
+    pub freq_semitones: i8,
     /// 選択中バーにバナー画像があるか (OPTION_NO_BANNER=192 / OPTION_BANNER=193)。
     pub select_has_banner: bool,
     /// 選択中 SongData と同じフォルダに `.txt` があるか (OPTION_NO_TEXT/TEXT=174/175)。
@@ -605,6 +610,8 @@ impl Default for SkinDrawState {
             bomb_ms: [None; LANE_COUNT],
             keyon_ms: [None; LANE_COUNT],
             keyoff_ms: [None; LANE_COUNT],
+            keyon_started_us: [None; LANE_COUNT],
+            keyoff_started_us: [None; LANE_COUNT],
             keybeam_hold_active: [false; LANE_COUNT],
             keybeam_fade_active: [false; LANE_COUNT],
             hold_ms: [None; LANE_COUNT],
@@ -685,6 +692,7 @@ impl Default for SkinDrawState {
             select_master_volume: 1.0,
             select_key_volume: 1.0,
             select_bgm_volume: 1.0,
+            freq_semitones: 0,
             select_has_banner: false,
             select_has_document: false,
             select_play_level: 0,

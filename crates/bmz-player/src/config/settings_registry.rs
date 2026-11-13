@@ -1,17 +1,17 @@
 use super::play::{
-    CONSTANT_FADE_MAX_MS, CONSTANT_FADE_MIN_MS, TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN,
-    quantize_hispeed,
+    CONSTANT_FADE_MAX_MS, CONSTANT_FADE_MIN_MS, FREQ_SEMITONES_MAX, FREQ_SEMITONES_MIN,
+    TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN, freq_playback_rate_percent, quantize_hispeed,
 };
 use super::profile_config::{
     AssistLongNoteMode, AssistMineMode, AssistOptionConfig, AssistScrollMode, BgaExpandConfig,
     BgaModeConfig, BottomShiftableGaugeConfig, CLASSIC_HISPEED_STEP_MIN, CLASSIC_HISPEED_STEP_UNIT,
     DifficultyTableLevelDisplay, DoubleOptionConfig, FLOATING_HISPEED_STEP_MIN,
     FLOATING_HISPEED_STEP_UNIT, FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig,
-    HISPEED_STEP_MAX, HispeedConfigPreset, HispeedDirectionConfig, HsFixConfig,
-    JudgeAlgorithmConfig, KeyModeConversionConfig, LaneConfig, ProfileConfig,
-    RELEASE_BOUNCE_MS_MAX, RandomOptionConfig, ReplaySlotRule, SelectInputModeConfig,
-    SevenToNinePattern, SevenToNineRuleMode, SevenToNineType, TargetOptionConfig,
-    normalize_classic_hispeed_step, normalize_floating_hispeed_step,
+    HISPEED_STEP_MAX, HISPEED_TRANSITION_MS_MAX, HispeedConfigPreset, HispeedDirectionConfig,
+    HsFixConfig, JudgeAlgorithmConfig, KeyModeConversionConfig, LaneConfig, ProfileConfig,
+    RELEASE_BOUNCE_MS_MAX, RandomOptionConfig, ReplaySlotRule, SRandomCorrectionConfig,
+    SelectInputModeConfig, SevenToNinePattern, SevenToNineRuleMode, SevenToNineType,
+    TargetOptionConfig, normalize_classic_hispeed_step, normalize_floating_hispeed_step,
 };
 use bmz_core::lane::KeyMode;
 use bmz_gameplay::rule::RuleMode;
@@ -57,7 +57,9 @@ impl SettingsEntryId {
         Self::BgaMode,
         Self::BgaExpand,
         Self::SessionMode,
+        Self::SRandomCorrection,
         Self::KeyModeConversion,
+        Self::Freq,
         Self::MisslayerDurationMs,
         Self::WaitAllNotesResult,
         Self::HideMisslayerOnGood,
@@ -118,6 +120,8 @@ impl SettingsEntryId {
         Self::Hidden,
         Self::Constant,
         Self::ConstantFadeMs,
+        Self::HispeedTransitionMs,
+        Self::InvertE2KeyGreenNumber,
     ];
 
     pub const fn visible_for_hispeed_config(self, preset: HispeedConfigPreset) -> bool {
@@ -229,7 +233,9 @@ impl SettingsEntryId {
             Self::BgaMode => "BGA",
             Self::BgaExpand => "BGA FIT",
             Self::SessionMode => "SESSION MODE",
+            Self::SRandomCorrection => "S-RANDOM CORRECTION",
             Self::KeyModeConversion => "KEY CONVERSION",
+            Self::Freq => "FREQ",
             Self::SevenToNinePattern => "7K TO 9K PATTERN",
             Self::SevenToNineType => "7K TO 9K TYPE",
             Self::SevenToNineRuleMode => "7K TO 9K RULE",
@@ -278,6 +284,8 @@ impl SettingsEntryId {
             Self::NoteDisplayDurationMs => "DURATION",
             Self::Constant => "CONSTANT",
             Self::ConstantFadeMs => "CONSTANT FADE",
+            Self::HispeedTransitionMs => "HS ANIMATION",
+            Self::InvertE2KeyGreenNumber => "E2+KEY GREEN INVERT",
             Self::SelectInputMode => "SELECT INPUT DEVICE",
             Self::AnalogScratch1P => "1P ANALOG SCRATCH",
             Self::AnalogScratchSensitivity1P => "1P ANALOG SENS",
@@ -361,7 +369,9 @@ impl SettingsEntryId {
             Self::BgaMode => "settings-entry-description-bga-mode",
             Self::BgaExpand => "settings-entry-description-bga-expand",
             Self::SessionMode => "settings-entry-description-session-mode",
+            Self::SRandomCorrection => "settings-entry-description-s-random-correction",
             Self::KeyModeConversion => "settings-entry-description-key-mode-conversion",
+            Self::Freq => "settings-entry-description-freq",
             Self::SevenToNinePattern => "settings-entry-description-seven-to-nine-pattern",
             Self::SevenToNineType => "settings-entry-description-seven-to-nine-type",
             Self::SevenToNineRuleMode => "settings-entry-description-seven-to-nine-rule-mode",
@@ -412,6 +422,8 @@ impl SettingsEntryId {
             Self::NoteDisplayDurationMs => "settings-entry-description-note-display-duration",
             Self::Constant => "settings-entry-description-constant",
             Self::ConstantFadeMs => "settings-entry-description-constant-fade",
+            Self::HispeedTransitionMs => "settings-entry-description-hispeed-transition",
+            Self::InvertE2KeyGreenNumber => "settings-entry-description-invert-e2-key-green-number",
             Self::SelectInputMode => "settings-entry-description-select-input-mode",
             Self::AnalogScratch1P | Self::AnalogScratch2P => {
                 "settings-entry-description-analog-scratch"
@@ -681,6 +693,83 @@ mod tests {
         assert_eq!(profile.play.seven_to_nine_type, SevenToNineType::NoMashing);
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::SevenToNineRuleMode, 1));
         assert_eq!(profile.play.seven_to_nine_rule_mode, SevenToNineRuleMode::Keys9);
+    }
+
+    #[test]
+    fn display_entries_end_with_hs_animation_and_e2_key_green_inversion() {
+        let display = SettingsEntryId::DISPLAY_ENTRIES;
+        assert_eq!(
+            &display[display.len() - 3..],
+            &[
+                SettingsEntryId::ConstantFadeMs,
+                SettingsEntryId::HispeedTransitionMs,
+                SettingsEntryId::InvertE2KeyGreenNumber,
+            ]
+        );
+
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        let step = settings_adjust_step(SettingsEntryId::HispeedTransitionMs);
+        assert_eq!(step, 10);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::HispeedTransitionMs), "150 ms");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::HispeedTransitionMs, step));
+        assert_eq!(profile.lane.hispeed_transition_ms, 160);
+        profile.lane.hispeed_transition_ms = HISPEED_TRANSITION_MS_MAX;
+        assert!(!adjust_settings_value(&mut profile, SettingsEntryId::HispeedTransitionMs, step));
+        profile.lane.hispeed_transition_ms = 0;
+        assert!(!adjust_settings_value(&mut profile, SettingsEntryId::HispeedTransitionMs, -step));
+
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::InvertE2KeyGreenNumber), "OFF");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::InvertE2KeyGreenNumber, 1));
+        assert!(profile.input.invert_e2_key_green_number);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::InvertE2KeyGreenNumber), "ON");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::InvertE2KeyGreenNumber, -1));
+        assert!(!profile.input.invert_e2_key_green_number);
+    }
+
+    #[test]
+    fn s_random_correction_sits_between_session_mode_and_key_conversion_and_cycles() {
+        let play = SettingsEntryId::PLAY_ENTRIES;
+        let index = play.iter().position(|&entry| entry == SettingsEntryId::SRandomCorrection);
+        let index = index.expect("S-RANDOM correction is a play entry");
+        assert_eq!(play[index - 1], SettingsEntryId::SessionMode);
+        assert_eq!(play[index + 1], SettingsEntryId::KeyModeConversion);
+
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::SRandomCorrection), "LM 120HZ");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::SRandomCorrection, 1));
+        assert_eq!(profile.play.s_random_correction, SRandomCorrectionConfig::Lr2);
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::SRandomCorrection, 1));
+        assert_eq!(profile.play.s_random_correction, SRandomCorrectionConfig::Beatoraja);
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::SRandomCorrection, -1));
+        assert_eq!(profile.play.s_random_correction, SRandomCorrectionConfig::Lr2);
+        assert!(SettingsEntryId::SRandomCorrection.is_play_setting());
+    }
+
+    #[test]
+    fn freq_follows_key_conversion_and_steps_semitones_within_one_octave() {
+        let play = SettingsEntryId::PLAY_ENTRIES;
+        let index = play.iter().position(|&entry| entry == SettingsEntryId::Freq);
+        let index = index.expect("FREQ is a play entry");
+        assert_eq!(play[index - 1], SettingsEntryId::KeyModeConversion);
+        assert!(SettingsEntryId::Freq.is_play_setting());
+        assert_eq!(SettingsEntryId::Freq.label(), "FREQ");
+        assert_eq!(settings_adjust_step(SettingsEntryId::Freq), 1);
+
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        assert_eq!(profile.play.freq_semitones, 0);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::Freq), "0 (100%)");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::Freq, 3));
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::Freq), "+3 (119%)");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::Freq, 20));
+        assert_eq!(profile.play.freq_semitones, 12);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::Freq), "+12 (200%)");
+        assert!(!adjust_settings_value(&mut profile, SettingsEntryId::Freq, 1));
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::Freq, -30));
+        assert_eq!(profile.play.freq_semitones, -12);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::Freq), "-12 (50%)");
+        assert!(!adjust_settings_value(&mut profile, SettingsEntryId::Freq, -1));
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::Freq, 1));
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::Freq), "-11 (53%)");
     }
 
     #[test]

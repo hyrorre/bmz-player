@@ -173,7 +173,7 @@ impl WinitApp {
         self.start_play_preload(chart_id, options.clone());
         self.reload_decide_skin_for_chart(&snapshot);
         // Play スキンは裏で decode+upload を進めるが、Decide 入場では待たない。
-        // 実際の Play 入場で `ensure_skin_ready` が保険として残る。
+        // Play 入場時も完了をフレーム間で確認し、READY の開始を待機する。
         let play_skin_key_mode = chart_metadata
             .as_ref()
             .and_then(|chart| KeyMode::from_str_opt(&chart.mode))
@@ -212,13 +212,13 @@ impl WinitApp {
             play_skin_runtime_state,
         );
         // All workers now run while STAGEFILE/BACKBMP are prepared. Keep the
-        // initial Play snapshot stable and wait for Decide before scene entry.
+        // initial Play snapshot stable while the Decide skin finishes asynchronously.
         if let Some(chart) = &chart_metadata {
             self.prepare_play_meta_image_textures_from_chart(chart);
         } else {
             self.prepare_play_meta_image_textures(chart_id);
         }
-        self.ensure_skin_ready(SkinKind::Decide);
+        self.request_scene_skin(SkinKind::Decide);
         tracing::info!(
             chart_id,
             presentation_prepare_ms = preparation_started_at.elapsed().as_millis(),
@@ -653,8 +653,7 @@ impl WinitApp {
         prepared: PreparedInputPlaySession,
     ) -> Result<StartedInputPlaySession> {
         let runtime = self.audio.audio_runtime.as_ref().context("audio output is not available")?;
-        let schedule_ahead = self.boot.app_config.audio.schedule_ahead;
-        open_prepared_winit_play_session(&self.boot.score_db, runtime, prepared, schedule_ahead)
+        open_prepared_winit_play_session(&self.boot.score_db, runtime, prepared)
     }
 
     pub(super) fn play_output_sample_rate(&self) -> u32 {
@@ -668,9 +667,13 @@ impl WinitApp {
     pub(super) fn play_session_app_config(&self) -> AppConfig {
         let mut app_config = self.boot.app_config.clone();
         app_config.audio.sample_rate = self.play_output_sample_rate();
-        app_config.input.gamepad_slot_runtime_device_ids =
-            resolve_gamepad_runtime_slots(&app_config.input, self.gamepad.as_ref())
-                .map(|id| id.map(|id| id.0));
+        // 進行中のプレー (Practice の次のラウンド、クイックリトライを含む) は、開始時の
+        // 割り当てを引き継ぐ。選曲へ戻ったあとの次のプレーから現在の割り当てを使う。
+        let slots =
+            self.play_session_gamepad_slots().map(|slots| slots.slot_device_ids).unwrap_or_else(
+                || resolve_gamepad_runtime_slots(&app_config.input, self.gamepad.as_ref()),
+            );
+        app_config.input.gamepad_slot_runtime_device_ids = slots.map(|id| id.map(|id| id.0));
         app_config
     }
 

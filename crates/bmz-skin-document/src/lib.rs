@@ -116,6 +116,26 @@ where
     }
 }
 
+/// Accepts a JSON boolean or the strings `"true"` / `"false"` (ASCII case-insensitive).
+///
+/// libGDX's `Json` converts a string to a `boolean` field with `Boolean.valueOf`,
+/// and some beatoraja skins write e.g. `"wrapping": "false"`. Other strings are
+/// rejected rather than silently read as `false`.
+pub fn deserialize_skin_bool_or_string<'de, D>(
+    deserializer: D,
+) -> std::result::Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = JsonValue::deserialize(deserializer)?;
+    match value {
+        JsonValue::Bool(value) => Ok(value),
+        JsonValue::String(text) if text.eq_ignore_ascii_case("true") => Ok(true),
+        JsonValue::String(text) if text.eq_ignore_ascii_case("false") => Ok(false),
+        _ => Err(D::Error::custom("expected a boolean or \"true\"/\"false\"")),
+    }
+}
+
 pub fn default_graph_angle() -> i32 {
     1
 }
@@ -313,6 +333,12 @@ impl SkinDocument {
                     .and_then(|value| value.resolve_id(PropertyFamily::String))
                     .is_some_and(is_chart_text)
         })
+    }
+
+    /// Decodes a skin value without tracking field paths. Callers that report errors
+    /// decode a failed value again with `serde_path_to_error` to name the field.
+    pub fn from_json_value(value: &JsonValue) -> serde_json::Result<Self> {
+        Self::deserialize(value)
     }
 
     pub fn load_beatoraja_json(path: &Path) -> Result<Self> {

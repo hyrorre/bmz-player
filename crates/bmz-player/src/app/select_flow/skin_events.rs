@@ -365,9 +365,7 @@ impl WinitApp {
         self.boot.profile_config.rival.active_rival =
             if next == 0 { String::new() } else { ids[next - 1].clone() };
         self.boot.profile_config.updated_at = now_unix_seconds();
-        if let Err(error) =
-            save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
-        {
+        if let Err(error) = self.save_profile_config_now() {
             self.boot.profile_config.rival.active_rival = current;
             tracing::error!(%error, "failed to save active rival");
             return;
@@ -387,9 +385,7 @@ impl WinitApp {
         let previous = self.boot.profile_config.rival.chart_replication_mode;
         self.boot.profile_config.rival.chart_replication_mode = previous.cycle(arg >= 0);
         self.boot.profile_config.updated_at = now_unix_seconds();
-        if let Err(error) =
-            save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
-        {
+        if let Err(error) = self.save_profile_config_now() {
             self.boot.profile_config.rival.chart_replication_mode = previous;
             tracing::error!(%error, "failed to save chart replication mode");
             return;

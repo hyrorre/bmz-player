@@ -42,8 +42,9 @@ impl SceneTiming {
         self
     }
 
-    fn chart_time(&self, scene_us: i64) -> i64 {
-        (scene_us - self.chart_zero_us).max(-self.countdown_us)
+    fn chart_time(&self, scene_us: i64, rate: u16) -> i64 {
+        let elapsed = (scene_us - self.chart_zero_us).max(-self.countdown_us);
+        (i128::from(elapsed) * i128::from(rate) / 100) as i64
     }
 }
 
@@ -79,13 +80,21 @@ impl Simulation {
         skin_audio: crate::skin_audio::SkinAudioRuntime,
         paths: &AppPaths,
     ) -> Result<Self> {
+        let rate = prepared.play.session.audio_clock.playback_rate_percent();
         prepared.play.session.audio_clock = AudioClock::with_position(
             48_000,
             0,
-            -timing.chart_zero_us,
+            timing.chart_time(0, rate),
             Arc::new(AtomicU64::new(0)),
-            true,
+            false,
         );
+        // Anchor at the end of Loading. Skin/READY timers use scene time;
+        // chart time and sample playback use the recorded FREQ.
+        prepared.play.session.audio_clock.start_output_frame =
+            ((timing.chart_zero_us - timing.countdown_us) as u64 * 48_000) / 1_000_000;
+        prepared.play.session.audio_clock.set_playback_rate_percent(rate);
+        prepared.play.session.audio_clock.running = true;
+        prepared.play.audio.set_playback_rate_percent(rate);
         let config = &prepared.profile.system_sound;
         let bgm_root = paths
             .resolve_optional_path_ref(&config.bgm_dir)?
@@ -340,7 +349,8 @@ impl Simulation {
     ) -> bmz_render::snapshot::RenderSnapshot {
         let play = &self.prepared.play;
         let session = &play.session;
-        let chart_us = self.timing.chart_time(scene_us);
+        let chart_us =
+            self.timing.chart_time(scene_us, session.audio_clock.playback_rate_percent());
         let target = play.target_option.target_ex_score_with_best(
             bmz_gameplay::score::scored_note_count(&session.chart),
             self.prepared.best,
@@ -389,8 +399,10 @@ impl Simulation {
     pub fn estimated_exit_us(&self) -> i64 {
         self.exit_us.unwrap_or(
             self.timing.chart_zero_us
-                + self.prepared.play.session.chart.end_time.0
-                + bmz_gameplay::session::SESSION_END_MARGIN_US
+                + (self.prepared.play.session.chart.end_time.0
+                    + bmz_gameplay::session::SESSION_END_MARGIN_US)
+                    * 100
+                    / i64::from(self.prepared.play.session.audio_clock.playback_rate_percent())
                 + self.timing.finishmargin_us
                 + self.fadeout_duration_us,
         )

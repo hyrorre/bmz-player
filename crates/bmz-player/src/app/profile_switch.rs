@@ -206,11 +206,7 @@ impl WinitApp {
             return;
         }
         // debounce中の編集も旧profileへ保存する。CLIの一時上書きは既存save APIが除く。
-        let saved =
-            save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
-                .and_then(|_| {
-                    save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config)
-                });
+        let saved = self.save_profile_config_now().and_then(|_| self.save_app_config_now());
         if let Err(error) = saved {
             self.finish_profile_change(&action, Err(error));
             return;
@@ -404,6 +400,7 @@ impl WinitApp {
             self.skin.default_skin_manifest.as_ref(),
         )?;
         self.boot.activate_prepared_profile(prepared.profile)?;
+        self.select.list_loader.cancel();
         self.jobs.ir_manual.reset_for_profile();
         // ここから先は失敗しないruntimeの入れ替え。非同期結果はreceiverごと破棄する。
         self.clear_profile_input();
@@ -416,6 +413,7 @@ impl WinitApp {
         self.result.result_ir = None;
         self.result.result_skin_audio = None;
         self.result.last_play_session_mode = SessionMode::Normal;
+        self.result.last_play_freq_semitones = 0;
         self.select.autoplay_folder = None;
         self.select.random_trainer = RandomTrainerState::default();
         self.select.select_ir = Default::default();
@@ -427,7 +425,6 @@ impl WinitApp {
         self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
         self.jobs.download_selections.clear();
         self.select.select_items.clear();
-        self.select.collection_cache.invalidate();
         self.select.selected_replay_slot = None;
         *self.select.replay_slot_cache.borrow_mut() = None;
         self.select.score_refresh = Default::default();
@@ -442,7 +439,7 @@ impl WinitApp {
         );
         self.select.select_sort =
             SelectSort::from_str_or_default(&self.boot.profile_config.select.sort);
-        self.select.select_keys = SelectKeyBindings::from_profile(&self.boot.profile_config.input);
+        self.select.select_keys = SceneInputResolver::from_profile(&self.boot.profile_config.input);
         self.reload_select_items();
         self.sync_selected_play_mode();
         self.sync_select_play_options_from_profile();

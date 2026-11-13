@@ -128,12 +128,28 @@ impl WinitApp {
             self.leave_result();
             return;
         };
-        let Some(&chart_id) = session.chart_ids.get(session.next_index) else {
+        // 削除・移動などで開けない譜面は飛ばす。開けないまま始めると、リザルトを
+        // 抜ける処理を通らずに選曲画面へ戻ってしまう。
+        let mut next = None;
+        while let Some(&chart_id) = session.chart_ids.get(session.next_index) {
+            session.next_index += 1;
+            match self.boot.library_db.verified_chart_source(chart_id) {
+                Ok(_) => {
+                    next = Some(chart_id);
+                    break;
+                }
+                Err(error) => tracing::warn!(
+                    chart_id,
+                    error = %format_error_chain(&error),
+                    "skipping unavailable chart in folder autoplay"
+                ),
+            }
+        }
+        let Some(chart_id) = next else {
             self.select.autoplay_folder = None;
             self.leave_result();
             return;
         };
-        session.next_index += 1;
         self.result.finished_play = None;
         self.result.result_exit = None;
         self.result.result_key5_held = false;
@@ -203,20 +219,17 @@ impl WinitApp {
 
     /// コース中間リザルトのコントロール処理。Key6 はゲージグラフ切替のみ許可し、
     /// それ以外の終了レーン (Key1-4/Key5/Key7) は retry せず次の曲へ進む。
-    pub(super) fn handle_course_intermediate_control(
-        &mut self,
-        control: &PhysicalControl,
-        pressed: bool,
-        repeat: bool,
-        synthesized_analog_axis: bool,
-    ) -> bool {
-        if self.handle_result_favorite_control(control, pressed, repeat) {
+    pub(super) fn handle_course_intermediate_control(&mut self, input: &ResolvedInput) -> bool {
+        let pressed = input.pressed();
+        let repeat = input.repeat();
+        let control = *input.scene();
+        if self.handle_result_favorite_control(input) {
             return true;
         }
-        if self.handle_result_open_ir_control(control, pressed, repeat, false) {
+        if self.handle_result_open_ir_control(input, false) {
             return true;
         }
-        if self.handle_result_ir_scroll_control(control, pressed, repeat, synthesized_analog_axis) {
+        if self.handle_result_ir_scroll_control(input) {
             return true;
         }
         if pressed
@@ -224,7 +237,7 @@ impl WinitApp {
             && self.result_input_ready()
             && self.result.result_panel == 1
             && self.result_ir_scope_toggle_is_e1()
-            && self.is_result_ir_scope_toggle_control(control)
+            && control.is_start()
             && self.toggle_result_ir_scope()
         {
             return true;
@@ -232,19 +245,19 @@ impl WinitApp {
         if pressed
             && !repeat
             && self.result_input_ready()
-            && self.select_result_panel_for_control(control)
+            && result_panel_for_control(&control).is_some_and(|panel| self.set_result_panel(panel))
         {
             return true;
         }
         if pressed
             && !repeat
             && self.result_input_ready()
-            && self.is_result_panel_toggle_control(control)
+            && control.is_e2()
             && self.toggle_result_panel()
         {
             return true;
         }
-        let Some(lane) = self.result_lane_for_control(control) else {
+        let Some(lane) = control.ui_lane() else {
             return false;
         };
         match lane {

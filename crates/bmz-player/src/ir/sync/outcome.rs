@@ -26,6 +26,9 @@ pub(super) async fn submit_ir_job(
     credentials: IrStoredCredentials,
     include_ranking: bool,
 ) -> Result<SubmittedIrJob> {
+    if crate::ir::bokutachi::is_config(provider) {
+        bail!("Bokutachi jobs require the durable import worker");
+    }
     match job.kind {
         IrJobKind::Replay => {
             submit_replay_job(

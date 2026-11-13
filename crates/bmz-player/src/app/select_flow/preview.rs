@@ -2,6 +2,14 @@ use super::*;
 
 impl WinitApp {
     pub(super) fn poll_select_asset_loads(&mut self) {
+        let folder = self.select.select_items.get(self.select.selected_index).and_then(|item| {
+            if let SelectItem::Chart(row) = item {
+                row.chart.as_ref().map(|chart| chart.folder_path.as_str())
+            } else {
+                None
+            }
+        });
+        self.select.select_assets.update_source(folder, Instant::now());
         let (image_uploads, previews) = self.select.select_assets.poll_loads();
         for upload in image_uploads {
             self.upload_select_meta_image(upload.slot, upload.image);
@@ -16,8 +24,13 @@ impl WinitApp {
     pub(super) fn selected_chart_needs_generated_preview_distribution(&self) -> bool {
         match self.select.select_items.get(self.select.selected_index) {
             Some(SelectItem::Chart(row)) => row.chart.as_ref().is_some_and(|chart| {
-                let explicit_key =
-                    crate::chart_asset::asset_cache_key(&chart.folder_path, &chart.preview_file);
+                let Some(explicit_key) = self
+                    .select
+                    .select_assets
+                    .asset_cache_key(&chart.folder_path, &chart.preview_file)
+                else {
+                    return false;
+                };
                 let explicit_missing =
                     self.select.select_assets.explicit_preview_missing(&explicit_key);
                 uses_generated_preview(&chart.folder_path, &chart.preview_file, explicit_missing)
@@ -30,8 +43,10 @@ impl WinitApp {
         match self.select.select_items.get(self.select.selected_index) {
             Some(SelectItem::Chart(row)) => {
                 let chart = row.chart.as_ref()?;
-                let explicit_key =
-                    crate::chart_asset::asset_cache_key(&chart.folder_path, &chart.preview_file);
+                let explicit_key = self
+                    .select
+                    .select_assets
+                    .asset_cache_key(&chart.folder_path, &chart.preview_file)?;
                 let explicit_missing =
                     self.select.select_assets.explicit_preview_missing(&explicit_key);
                 if !uses_generated_preview(
@@ -44,11 +59,11 @@ impl WinitApp {
                 let distributions = self.select.select_distribution_cache.borrow();
                 let distribution = distributions.get(&chart.chart_id)?;
                 let start_ms = fallback_preview_start_ms(&distribution.notes, chart.length_ms)?;
-                Some(crate::generated_preview::generated_preview_cache_key_for_source(
+                self.select.select_assets.generated_preview_cache_key(
                     chart.chart_id,
                     start_ms,
                     &chart.folder_path,
-                ))
+                )
             }
             _ => None,
         }
@@ -119,8 +134,11 @@ impl WinitApp {
                     SelectMetaImageSlot::Backbmp => &chart.backbmp_file,
                     SelectMetaImageSlot::Banner => &chart.banner_file,
                 };
-                (!file.is_empty())
-                    .then(|| crate::chart_asset::asset_cache_key(&chart.folder_path, file))
+                if file.is_empty() {
+                    None
+                } else {
+                    self.select.select_assets.asset_cache_key(&chart.folder_path, file)
+                }
             }),
             _ => None,
         };
@@ -214,7 +232,8 @@ fn uses_generated_preview(folder: &str, preview: &str, missing: bool) -> bool {
     // archive worker try the normal prefix fallback before generating audio.
     if preview.trim().is_empty()
         && !missing
-        && crate::chart_asset::archive_asset_stamp(folder).is_some()
+        && crate::chart_source::ChartLocator::parse(Path::new(folder))
+            .is_ok_and(|locator| locator.is_archive())
     {
         false
     } else {

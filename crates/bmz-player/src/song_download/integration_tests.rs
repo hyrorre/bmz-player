@@ -28,7 +28,7 @@ pub(super) fn identified_request(
         keep_archive: false,
         request_id: id,
         title: "Same title".into(),
-        download_root: root.join("songs"),
+        save_dir: root.join("songs/http"),
         action: MissingChartAction::Http {
             api_url: api.into(),
             md5: crate::storage::common::hash_to_hex(&identity.md5.unwrap()),
@@ -602,7 +602,7 @@ fn register_scans(
 }
 
 #[test]
-fn custom_download_root_saves_http_and_ipfs_charts_and_registers_their_folders() {
+fn custom_save_dir_saves_http_and_ipfs_charts_and_registers_their_folders() {
     let http_chart = b"#TITLE Custom root HTTP\n#BPM 120\n#00011:01\n";
     let ipfs_chart = b"#TITLE Custom root IPFS\n#BPM 150\n#00011:01\n";
     let http_body = archive(&[("http-song/chart.bms", http_chart)]);
@@ -615,11 +615,12 @@ fn custom_download_root_saves_http_and_ipfs_charts_and_registers_their_folders()
         Duration::from_millis(5),
     );
     let root = tempfile::tempdir().unwrap();
-    // 既定の data/songs とは別の、空白を含むフォルダへ保存する。
-    let custom = root.path().join("My BMS").join("downloads");
+    // 既定の data/songs とは別の、空白を含むフォルダを方式ごとに指定する。
+    let custom_http = root.path().join("My BMS").join("http downloads");
+    let custom_ipfs = root.path().join("IPFS charts");
     let mut http =
         identified_request(root.path(), &format!("{}/{{md5}}", server.url), http_chart, 1);
-    http.download_root = custom.clone();
+    http.save_dir = custom_http.clone();
     let ipfs_identity = chart_identity(ipfs_chart);
     let ipfs = ChartDownloadRequest {
         keep_archive: false,
@@ -630,7 +631,7 @@ fn custom_download_root_saves_http_and_ipfs_charts_and_registers_their_folders()
             cids: vec!["QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG".into()],
         },
         title: "Custom root IPFS".into(),
-        download_root: custom.clone(),
+        save_dir: custom_ipfs.clone(),
     };
     let mut manager = ChartDownloadManager::default();
     let (http_id, _) = manager.submit(http);
@@ -639,9 +640,10 @@ fn custom_download_root_saves_http_and_ipfs_charts_and_registers_their_folders()
     let scans = manager.take_scan_requests();
     assert_eq!(scans.len(), 2);
     for (id, result) in &scans {
-        let expected = if *id == http_id { custom.join("http") } else { custom.join("ipfs") };
-        assert_eq!(result.root_dir, expected);
-        assert!(result.scan_path.starts_with(&expected), "{:?}", result.scan_path);
+        // 指定したフォルダの直下へ保存し、方式別のサブフォルダを付けない。
+        let expected = if *id == http_id { &custom_http } else { &custom_ipfs };
+        assert_eq!(&result.root_dir, expected);
+        assert_eq!(result.scan_path.parent(), Some(expected.as_path()));
     }
     assert!(!root.path().join("songs").exists());
 
@@ -652,7 +654,7 @@ fn custom_download_root_saves_http_and_ipfs_charts_and_registers_their_folders()
     register_scans(&db_path, &mut config, &mut manager, scans);
     assert_eq!(manager.task(http_id).unwrap().state(), DownloadState::Completed);
     assert_eq!(manager.task(ipfs_id).unwrap().state(), DownloadState::Completed);
-    for folder in [custom.join("http"), custom.join("ipfs")] {
+    for folder in [&custom_http, &custom_ipfs] {
         let folder = crate::paths::normalize_library_path(&folder.to_string_lossy());
         assert!(
             config.songs.roots.iter().any(|entry| {
@@ -668,7 +670,7 @@ fn custom_download_root_saves_http_and_ipfs_charts_and_registers_their_folders()
 }
 
 #[test]
-fn changed_download_root_keeps_earlier_tasks_and_their_retries_on_the_original_root() {
+fn changed_save_dir_keeps_earlier_tasks_and_their_retries_on_the_original_root() {
     use std::sync::atomic::{AtomicBool, Ordering};
     let fail = Arc::new(AtomicBool::new(true));
     let worker_fail = Arc::clone(&fail);
@@ -689,9 +691,9 @@ fn changed_download_root_keeps_earlier_tasks_and_their_retries_on_the_original_r
     let root = tempfile::tempdir().unwrap();
     let (before, after) = (root.path().join("before"), root.path().join("after"));
     let api = format!("{}/{{md5}}", server.url);
-    let queued = |download_root: &Path, number| {
+    let queued = |save_dir: &Path, number| {
         let mut request = request(root.path(), &api, number);
-        request.download_root = download_root.into();
+        request.save_dir = save_dir.into();
         request
     };
     let mut manager = ChartDownloadManager::default();
@@ -708,16 +710,7 @@ fn changed_download_root_keeps_earlier_tasks_and_their_retries_on_the_original_r
         m.task(same_hash).unwrap().state() == DownloadState::Failed
             && m.task(later).unwrap().state() == DownloadState::Scanning
     });
-    assert!(
-        manager
-            .task(later)
-            .unwrap()
-            .result
-            .as_ref()
-            .unwrap()
-            .scan_path
-            .starts_with(after.join("http"))
-    );
+    assert!(manager.task(later).unwrap().result.as_ref().unwrap().scan_path.starts_with(&after));
 
     // 再試行は投入時の保存先を使う。
     fail.store(false, Ordering::Relaxed);
@@ -729,9 +722,9 @@ fn changed_download_root_keeps_earlier_tasks_and_their_retries_on_the_original_r
             .all(|id| m.task(*id).unwrap().state() == DownloadState::Scanning)
     });
     let result = |id| manager.task(id).unwrap().result.clone().unwrap();
-    assert_eq!(result(earlier).root_dir, before.join("http"));
-    assert!(result(earlier).scan_path.starts_with(before.join("http")));
-    assert_eq!(result(same_hash).root_dir, after.join("http"));
-    assert!(result(same_hash).scan_path.starts_with(after.join("http")));
+    assert_eq!(result(earlier).root_dir, before);
+    assert!(result(earlier).scan_path.starts_with(&before));
+    assert_eq!(result(same_hash).root_dir, after);
+    assert!(result(same_hash).scan_path.starts_with(&after));
     assert!(!root.path().join("songs").exists());
 }

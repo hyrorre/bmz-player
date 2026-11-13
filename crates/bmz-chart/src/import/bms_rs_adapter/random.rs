@@ -25,23 +25,50 @@ struct SwitchControlState {
     skipped: bool,
 }
 
-pub(super) fn apply_beatoraja_random_control(
-    text: &str,
-    random_source: &BmsRandomSource,
-    bms_random_choices: &mut Vec<i32>,
-    bms_switch_choices: &mut Vec<u64>,
-    warnings: &mut Vec<ImportWarning>,
-) -> String {
-    let mut rewritten = String::with_capacity(text.len());
-    let mut rng = JavaRandom::new(random_source_seed(random_source) as i64);
-    let mut random_choice_index = 0;
-    let mut switch_choice_index = 0;
-    let mut random_stack = Vec::new();
-    let mut skip_stack = Vec::new();
-    let mut switch_stack: Vec<SwitchControlState> = Vec::new();
+/// beatoraja 互換の `#RANDOM` / `#SWITCH` 解決。区切り文字を正規化したテキストを
+/// 1行ずつ [`Self::keep_line`] に渡し、分岐を解決したテキストに残る行を決める。
+pub(super) struct BeatorajaRandomResolver<'a> {
+    random_source: &'a BmsRandomSource,
+    rng: JavaRandom,
+    random_choice_index: usize,
+    switch_choice_index: usize,
+    random_stack: Vec<i32>,
+    skip_stack: Vec<bool>,
+    switch_stack: Vec<SwitchControlState>,
+}
 
-    for (line_index, line) in text.lines().enumerate() {
-        let line_number = line_index + 1;
+impl<'a> BeatorajaRandomResolver<'a> {
+    pub(super) fn new(random_source: &'a BmsRandomSource) -> Self {
+        Self {
+            random_source,
+            rng: JavaRandom::new(random_source_seed(random_source) as i64),
+            random_choice_index: 0,
+            switch_choice_index: 0,
+            random_stack: Vec::new(),
+            skip_stack: Vec::new(),
+            switch_stack: Vec::new(),
+        }
+    }
+
+    /// Applies line `line_number` and returns whether it stays in the resolved text.
+    /// Control lines and lines of unselected branches do not; they become empty lines.
+    pub(super) fn keep_line(
+        &mut self,
+        line: &str,
+        line_number: usize,
+        bms_random_choices: &mut Vec<i32>,
+        bms_switch_choices: &mut Vec<u64>,
+        warnings: &mut Vec<ImportWarning>,
+    ) -> bool {
+        let Self {
+            random_source,
+            rng,
+            random_choice_index,
+            switch_choice_index,
+            random_stack,
+            skip_stack,
+            switch_stack,
+        } = self;
 
         match beatoraja_random_control_line(line) {
             Some(BeatorajaRandomControl::Random(args)) => {
@@ -62,8 +89,8 @@ pub(super) fn apply_beatoraja_random_control(
                     let selected = match random_source {
                         BmsRandomSource::Seed(_) => rng.next_int_bound(max) + 1,
                         BmsRandomSource::Choices { random, .. } => {
-                            let current_index = random_choice_index;
-                            random_choice_index += 1;
+                            let current_index = *random_choice_index;
+                            *random_choice_index += 1;
                             match random.get(current_index).copied() {
                                 None => {
                                     warnings.push(ImportWarning::ParserDiagnostic {
@@ -159,10 +186,10 @@ pub(super) fn apply_beatoraja_random_control(
                     max = 1;
                 }
                 let selected = match random_source {
-                    BmsRandomSource::Seed(_) => select_switch_value(&mut rng, max),
+                    BmsRandomSource::Seed(_) => select_switch_value(rng, max),
                     BmsRandomSource::Choices { switches, .. } => {
-                        let current_index = switch_choice_index;
-                        switch_choice_index += 1;
+                        let current_index = *switch_choice_index;
+                        *switch_choice_index += 1;
                         match switches.get(current_index).copied() {
                             None => {
                                 warnings.push(ImportWarning::ParserDiagnostic {
@@ -171,7 +198,7 @@ pub(super) fn apply_beatoraja_random_control(
                                         "line {line_number} #SWITCH {max} has no recorded choice at index {current_index}; using deterministic fallback"
                                     ),
                                 });
-                                select_switch_value(&mut rng, max)
+                                select_switch_value(rng, max)
                             }
                             Some(choice) if !(1..=max).contains(&choice) => {
                                 let clamped = choice.clamp(1, max);
@@ -276,39 +303,39 @@ pub(super) fn apply_beatoraja_random_control(
                             "line {line_number} {command} is ignored for beatoraja compatibility"
                         ),
                     });
-                } else if !skip_stack.last().copied().unwrap_or(false)
-                    && switch_stack.iter().all(|state| state.branch_active)
-                {
-                    rewritten.push_str(line);
+                } else {
+                    return !skip_stack.last().copied().unwrap_or(false)
+                        && switch_stack.iter().all(|state| state.branch_active);
                 }
             }
         }
-
-        rewritten.push('\n');
+        false
     }
 
-    if let BmsRandomSource::Choices { random, switches } = random_source {
-        if random_choice_index < random.len() {
-            warnings.push(ImportWarning::ParserDiagnostic {
-                code: "BmsRandomChoiceExtra".to_string(),
-                message: format!(
-                    "{} recorded BMS #RANDOM choice(s) were unused",
-                    random.len() - random_choice_index
-                ),
-            });
-        }
-        if switch_choice_index < switches.len() {
-            warnings.push(ImportWarning::ParserDiagnostic {
-                code: "BmsSwitchChoiceExtra".to_string(),
-                message: format!(
-                    "{} recorded BMS #SWITCH choice(s) were unused",
-                    switches.len() - switch_choice_index
-                ),
-            });
+    /// Reports recorded choices that no `#RANDOM` / `#SWITCH` used, after the last line.
+    pub(super) fn finish(self, warnings: &mut Vec<ImportWarning>) {
+        let Self { random_source, random_choice_index, switch_choice_index, .. } = self;
+        if let BmsRandomSource::Choices { random, switches } = random_source {
+            if random_choice_index < random.len() {
+                warnings.push(ImportWarning::ParserDiagnostic {
+                    code: "BmsRandomChoiceExtra".to_string(),
+                    message: format!(
+                        "{} recorded BMS #RANDOM choice(s) were unused",
+                        random.len() - random_choice_index
+                    ),
+                });
+            }
+            if switch_choice_index < switches.len() {
+                warnings.push(ImportWarning::ParserDiagnostic {
+                    code: "BmsSwitchChoiceExtra".to_string(),
+                    message: format!(
+                        "{} recorded BMS #SWITCH choice(s) were unused",
+                        switches.len() - switch_choice_index
+                    ),
+                });
+            }
         }
     }
-
-    rewritten
 }
 
 pub(super) fn random_source_seed(random_source: &BmsRandomSource) -> u64 {
@@ -325,8 +352,29 @@ fn select_switch_value(rng: &mut JavaRandom, max: u64) -> u64 {
     bms_rs::bms::rng::Rng::generate(rng, 1u64.into()..=max.into()).try_into().unwrap_or(max)
 }
 
+/// Whether `line` starts a `#RANDOM` / `#SWITCH` block, as `has_bms_random` records it.
+pub(super) fn declares_bms_random(line: &str) -> bool {
+    matches!(
+        beatoraja_random_control_line(line),
+        Some(
+            BeatorajaRandomControl::Random(_)
+                | BeatorajaRandomControl::SetRandom(_)
+                | BeatorajaRandomControl::Switch(_)
+                | BeatorajaRandomControl::SetSwitch(_)
+        )
+    )
+}
+
 pub(super) fn beatoraja_random_control_line(line: &str) -> Option<BeatorajaRandomControl<'_>> {
     let body = line.trim_start().strip_prefix('#')?.trim_start();
+    // Every control command starts with one of these letters; most lines are channel
+    // messages or definitions and stop here.
+    if !matches!(
+        body.as_bytes().first()?.to_ascii_uppercase(),
+        b'C' | b'D' | b'E' | b'I' | b'R' | b'S'
+    ) {
+        return None;
+    }
     if is_control_command(body, "ENDRANDOM") {
         return Some(BeatorajaRandomControl::EndRandom);
     }
@@ -410,69 +458,52 @@ fn direct_control_number(value: &str) -> Option<&str> {
     (!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())).then_some(value)
 }
 
-pub(super) fn strip_lnobj_commands(text: &str) -> String {
-    let mut rewritten = String::with_capacity(text.len());
-    for line in text.lines() {
-        if lnobj_command_args(line).is_none() {
-            rewritten.push_str(line);
-        }
-        rewritten.push('\n');
-    }
-    rewritten
-}
-
-pub(super) fn strip_empty_metadata_commands(text: &str) -> String {
-    let mut rewritten = String::with_capacity(text.len());
-    for line in text.lines() {
-        if !is_empty_metadata_command(line) {
-            rewritten.push_str(line);
-        }
-        rewritten.push('\n');
-    }
-    rewritten
-}
+const EMPTY_METADATA_COMMANDS: [&str; 19] = [
+    "PLAYER",
+    "GENRE",
+    "TITLE",
+    "SUBTITLE",
+    "ARTIST",
+    "SUBARTIST",
+    "BPM",
+    "PLAYLEVEL",
+    "DIFFICULTY",
+    "RANK",
+    "DEFEXRANK",
+    "TOTAL",
+    "STAGEFILE",
+    "BANNER",
+    "BACKBMP",
+    "PREVIEW",
+    "VOLWAV",
+    "LNTYPE",
+    "LNMODE",
+];
 
 pub(super) fn is_empty_metadata_command(line: &str) -> bool {
     let Some(body) = line.trim().strip_prefix('#') else {
         return false;
     };
-    let (name, value) = split_bms_header_command(body.trim_start());
-    value.is_empty()
-        && matches!(
-            name.to_ascii_uppercase().as_str(),
-            "PLAYER"
-                | "GENRE"
-                | "TITLE"
-                | "SUBTITLE"
-                | "ARTIST"
-                | "SUBARTIST"
-                | "BPM"
-                | "PLAYLEVEL"
-                | "DIFFICULTY"
-                | "RANK"
-                | "DEFEXRANK"
-                | "TOTAL"
-                | "STAGEFILE"
-                | "BANNER"
-                | "BACKBMP"
-                | "PREVIEW"
-                | "VOLWAV"
-                | "LNTYPE"
-                | "LNMODE"
-        )
+    // `trim` leaves no whitespace at the end, so the value is empty exactly when the
+    // body is the bare command name.
+    let body = body.trim_start();
+    EMPTY_METADATA_COMMANDS.iter().any(|command| body.eq_ignore_ascii_case(command))
 }
 
-pub(super) fn extract_lnobj_wav_key(
-    text: &str,
+/// A `#LNOBJ` line of the random-resolved text. Its object ID is read once `#BASE` is known.
+#[derive(Debug, Clone)]
+pub(super) struct LnobjLine {
+    pub(super) line_number: usize,
+    pub(super) args: String,
+}
+
+pub(super) fn lnobj_wav_key(
+    lines: &[LnobjLine],
     base62_obj_ids: bool,
     warnings: &mut Vec<ImportWarning>,
 ) -> Option<u16> {
     let mut lnobj_wav_key = None;
-    for (line_index, line) in text.lines().enumerate() {
-        let Some(args) = lnobj_command_args(line) else {
-            continue;
-        };
-        let line_number = line_index + 1;
+    for LnobjLine { line_number, args } in lines {
         let Some(token) = args.split_whitespace().next() else {
             warnings.push(ImportWarning::ParserDiagnostic {
                 code: "InvalidLnobj".to_string(),
@@ -493,10 +524,11 @@ pub(super) fn extract_lnobj_wav_key(
     lnobj_wav_key
 }
 
+/// The arguments of `#LNOBJ`, which must be followed by whitespace or the line end.
 pub(super) fn lnobj_command_args(line: &str) -> Option<&str> {
     let body = line.trim_start().strip_prefix('#')?.trim_start();
-    let (name, value) = body.split_once(char::is_whitespace).unwrap_or((body, ""));
-    name.eq_ignore_ascii_case("LNOBJ").then_some(value.trim())
+    let rest = strip_control_command_prefix(body, "LNOBJ")?;
+    (rest.is_empty() || rest.starts_with(char::is_whitespace)).then(|| rest.trim())
 }
 
 pub(super) fn parse_beatoraja_control_int(

@@ -9,6 +9,42 @@ pub(super) struct Extracted {
     pub diagnostics: Vec<String>,
 }
 
+/// Only extension-bearing sources need the additional resolved-text passes.
+/// Inspect every static branch here; the actual feature flags still come from
+/// the selected static branch and all candidates of each dynamic branch.
+pub(super) fn needs_interpretation(text: &str, layout: ChartKeyLayout) -> bool {
+    text.lines().any(|line| {
+        let Some(body) = line.trim_start().strip_prefix('#') else { return false };
+        if let Some((head, _)) = split_bms_channel_command(body) {
+            let ch = head[head.len() - 2..].to_ascii_uppercase();
+            return ch == "ST"
+                || (!layout.is_pms()
+                    && matches!(ch.as_str(), "SF" | "SG" | "SH" | "SI" | "17" | "27"))
+                || matches!(ch.as_bytes(), [b'F'..=b'O', b'1'..=b'9']);
+        }
+        let command = body.split_whitespace().next().unwrap_or("");
+        [
+            "LNMODE",
+            "CNOBJ",
+            "HCNOBJ",
+            "HLNOBJ",
+            "CONDITIONAL",
+            "WHEN",
+            "ELSEWHEN",
+            "DEFAULT",
+            "ENDCONDITIONAL",
+            "BMD",
+            "SOUNDFONT",
+            "TARGETHASH",
+            "LOADINGFILE",
+            "READYFILE",
+            "BGAOVERFLOW",
+        ]
+        .iter()
+        .any(|name| command.eq_ignore_ascii_case(name))
+    })
+}
+
 /// Extract after static RANDOM and before bms-rs. No filesystem timestamps participate.
 pub(super) fn extract<T: KeyLayoutMapper>(text: &str, layout: ChartKeyLayout) -> Extracted {
     let mut out = Extracted {

@@ -257,10 +257,9 @@ impl Default for TableBudget {
 }
 
 impl TableBudget {
-    pub(super) fn consume_string(&mut self, string: &mlua::String, path: &str) -> Result<()> {
+    pub(super) fn consume_string_bytes(&mut self, bytes: &[u8], path: &str) -> Result<()> {
         // Lossy UTF-8 can expand each input byte into a three-byte replacement.
-        let bytes = string.as_bytes();
-        let count = if std::str::from_utf8(&bytes).is_ok() {
+        let count = if std::str::from_utf8(bytes).is_ok() {
             bytes.len()
         } else {
             bytes.len().saturating_mul(3)

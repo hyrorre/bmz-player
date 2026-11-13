@@ -7,7 +7,7 @@ use std::time::{Instant, UNIX_EPOCH};
 use anyhow::Result;
 use bmz_chart::import::ImportResult;
 use bmz_chart::import::error::ImportError;
-use bmz_chart::import::import_bms_chart;
+use bmz_chart::import::{AssetLookup, BmsRandomSource, import_chart_with_assets};
 use rayon::prelude::*;
 
 use crate::config::app_config::{PathEntry, ScanConfig};
@@ -21,6 +21,9 @@ pub struct ScanSummary {
     pub native_discovery_roots: u32,
     pub everything_discovery_roots: u32,
     pub everything_fallback_roots: u32,
+    /// Why the first root that could not use Everything fell back, unless it only had
+    /// no indexed files (an empty root is not an Everything problem worth reporting).
+    pub everything_fallback_reason: Option<String>,
     pub files_seen: u32,
     pub discovery_skipped: u32,
     pub imported: u32,
@@ -107,6 +110,11 @@ pub struct ScanTiming {
     pub skip_check_ms: u128,
     pub parse_ms: u128,
     pub write_ms: u128,
+    /// Archive listing checks and imports, including their own parsing.
+    pub archive_ms: u128,
+    pub folder_flags_ms: u128,
+    /// Post-import archive revalidation, pruning, and root timestamp updates.
+    pub prune_ms: u128,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -117,6 +125,8 @@ pub struct ScanProgress {
 
 mod archive;
 mod discovery;
+#[cfg(test)]
+mod discovery_bench;
 #[cfg(windows)]
 mod everything;
 mod import;
@@ -126,7 +136,6 @@ mod link_tests;
 mod partial_scan_tests;
 
 pub(crate) use discovery::folder_has_document;
-pub(crate) use discovery::hidden_path_in_root;
 pub use discovery::{ChartFileEntry, discover_chart_files};
 pub use import::{scan_song_roots, scan_song_roots_with_progress};
 
@@ -150,11 +159,64 @@ mod tests {
     fn scan_config() -> ScanConfig {
         ScanConfig {
             follow_symlinks: false,
-            skip_hidden: true,
             use_everything: false,
             auto_rescan_on_startup: false,
             rescan_missing_files: true,
         }
+    }
+
+    #[test]
+    fn encrypted_archive_is_reported_without_blocking_root_pruning() {
+        let root = make_temp_dir("scan-encrypted-archive");
+        std::fs::create_dir_all(root.join("song")).unwrap();
+        write_file(&root.join("song/a.bms"), "#TITLE A\n#BPM 120\n#00011:01\n");
+        write_file(&root.join("song/b.bms"), "#TITLE B\n#BPM 120\n#00011:01\n");
+        let mut writer = sevenz_rust2::ArchiveWriter::create(root.join("secret.7z")).unwrap();
+        writer.set_content_methods(vec![
+            sevenz_rust2::encoder_options::AesEncoderOptions::new("secret".into()).into(),
+            sevenz_rust2::EncoderMethod::LZMA2.into(),
+        ]);
+        writer
+            .push_archive_entry(
+                sevenz_rust2::ArchiveEntry::new_file("secret.bms"),
+                Some(std::io::Cursor::new(b"#TITLE Secret\n")),
+            )
+            .unwrap();
+        writer.finish().unwrap();
+        // AppleDouble metadata copied from macOS is neither a chart nor a damaged archive.
+        let apple_double = b"\x00\x05\x16\x07\x00\x02\x00\x00 resource fork";
+        std::fs::write(root.join("song/._a.bms"), apple_double).unwrap();
+        std::fs::write(root.join("._pack.zip"), apple_double).unwrap();
+        std::fs::create_dir_all(root.join("__MACOSX/song")).unwrap();
+        write_file(&root.join("__MACOSX/song/a.bms"), "#TITLE A\n#BPM 120\n#00011:01\n");
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let roots = vec![PathEntry {
+            path: root.to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+
+        let first = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_070, false).unwrap();
+        assert_eq!(first.summary.files_seen, 2);
+        assert_eq!(first.summary.imported, 2);
+        assert_eq!(first.discovery_issues.len(), 1);
+        assert_eq!(first.discovery_issues[0].operation, ScanDiscoveryOperation::ReadArchive);
+        let last_scan_at: Option<i64> =
+            db.conn().query_row("SELECT last_scan_at FROM roots", [], |row| row.get(0)).unwrap();
+        assert_eq!(last_scan_at, Some(1_700_000_070));
+
+        std::fs::remove_file(root.join("song/b.bms")).unwrap();
+        let second =
+            scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_071, false).unwrap();
+        assert_eq!(second.discovery_issues.len(), 1);
+        assert_eq!(second.summary.removed_files, 1);
+        assert_eq!(db.list_charts(10, 0).unwrap().len(), 1);
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -196,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn discover_chart_files_respects_recursion_and_hidden_files() {
+    fn discover_chart_files_respects_recursion_and_keeps_hidden_files() {
         let root = make_temp_dir("discover");
         write_file(&root.join("a.bms"), "#TITLE A\n#BPM 120\n");
         write_file(&root.join("ignore.txt"), "");
@@ -207,90 +269,12 @@ mod tests {
         let shallow = discover_chart_files(&root, false, &scan_config()).unwrap();
         let deep = discover_chart_files(&root, true, &scan_config()).unwrap();
 
-        assert_eq!(shallow.len(), if cfg!(windows) { 2 } else { 1 });
-        assert_eq!(deep.len(), if cfg!(windows) { 3 } else { 2 });
+        // Hidden files are scanned like beatoraja; only fixed names are excluded.
+        assert_eq!(shallow.len(), 2);
+        assert_eq!(deep.len(), 3);
         assert!(shallow[0].has_document);
         assert!(deep.iter().any(|entry| entry.has_document));
 
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(any(windows, target_os = "macos"))]
-    #[test]
-    fn scan_filters_platform_hidden_files_and_folders() {
-        let root = make_temp_dir("platform-hidden");
-        let hidden_dir = root.join("hidden-dir");
-        let dot_dir = root.join(".dot-dir");
-        std::fs::create_dir_all(&hidden_dir).unwrap();
-        std::fs::create_dir_all(&dot_dir).unwrap();
-        write_file(&hidden_dir.join("inside.bms"), "#TITLE Hidden\n");
-        write_file(&dot_dir.join("inside.bms"), "#TITLE Dot\n");
-        let hidden_file = root.join("hidden.bms");
-        write_file(&hidden_file, "#TITLE Hidden file\n");
-        write_file(&root.join("visible.bms"), "#TITLE Visible\n");
-
-        #[cfg(windows)]
-        {
-            use std::os::windows::ffi::OsStrExt;
-            use windows_sys::Win32::Storage::FileSystem::{
-                FILE_ATTRIBUTE_HIDDEN, SetFileAttributesW,
-            };
-            for path in [&hidden_dir, &hidden_file] {
-                let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-                assert_ne!(unsafe { SetFileAttributesW(wide.as_ptr(), FILE_ATTRIBUTE_HIDDEN) }, 0);
-            }
-        }
-        #[cfg(target_os = "macos")]
-        for path in [&hidden_dir, &hidden_file] {
-            assert!(
-                std::process::Command::new("chflags")
-                    .arg("hidden")
-                    .arg(path)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
-        }
-
-        for follow_symlinks in [false, true] {
-            let mut config = scan_config();
-            config.follow_symlinks = follow_symlinks;
-            let found = discover_chart_files(&root, true, &config).unwrap();
-            assert!(found.iter().any(|entry| entry.path == root.join("visible.bms")));
-            assert!(
-                !found
-                    .iter()
-                    .any(|entry| entry.path == hidden_file || entry.path.starts_with(&hidden_dir))
-            );
-            assert_eq!(found.iter().any(|entry| entry.path.starts_with(&dot_dir)), cfg!(windows));
-            config.skip_hidden = false;
-            assert_eq!(discover_chart_files(&root, true, &config).unwrap().len(), 4);
-        }
-
-        #[cfg(windows)]
-        {
-            let mut cache = std::collections::HashMap::new();
-            assert!(
-                super::everything::has_hidden_component(
-                    &root,
-                    Path::new("hidden-dir/inside.bms"),
-                    &mut cache
-                )
-                .unwrap()
-            );
-            assert!(
-                super::everything::has_hidden_component(&root, Path::new("hidden.bms"), &mut cache)
-                    .unwrap()
-            );
-            assert!(
-                !super::everything::has_hidden_component(
-                    &root,
-                    Path::new(".dot-dir/inside.bms"),
-                    &mut cache
-                )
-                .unwrap()
-            );
-        }
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -499,6 +483,15 @@ mod tests {
         assert_eq!(report.summary.everything_discovery_roots, 0);
         assert_eq!(report.summary.native_discovery_roots, 1);
         assert_eq!(report.summary.everything_fallback_roots, 1);
+        assert!(
+            report
+                .summary
+                .everything_fallback_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("follow_symlinks")),
+            "{:?}",
+            report.summary.everything_fallback_reason
+        );
         assert_eq!(report.summary.files_seen, 0);
 
         std::fs::remove_dir_all(root).unwrap();
@@ -613,6 +606,55 @@ mod tests {
         assert_eq!(report.summary.files_seen, 2);
         assert_eq!(report.summary.imported, 1);
         assert_eq!(report.summary.failed, 1);
+    }
+
+    #[test]
+    fn scan_song_roots_skips_unchanged_failed_files_until_file_or_importer_changes() {
+        let root = make_temp_dir("scan-skip-failed");
+        let path = root.join("24key.bmson");
+        let unsupported = r#"{"version":"1.0.0","info":{"title":"Unsupported","artist":"T",
+            "genre":"T","level":1,"init_bpm":120,"resolution":240,"mode_hint":"keyboard-24k"},
+            "sound_channels":[]}"#;
+        write_file(&path, unsupported);
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let roots = vec![PathEntry {
+            path: root.to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+
+        let first = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_060, false).unwrap();
+        assert_eq!((first.summary.failed, first.summary.skipped), (1, 0));
+        let second =
+            scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_061, false).unwrap();
+        assert_eq!((second.summary.failed, second.summary.skipped), (0, 1));
+
+        // A failure recorded by an older importer is retried.
+        db.conn()
+            .execute(
+                "UPDATE chart_files SET failed_import_version = ?1",
+                [CHART_IMPORT_VERSION - 1],
+            )
+            .unwrap();
+        let retried =
+            scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_062, false).unwrap();
+        assert_eq!((retried.summary.failed, retried.summary.skipped), (1, 0));
+
+        // A changed file is parsed again and can succeed.
+        write_file(&path, &unsupported.replace("keyboard-24k", "beat-7k"));
+        let fixed = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_063, false).unwrap();
+        assert_eq!((fixed.summary.imported, fixed.summary.failed), (1, 0));
+        let status: String = db
+            .conn()
+            .query_row("SELECT parse_status FROM chart_files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(status, "Parsed");
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

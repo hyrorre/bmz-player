@@ -74,12 +74,107 @@ fn decoder_with_pending(pending: impl IntoIterator<Item = i64>) -> VideoBgaDecod
         current: Some(frame(0)),
         finished: false,
         playback_target_us: Arc::new(AtomicI64::new(0)),
-        decode_generation: Arc::new(AtomicU64::new(0)),
+        channel_decode: Arc::new(ChannelDecodeState::default()),
         stop_decode: Arc::new(AtomicBool::new(false)),
-        restart_decode: Arc::new(AtomicBool::new(false)),
-        pass_finished: Arc::new(AtomicBool::new(false)),
+        restart_clocked_decode: Arc::new(AtomicBool::new(false)),
         decode_thread: None,
+        retirement: None,
     }
+}
+
+#[test]
+#[ignore = "release teardown probe; run alone with --ignored --nocapture"]
+fn profile_video_decoder_drop_wait() {
+    assert!(!std::hint::black_box(cfg!(debug_assertions)), "run with --release");
+    for delay_ms in [10, 50, 200] {
+        let mut decoder = decoder_with_pending([]);
+        decoder.retirement = Some(retirement::Retirement::new().unwrap());
+        let (tx, rx) = std::sync::mpsc::channel();
+        decoder.decode_thread = Some(std::thread::spawn(move || {
+            tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(delay_ms));
+        }));
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let start = std::time::Instant::now();
+        drop(decoder);
+        eprintln!(
+            "video worker_delay_ms={delay_ms} drop_ms={:.3}",
+            start.elapsed().as_secs_f64() * 1e3
+        );
+        // Avoid overlapping the next sample after asynchronous retirement is introduced.
+        std::thread::sleep(Duration::from_millis(delay_ms + 10));
+    }
+}
+
+#[test]
+#[ignore = "release video queue probe; run alone with --ignored --nocapture"]
+fn profile_video_idle_queues() {
+    assert!(!std::hint::black_box(cfg!(debug_assertions)), "run with --release");
+    let stamp =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let path = std::env::temp_dir().join(format!("bmz-idle-{}-{stamp}.y4m", std::process::id()));
+    let mut bytes = b"YUV4MPEG2 W640 H360 F30:1 Ip A1:1 C420jpeg\n".to_vec();
+    for _ in 0..12 {
+        bytes.extend_from_slice(b"FRAME\n");
+        bytes.resize(bytes.len() + 640 * 360 * 3 / 2, 128);
+    }
+    std::fs::write(&path, bytes).unwrap();
+    for count in [2, 32] {
+        let mut decoders: Vec<_> =
+            (0..count).map(|_| VideoBgaDecoder::open(&path).unwrap()).collect();
+        for decoder in &mut decoders {
+            decoder.frame_at_blocking(0).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        let before = CHANNEL_WAIT_COUNT.load(Ordering::Relaxed);
+        std::thread::sleep(Duration::from_millis(200));
+        let waits = CHANNEL_WAIT_COUNT.load(Ordering::Relaxed) - before;
+        for decoder in &decoders {
+            decoder.stop_decode.store(true, Ordering::Release);
+        }
+        let mut retained = 0usize;
+        for decoder in &mut decoders {
+            if let Some(handle) = decoder.decode_thread.take() {
+                handle.thread().unpark();
+                handle.join().unwrap();
+            }
+            retained += decoder
+                .pending
+                .iter()
+                .chain(decoder.current.iter())
+                .map(|frame| frame.rgba.len())
+                .sum::<usize>();
+            retained += decoder
+                .receiver
+                .as_ref()
+                .unwrap()
+                .try_iter()
+                .map(|frame| frame.frame.rgba.len())
+                .sum::<usize>();
+        }
+        eprintln!(
+            "video inactive_decoders={count} wait_entries_200ms={waits} queued_and_selected_mib={:.2}",
+            retained as f64 / (1024.0 * 1024.0)
+        );
+        drop(decoders);
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn video_retirement_does_not_wait_for_a_blocked_native_worker() {
+    let mut decoder = decoder_with_pending([100]);
+    decoder.retirement = Some(retirement::Retirement::new().unwrap());
+    let (release, blocked) = std::sync::mpsc::channel();
+    let (done, completed) = std::sync::mpsc::channel();
+    decoder.decode_thread = Some(std::thread::spawn(move || {
+        let _ = blocked.recv_timeout(Duration::from_secs(5));
+        let _ = done.send(());
+    }));
+    drop(decoder);
+    assert!(matches!(completed.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+    release.send(()).unwrap();
+    completed.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
 #[test]
@@ -101,6 +196,20 @@ fn choose_beatoraja_video_stream_falls_back_to_best_when_no_valid_retry_exists()
     let selected = choose_beatoraja_video_stream(0, [(0, 0), (1, 0), (6, 100)]);
 
     assert_eq!(selected, 0);
+}
+
+#[test]
+fn only_vc1_packet_submission_permission_errors_are_skipped() {
+    use ffmpeg_next::{Error, codec::Id};
+
+    let eperm = Error::Other { errno: ffmpeg_next::error::EPERM };
+    assert!(is_skippable_video_packet_error(Id::VC1, eperm));
+    assert!(!is_skippable_video_packet_error(Id::WMV2, eperm));
+    assert!(!is_skippable_video_packet_error(Id::VC1, Error::InvalidData));
+    assert!(!is_skippable_video_packet_error(
+        Id::VC1,
+        Error::Other { errno: ffmpeg_next::error::ENOMEM },
+    ));
 }
 
 #[test]
@@ -168,17 +277,15 @@ fn channel_send_stops_while_queue_is_full() {
     let (sender, _receiver) = sync_channel(1);
     sender.try_send(queued_frame(0, 0)).unwrap();
     let stop_decode = Arc::new(AtomicBool::new(false));
-    let restart_decode = Arc::new(AtomicBool::new(false));
+    let channel = Arc::new(ChannelDecodeState::default());
     let thread_stop_decode = Arc::clone(&stop_decode);
-    let thread_restart_decode = Arc::clone(&restart_decode);
     let handle = std::thread::spawn(move || {
-        send_decoded_frame(&sender, frame(1), 0, &thread_stop_decode, &thread_restart_decode)
-            .unwrap()
+        send_decoded_frame(&sender, frame(1), 0, &thread_stop_decode, &channel).unwrap()
     });
 
     std::thread::sleep(Duration::from_millis(5));
     stop_decode.store(true, Ordering::Release);
-
+    handle.thread().unpark();
     assert_eq!(handle.join().unwrap(), ChannelDecodePassEnd::Stop);
 }
 
@@ -187,17 +294,15 @@ fn channel_send_restarts_while_queue_is_full() {
     let (sender, _receiver) = sync_channel(1);
     sender.try_send(queued_frame(0, 0)).unwrap();
     let stop_decode = Arc::new(AtomicBool::new(false));
-    let restart_decode = Arc::new(AtomicBool::new(false));
-    let thread_stop_decode = Arc::clone(&stop_decode);
-    let thread_restart_decode = Arc::clone(&restart_decode);
+    let channel = Arc::new(ChannelDecodeState::default());
+    let thread_channel = Arc::clone(&channel);
     let handle = std::thread::spawn(move || {
-        send_decoded_frame(&sender, frame(1), 0, &thread_stop_decode, &thread_restart_decode)
-            .unwrap()
+        send_decoded_frame(&sender, frame(1), 0, &stop_decode, &thread_channel).unwrap()
     });
 
     std::thread::sleep(Duration::from_millis(5));
-    restart_decode.store(true, Ordering::Release);
-
+    channel.restart_at(0);
+    handle.thread().unpark();
     assert_eq!(handle.join().unwrap(), ChannelDecodePassEnd::Restart);
 }
 
@@ -268,13 +373,39 @@ fn decoder_with_channel(
         current: Some(frame(0)),
         finished: false,
         playback_target_us: Arc::new(AtomicI64::new(0)),
-        decode_generation: Arc::new(AtomicU64::new(0)),
+        channel_decode: Arc::new(ChannelDecodeState::default()),
         stop_decode: Arc::new(AtomicBool::new(false)),
-        restart_decode: Arc::new(AtomicBool::new(false)),
-        pass_finished: Arc::new(AtomicBool::new(false)),
+        restart_clocked_decode: Arc::new(AtomicBool::new(false)),
         decode_thread: None,
+        retirement: None,
     };
     (sender, decoder)
+}
+
+#[test]
+fn poll_frame_wakes_a_decoder_parked_on_a_full_channel_after_draining() {
+    let (sender, mut decoder) = decoder_with_channel([]);
+    for pts_us in [10, 20, 30, 40] {
+        sender.try_send(queued_frame(0, pts_us)).unwrap();
+    }
+    let stop_decode = Arc::new(AtomicBool::new(false));
+    let channel = Arc::clone(&decoder.channel_decode);
+    let (sent_tx, sent_rx) = std::sync::mpsc::channel();
+    decoder.decode_thread = Some(std::thread::spawn(move || {
+        let end = send_decoded_frame(&sender, frame(50), 0, &stop_decode, &channel);
+        let _ = sent_tx.send(end.unwrap());
+    }));
+    // Let the producer find the channel full and park.
+    std::thread::sleep(Duration::from_millis(20));
+    assert!(sent_rx.try_recv().is_err());
+
+    assert_eq!(decoder.poll_frame(25).unwrap().pts_us, 20);
+    // No further poll: the drain itself must have woken the producer.
+    assert_eq!(
+        sent_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        ChannelDecodePassEnd::Eof,
+        "frame sent into the freed slot"
+    );
 }
 
 #[test]
@@ -297,7 +428,7 @@ fn offline_selection_waits_for_a_future_frame_instead_of_reusing_stale_data() {
 #[test]
 fn offline_selection_holds_last_frame_at_verified_eof() {
     let (_sender, mut decoder) = decoder_with_channel([10, 20]);
-    decoder.pass_finished.store(true, Ordering::Release);
+    decoder.channel_decode.mark_finished(0);
     assert_eq!(decoder.frame_at_blocking(100).unwrap().unwrap().pts_us, 20);
     assert_eq!(decoder.frame_at_blocking(200).unwrap().unwrap().pts_us, 20);
 }
@@ -390,22 +521,39 @@ fn poll_frame_drops_frames_from_before_restart() {
 
     let pts_us = decoder.poll_frame(0).unwrap().pts_us;
 
-    assert_eq!(decoder.decode_generation.load(Ordering::Acquire), 1);
+    assert_eq!(decoder.channel_decode.generation(), 1);
     assert_eq!(pts_us, 0);
     assert!(decoder.pending.is_empty());
 }
 
 #[test]
-fn restart_at_sets_seek_target_and_invalidates_channel_generation() {
+fn polling_does_not_replace_the_requested_channel_restart_position() {
     let (_sender, mut decoder) = decoder_with_channel([10, 20]);
 
     decoder.restart_at(1_234_567);
 
-    assert_eq!(decoder.playback_target_us.load(Ordering::Acquire), 1_234_567);
-    assert_eq!(decoder.decode_generation.load(Ordering::Acquire), 1);
-    assert!(decoder.restart_decode.load(Ordering::Acquire));
+    decoder.poll_frame(1_300_000);
+    assert_eq!(decoder.playback_target_us.load(Ordering::Acquire), 1_300_000);
+    assert_eq!(decoder.channel_decode.restart_position(), (1, 1_234_567));
     assert!(decoder.current.is_none());
     assert!(decoder.pending.is_empty());
+
+    decoder.restart();
+    decoder.poll_frame(30_000);
+    assert_eq!(decoder.channel_decode.restart_position(), (2, 0));
+}
+
+#[test]
+fn previous_channel_generation_cannot_finish_a_restart() {
+    let (sender, mut decoder) = decoder_with_channel([]);
+    decoder.restart();
+    decoder.channel_decode.mark_finished(0);
+
+    assert!(decoder.poll_frame(0).is_none());
+    assert!(!decoder.finished);
+    sender.send(queued_frame(1, 0)).unwrap();
+    sender.send(queued_frame(1, 10)).unwrap();
+    assert_eq!(decoder.frame_at_blocking(0).unwrap().unwrap().pts_us, 0);
 }
 
 #[test]
@@ -420,11 +568,11 @@ fn poll_frame_updates_playback_target_for_clocked_decoder() {
         current: None,
         finished: false,
         playback_target_us: Arc::clone(&target),
-        decode_generation: Arc::new(AtomicU64::new(0)),
+        channel_decode: Arc::new(ChannelDecodeState::default()),
         stop_decode: Arc::new(AtomicBool::new(false)),
-        restart_decode: Arc::new(AtomicBool::new(false)),
-        pass_finished: Arc::new(AtomicBool::new(false)),
+        restart_clocked_decode: Arc::new(AtomicBool::new(false)),
         decode_thread: None,
+        retirement: None,
     };
 
     assert!(decoder.poll_frame(123_456).is_none());
@@ -445,11 +593,11 @@ fn clocked_poll_accepts_received_frame_without_pts_gate() {
         current: None,
         finished: false,
         playback_target_us: Arc::clone(&target),
-        decode_generation: Arc::new(AtomicU64::new(0)),
+        channel_decode: Arc::new(ChannelDecodeState::default()),
         stop_decode: Arc::new(AtomicBool::new(false)),
-        restart_decode: Arc::new(AtomicBool::new(false)),
-        pass_finished: Arc::new(AtomicBool::new(false)),
+        restart_clocked_decode: Arc::new(AtomicBool::new(false)),
         decode_thread: None,
+        retirement: None,
     };
     publish_clocked_frame(&frames, frame(50_000)).unwrap();
 

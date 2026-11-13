@@ -57,7 +57,8 @@ impl WinitApp {
             return;
         };
 
-        let advance_outcome = consume_running_play_snapshot(&mut active_play.running);
+        let advance_outcome =
+            consume_running_play_snapshot(&mut active_play.running, play_elapsed_time);
         match advance_outcome {
             Ok(frame)
                 if !matches!(
@@ -87,7 +88,6 @@ impl WinitApp {
                 );
                 crate::animated_bga::apply_channel_textures(&mut snapshot, &channel_textures);
                 self.apply_profile_fast_slow_filter(&mut snapshot);
-                snapshot.play_elapsed_time = play_elapsed_time;
                 snapshot.ready_elapsed_time = ready_elapsed_time;
                 snapshot.seamless_play_entry = seamless_play_entry;
                 snapshot.stagefile_background = stagefile_background;
@@ -110,7 +110,6 @@ impl WinitApp {
                 {
                     let failed = frame.state == bmz_gameplay::session::PlayState::Failed;
                     let mut snapshot = frame.render_snapshot;
-                    snapshot.play_elapsed_time = play_elapsed_time;
                     snapshot.ready_elapsed_time = ready_elapsed_time;
                     snapshot.seamless_play_entry = seamless_play_entry;
                     snapshot.stagefile_background = stagefile_background;
@@ -189,7 +188,6 @@ impl WinitApp {
                 };
                 let hispeed = Some(active_play.running.session.display_hispeed);
                 let mut snapshot = frame.render_snapshot;
-                snapshot.play_elapsed_time = play_elapsed_time;
                 snapshot.ready_elapsed_time = ready_elapsed_time;
                 snapshot.seamless_play_entry = seamless_play_entry;
                 snapshot.stagefile_background = stagefile_background;
@@ -208,6 +206,7 @@ impl WinitApp {
                         self.prepare_terminal_course_finish(chart_id, finished);
                     }
                     self.start_result_ir_for_finished_play(finished);
+                    self.prewarm_result_skin_for_finished_play(finished);
                 }
                 self.notify_obs_play_ended();
                 let now = Instant::now();
@@ -337,10 +336,14 @@ impl WinitApp {
             self.prepare_terminal_course_finish(chart_id, &finished);
         }
         self.start_result_ir_for_finished_play(&finished);
+        self.prewarm_result_skin_for_finished_play(&finished);
         tracing::info!(elapsed_ms, "background play result save completed");
     }
 
     pub(super) fn maybe_start_ready_phase(&mut self) {
+        if self.scene_skin_entry_loading() {
+            return;
+        }
         if self.play.active_play.as_ref().is_some_and(|play| play.running.gameplay.is_running()) {
             return;
         }
@@ -484,7 +487,10 @@ impl WinitApp {
         let effects = self.gameplay_sound_output();
         self.sync_input_capture_target();
         if let Some(active_play) = &mut self.play.active_play
-            && let Err(error) = active_play.running.start_gameplay_runtime(effects)
+            && let Err(error) = active_play.running.start_gameplay_runtime(
+                effects,
+                self.boot.profile_config.lane.hispeed_transition_ms,
+            )
         {
             tracing::error!(%error, "failed to start gameplay runtime");
             self.abort_pending_play_start();
@@ -528,6 +534,28 @@ impl WinitApp {
             }
         }
         self.refresh_pending_play_visual_snapshot(play_elapsed_time);
+    }
+
+    /// preload 済み・preload 中のセッションが使う 1P / 2P の割り当て。
+    pub(super) fn play_preload_gamepad_slots(
+        &self,
+        chart_id: i64,
+    ) -> Option<crate::input::gamepad::GamepadSlotMap> {
+        self.play
+            .preloaded_play_session
+            .as_ref()
+            .filter(|preloaded| preloaded.chart_id == chart_id)
+            .map(|preloaded| preloaded.session_options.gamepad_slots)
+            .or_else(|| {
+                self.play
+                    .pending_play_preload
+                    .as_ref()
+                    .filter(|pending| {
+                        pending.chart_id == chart_id
+                            && pending.generation == self.play.play_preload_generation
+                    })
+                    .map(|pending| pending.gamepad_slots)
+            })
     }
 
     pub(super) fn play_preload_prepared_chart(&self, chart_id: i64) -> Option<PreparedPlayChart> {
@@ -784,9 +812,18 @@ impl WinitApp {
                 return false;
             }
             tracing::info!(reason, "stopping active play");
-            active_play.running.gameplay.edit(|session| {
-                session.state = bmz_gameplay::session::PlayState::Failed;
-                session.manually_stopped = true;
+            // The observation can be one gameplay wake old. The owner re-checks
+            // the request so a settled result is never reclassified as FAILED.
+            // Practice pauses the clock and ends the round right after this, so a
+            // refused stop there becomes an explicit finish instead of staying
+            // Playing with no reachable result.
+            let practice = practice_phase == Some(PracticePhase::Playing);
+            active_play.running.gameplay.edit(move |session| {
+                if practice {
+                    session.request_practice_round_end();
+                } else {
+                    session.request_manual_stop();
+                }
             });
             true
         };
@@ -843,20 +880,19 @@ impl WinitApp {
     /// ↑↓と9KのE1/E2 + KEY8/9で長押し状態を開始し、同じ入力の解放で終える。
     pub(super) fn update_lane_cover_key_hold(
         &mut self,
-        event: &ControlInputEvent,
+        input: &ResolvedInput,
         applied_press: bool,
     ) {
-        if event.repeat {
+        if input.repeat() {
             return;
         }
-        let Some(physical) = event.physical.as_ref() else {
+        let (Some(device), Some(physical)) = (input.device(), input.physical()) else {
             return;
         };
-        let control = (event.device, physical.clone());
-        if event.pressed {
+        let control = (device, physical.clone());
+        if input.pressed() {
             let option = play_option_control_for_input(
-                event.device,
-                physical,
+                input,
                 self.play.play_e1_held,
                 self.play.play_e2_held,
                 self.play.play_option_input.as_ref(),
@@ -865,9 +901,7 @@ impl WinitApp {
             let (direction, requires_modifier) =
                 if let Some(PlayOptionControl::LaneCoverKey(units)) = option {
                     (units.signum(), true)
-                } else if let Some((_, direction)) =
-                    keyboard_lane_cover_direction(event, &self.boot.profile_config.input)
-                {
+                } else if let Some(direction) = keyboard_lane_cover_direction(input) {
                     (direction, false)
                 } else {
                     return;
@@ -922,7 +956,7 @@ impl WinitApp {
     }
 
     pub(super) fn sync_autoplay_replay_playback_rate(&mut self) {
-        let rate = autoplay_replay_playback_rate_from_pressed_inputs(
+        let held_rate = held_autoplay_replay_playback_rate(
             &self.input.pressed_play_inputs,
             self.play.play_option_input.as_ref(),
         );
@@ -934,6 +968,11 @@ impl WinitApp {
         {
             return;
         }
+        // Releasing the speed keys returns to the FREQ the session started at.
+        let session_rate = crate::config::play::freq_playback_rate_percent(
+            active_play.running.applied_arrange.freq_semitones,
+        );
+        let rate = held_rate.unwrap_or(session_rate);
         // The READY hold runs at 1x; the requested rate applies once it ends.
         if let Some((_, requested_rate)) = &mut self.play.presentation.rate_restore {
             *requested_rate = rate;
@@ -1011,12 +1050,11 @@ impl WinitApp {
         }
     }
 
-    pub(super) fn update_play_e1_control_state(
-        &mut self,
-        device: DeviceId,
-        control: &PhysicalControl,
-        pressed: bool,
-    ) -> bool {
+    pub(super) fn update_play_e1_control_state(&mut self, input: &ResolvedInput) -> bool {
+        let (Some(device), Some(control)) = (input.device(), input.physical()) else {
+            return false;
+        };
+        let pressed = input.pressed();
         let Some(pressed) = self.play.play_option_input.as_ref().and_then(|input| {
             play_e1_held_after_input(
                 &self.input.pressed_play_inputs,
@@ -1068,12 +1106,11 @@ impl WinitApp {
         self.apply_play_lane_action(PlayLaneAction::ToggleLaneCoverVisibility)
     }
 
-    pub(super) fn update_play_exit_control_state(
-        &mut self,
-        device: DeviceId,
-        control: &PhysicalControl,
-        pressed: bool,
-    ) -> bool {
+    pub(super) fn update_play_exit_control_state(&mut self, input: &ResolvedInput) -> bool {
+        let (Some(device), Some(control)) = (input.device(), input.physical()) else {
+            return false;
+        };
+        let pressed = input.pressed();
         let was_ready_blocked =
             play_ready_blocked_by_control_holds(self.play.play_e1_held, self.play.play_e2_held);
         let (is_e2, is_e3) = self
@@ -1151,6 +1188,9 @@ impl WinitApp {
             fadeout_elapsed_ms: ending.fadeout_started_at.map(elapsed_since_ms),
         };
 
+        // A cancelled preload can still be showing its placeholder, before a
+        // GameSession exists. Keep its input timers and turntable phase moving too.
+        self.refresh_pending_play_visual_snapshot(play_elapsed_time);
         let Some(active_play) = &mut self.play.active_play else {
             let Some(snapshot) = &mut self.play.last_play_snapshot else {
                 return;

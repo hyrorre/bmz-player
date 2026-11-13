@@ -312,7 +312,7 @@ impl WinitApp {
                     return;
                 };
                 self.boot.app_config.updates.skipped_version = version;
-                match save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config) {
+                match self.save_app_config_now() {
                     Ok(()) => tracing::info!("skipped update version saved"),
                     Err(error) => tracing::warn!(%error, "failed to save skipped update version"),
                 }

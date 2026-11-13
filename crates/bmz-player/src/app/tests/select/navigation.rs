@@ -19,7 +19,7 @@ fn load(
 ) -> Result<(Vec<SelectItem>, SelectModeFilter)> {
     load_items_for_stack(
         SelectListContext {
-            boot,
+            boot: boot.into(),
             collections: &mut SelectCollectionCache::default(),
             virtual_folders: &crate::screens::select_model::VirtualFolderCatalog::load(
                 &boot.profile_paths.root_dir,
@@ -49,7 +49,7 @@ fn virtual_folder_list_and_breadcrumb_share_a_definition_snapshot_until_reload()
     std::fs::write(&path, "invalid [").unwrap();
     let (items, _) = load_items_for_stack(
         SelectListContext {
-            boot: &boot,
+            boot: (&boot).into(),
             collections: &mut SelectCollectionCache::default(),
             virtual_folders: &catalog,
         },
@@ -146,7 +146,7 @@ fn root_function_folders_keep_kinds_and_favorite_follows_my_best() {
         ] {
             let (items, _) = load_items_for_stack(
                 SelectListContext {
-                    boot: &boot,
+                    boot: (&boot).into(),
                     collections: &mut SelectCollectionCache::default(),
                     virtual_folders: &crate::screens::select_model::VirtualFolderCatalog::load(
                         &boot.profile_paths.root_dir,

@@ -89,7 +89,8 @@ impl WinitApp {
     }
 
     pub(super) fn result_input_ready(&self) -> bool {
-        self.result.result_scene_started_at.elapsed() >= self.result_input_duration()
+        !self.scene_skin_entry_waiting(SkinKind::Result)
+            && self.result.result_scene_started_at.elapsed() >= self.result_input_duration()
     }
 
     pub(super) fn result_input_duration(&self) -> Duration {
@@ -102,8 +103,8 @@ impl WinitApp {
             self.is_course_intermediate_result(),
             self.course_intermediate_auto_advance_enabled(),
         );
-        if duration.is_none() && self.autoplay_folder_has_next() {
-            Some(FALLBACK_RESULT_SCENE_DURATION)
+        if self.autoplay_folder_has_next() && !self.is_course_intermediate_result() {
+            Some(autoplay_folder_result_exit_duration(duration))
         } else {
             duration
         }

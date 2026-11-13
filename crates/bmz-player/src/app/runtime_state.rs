@@ -30,7 +30,7 @@ pub(super) struct SelectRuntimeState {
     /// 選曲リストをブラウズしながら課題曲を積む LR2-style course creation state。
     pub(super) course_builder: Option<SelectCourseBuilderState>,
     pub(super) select_items: Vec<SelectItem>,
-    pub(super) collection_cache: crate::screens::select_model::SelectCollectionCache,
+    pub(super) list_loader: Box<super::select_list_loader::SelectListLoader>,
     pub(super) virtual_folders: Result<crate::screens::select_model::VirtualFolderCatalog, String>,
     pub(super) replay_slot_cache: RefCell<Option<(crate::storage::score_db::ScoreKey, [bool; 4])>>,
     pub(super) select_distribution_cache: RefCell<HashMap<i64, CachedSelectChartDistribution>>,
@@ -65,12 +65,12 @@ pub(super) struct SelectRuntimeState {
     /// Currently selected replay slot for the highlighted chart or course.
     pub(super) selected_replay_slot: Option<u8>,
     pub(super) select_sort: SelectSort,
-    pub(super) select_keys: SelectKeyBindings,
+    pub(super) select_keys: SceneInputResolver,
     pub(super) select_bar_scroll: SelectBarScroll,
     pub(super) select_hold_move: Option<SelectMove>,
     pub(super) select_hold_started_at: Option<Instant>,
     pub(super) select_hold_last_trigger_at: Option<Instant>,
-    pub(super) select_hold_control: Option<String>,
+    pub(super) select_hold_control: Option<InputSource>,
     pub(super) select_analog_scroll_buffer: i32,
     pub(super) select_analog_last_tick_at: Option<Instant>,
     /// キーコンフィグ確定/キャンセル直後、スクラッチが止まるまでアナログスクロールを抑止する。
@@ -217,6 +217,9 @@ pub(super) struct ResultRuntimeState {
     pub(super) result_ir: Option<crate::screens::result_ir::ResultIrState>,
     /// 直近に開始したプレイのsession mode。Play / Resultの常時表示に使う。
     pub(super) last_play_session_mode: SessionMode,
+    /// 直近に開始したプレイのFREQ。course Resultのように `finished_play` が
+    /// 無い場面でも、実際の再生速度をskinへ渡すために保持する。
+    pub(super) last_play_freq_semitones: i8,
     pub(super) result_scene_started_at: Instant,
     pub(super) lr2_result_progress: bmz_render::skin::Lr2ResultProgress,
     pub(super) lr2_result_epoch: Option<Instant>,
@@ -251,12 +254,13 @@ pub(super) struct ResultIrScrollRuntime {
     pub(super) hold_rows: i32,
     pub(super) hold_started_at: Option<Instant>,
     pub(super) hold_last_trigger_at: Option<Instant>,
-    pub(super) hold_control: Option<String>,
+    pub(super) hold_control: Option<InputSource>,
     pub(super) analog_buffer: i32,
     pub(super) analog_last_tick_at: Option<Instant>,
 }
 
 pub(super) struct AppJobs {
+    pub(super) config_saver: config_saver::ConfigSaver,
     pub(super) profile_change: Option<profile_switch::PendingProfileChange>,
     pub(super) ir_sync: Option<IrSyncWorker>,
     /// 設定画面から起動する手動IR操作（一括送信・取得・キュー再送）。
@@ -313,9 +317,12 @@ pub(super) struct SmokeRuntime {
     pub(super) app_started_at: Instant,
     pub(super) startup_started_at: Instant,
     pub(super) first_present_logged: bool,
+    pub(super) first_present_phase: Option<StartupPhase>,
 }
 
 pub(super) struct SkinRuntimeState {
+    /// Scene entry waits are polled between frames; they never block the window thread.
+    pub(super) scene_entry_waits: HashSet<SkinKind>,
     pub(super) lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
     pub(super) skin_catalog: SkinCatalogState,
     pub(super) skin_defs_cache: BTreeMap<(String, bool), SceneSkinDefs>,
@@ -331,6 +338,10 @@ pub(super) struct SkinRuntimeState {
     /// 直近 install をリクエストした Result context の用途と設定 fingerprint。
     /// Renderer の Result context は 1 本だけなので、通常/コース最終結果で差し替える。
     pub(super) last_result_skin_signature: Option<ResultSkinSignature>,
+    /// Result skin decoded once the play's score was final.
+    pub(super) result_skin_prewarm: Option<Box<PrewarmedSceneSkin>>,
+    /// Select skin decoded while Result is shown.
+    pub(super) select_skin_prewarm: Option<Box<PrewarmedSceneSkin>>,
 }
 
 pub(super) struct AppAudioRuntimeState {
@@ -393,21 +404,40 @@ pub(super) struct UiRuntimeState {
     pub(super) cursor_visible: bool,
 }
 
+#[derive(Clone)]
+pub(super) struct QueuedSongScan {
+    pub(super) roots: Vec<PathEntry>,
+    pub(super) force: bool,
+    pub(super) label: String,
+    pub(super) scope: SongScanScope,
+    pub(super) start_failures: u8,
+}
+
 #[derive(Default)]
 pub(super) struct SongScanRuntime {
     pub(super) pending: Option<PendingSongScan>,
-    /// Select外で要求されたscanを、次のSelectまでFIFOで保持する。
-    pub(super) queued: VecDeque<(Vec<PathEntry>, bool, String, SongScanScope)>,
+    /// Select外の要求とworker起動待ちをFIFOで保持する。
+    pub(super) queued: VecDeque<QueuedSongScan>,
     pub(super) progress: Option<ScanProgress>,
+    /// Survives a request reaching its attempt limit; cleared only after a worker starts.
+    pub(super) retry_at: Option<Instant>,
 }
 
 impl SongScanRuntime {
+    pub(super) fn take_ready(&mut self, now: Instant) -> Option<QueuedSongScan> {
+        if self.pending.is_some() || self.retry_at.is_some_and(|at| now < at) {
+            return None;
+        }
+        self.queued.pop_front()
+    }
+
     pub(super) fn has_download_scan_for(&self, dir: &Path) -> bool {
         self.pending
             .as_ref()
             .is_some_and(|pending| pending.download_dirs.iter().any(|path| path == dir))
-            || self.queued.iter().any(|(roots, _, _, _)| {
-                roots
+            || self.queued.iter().any(|request| {
+                request
+                    .roots
                     .iter()
                     .any(|root| root.enabled && root.recursive && Path::new(&root.path) == dir)
             })

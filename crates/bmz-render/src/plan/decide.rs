@@ -28,6 +28,7 @@ pub(super) fn plan_decide(
             select_master_volume: snapshot.skin_input.audio_volumes[0],
             select_key_volume: snapshot.skin_input.audio_volumes[1],
             select_bgm_volume: snapshot.skin_input.audio_volumes[2],
+            freq_semitones: snapshot.skin_input.freq_semitones,
             total_notes: snapshot.total_notes,
             select_chart_total_gauge: snapshot.chart_total_gauge,
             past_notes: snapshot.past_notes,

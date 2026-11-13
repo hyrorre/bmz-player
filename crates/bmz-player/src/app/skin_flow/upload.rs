@@ -62,6 +62,9 @@ impl WinitApp {
                     stats.max_upload_wait_us = stats
                         .max_upload_wait_us
                         .max(instant_elapsed_us_u64(result.upload_finished_at));
+                    let Some(result) = self.hold_prewarmed_upload(result) else {
+                        continue;
+                    };
                     if self.apply_uploaded_skin(result) {
                         stats.applied_count += 1;
                     }
@@ -73,10 +76,8 @@ impl WinitApp {
         stats
     }
 
-    /// 指定された kind のスキンがアップロードされ取り込まれるまでブロックして待つ。
-    /// scene 遷移直前 (特にプレイ開始) に呼ぶ。GPU アップロードは upload worker 上で
-    /// 進むため、main は worker からの受信を待つだけで重い同期処理は無い。
-    /// 先読みが間に合っていれば待ちはゼロ。
+    /// Startup only: install Select before the first frame. Interactive scene
+    /// transitions use request_scene_skin and keep dispatching frames/events.
     pub(super) fn ensure_skin_ready(&mut self, kind: SkinKind) {
         // Select の開始演出中でも、scene 遷移が skin を要求した場合は待機中の
         // decode 結果を直ちに GPU upload へ流す。
@@ -104,12 +105,19 @@ impl WinitApp {
         if kind == SkinKind::Play {
             self.skin.skin_pipeline.lr2_assets.previous_scene = Some(SkinKind::Play);
         }
+        self.poll_scene_skin_entries();
     }
 
     pub(super) fn ensure_result_skin_ready(&mut self, slot: ResultSkinSlot) {
         self.refresh_result_favorites();
         self.spawn_result_skin_decode_for(slot);
-        self.ensure_skin_ready(SkinKind::Result);
+        self.request_scene_skin(SkinKind::Result);
+        if !self.scene_skin_entry_waiting(SkinKind::Result) {
+            self.finish_result_skin_entry();
+        }
+    }
+
+    pub(super) fn finish_result_skin_entry(&mut self) {
         self.renderer.reset_result_skin_runtime();
         let (skin_bgm_volume, skin_se_volume) = self.result_skin_audio_volumes();
         let started = self.result.result_skin_audio.as_mut().is_some_and(|audio| {
@@ -127,9 +135,19 @@ impl WinitApp {
             .unwrap_or(0);
         self.clear_result_ir_scroll_input();
         self.skin.skin_pipeline.lr2_assets.previous_scene = Some(SkinKind::Result);
+        self.prewarm_select_skin_for_result_exit();
     }
 
     pub(super) fn ensure_result_skin_ready_for_entry(&mut self, slot: ResultSkinSlot) {
+        if slot == ResultSkinSlot::Normal && self.enter_result_with_prewarmed_skin() {
+            return;
+        }
+        self.discard_skin_prewarm(SkinKind::Result);
+        self.begin_result_skin_load_for_entry(slot);
+        self.ensure_result_skin_ready(slot);
+    }
+
+    pub(super) fn begin_result_skin_load_for_entry(&mut self, slot: ResultSkinSlot) {
         self.skin.skin_pipeline.begin_lr2_result_entry(
             slot == ResultSkinSlot::Course,
             self.result.finished_play.is_some() || self.result.finished_course.is_some(),
@@ -140,7 +158,6 @@ impl WinitApp {
         self.skin.skin_pipeline.result_source_selections.clear();
         self.skin.skin_pipeline.result_random_file_selections.clear();
         self.skin.last_result_skin_signature = None;
-        self.ensure_result_skin_ready(slot);
     }
 
     /// An LR2 Result inherits CONTINUE assets from the Play skin. When the attempt was
@@ -785,6 +802,7 @@ impl WinitApp {
         );
         if kind == SkinKind::Select
             && matches!(self.view_state(), AppViewState::Select)
+            && !self.scene_skin_entry_waiting(SkinKind::Select)
             && !self.take_lr2_skin_settings_reload()
         {
             self.restart_select_scene_timers();

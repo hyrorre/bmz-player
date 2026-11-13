@@ -68,6 +68,7 @@ mod long_end;
 mod long_note_headers;
 mod metadata;
 mod objects;
+mod prepare;
 mod random;
 mod sparse;
 mod text;
@@ -76,6 +77,7 @@ mod timing;
 use compat::*;
 use metadata::*;
 use objects::*;
+use prepare::*;
 use random::*;
 use sparse::*;
 use text::*;
@@ -246,98 +248,92 @@ fn import_with_layout<T: KeyLayoutMapper>(
 ) -> Result<IntermediateChart, ImportError> {
     let identity = compute_chart_identity(bytes);
     let raw_text = decode_bms_text(bytes, warnings);
-    let has_bms_random = source_text_has_bms_random(&raw_text);
-    let layout_text = if layout == ChartKeyLayout::pms(PmsKeyLayout::Standard) {
-        strip_pms_bme_upper_channels(&raw_text)
-    } else {
-        raw_text.clone()
-    };
-    let compatible_text = normalize_beatoraja_separators(&layout_text);
-    let text = apply_beatoraja_random_control(
-        &compatible_text,
+    let pms_standard = layout == ChartKeyLayout::pms(PmsKeyLayout::Standard);
+    if !kaleid::needs_interpretation(&raw_text, layout) {
+        // Keep main's single-pass preparation for ordinary charts.
+        let source = prepare_bms_source(
+            &raw_text,
+            pms_standard,
+            random_source,
+            bms_random_choices,
+            bms_switch_choices,
+            warnings,
+        );
+        return parse_prepared_with_layout::<T>(
+            source_path,
+            layout,
+            source,
+            &[],
+            identity,
+            random_source,
+            warnings,
+        )
+        .map(|(chart, _)| chart);
+    }
+    let text = resolve_kaleid_source(
+        &raw_text,
+        pms_standard,
         random_source,
         bms_random_choices,
         bms_switch_choices,
         warnings,
     );
+    let mut bms_headers = BTreeMap::new();
+    for line in raw_text.lines() {
+        insert_bms_header_line(&mut bms_headers, line);
+    }
+    let has_bms_random = raw_text.lines().any(declares_bms_random);
     crate::conditional::compile(&text, source_path, |text| {
-        parse_resolved_with_layout::<T>(
+        let mut chart = parse_resolved_with_layout::<T>(
             source_path,
             layout,
             text,
-            &raw_text,
-            has_bms_random,
             identity.clone(),
             random_source,
             warnings,
-        )
+        )?;
+        apply_raw_judge_rank_headers(&mut chart, &bms_headers);
+        if chart.metadata.source_url.is_empty() {
+            chart.metadata.source_url = bms_headers.get("URL").cloned().unwrap_or_default();
+        }
+        chart.metadata.append_url = append_url_from_headers(&bms_headers);
+        chart.metadata.bms_headers = bms_headers.clone();
+        chart.metadata.has_bms_random = has_bms_random;
+        Ok(chart)
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn parse_resolved_with_layout<T: KeyLayoutMapper>(
     source_path: &Path,
     layout: ChartKeyLayout,
     text: &str,
-    raw_text: &str,
-    has_bms_random: bool,
-    identity: bmz_core::chart::ChartIdentity,
+    identity: ChartIdentity,
     random_source: &BmsRandomSource,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
     let (hln_parse_text, hln_mode) = long_note_headers::preprocess(text);
     let kaleid = kaleid::extract::<T>(&hln_parse_text, layout);
-    let metadata_text = strip_empty_metadata_commands(&kaleid.text);
-    let lnobj_parse_text = strip_lnobj_commands(&metadata_text);
-    let bga_messages = extract_bga_message_lines(&lnobj_parse_text);
-    let source_texts = extract_source_texts(&lnobj_parse_text);
-    let (parse_text, sparse_messages) =
-        extract_sparse_bms_message_lines(&lnobj_parse_text, warnings);
-
-    let BmsOutput { bms, warnings: bms_warnings } = parse_bms::<T, _, _, _>(
-        &parse_text,
-        default_config_with_rng(JavaRandom::new(random_source_seed(random_source) as i64))
-            .key_mapper::<T>(),
-    );
-    for w in bms_warnings {
-        if let Some(w) = map_bms_warning(&w) {
-            warnings.push(w);
-        }
-    }
-    let mut bms = bms.map_err(|err| ImportError::Parse {
-        path: source_path.to_path_buf(),
-        message: format!("{err:?}"),
-    })?;
-    inject_sparse_bms_messages::<T>(&mut bms, &sparse_messages, warnings);
-    let mut extra_objects = bga_messages_to_intermediate_objects(
-        &bga_messages,
-        bms_uses_base62_obj_ids(&bms),
+    let source = prepare_bms_source(
+        &kaleid.text,
+        false,
+        random_source,
+        &mut Vec::new(),
+        &mut Vec::new(),
         warnings,
     );
-    // bms-rs stores BGA changes in a single map keyed only by time, so simultaneous
-    // Base/Poor/Layer changes overwrite each other. Use the source-derived events instead.
-    bms.bmp.bga_changes.clear();
-    // Text events have the same limitation; bms-rs also drops the rest of a #99 message
-    // after an undefined object.
-    let source_texts = source_text_objects(&source_texts, bms_uses_base62_obj_ids(&bms), warnings);
-    extra_objects.extend(source_texts.objects);
-    extra_objects.extend(kaleid.objects);
-    bms.text.text_events.clear();
-
-    let mut intermediate = build_intermediate_from_bms_with_extra_objects::<T>(
-        &bms,
+    let (mut intermediate, base62_obj_ids) = parse_prepared_with_layout::<T>(
+        source_path,
         layout,
-        &extra_objects,
+        source,
+        &kaleid.objects,
+        identity,
+        random_source,
         warnings,
     )?;
-    restore_default_poor_bga(&mut intermediate, bms.bmp.poor_bmp.as_deref());
     intermediate.metadata.kaleid.source = kaleid.features;
     intermediate.metadata.kaleid.declared = kaleid.features;
     intermediate.metadata.kaleid.diagnostics = kaleid.diagnostics;
-    intermediate.lnobj_wav_key =
-        extract_lnobj_wav_key(text, bms_uses_base62_obj_ids(&bms), warnings);
-    intermediate.typed_lnobj =
-        long_end::typed_markers(text, bms_uses_base62_obj_ids(&bms), warnings);
+    intermediate.typed_lnobj = long_end::typed_markers(text, base62_obj_ids, warnings);
     for warning in warnings.iter() {
         if let ImportWarning::ParserDiagnostic { code, message } = warning
             && matches!(code.as_str(), "InvalidCnobj" | "InvalidHcnobj" | "InvalidHlnobj")
@@ -378,21 +374,64 @@ fn parse_resolved_with_layout<T: KeyLayoutMapper>(
         matches!(object.kind, IntermediateObjectKind::LongChannelNote { .. } if hln_mode)
         || matches!(object.kind, IntermediateObjectKind::VisibleNote { wav_key: Some(key), .. }
             if intermediate.typed_lnobj.iter().any(|(marker, mode)| *marker == key && *mode == LongNoteMode::Hln)));
-    long_end::restore_marker_overlays::<T>(
-        text,
-        layout,
-        bms_uses_base62_obj_ids(&bms),
-        &mut intermediate,
-    );
+    long_end::restore_marker_overlays::<T>(text, layout, base62_obj_ids, &mut intermediate);
     if hln_mode {
         intermediate.metadata.kaleid.declared.hln = true;
         intermediate.metadata.long_note_mode = LongNoteMode::Hln;
         intermediate.metadata.long_note_mode_defined = true;
     }
-    let bms_headers = extract_bms_headers_from_text(raw_text);
-    intermediate.metadata.has_bms_random = has_bms_random;
+    Ok(intermediate)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_prepared_with_layout<T: KeyLayoutMapper>(
+    source_path: &Path,
+    layout: ChartKeyLayout,
+    source: PreparedBmsSource,
+    kaleid_objects: &[IntermediateObject],
+    identity: ChartIdentity,
+    random_source: &BmsRandomSource,
+    warnings: &mut Vec<ImportWarning>,
+) -> Result<(IntermediateChart, bool), ImportError> {
+    let BmsOutput { bms, warnings: bms_warnings } = parse_bms::<T, _, _, _>(
+        &source.parse_text,
+        default_config_with_rng(JavaRandom::new(random_source_seed(random_source) as i64))
+            .key_mapper::<T>(),
+    );
+    for w in bms_warnings {
+        if let Some(w) = map_bms_warning(&w) {
+            warnings.push(w);
+        }
+    }
+    let mut bms = bms.map_err(|err| ImportError::Parse {
+        path: source_path.to_path_buf(),
+        message: format!("{err:?}"),
+    })?;
+    inject_sparse_bms_messages::<T>(&mut bms, &source.sparse_messages, warnings);
+    let base62_obj_ids = bms_uses_base62_obj_ids(&bms);
+    let mut extra_objects =
+        bga_messages_to_intermediate_objects(&source.bga_messages, base62_obj_ids, warnings);
+    // bms-rs stores BGA changes in a single map keyed only by time, so simultaneous
+    // Base/Poor/Layer changes overwrite each other. Use the source-derived events instead.
+    bms.bmp.bga_changes.clear();
+    // Text events have the same limitation; bms-rs also drops the rest of a #99 message
+    // after an undefined object.
+    let source_texts = source_text_objects(&source.source_texts, base62_obj_ids, warnings);
+    extra_objects.extend(source_texts.objects);
+    extra_objects.extend_from_slice(kaleid_objects);
+    bms.text.text_events.clear();
+
+    let mut intermediate = build_intermediate_from_bms_with_extra_objects::<T>(
+        &bms,
+        layout,
+        &extra_objects,
+        warnings,
+    )?;
+    restore_default_poor_bga(&mut intermediate, bms.bmp.poor_bmp.as_deref());
+    intermediate.lnobj_wav_key = lnobj_wav_key(&source.lnobj_lines, base62_obj_ids, warnings);
+    let bms_headers = source.bms_headers;
+    intermediate.metadata.has_bms_random = source.has_bms_random;
     intermediate.metadata.miss_text = source_texts.miss_text;
-    intermediate.metadata.bms_headers = bms_headers.clone();
     apply_raw_judge_rank_headers(&mut intermediate, &bms_headers);
     intermediate.metadata.source_url = bms
         .metadata
@@ -402,8 +441,9 @@ fn parse_resolved_with_layout<T: KeyLayoutMapper>(
         .or_else(|| bms_headers.get("URL").cloned())
         .unwrap_or_default();
     intermediate.metadata.append_url = append_url_from_headers(&bms_headers);
+    intermediate.metadata.bms_headers = bms_headers;
     intermediate.identity = identity;
-    Ok(intermediate)
+    Ok((intermediate, base62_obj_ids))
 }
 
 pub(crate) fn build_intermediate_from_bms<T: KeyLayoutMapper>(
@@ -575,3 +615,7 @@ pub(crate) fn detect_pms_variant(source: &str) -> (PmsKeyLayout, bool) {
 #[cfg(test)]
 #[path = "bms_rs_adapter/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "bms_rs_adapter/import_bench.rs"]
+mod import_bench;

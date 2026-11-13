@@ -5,8 +5,8 @@ use crate::config::app_config::{AppConfig, AudioBackend, AudioBufferSizeMode};
 use crate::config::app_settings_registry::{AppSettingsEntryId, format_app_settings_value};
 use crate::config::key_config::{
     KEY_BINDING_SLOTS, KEY_CONFIG_MODES, KeyBindingGroup, KeyBindingTarget, binding_row_label,
-    format_play_binding, key_binding_targets_for_group, key_mode_binding_targets,
-    key_mode_settings_path,
+    binding_slots_for_group, format_play_binding, key_binding_targets_for_group,
+    key_mode_binding_targets, key_mode_settings_path,
 };
 use crate::config::profile_config::ProfileConfig;
 use crate::config::settings_registry::{SettingsEntryId, format_settings_value};
@@ -382,8 +382,7 @@ fn settings_folder(path: &str, name: String) -> SelectItem {
 }
 
 fn audio_items(app_config: &AppConfig) -> Vec<SelectItem> {
-    let mut entries =
-        vec![AppSettingsEntryId::AudioBackend, AppSettingsEntryId::AudioScheduleAhead];
+    let mut entries = vec![AppSettingsEntryId::AudioBackend];
     if app_config.audio.backend == AudioBackend::Wasapi {
         entries.push(AppSettingsEntryId::AudioOutputMode);
     }
@@ -461,7 +460,7 @@ fn key_mode_folder_items(locale: AppLocale) -> Vec<SelectItem> {
 }
 
 fn key_group_binding_items(group: KeyBindingGroup) -> Vec<SelectItem> {
-    KEY_BINDING_SLOTS
+    binding_slots_for_group(group)
         .iter()
         .copied()
         .flat_map(|slot| {
@@ -516,7 +515,9 @@ fn app_config_items(entries: &[AppSettingsEntryId]) -> Vec<SelectItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::key_config::{COMMON_ACTIONS, KeyBindingSlot, ScratchDirection};
+    use crate::config::key_config::{
+        COMMON_ACTIONS, COMMON_KEY_BINDING_SLOTS, KeyBindingSlot, ScratchDirection,
+    };
     use crate::config::profile_config::{InputActionConfig, LaneConfig};
 
     #[test]
@@ -704,7 +705,7 @@ mod tests {
     #[test]
     fn settings_keys_common_lists_configurable_actions() {
         let items = load_settings_items(CONFIG_KEYS_COMMON_PATH);
-        assert_eq!(items.len(), COMMON_ACTIONS.len() * KEY_BINDING_SLOTS.len() + 1);
+        assert_eq!(items.len(), COMMON_ACTIONS.len() * COMMON_KEY_BINDING_SLOTS.len() + 1);
         assert!(matches!(items.first(), Some(SelectItem::SettingsBack)));
         assert!(matches!(
             &items[1],
@@ -932,6 +933,8 @@ mod tests {
             SettingsEntryId::Hidden,
             SettingsEntryId::Constant,
             SettingsEntryId::ConstantFadeMs,
+            SettingsEntryId::HispeedTransitionMs,
+            SettingsEntryId::InvertE2KeyGreenNumber,
         ];
         let cases = [
             (

@@ -14,6 +14,8 @@ impl WinitApp {
         raw_input_bridge: Option<crate::input::rawinput::RawInputBridge>,
     ) -> Result<Box<Self>> {
         let constructor_started_at = Instant::now();
+        let constructor_phase = StartupPhase::begin(startup_started_at, "winit_app_new");
+        let phase = StartupPhase::begin(startup_started_at, "constructor_options_and_ir_handle");
         crate::cli::configure_latency_stall_test(options.latency_stall_test);
         crate::cli::configure_latency_event_loop_probe(options.latency_event_loop_probe);
         crate::cli::configure_latency_legacy_wayland_present(
@@ -35,13 +37,18 @@ impl WinitApp {
             boot.app_config.video.renderer = cli_renderer;
         }
 
+        phase.complete();
+        let phase =
+            StartupPhase::begin(startup_started_at, "startup_difficulty_table_fetch_urls_for_boot");
         // ネットワークへ出る前に、DBから必要なURLだけ選定しておく。実際の取得は
         // 最初の描画後に開始するため、初回起動でもウィンドウ表示を待たせない。
         let startup_table_fetch_urls = if viewer_mode {
             Vec::new()
         } else {
-            startup_difficulty_table_fetch_urls_for_boot(&boot)
+            startup_difficulty_table_fetch_urls_for_boot(&boot, startup_started_at)
         };
+        phase.complete();
+        let phase = StartupPhase::begin(startup_started_at, "initial_select_settings");
         let startup_rival_sync = if viewer_mode {
             None
         } else {
@@ -56,15 +63,21 @@ impl WinitApp {
         );
         let select_sort = SelectSort::from_str_or_default(&boot.profile_config.select.sort);
         let mut collection_cache = crate::screens::select_model::SelectCollectionCache::default();
-        let virtual_folders =
-            crate::screens::select_model::VirtualFolderCatalog::load(&boot.profile_paths.root_dir)
-                .map_err(|error| format!("{error:#}"));
+        phase.complete();
+        let phase = StartupPhase::begin(startup_started_at, "virtual_folder_catalog_load");
+        let virtual_folders = phase
+            .result(crate::screens::select_model::VirtualFolderCatalog::load(
+                &boot.profile_paths.root_dir,
+            ))
+            .map_err(|error| format!("{error:#}"));
+        let phase = StartupPhase::begin(startup_started_at, "load_items_for_stack");
         let (select_items, select_mode_filter) = if viewer_mode {
+            phase.complete();
             (Vec::new(), initial_mode_filter)
         } else {
-            load_items_for_stack(
+            phase.result(load_items_for_stack_at_startup(
                 SelectListContext {
-                    boot: &boot,
+                    boot: (&boot).into(),
                     collections: &mut collection_cache,
                     virtual_folders: &virtual_folders,
                 },
@@ -73,8 +86,11 @@ impl WinitApp {
                 initial_mode_filter,
                 select_difficulty_filter,
                 select_sort,
-            )?
+                startup_started_at,
+            ))?
         };
+        let phase =
+            StartupPhase::begin(startup_started_at, "startup_play_options_and_input_bindings");
         boot.profile_config.select.mode_filter = select_mode_filter.as_str().to_string();
         if !viewer_mode
             && let Some(key_mode) = crate::app::select_flow_mode_config::select_item_play_mode(
@@ -115,20 +131,28 @@ impl WinitApp {
         let double_option = double_option_from_profile(boot.profile_config.play.double_option);
         let hs_fix_option = hs_fix_option_from_profile(boot.profile_config.play.hs_fix);
         let target_option = target_option_from_profile(boot.profile_config.play.target);
-        let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
+        let select_keys = SceneInputResolver::from_profile(&boot.profile_config.input);
+        phase.complete();
+        let phase = StartupPhase::begin(startup_started_at, "renderer_default");
         let mut renderer = Box::new(Renderer::default());
+        phase.complete();
+        let phase = StartupPhase::begin(startup_started_at, "renderer_initial_configuration");
         renderer.set_default_font_search_paths(vec![boot.app_paths.bundled_noto_cjk_font_root()]);
         renderer.set_default_font_coverage(boot.profile_config.ui.locale().font_coverage());
         renderer
             .set_internal_resolution_mode(config_internal_resolution_mode(&boot.app_config.video));
+        phase.complete();
         let before_catalog_ms = constructor_started_at.elapsed().as_millis();
+        let phase = StartupPhase::begin(startup_started_at, "skin_catalog_scan_dispatch");
         // 一覧のheader走査は選曲スキンのdecodeと独立しているため並行する。
         // 起動では待たず、設定画面等が最初に一覧を使うときにjoinする。
         let skin_catalog = if viewer_mode {
+            phase.complete();
             SkinCatalogState::ready(SkinCatalog::default())
         } else {
-            SkinCatalogState::scan(boot.app_paths.clone())?
+            phase.result(SkinCatalogState::scan(boot.app_paths.clone()))?
         };
+        let phase = StartupPhase::begin(startup_started_at, "player_stats_snapshot");
         // Frontend skins read the profile statistics while loading.
         let player_stats = if viewer_mode {
             PlayerStatsSnapshot::default()
@@ -139,7 +163,9 @@ impl WinitApp {
                 boot.profile_config.statistics.day_start_hour,
             )
         };
+        phase.complete();
         let skins_started_at = Instant::now();
+        let phase = StartupPhase::begin(startup_started_at, "load_initial_skin_textures");
         let mut skin_pipeline = SkinPipelineRuntime::new();
         skin_pipeline.external_access.clone_from(&boot.profile_config.skin.external_access);
         let (
@@ -162,13 +188,16 @@ impl WinitApp {
             !viewer_mode,
             options.lua_skin_runtime_mode,
             boot.app_config.select.experimental_detail_options,
+            startup_started_at,
         );
         skin_pipeline.set_pending(SkinKind::Select, pending_select_skin);
         skin_pipeline.set_pending(SkinKind::Decide, pending_decide_skin);
         skin_pipeline.set_pending(SkinKind::Result, pending_result_skin);
+        phase.complete();
         let skins_ms = skins_started_at.elapsed().as_millis();
         let now = Instant::now();
 
+        let phase = StartupPhase::begin(startup_started_at, "gamepad_initialization");
         let mut gamepad = if boot.app_config.input.gamepad_enabled {
             initialize_gamepad_backend(
                 boot.app_config.input.gamepad_backend,
@@ -191,6 +220,8 @@ impl WinitApp {
             );
         }
 
+        phase.complete();
+        let phase = StartupPhase::begin(startup_started_at, "obs_and_system_sound_catalog");
         let initial_window_mode = boot.app_config.video.mode.clone();
         let applied_obs_config = boot.app_config.obs.clone();
         let obs_controller = crate::obs::ObsController::spawn(applied_obs_config.clone());
@@ -205,6 +236,8 @@ impl WinitApp {
         } else {
             system_sound_catalog_from_boot(&boot)
         };
+        phase.complete();
+        let phase = StartupPhase::begin(startup_started_at, "select_assets_and_result_signature");
         let select_preview =
             system_audio.as_ref().map(|audio| SelectChartPreview::new(audio.engine()));
         let select_assets = SelectAssetRuntime::new(
@@ -231,10 +264,13 @@ impl WinitApp {
                 ),
             )
         });
+        phase.complete();
+        let phase = StartupPhase::begin(startup_started_at, "difficulty_tables_for_ui");
         let difficulty_tables = if viewer_mode {
+            phase.complete();
             Vec::new()
         } else {
-            match boot.library_db.list_difficulty_tables() {
+            match phase.result(boot.library_db.list_difficulty_tables()) {
                 Ok(tables) => tables,
                 Err(error) => {
                     tracing::warn!(%error, "failed to list difficulty tables for egui");
@@ -242,23 +278,27 @@ impl WinitApp {
                 }
             }
         };
+        let phase = StartupPhase::begin(startup_started_at, "select_folder_summary_runtime");
         let select_folder_summary_ln_policy = boot.profile_config.play.ln_mode_policy;
         let select_folder_summary_rule_mode = boot.profile_config.play.rule_mode;
         let select_folder_summaries = if viewer_mode {
-            SelectFolderSummaryRuntime::disabled(
+            let summaries = SelectFolderSummaryRuntime::disabled(
                 &folder_stack,
                 select_folder_summary_ln_policy,
                 select_folder_summary_rule_mode,
-            )
+            );
+            phase.complete();
+            summaries
         } else {
-            SelectFolderSummaryRuntime::new(
+            phase.result(SelectFolderSummaryRuntime::new(
                 boot.app_paths.library_db.clone(),
                 boot.profile_paths.score_db.clone(),
                 &folder_stack,
                 select_folder_summary_ln_policy,
                 select_folder_summary_rule_mode,
-            )?
+            ))?
         };
+        let phase = StartupPhase::begin(startup_started_at, "app_state_assembly");
         let rian_table_identity = (!viewer_mode)
             .then(|| RianTableIdentity::from_ir_config(&boot.profile_config.ir))
             .flatten();
@@ -273,12 +313,15 @@ impl WinitApp {
         // too little of Windows' main-thread stack for synchronous skin decoding.
         let mut app = Box::new(Self {
             startup_error: None,
+            surface_error: None,
             boot,
             window: None,
             first_frame_startup_completed: false,
             shutdown_requested,
             renderer,
-            input: AppInputRuntime::default(),
+            input: AppInputRuntime::with_gamepad_slots(
+                crate::input::gamepad::GamepadSlotMap::from_device_ids(gamepad_slots),
+            ),
             raw_input_bridge,
             gamepad,
             event_loop_probe: if options.latency_event_loop_probe {
@@ -297,6 +340,7 @@ impl WinitApp {
             viewer_paused_play_elapsed: None,
             skip_result: options.skip_result,
             select: SelectRuntimeState {
+                list_loader: Default::default(),
                 autoplay_folder: None,
                 select_ir: crate::screens::select_ir::SelectIrRanking::default(),
                 ir_battle: crate::app::select_ir_battle::SelectIrBattleRuntime::default(),
@@ -308,7 +352,6 @@ impl WinitApp {
                 select_distribution_cache: RefCell::new(HashMap::new()),
                 lr2_select_cache: Box::default(),
                 lr2_skin_settings: Box::default(),
-                collection_cache,
                 virtual_folders,
                 select_distributions: RefCell::new(Default::default()),
                 difficulty_tables,
@@ -416,6 +459,7 @@ impl WinitApp {
                 result_favorite_song: false,
                 result_ir: None,
                 last_play_session_mode: SessionMode::Normal,
+                last_play_freq_semitones: 0,
                 result_scene_started_at: now,
                 lr2_result_progress: Default::default(),
                 lr2_result_epoch: None,
@@ -428,6 +472,7 @@ impl WinitApp {
                 result_ir_scroll: ResultIrScrollRuntime::default(),
             },
             jobs: AppJobs {
+                config_saver: config_saver::ConfigSaver::new(),
                 profile_change: None,
                 ir_sync: None,
                 ir_manual: ir_manual_handle,
@@ -476,8 +521,10 @@ impl WinitApp {
                 app_started_at: now,
                 startup_started_at,
                 first_present_logged: false,
+                first_present_phase: None,
             },
             skin: SkinRuntimeState {
+                scene_entry_waits: HashSet::new(),
                 lua_runtime_mode: options.lua_skin_runtime_mode,
                 skin_catalog,
                 skin_defs_cache: BTreeMap::new(),
@@ -488,6 +535,8 @@ impl WinitApp {
                 pending_skin_render_probe: None,
                 last_play_skin_signature: None,
                 last_result_skin_signature: initial_result_skin_signature,
+                result_skin_prewarm: None,
+                select_skin_prewarm: None,
             },
             audio: AppAudioRuntimeState {
                 pending_audio_apply: false,
@@ -525,6 +574,8 @@ impl WinitApp {
             course_editor_cache: course_editor::CourseEditorDataCache::default(),
             meta_animations: Default::default(),
         });
+        phase.complete();
+        let phase = StartupPhase::begin(startup_started_at, "constructor_final_setup");
         if options.boot_result_sample {
             tracing::info!("booting directly into synthetic result screen");
             app.result.finished_play = Some(debug_boot_finished_play_session());
@@ -543,6 +594,7 @@ impl WinitApp {
             app.start_system_sound_load();
         }
         app.sync_discord_presence_config();
+        phase.complete();
         tracing::info!(
             before_catalog_ms,
             skins_ms,
@@ -550,6 +602,7 @@ impl WinitApp {
             constructor_total_ms = constructor_started_at.elapsed().as_millis(),
             "startup constructor timings"
         );
+        constructor_phase.complete();
         Ok(app)
     }
 }

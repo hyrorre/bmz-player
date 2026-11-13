@@ -8,19 +8,22 @@ pub(super) fn open(
     let count = preflight(&mut file, control)?;
     file.seek(SeekFrom::Start(0))?;
     let mut archive = ::zip::ZipArchive::new(file)?;
-    ensure!(archive.offset() == 0, "self-extracting ZIP archives are unsupported");
+    if archive.offset() != 0 {
+        return Err(super::super::unsupported("self-extracting ZIP archives are unsupported"));
+    }
     ensure!(archive.len() == count, "duplicate ZIP directory entries");
     let mut entries = Vec::with_capacity(count);
     for index in 0..count {
         let entry = archive.by_index_raw(index)?;
-        ensure!(!entry.encrypted(), "encrypted song archives are unsupported");
-        ensure!(
-            matches!(
-                entry.compression(),
-                ::zip::CompressionMethod::Stored | ::zip::CompressionMethod::Deflated
-            ),
-            "unsupported ZIP compression method"
-        );
+        if entry.encrypted() {
+            return Err(super::super::unsupported("encrypted song archives are unsupported"));
+        }
+        if !matches!(
+            entry.compression(),
+            ::zip::CompressionMethod::Stored | ::zip::CompressionMethod::Deflated
+        ) {
+            return Err(super::super::unsupported("unsupported ZIP compression method"));
+        }
         let directory = entry.is_dir();
         if let Some(mode) = entry.unix_mode() {
             safety::regular_mode(mode, directory)?;

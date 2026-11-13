@@ -71,8 +71,10 @@ pub(super) fn normal_applied_arrange(
     seed: i64,
     legacy_seed: bool,
     s_random_scheme: SRandomScheme,
+    h_random_threshold_ms: Option<u32>,
 ) -> AppliedArrange {
     AppliedArrange {
+        source_key_mode: None,
         arrange: ArrangeOption::Normal,
         arrange_2p: ArrangeOption::Normal,
         double_option: DoubleOption::Off,
@@ -81,7 +83,7 @@ pub(super) fn normal_applied_arrange(
         legacy_seed,
         s_random_scheme,
         s_random_scheme_2p: None,
-        h_random_threshold_ms: None,
+        h_random_threshold_ms,
         bms_random_choices: Vec::new(),
         bms_switch_choices: Vec::new(),
         pattern: None,
@@ -89,6 +91,7 @@ pub(super) fn normal_applied_arrange(
         seven_to_nine_pattern: SevenToNinePattern::default(),
         seven_to_nine_type: SevenToNineType::default(),
         seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+        freq_semitones: 0,
     }
 }
 
@@ -113,13 +116,19 @@ pub(super) fn apply_arrange_internal(
     let key_mode = chart.metadata.key_mode;
     let used_seed = seed.unwrap_or_else(generate_arrange_seed);
     if arrange_requires_scratch(arrange) && !key_mode_has_scratch(key_mode) {
-        return normal_applied_arrange(used_seed, legacy_seed, s_random_scheme);
+        return normal_applied_arrange(
+            used_seed,
+            legacy_seed,
+            s_random_scheme,
+            h_random_threshold_ms,
+        );
     }
 
     if let Some(perm) = pattern {
         let perm_usize: Vec<usize> = perm.iter().map(|&i| i as usize).collect();
         apply_lane_permutation(chart, &perm_usize);
         return AppliedArrange {
+            source_key_mode: None,
             arrange,
             arrange_2p: ArrangeOption::Normal,
             double_option: DoubleOption::Off,
@@ -136,15 +145,19 @@ pub(super) fn apply_arrange_internal(
             seven_to_nine_pattern: SevenToNinePattern::default(),
             seven_to_nine_type: SevenToNineType::default(),
             seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+            freq_semitones: 0,
         };
     }
 
     match arrange {
-        ArrangeOption::Normal => normal_applied_arrange(used_seed, legacy_seed, s_random_scheme),
+        ArrangeOption::Normal => {
+            normal_applied_arrange(used_seed, legacy_seed, s_random_scheme, h_random_threshold_ms)
+        }
         ArrangeOption::Mirror => {
             let perm = mirror_permutation(key_mode);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
+                source_key_mode: None,
                 arrange: ArrangeOption::Mirror,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
@@ -161,12 +174,14 @@ pub(super) fn apply_arrange_internal(
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
                 seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+                freq_semitones: 0,
             }
         }
         ArrangeOption::Random => {
             let perm = random_lane_permutation(used_seed, key_mode, false, legacy_seed);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
+                source_key_mode: None,
                 arrange: ArrangeOption::Random,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
@@ -183,12 +198,14 @@ pub(super) fn apply_arrange_internal(
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
                 seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+                freq_semitones: 0,
             }
         }
         ArrangeOption::RRandom => {
             let perm = rotate_lane_permutation(used_seed, key_mode, false, legacy_seed);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
+                source_key_mode: None,
                 arrange: ArrangeOption::RRandom,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
@@ -205,12 +222,14 @@ pub(super) fn apply_arrange_internal(
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
                 seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+                freq_semitones: 0,
             }
         }
         ArrangeOption::RandomEx => {
             let perm = random_lane_permutation(used_seed, key_mode, true, legacy_seed);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
+                source_key_mode: None,
                 arrange: ArrangeOption::RandomEx,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
@@ -227,12 +246,14 @@ pub(super) fn apply_arrange_internal(
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
                 seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+                freq_semitones: 0,
             }
         }
         ArrangeOption::FRandom | ArrangeOption::MFRandom => {
             let perm = f_random_lane_permutation(used_seed, key_mode, arrange, legacy_seed);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
+                source_key_mode: None,
                 arrange,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
@@ -249,6 +270,7 @@ pub(super) fn apply_arrange_internal(
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
                 seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+                freq_semitones: 0,
             }
         }
         ArrangeOption::SRandom
@@ -265,6 +287,7 @@ pub(super) fn apply_arrange_internal(
                 h_random_threshold_ms,
             );
             AppliedArrange {
+                source_key_mode: None,
                 arrange,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
@@ -281,6 +304,7 @@ pub(super) fn apply_arrange_internal(
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
                 seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+                freq_semitones: 0,
             }
         }
     }
@@ -333,6 +357,7 @@ pub fn apply_arrange_pair(
         let perm_usize: Vec<usize> = perm.iter().map(|&i| i as usize).collect();
         apply_lane_permutation(chart, &perm_usize);
         return AppliedArrange {
+            source_key_mode: None,
             arrange: arrange_1p,
             arrange_2p,
             double_option: DoubleOption::Off,
@@ -349,6 +374,7 @@ pub fn apply_arrange_pair(
             seven_to_nine_pattern: SevenToNinePattern::default(),
             seven_to_nine_type: SevenToNineType::default(),
             seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+            freq_semitones: 0,
         };
     }
 
@@ -381,6 +407,7 @@ pub fn apply_arrange_pair(
     }
 
     AppliedArrange {
+        source_key_mode: None,
         arrange: arrange_1p,
         arrange_2p,
         double_option: DoubleOption::Off,
@@ -397,6 +424,7 @@ pub fn apply_arrange_pair(
         seven_to_nine_pattern: SevenToNinePattern::default(),
         seven_to_nine_type: SevenToNineType::default(),
         seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+        freq_semitones: 0,
     }
 }
 

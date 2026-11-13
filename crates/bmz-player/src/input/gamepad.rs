@@ -49,13 +49,21 @@ impl GamepadSlotMap {
         }
     }
 
+    /// 論理スロット (1P = 1, 2P = 2) に割り当たった実機。
+    ///
+    /// 未割り当てのスロットは `None` のまま返す。既定IDへ補完すると、重複を避けて
+    /// 未解決にしたスロットが別側と同じ実機を指すことがあるため補完しない。
     pub fn device_id_for_player(self, player_index: u32) -> Option<DeviceId> {
         let slot = player_index.checked_sub(1)? as usize;
-        if slot >= self.slot_device_ids.len() {
-            return Some(gamepad_device_id_from_backend_index(slot as u32));
-        }
-        self.slot_device_ids[slot]
-            .or_else(|| Some(gamepad_device_id_from_backend_index(slot as u32)))
+        self.slot_device_ids.get(slot).copied().flatten()
+    }
+
+    /// 実機が割り当てられている論理スロット番号 (1P = 1, 2P = 2)。
+    pub fn player_for_device(self, device: DeviceId) -> Option<u32> {
+        self.slot_device_ids
+            .iter()
+            .position(|assigned| *assigned == Some(device))
+            .map(|slot| slot as u32 + 1)
     }
 }
 

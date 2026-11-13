@@ -146,6 +146,7 @@ pub(crate) fn compile_bmson(
             source: path.into(),
             positions: BTreeMap::new(),
             voice_ids: BTreeMap::new(),
+            bga_assets: None,
             margin: TimeUs(0),
             transform: None,
         },

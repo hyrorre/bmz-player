@@ -43,6 +43,10 @@ region・scheduler・判定状態は引き継ぎません。cacheはプロセス
 
 ## 入力と時計
 
+ロード時に変換済み譜面のノートID・HCN区間索引と判定map容量を準備します。
+入力候補とMineは時刻窓から調べ、HCNは現在時刻を含み得る区間だけ更新します。
+別の譜面に差し替わった場合は索引を使わず、通常の探索へ戻ります。
+
 - Windowsキーボードは入力専用スレッドのmessage-only windowでRaw Inputを受け取ります。
   message取得時に既存`monotonic_timestamp_ns()`でtimestampを確定します。
   foreground windowを入力スレッドでも確認します。キーのrepeat / releaseとscancodeは
@@ -55,6 +59,11 @@ region・scheduler・判定状態は引き継ぎません。cacheはプロセス
   scratch停止は同じqueueの1ms timerで確認します。履歴の軸処理は入力サンプル時刻で進めます。
 - Gameplayに送る入力と、メニュー・キー設定用のUIコピーは別キューにします。
   UIのコピーが滞留してもgameplayの配送には影響しません。
+- window/event-loopスレッドのUIコピーは、`ControlInputEvent`から`input_resolve::resolve_input`だけを通して
+  機器・スロット・設定対象モードを解決し、解決済みの`ResolvedInput`から操作を決めます。
+  進行中のプレー（読み込み中・プラクティスを含む）では、UIコピーもノーツ入力と同じく開始時の1P / 2Pの割り当てで解決します。
+  解決の規則と、入力名を直接見る残りの箇所は[操作方法](controls.md#1p--2pの入力の解決)と
+  [作業記録](../notes/2026/2026-11-11-input-resolution-pipeline.md)を参照してください。
 - macOS / Linuxのゲームパッドも独立取得します。macOSキーボードは`macos-iohid` featureで有効化したIOHID専用run loop、
   またはmacOS 11以降のGCKeyboard専用dispatch queueで独立取得できます。
   winitを選んだ場合とLinuxではwindow/event-loop停止中のキーボード取得遅延が残ります。
@@ -86,15 +95,10 @@ CPAL callbackとnative backendが共有するmix・PCM変換・buffer・診断�
 タイムスタンプを判定時計へ戻しません。入力の `InputTimestampAnchor` も同じ1回の
 `Instant` 観測から単調時刻と譜面時刻を求め、別々の取得間に入るスレッド停止を除きます。
 
-本体設定 `audio.schedule_ahead`（既定 `true`）で次の2方式を選びます。演奏を開く時点の保存値を使い、
-音声デバイスは開き直しません。
+BGM・自動キー音（フルオートを含む）は、常に実時間100ms先までシステム時刻のdeadlineで予約します。
+押鍵に応じたキー音・判定ガイド音は処理後に即時要求します。旧設定 `audio.schedule_ahead` は無視します。
 
-| 設定 | BGM・自動キー音（フルオートを含む） | 押鍵に応じたキー音・判定ガイド音 |
-|---|---|---|
-| ON | 実時間100ms先までシステム時刻のdeadlineで予約 | 処理後に即時要求 |
-| OFF | 譜面上の時刻に達したwakeで即時要求 | 処理後に即時要求 |
-
-ONの予約は `ScheduledSound.start_time` に `Instant` のまま保持します。各callbackで
+予約は `ScheduledSound.start_time` に `Instant` のまま保持します。各callbackで
 バッファ先頭の時刻と `current_frame` を対応付け、そのバッファに入る予約だけを
 frameへ変換します。曲開始時のframeと公称レートによる固定変換をライブ予約には使いません。
 
@@ -120,7 +124,7 @@ callback間隔が供給範囲を許容幅より超えたら、停止として平
 供給範囲は前回・今回のバッファの長い方、許容幅は短い方のバッファから求めた20msかつ2バッファ分です。
 初期化の後は単純平均から始め、1回のcallback遅配の影響を抑えます。
 
-遅れたBGMは既存のcatch-up、キー音はサンプル先頭を保持します。OFFはどちらも先頭を保持します。
+遅れたBGMは既存のcatch-up、キー音はサンプル先頭を保持します。
 即時要求は次に描画する音声バッファの先頭で発声し、絶対frame 0への予約とは区別します。
 同じ音源は解決後の開始frame順に処理し、同じ開始位置の要求はバッチをまたいでも投入順を維持します。
 先読み幅は25～300%の再生速度を考慮し、wakeの期限も同じ幅を使います。
@@ -175,6 +179,13 @@ consumerは取得したAudioClockの現在時刻で、ノーツ・Mine・LN端�
 STOP、SCROLL/SPEED、CONSTANT、note retention、PMS見逃し表示の計算は準備画面と共通です。
 consumerの投影はgameplayのadvance、入力判定、audio enqueueを呼ばず、交換lockの外で行います。
 
+KEYON / KEYOFF・HOLD・HCN・ゲージ増加 / 最大・FULLCOMBOの演出は、publicationへ保持した
+開始時刻からconsumerの譜面時刻で経過時間を求め直します。相手側のゲージ・FULLCOMBOも同様です。
+RHYTHM・4分拍・ENDOFNOTEは現在の譜面位置から再計算し、同じsnapshotを再利用しても進めます。
+押下 / 解放の識別には元の開始時刻を使い、画面時計と譜面時計の差や再生速度、ms丸めによる
+開始時刻の揺れで新しい入力と判断しません。準備中は画面時計を使い、開始前のキャンセルでも
+終了演出へ経過時間と入力状態を引き継ぎます。
+
 PMS見逃しノーツの落下計算は、譜面準備時に作る`MissedNoteFallCache`を共有します。
 BPMごとの累積落下量（STOP中は一定）と各ノーツのSTOP終了時刻を保持し、
 現在時刻と落下開始時刻の累積値の差で位置を求めます。判定幅は現在のwindowから適用します。
@@ -220,6 +231,74 @@ enqueue時とcallbackの適用時に検査します。旧workerの遅い送信�
 workerはスコア確定時・終端遷移時にimmutable `FinishSessionSnapshot`とgraphを発行します。
 通常play、course、replay、abort、結果画面への遷移はこの結果からstorage / IRの保存・送信経路を呼びます。
 UIは終了要求を送った直後の古い観測値を保存せず、workerの確定結果を待ちます。
+
+### 採点の確定とResultのゲージ履歴
+
+採点は1プレイにつき一度だけ閉じます。`advance_session_frame`がその更新で取得した入力・
+見逃し・地雷・LN/CN/HCNの処理を終えた後に`GameSession.scoring_closed_at`を設定し、
+所有スレッドは同じ状態からスコア、クリア種別、全ゲージ、コンボ、判定詳細、記録用リプレイ、
+コース引継ぎ値を取得します。確定時刻は以下のどちらかです。
+
+- 通常完走（ゲージ不足のFAILEDランプを含む）は、`natural_result_settled`が真になった更新。
+  全ノーツが判定済み（`judge.is_exhausted()`）で、`E = chart.end_time`、
+  `W = window_set.result_settle_margin_us()`（ルール・キー種別・ランク・再生速度を反映した実効窓）、
+  `O = offsets.input_offset_us`について次を満たした時点です。
+  - 人間入力が採点対象に残る場合（部分オート・部分リプレイを含む）: `audio_now > E + W + max(0, -O)`。
+    取得時刻にOを加えた判定時刻が`E + W`以下なら空POOR等になり得るためです。
+  - フルリプレイ: 実際に処理を終えた1ms tick（`ReplayPlayer::scored_until`）が`E + W`を超えたとき。
+    記録済み入力に現在のOを再適用しないため、負オフセット分は待ちません。
+  - フルオート: `audio_now > E + W`。
+  - 独立した対戦相手がいる場合は、その判定も同じ条件で終わっていること。
+  判定窓の境界（`delta == W`）は受け付けるため比較は厳密な`>`です。
+- 途中FAILED（HARD等のゲージ枯渇）・手動中断・全ノーツ処理後の明示的な退出は、
+  `Finished` / `Failed`へ入った停止境界の更新。自然確定の判定窓は待ちません。
+
+確定後の入力はスコア・ゲージ・判定詳細・記録用リプレイへ渡さず、キービーム、skin入力イベント、
+押鍵時のfallbackキー音だけを進めます。BSS終端のRelease直後に設定した逆方向Pressの抑止
+（[ln.md](ln.md)）は確定後も同じ判定処理で消費し、fallbackキー音へ流しません。確定後に古いタイムスタンプの入力が届いた場合や、
+プレー中にオフセットを変更した場合も確定済みの結果は変わりません。任意の入力遅配を待つ固定の待機は
+設けていません。BGM・自動キー音、音声末尾、BGA、スキンtimer、オプション操作は採点と独立して続き、
+Play画面の退出は従来どおり5秒の余白・BGMスケジューリング完了・`wait_all_notes_result`に従います。
+
+手動中断（`request_manual_stop`）と全ノーツ処理後の退出（`request_finish`）は、UIの観測が古い場合に備えて
+gameplayの所有スレッドで再確認します。全ノーツ処理後・確定後の中断要求は無視し、
+途中FAILEDの後に届いた退出要求で`Finished`へ書き換えません。Practiceは要求の直後に時計を止めて
+終了演出へ進むため、`request_practice_round_end`を使います。ノーツが残る間は手動中断、
+所有スレッドで既に全ノーツを処理していた場合は明示的な退出として`Finished`にし、
+そのラウンドの結果を停止境界で取得できるようにします。
+
+Resultのゲージ履歴は500ms周期の定期記録に加え、結果を確定した譜面時刻に全ゲージの
+`value / max / border / gauge_type`を終端点として一度だけ記録します。同じゲージ・同じ時刻の
+定期点があれば最新値へ更新し、時刻順を保ちます。LR2 / beatoraja JSON / LuaのResultは
+選択ゲージの履歴末尾を表示値として使うため、確定結果と表示が一致します。表示の丸め
+（LR2の2%刻み、beatorajaの切り捨て）は従来どおりです。`Finished`への遷移では結果を取り直さず、
+退出時のプレー時間だけを終端時点の値に更新します。`PlayState::Failed`の0埋めは終端点より後の
+定期サンプル位置から始まり、停止時の実値の後にゲージが戻ることはありません。
+gameplay workerを使わず`GameSession`を直接保存する経路（同期・非同期の保存）も、
+同じ確定時刻と終端点を使います。経緯と検証は
+[作業記録](../notes/2026/2026-11-11-result-gauge-settlement.md)を参照してください。
+
+### 音声・動画資源の後片付け
+
+audio callbackから退避したsourceは、出力streamごとのworkerが回収します。
+事前確保したbufferを短いlock内で交換し、大きなPCM bankの解放はlock外で行います。
+window threadの通知はtry_lockだけで、空のqueueではworkerを起こしません。
+描画停止中も20ms周期で回収し、stream停止後の残りもworkerで解放します。
+
+BGA動画は表示中の各channelに加え、最後に使った非表示10本までdecoderを保持します。
+1プレイで十数本以上を切り替える譜面だけ、古いものから閉じます。
+動画を開くときやデコーダを別のイベントへ割り当てるときは、イベントから250ms未満なら先頭から
+デコードします。250ms以上進んだ位置から再生する場合は、その再生位置へのseekを試みます。
+リトライでは静止画と動画デコーダを再利用し、動画は今回のフレームを取得してから表示します。
+チャネル方式では、VC-1デコーダがパケット投入時に`EPERM`を返した場合、そのパケットを飛ばして
+後続のフレームを取得します。この処理はプレイ中のBGAと動画書き出しに適用します。
+channel方式は先読みqueue満杯・EOFでparkし、frame取得・restart・停止で起こします。
+skin動画のclock方式は従来の短い待機上限を保ち、停止通知で早く復帰できます。
+
+動画のDropは停止を要求し、FFmpeg workerのjoinとRGBA解放を共通の退避workerへ渡します。
+ファイルが閉じるのはこの処理完了時です。プロセス内のdecoderは退避待ちを含め64本までで、
+上限到達時は新規openをエラーにします。native I/Oが停止してもthreadやframeが無制限に
+蓄積しないための上限です。退避worker自体が異常終了した場合だけ同期cleanupへ戻ります。
 
 ### 途中FAILED時の譜面音声
 

@@ -952,6 +952,15 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 37,
+        // CHART_IMPORT_VERSION that last failed to parse a Failed file. An unchanged file
+        // is not parsed again until it or the importer changes. 0 (existing rows and
+        // read errors) retries on the next scan, so the default loses nothing.
+        statements: &[
+            "ALTER TABLE chart_files ADD COLUMN failed_import_version INTEGER NOT NULL DEFAULT 0;",
+        ],
+    },
+    Migration {
+        version: 38,
         statements: &[
             "ALTER TABLE charts ADD COLUMN has_defined_hln INTEGER NOT NULL DEFAULT 0;",
             "ALTER TABLE charts ADD COLUMN defined_hln_pairs INTEGER NOT NULL DEFAULT 0;",

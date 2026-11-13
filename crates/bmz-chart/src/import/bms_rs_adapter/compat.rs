@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 /// beatoraja / jbms-parser が受け付ける区切り文字を bms-rs 向けに正規化する。
 ///
 /// 一部の譜面では `#BPMxx:value` / `#STOPxx:value` が使われる。jbms-parser
@@ -5,28 +7,32 @@
 /// 必要なため、パーサーへ渡すテキストだけを正規化する。ハッシュ計算や
 /// 生ヘッダ保存に使う原文は変更しない。空白区切りの小節行は、通常の
 /// `#xxxyy:data` へ変換して小節長・BGA・疎行を含むすべての経路へ渡す。
-pub(super) fn normalize_beatoraja_separators(text: &str) -> String {
-    let mut rewritten = String::with_capacity(text.len());
-    for line in text.lines() {
-        if let Some(colon) = legacy_header_colon(line) {
-            rewritten.push_str(&line[..colon]);
-            rewritten.push(' ');
-            rewritten.push_str(&line[colon + 1..]);
-        } else if let Some((head, payload)) =
-            line.trim_start().strip_prefix('#').and_then(split_bms_channel_command)
-        {
-            let leading = line.len() - line.trim_start().len();
-            rewritten.push_str(&line[..leading + 1 + head.len()]);
-            rewritten.push(':');
-            rewritten.push_str(
-                payload.trim_start_matches([':', ' ', '\t']).trim_end_matches([' ', '\t']),
-            );
-        } else {
-            rewritten.push_str(line);
-        }
-        rewritten.push('\n');
+/// 変更のない行は複製せずにそのまま返す。
+pub(super) fn normalize_beatoraja_separator_line(line: &str) -> Cow<'_, str> {
+    if let Some(colon) = legacy_header_colon(line) {
+        let mut rewritten = String::with_capacity(line.len());
+        rewritten.push_str(&line[..colon]);
+        rewritten.push(' ');
+        rewritten.push_str(&line[colon + 1..]);
+        return Cow::Owned(rewritten);
     }
-    rewritten
+    let leading = line.len() - line.trim_start().len();
+    let Some((head, payload)) =
+        line[leading..].strip_prefix('#').and_then(split_bms_channel_command)
+    else {
+        return Cow::Borrowed(line);
+    };
+    let head_end = leading + 1 + head.len();
+    let data = payload.trim_start_matches([':', ' ', '\t']).trim_end_matches([' ', '\t']);
+    if line.as_bytes()[head_end] == b':' && data.len() == payload.len() {
+        // Already `#xxxyy:data`.
+        return Cow::Borrowed(line);
+    }
+    let mut rewritten = String::with_capacity(head_end + 1 + data.len());
+    rewritten.push_str(&line[..head_end]);
+    rewritten.push(':');
+    rewritten.push_str(data);
+    Cow::Owned(rewritten)
 }
 
 /// `#` を除いた小節行を分割する。PMS 判定と生ヘッダ抽出にも使い、
@@ -84,7 +90,13 @@ fn is_ascii_base36(byte: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_beatoraja_separators;
+    use std::borrow::Cow;
+
+    use super::normalize_beatoraja_separator_line;
+
+    fn normalize_beatoraja_separators(text: &str) -> String {
+        text.lines().map(|line| normalize_beatoraja_separator_line(line) + "\n").collect()
+    }
 
     #[test]
     fn normalizes_colon_separated_bpm_and_stop_definitions() {
@@ -114,6 +126,16 @@ mod tests {
             normalize_beatoraja_separators(source),
             "  #00111:0101\n#00002:0.5\n#10000A:01\n#00212:0202\n"
         );
+    }
+
+    #[test]
+    fn borrows_lines_that_need_no_rewrite() {
+        for line in ["#00111:0101", "  #00111:0101\r", "#TITLE Artist: Song", "#BPM 160"] {
+            assert!(matches!(normalize_beatoraja_separator_line(line), Cow::Borrowed(_)));
+        }
+        for line in ["#00111 0101", "#00111:0101 ", "#00111::0101", "#BPM01:160"] {
+            assert!(matches!(normalize_beatoraja_separator_line(line), Cow::Owned(_)));
+        }
     }
 
     #[test]

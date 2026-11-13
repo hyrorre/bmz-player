@@ -56,6 +56,8 @@ impl CpalBackend {
             let output_commands = Arc::new(Mutex::new(VecDeque::new()));
             let retired_sources =
                 Arc::new(Mutex::new(Vec::with_capacity(OUTPUT_COMMAND_QUEUE_CAPACITY)));
+            let source_reaper = SourceReaper::new(retired_sources.clone())
+                .map_err(CpalBackendError::RetirementThread)?;
             let diagnostics = Arc::new(CpalOutputDiagnosticsCounters::default());
             let renderer = NativeOutputRenderer::new(
                 requested_channel_offset as usize,
@@ -108,7 +110,7 @@ impl CpalBackend {
                     sample_rate: info.sample_rate,
                     current_frame,
                     output_commands,
-                    retired_sources,
+                    source_reaper,
                     diagnostics,
                     next_source_id: AtomicU64::new(1),
                 }),
@@ -174,9 +176,11 @@ impl CpalBackend {
         let output_commands = Arc::new(Mutex::new(VecDeque::new()));
         // callback 側で source を除去すると最後の Arc になった AudioEngine の
         // SampleBank を解放し得る。音声 callback でそのような重い drop をしない
-        // よう、容量を先に確保した退避先へ移し、app thread 側で回収する。
+        // よう、容量を先に確保した退避先へ移し、専用workerで回収する。
         let retired_sources =
             Arc::new(Mutex::new(Vec::with_capacity(OUTPUT_COMMAND_QUEUE_CAPACITY)));
+        let source_reaper = SourceReaper::new(retired_sources.clone())
+            .map_err(CpalBackendError::RetirementThread)?;
         let diagnostics = Arc::new(CpalOutputDiagnosticsCounters::default());
 
         let build_stream = |config: &StreamConfig| match sample_format {
@@ -272,7 +276,7 @@ impl CpalBackend {
                 sample_rate,
                 current_frame,
                 output_commands,
-                retired_sources,
+                source_reaper,
                 diagnostics,
                 next_source_id: AtomicU64::new(1),
             }),

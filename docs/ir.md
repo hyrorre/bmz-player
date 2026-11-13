@@ -3,12 +3,13 @@
 Kaleid拡張・部分対応もBMZ IRの原本単位ランキングへ集約します。HLN構成、
 解釈情報、採択経路を保持し、ノーツ数が異なる枝の独立ベストを許容します。
 実プレイのEX・判定数等の整合性検査は維持します。サーバー変更はSQLite migration
-0017が必要です。詳細な機能表・BMS-IRとrianIRの制限は[Kaleid拡張](kaleid.md)を参照。
+0017が必要です。機能別のBMS-IR・rianIR・Bokutachi条件は[Kaleid拡張](kaleid.md)を参照。
 play_options.kaleidはdevice evidenceとは別の署名対象です。play_options上限は128KiB、
 リクエスト全体の既存256KiB上限は維持します。
 
 BMZ公式IRのAPIと、BMZ Player側のIRクライアントの現在の仕様をまとめた文書です。
 rianIRとの互換は[rianIR互換プロバイダー](rian-ir.md)、アシスト・特殊モードを含むスコアの保存・送信条件は[スコア保存・アシスト・IR送信条件](score-persistence.md)を参照してください。
+Bokutachiへの新規7K／14K／9K単曲・コース各曲の送信と、BMS 7K／14Kの段位更新は[Bokutachi](bokutachi.md)を参照してください。APIキーで接続する送信専用プロバイダーです。
 設計時の案・未決事項・実装タスクの経緯は[BMZ IRの設計記録](../notes/2026/2026-06-04-bmz-ir-design.md)にあります。
 
 ## 概要
@@ -22,6 +23,22 @@ rianIRとの互換は[rianIR互換プロバイダー](rian-ir.md)、アシスト
 - スコアを分ける単位（score identity）は`chart_sha256` / `ln_policy` / `double_option` / `rule_mode` / `scoring`です。`gauge`はプレイ設定・表示用に保存しますが、ランキングを分ける条件にはしません。
 - LN / CN / HCNの区別は[LN / CN / HCNの扱い](ln.md)の`LnScorePolicy`に従います。
 - 改ざん検出（evidence）は、提出内容が後から変わっていないことを示すための仕組みです。改造したクライアントによる不正を防ぐものではありません。
+
+## 単一実効LN型の正規化と過去投稿
+
+新規単曲・コースの投稿とランキング取得には、[LN正規化規則](ln.md)の`LnScorePolicy`を使います。
+AUTOのfallbackをundefined部分へ適用した結果が単一種別なら`rule.ln_policy`は対応する
+`Force*`です。`rule.effective_ln_mode`は実際のプレイ種別、単曲の`chart.ln_profile`は
+変換前の元譜面の情報を維持します。コースは元profile集約、constraint fallback、正規化の順です。
+既存のアシスト等の送信可否条件は変わりません。現行サーバーは新Forceと旧Autoの両方を受理します。
+
+これは新規投稿の区分変更です。過去のAuto投稿と旧クライアントからの投稿は旧区分に残ります。
+過去IRランキングのAuto→Force一括統合、本番DB変更・デプロイは対象外です。
+
+既存outboxのgameplay本文、idempotency/submission key、送信済みsnapshot、remote score ID対応、
+既存replayのバイト列・hash・pathは保持します。旧outboxの再送は保存済み本文を使い、
+必要な署名付与だけ既存送信処理に従います。local backfillも保存時のpolicyを維持し、
+同じidempotency keyの投稿内容を新しい正規化値へ書き換えません。
 
 ## API一覧
 
@@ -740,6 +757,13 @@ jobの状態は`pending` / `sending` / `succeeded` / `failed`です。
 - submit-onlyのproviderにはスコアを送りますが、送信の応答へランキングを含めるよう要求しません。
 - リザルト画面でのランキングAPIの取得は、primaryの今回分の送信が終わってから始めます。secondary providerやbacklogの送信は待ちません。primaryのjobを別の同期taskがclaim済みの場合も、そのjobだけを待ちます。
 - リザルト画面のオーバーレイには、送信対象なし・成功・失敗をproviderごとに表示します。
+- オートプレイとリプレイ再生のリザルトでは、スコアを送らず、選曲画面で取得したランキングを表示します（beatorajaと同じ）。
+  - 選曲画面での取得がプレイ中に終わった場合も、その結果を使います。取得中なら、終わるのを待って表示します。
+  - 選曲画面で一度も取得していない場合は、リザルトで1回だけ取得し、選曲画面のキャッシュへ入れます。選曲画面に戻っても取得し直しません。
+  - コースのオートプレイ・リプレイの単曲リザルトも同じです。
+  - フォルダの連続オートプレイでは、曲ごとに通信しないよう、IRランキングを扱いません。
+  - リプレイの条件（LNの扱い・DOUBLE・ルール）が選曲画面の今の設定と異なる場合は、選曲画面のキャッシュを使わず、そのリザルトだけの取得を1回行います。
+  - 送信しないため、`TIMER_IR_CONNECT_BEGIN/SUCCESS/FAIL`は動かしません。順位は、サーバーにある自己ベストの順位です。`previous_rank`は出しません。
 
 ### local backfill
 
@@ -822,6 +846,7 @@ payloadと署名は次のとおりです。
 - 実行中はプロファイルの切り替えを始められません（UIも無効にします）。アプリの終了時は中断を要求し、処理中の1件を最大3秒待ちます。待ち切れなかったjobは`sending`のまま残り、5分のleaseの後に再び取得します。
 - 送信キューの画面は、`list_ir_score_jobs` / `ir_score_job_status_counts`で読み、状態ごとの件数、状態のフィルター（既定は失敗）、1ページ50件のページングを持ちます。並びは`failed` → `sending` → `pending` → `succeeded`、次に更新日時の新しい順です。DBの読み込みは別のスレッドで行い、UIスレッドでは開きません。一覧は操作の完了後に自動で読み込み直します。
 - 再送（個別・失敗分の一括）は状態を直接書き換えず、通常の送信と同じclaimを経由し、再試行の待ち時刻（backoff）を無視して送ります。`Immediate`トランザクションの中で`sending`へ更新するため、常駐workerや他のプロセスが送信中のjobは二重に送らず、「送信中のため送らなかった」件数として数えます。失敗分の一括の再送は、開始時点の`failed`の一覧を対象に固定します。
+- Bokutachiの対象外ジョブは個別再送だけで再照会します。一括処理の未完了件数にも含めません。Tachiで失敗が確定したインポートの登録やり直しも個別再送に限ります。通常の通信失敗では受付IDを保持して確認を再開します。詳細は[Bokutachiの受付と登録完了](bokutachi.md#受付と登録完了)を参照してください。
 - 決定画面・プレイ画面の表示中は、IR設定と同様に操作できません。
 
 ### 重複したスコアの整理

@@ -6,6 +6,16 @@ pub(in crate::app) enum SelectRowClickAction {
     ExitFolder,
 }
 
+/// Clicked rows may wrap around the end of the circular list.
+pub(in crate::app) fn select_row_scroll_rows(current: usize, next: usize, len: usize) -> i32 {
+    if len == 0 {
+        return 0;
+    }
+    let forward = (next as i64 - current as i64).rem_euclid(len as i64);
+    let backward = forward - len as i64;
+    if forward <= -backward { forward as i32 } else { backward as i32 }
+}
+
 pub(in crate::app) fn select_row_click_action(
     row_index: u32,
     button: MouseButton,
@@ -84,9 +94,12 @@ pub(in crate::app) fn log_gamepad_key_config_raw_event(
 #[cfg(test)]
 pub(in crate::app) fn select_control_action(
     control: &str,
-    bindings: &SelectKeyBindings,
+    bindings: &SceneInputResolver,
 ) -> Option<SelectAction> {
-    scene_select_action(&ControlInputEvent::gamepad(DeviceId(1), control, true), bindings)
+    scene_select_action(&super::input_resolve::resolve_scene_for_test(
+        bindings,
+        ControlInputEvent::gamepad(DeviceId(1), control, true),
+    ))
 }
 
 #[cfg(test)]
@@ -94,9 +107,12 @@ pub(in crate::app) fn select_action(
     physical_key: PhysicalKey,
     state: ElementState,
     repeat: bool,
-    bindings: &SelectKeyBindings,
+    bindings: &SceneInputResolver,
 ) -> Option<SelectAction> {
-    scene_select_action(&ControlInputEvent::keyboard_parts(physical_key, state, repeat), bindings)
+    scene_select_action(&super::input_resolve::resolve_scene_for_test(
+        bindings,
+        ControlInputEvent::keyboard_parts(physical_key, state, repeat),
+    ))
 }
 
 pub(in crate::app) fn select_wheel_move(delta: MouseScrollDelta) -> Option<SelectMove> {

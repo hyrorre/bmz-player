@@ -324,6 +324,15 @@ define_settings! {
             .as_str()
             .to_string(),
     }
+    SRandomCorrection(SRandomCorrectionConfig) {
+        value: [field play.s_random_correction],
+        adjust: |profile, delta| {
+            cycle_enum(delta, profile.play.s_random_correction, cycle_s_random_correction)
+                .map(|next| profile.play.s_random_correction = next)
+                .is_some()
+        },
+        format: |profile| profile.play.s_random_correction.label().to_string(),
+    }
     KeyModeConversion((KeyModeConversionConfig, DoubleOptionConfig)) {
         value: [access |profile| (profile.play.key_mode_conversion, profile.play.double_option), |profile, value| { profile.play.key_mode_conversion = value.0; profile.play.double_option = value.1; }],
         adjust: |profile, delta| {
@@ -337,6 +346,18 @@ define_settings! {
                 .is_some()
         },
         format: |profile| profile.play.key_mode_conversion.as_str().to_string(),
+    }
+    Freq(i8) {
+        value: [field play.freq_semitones],
+        adjust: |profile, delta| {
+            let before = profile.play.freq_semitones;
+            let next = i32::from(before)
+                .saturating_add(delta)
+                .clamp(i32::from(FREQ_SEMITONES_MIN), i32::from(FREQ_SEMITONES_MAX));
+            profile.play.freq_semitones = next as i8;
+            profile.play.freq_semitones != before
+        },
+        format: |profile| format_freq(profile.play.freq_semitones),
     }
     SevenToNinePattern(SevenToNinePattern) {
         value: [field play.seven_to_nine_pattern],
@@ -812,6 +833,24 @@ define_settings! {
             profile.lane.constant_fade_ms != before
         },
         format: |profile| format!("{} ms", profile.lane.constant_fade_ms),
+    }
+    HispeedTransitionMs(u32) {
+        value: [field lane.hispeed_transition_ms],
+        adjust: |profile, delta| adjust_u32(
+            &mut profile.lane.hispeed_transition_ms,
+            delta,
+            0,
+            HISPEED_TRANSITION_MS_MAX,
+        ),
+        format: |profile| format!("{} ms", profile.lane.hispeed_transition_ms),
+    }
+    InvertE2KeyGreenNumber(bool) {
+        value: [field input.invert_e2_key_green_number],
+        adjust: |profile, _delta| {
+            profile.input.invert_e2_key_green_number = !profile.input.invert_e2_key_green_number;
+            true
+        },
+        format: |profile| format_bool_on_off(profile.input.invert_e2_key_green_number),
     }
     SelectInputMode(SelectInputModeConfig) {
         value: [field input.select_input_mode],

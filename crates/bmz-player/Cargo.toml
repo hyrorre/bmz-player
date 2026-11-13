@@ -61,6 +61,8 @@ rfd.workspace = true
 image.workspace = true
 arboard.workspace = true
 libc.workspace = true
+rpassword = "7.4"
+httpdate = "1"
 
 rayon.workspace = true
 futures-util.workspace = true

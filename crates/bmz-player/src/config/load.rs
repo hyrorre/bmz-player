@@ -17,6 +17,7 @@ fn parse_app_config(text: &str) -> Result<AppConfig> {
     let mut config: AppConfig = toml::from_str(text)?;
     normalize_song_root_paths(&mut config.songs.roots);
     ensure_default_difficulty_table_sources(&mut config);
+    config.downloads.migrate_legacy_save_dir();
     for slot in &mut config.input.gamepad_slot_device_ids {
         if slot.as_deref().is_some_and(|id| id.starts_with("gc-session:")) {
             *slot = None;
@@ -226,7 +227,7 @@ mod tests {
 
         let loaded = parse_profile_config(&text).unwrap();
 
-        assert_eq!(loaded.ir.providers.len(), 3);
+        assert_eq!(loaded.ir.providers.len(), 4);
         assert_eq!(
             loaded.ir.providers[0],
             crate::config::profile_config::IrProviderConfig::bmz_ir()

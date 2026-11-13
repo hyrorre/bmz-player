@@ -402,6 +402,77 @@ fn keybeam_runtime_suppresses_ln_press_and_its_release_fade() {
 }
 
 #[test]
+fn keybeam_ln_release_stays_suppressed_across_cached_frames_and_playback_rates() {
+    let document: SkinDocument = serde_json::from_str(r#"{"type":0,"w":1,"h":1}"#).unwrap();
+    let lane = Lane::Key1.index();
+    for identities in [false, true] {
+        for rate in [50, 100, 200] {
+            let mut runtime = DynamicTimerRuntime::default();
+            let mut state = SkinDrawState::default();
+            state.keyon_ms[lane] = Some(0);
+            state.keyon_started_us[lane] = identities.then_some(100_999);
+            runtime.advance(&document, &mut state, 6_000);
+            state.hold_ms[lane] = Some(0);
+            runtime.advance(&document, &mut state, 6_010);
+            assert!(!state.keybeam_hold_active[lane]);
+            state.hold_ms[lane] = None;
+            runtime.advance(&document, &mut state, 6_016);
+            assert!(!state.keybeam_hold_active[lane]);
+            state.keyon_ms[lane] = None;
+            state.keyon_started_us[lane] = None;
+            state.hold_ms[lane] = None;
+            state.keyoff_ms[lane] = Some(0);
+            state.keyoff_started_us[lane] = identities.then_some(120_999);
+            runtime.advance(&document, &mut state, 6_020);
+            assert!(!state.keybeam_fade_active[lane]);
+            for elapsed in [0, 4, 20, 100] {
+                state.keyoff_ms[lane] = Some(elapsed * rate / 100);
+                runtime.advance(&document, &mut state, 6_024 + elapsed);
+                assert!(
+                    !state.keybeam_fade_active[lane],
+                    "ids={identities}, rate={rate}, elapsed={elapsed}"
+                );
+            }
+            // An actual new press/release remains visible, even if sub-ms
+            // origins produce the same integer elapsed value in two frames.
+            state.keyoff_ms[lane] = None;
+            state.keyoff_started_us[lane] = None;
+            state.keyon_ms[lane] = Some(0);
+            state.keyon_started_us[lane] = identities.then_some(121_000);
+            runtime.advance(&document, &mut state, 6_200);
+            assert!(state.keybeam_hold_active[lane]);
+            state.keyon_ms[lane] = None;
+            state.keyon_started_us[lane] = None;
+            state.keyoff_ms[lane] = Some(0);
+            state.keyoff_started_us[lane] = identities.then_some(121_001);
+            runtime.advance(&document, &mut state, 6_201);
+            assert!(state.keybeam_fade_active[lane]);
+        }
+    }
+}
+
+#[test]
+fn keybeam_new_release_is_identified_even_with_the_same_millisecond_elapsed() {
+    let document: SkinDocument = serde_json::from_str(r#"{"type":0,"w":1,"h":1}"#).unwrap();
+    let mut runtime = DynamicTimerRuntime::default();
+    let mut state = SkinDrawState::default();
+    let lane = Lane::Key1.index();
+    state.keyon_ms[lane] = Some(0);
+    state.keyon_started_us[lane] = Some(100_999);
+    state.hold_ms[lane] = Some(0);
+    runtime.advance(&document, &mut state, 6_000);
+    state.keyon_ms[lane] = None;
+    state.hold_ms[lane] = None;
+    state.keyoff_ms[lane] = Some(0);
+    state.keyoff_started_us[lane] = Some(110_000);
+    runtime.advance(&document, &mut state, 6_010);
+    assert!(!state.keybeam_fade_active[lane]);
+    state.keyoff_started_us[lane] = Some(110_001);
+    runtime.advance(&document, &mut state, 6_011);
+    assert!(state.keybeam_fade_active[lane]);
+}
+
+#[test]
 fn keybeam_timer_lane_mapping_matches_skin_timer_mapping() {
     assert_eq!(keybeam_lane_for_keyon_timer(108), Some(Lane::Key8.index()));
     assert_eq!(keybeam_lane_for_keyon_timer(109), Some(Lane::Key9.index()));

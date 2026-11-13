@@ -13,6 +13,7 @@ use bmz_gameplay::input::{backend::*, binding::*, translator::*};
 use std::sync::atomic::AtomicI64;
 
 mod failure_audio;
+mod result_settlement;
 
 #[derive(Default)]
 pub struct RuntimeProbe {
@@ -177,9 +178,13 @@ fn events(tick: i64) -> Vec<DeviceInputEvent> {
 }
 
 fn prepared(input: SharedInputBackend) -> GameSession {
+    prepared_with_chart(input, chart())
+}
+
+fn prepared_with_chart(input: SharedInputBackend, chart: Arc<PlayableChart>) -> GameSession {
     let profile = crate::config::profile_config::ProfileConfig::new_default("test", "Test", 1);
     let mut session = build_game_session_with_input_backend(
-        chart(),
+        chart,
         &profile,
         PlaySessionOptions { arrange_seed: Some(12345), ..Default::default() },
         Box::new(input),
@@ -212,6 +217,7 @@ fn config(session: &GameSession, probe: Arc<RuntimeProbe>) -> RuntimeRenderConfi
     RuntimeRenderConfig {
         probe: Some(probe),
         effects: None,
+        hispeed_transition_ms: 500,
         best_ex_score: None,
         best_ghost: None,
         target_ex_score: None,
@@ -241,6 +247,54 @@ fn wait_until(mut condition: impl FnMut() -> bool) {
 
 fn run_with_render_stall(stall_ms: u64) -> (String, u64) {
     run_mode_with_render_stall(stall_ms, 0)
+}
+
+#[test]
+fn hispeed_animation_duration_changes_reach_the_running_worker_without_restart() {
+    let mut session = prepared(SharedInputBackend::default());
+    session.hispeed = 1.0;
+    let audio = AudioEngineHandle::new(AudioEngine::new(1_000_000));
+    let render_config = config(&session, Arc::new(RuntimeProbe::default()));
+    let mut client = GameplayClient::new(session);
+    client.start(audio, render_config).unwrap();
+    let generation = client.generation;
+    // Sampling before the edits keeps a nonzero-duration transition at its
+    // starting position, regardless of wall-clock delays in this test.
+    let sampled_at = Instant::now();
+    assert!(client.edit(|session| session.hispeed = 2.0));
+    wait_until(|| {
+        client.poll();
+        client.session.hispeed == 2.0
+    });
+    client.set_hispeed_transition_ms(0);
+    wait_until(|| {
+        let Some(mut frame) = client.poll() else { return false };
+        client.projection.as_ref().unwrap().project_at(
+            &mut frame.render_snapshot,
+            TimeUs(0),
+            &mut ProjectionClock::default(),
+            sampled_at,
+        );
+        (frame.render_snapshot.visible_notes[Lane::Key1.index()][0].y - 0.1).abs() < 1e-6
+    });
+    // Enabling animation again must also reach this same worker.
+    let sampled_at = Instant::now();
+    client.set_hispeed_transition_ms(1000);
+    assert!(client.edit(|session| session.hispeed = 3.0));
+    wait_until(|| {
+        client.poll();
+        client.session.hispeed == 3.0
+    });
+    let mut frame = client.latest_frame.as_ref().unwrap().as_ref().clone();
+    client.projection.as_ref().unwrap().project_at(
+        &mut frame.render_snapshot,
+        TimeUs(0),
+        &mut ProjectionClock::default(),
+        sampled_at,
+    );
+    assert!((frame.render_snapshot.visible_notes[Lane::Key1.index()][0].y - 0.1).abs() < 1e-6);
+    assert_eq!(client.generation, generation);
+    client.shutdown();
 }
 
 #[test]
@@ -426,6 +480,128 @@ fn autoplay_and_replay_are_invariant_to_render_stalls() {
                 expected,
                 "mode {mode}, stall {stall}"
             );
+        }
+    }
+}
+
+#[test]
+fn cached_publication_recomputes_skin_timers_at_the_consumers_chart_time() {
+    for rate in [50, 100, 200] {
+        let mut session = prepared(SharedInputBackend::default());
+        session.audio_clock.set_playback_rate_percent(rate);
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(-1_000_999));
+        session.lane_keyoff_started_at[Lane::Key2.index()] = Some(TimeUs(-1_000_999));
+        session.full_combo_started_at = Some(TimeUs(-500_999));
+        let audio = AudioEngineHandle::new(AudioEngine::new(1_000_000));
+        let config = config(&session, Arc::new(RuntimeProbe::default()));
+        let mut client = GameplayClient::new(session);
+        client.start(audio, config).unwrap();
+        let slot = client.worker.as_ref().unwrap().latest.clone();
+        let guard = slot.lock().unwrap();
+        for output_us in [0, 4_000, 20_000, 200_000] {
+            client.session.audio_clock.current_frame.store(output_us, Ordering::Release);
+            let chart_us = output_us as i64 * i64::from(rate) / 100;
+            let snapshot = client
+                .poll_with_play_elapsed(TimeUs(6_000_000 + output_us as i64))
+                .unwrap()
+                .render_snapshot;
+            assert_eq!(snapshot.time, TimeUs(chart_us));
+            assert_eq!(
+                snapshot.keyon_ms[Lane::Key1.index()],
+                Some(((chart_us + 1_000_999) / 1_000) as i32)
+            );
+            assert_eq!(
+                snapshot.keyoff_ms[Lane::Key2.index()],
+                snapshot.keyon_ms[Lane::Key1.index()]
+            );
+            assert_eq!(snapshot.keyon_started_at[Lane::Key1.index()], Some(TimeUs(-1_000_999)));
+            assert_eq!(snapshot.full_combo_elapsed_ms, Some(((chart_us + 500_999) / 1_000) as i32));
+            assert_eq!(snapshot.rhythm_timer_elapsed_ms, Some((chart_us * 2 / 1_000) as i32));
+            assert_eq!(snapshot.quarter_note_elapsed_ms, Some((chart_us / 1_000) as i32));
+        }
+        drop(guard);
+        client.shutdown();
+    }
+}
+
+#[test]
+fn renderer_turntables_follow_scene_time_through_ready_and_chart_start() {
+    use bmz_gameplay::session::PlaySkinOffset;
+    use bmz_render::skin_offset::SkinOffsetValue;
+
+    for key_mode in [KeyMode::K7, KeyMode::K14] {
+        for rate in [50, 100, 200] {
+            let mut session = prepared(SharedInputBackend::default());
+            Arc::make_mut(&mut session.chart).metadata.key_mode = key_mode;
+            session.audio_clock.chart_zero_time_us = -1_000_000;
+            session.audio_clock.set_playback_rate_percent(rate);
+            session.lane_scratch_angle_delta_ms[Lane::Scratch.index()] = 120;
+            session.lane_scratch_angle_delta_ms[Lane::Scratch2.index()] = -60;
+            for id in [1, 2, 42] {
+                session.skin_offsets.push(PlaySkinOffset {
+                    id,
+                    x: 1,
+                    y: 2,
+                    w: 3,
+                    h: 4,
+                    r: 5,
+                    a: -6,
+                });
+            }
+            let audio = AudioEngineHandle::new(AudioEngine::new(1_000_000));
+            let config = config(&session, Arc::new(RuntimeProbe::default()));
+            let mut client = GameplayClient::new(session);
+            client.start(audio, config).unwrap();
+            let slot = client.worker.as_ref().unwrap().latest.clone();
+            // Reuse one publication across READY -> chart start, including a
+            // stalled exchange. Idle rotation must still advance every render.
+            let guard = slot.lock().unwrap();
+            let chart_start_us = 1_000_000 * 100 / u64::from(rate);
+            for output_us in
+                [0, 6_000, chart_start_us - 6_000, chart_start_us, chart_start_us + 6_000]
+            {
+                client.session.audio_clock.current_frame.store(output_us, Ordering::Release);
+                let scene_us = 6_000_000 + output_us as i64;
+                let snapshot =
+                    client.poll_with_play_elapsed(TimeUs(scene_us)).unwrap().render_snapshot;
+                assert_eq!(
+                    snapshot.time,
+                    TimeUs(-1_000_000 + output_us as i64 * i64::from(rate) / 100)
+                );
+                assert_eq!(snapshot.play_elapsed_time, TimeUs(scene_us));
+                for (id, input_phase_ms) in [(1, 120), (2, -60)] {
+                    if id == 2 && key_mode == KeyMode::K7 {
+                        assert_eq!(snapshot.skin_offsets.get(id).unwrap().r, 5);
+                        continue;
+                    }
+                    let expected_angle =
+                        ((2_160 - scene_us / 1_000 + input_phase_ms).rem_euclid(2_160) / 6) as i32;
+                    assert_eq!(
+                        snapshot.skin_offsets.get(id),
+                        Some(SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: expected_angle, a: -6 }),
+                        "mode={key_mode:?}, rate={rate}, output_us={output_us}, id={id}"
+                    );
+                }
+                assert_eq!(snapshot.skin_offsets.get(42).unwrap().r, 5);
+                // Re-evaluating the same paused scene time must not accumulate rotation.
+                let paused =
+                    client.poll_with_play_elapsed(TimeUs(scene_us)).unwrap().render_snapshot;
+                assert_eq!(paused.skin_offsets, snapshot.skin_offsets);
+            }
+            drop(guard);
+            // New producer state must replace the scratch phase while the
+            // scene-time rotation continues from the same frame.
+            assert!(client.edit(|session| {
+                session.lane_scratch_angle_delta_ms[Lane::Scratch.index()] = 0;
+            }));
+            let scene_us = 6_000_000 + chart_start_us as i64 + 6_000;
+            let idle_angle = ((2_160 - scene_us / 1_000).rem_euclid(2_160) / 6) as i32;
+            wait_until(|| {
+                let snapshot =
+                    client.poll_with_play_elapsed(TimeUs(scene_us)).unwrap().render_snapshot;
+                snapshot.skin_offsets.get(1).unwrap().r == idle_angle
+            });
+            client.shutdown();
         }
     }
 }

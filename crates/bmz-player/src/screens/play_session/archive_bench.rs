@@ -39,7 +39,7 @@ fn archive_bench() {
     let mut db = LibraryDatabase::from_connection(connection);
     let roots = vec![PathEntry { path: root, enabled: true, recursive: false }];
     db.set_configured_song_roots(&roots).unwrap();
-    let scan = ScanConfig { use_everything: false, skip_hidden: true, ..AppConfig::default().scan };
+    let scan = ScanConfig { use_everything: false, ..AppConfig::default().scan };
     let started = Instant::now();
     let report = scan_song_roots(&mut db, &roots, &scan, 10, false).unwrap();
     println!(

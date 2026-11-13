@@ -14,6 +14,9 @@ use super::model::{
 };
 use crate::rule::RuleMode;
 
+mod chart_index;
+use chart_index::ChartIndex;
+
 const BSS_REVERSE_PRESS_SUPPRESSION_US: i64 = 30_000;
 
 fn press_window(window_set: JudgeWindows, scratch: bool) -> JudgeWindow {
@@ -46,6 +49,7 @@ pub struct JudgeEngine {
     hln: hln::HlnState,
     free_zone_scratched: HashSet<NoteId>,
     pub free_zone_autoplay: [bool; LANE_COUNT],
+    chart_index: Option<std::sync::Arc<ChartIndex>>,
 }
 
 impl JudgeEngine {
@@ -119,6 +123,7 @@ impl JudgeEngine {
             hln: Default::default(),
             free_zone_scratched: HashSet::new(),
             free_zone_autoplay: [false; LANE_COUNT],
+            chart_index: None,
         }
     }
 
@@ -403,14 +408,23 @@ impl JudgeEngine {
             })
     }
 
+    /// A release-judged BSS still produces the reverse Press used by physical scratch
+    /// controllers. Consumes only that first matching edge, and disarms the one-shot
+    /// suppression on any other Press of the lane, exactly as the scored path does.
+    ///
+    /// The unscored path after the result settles uses this too, so the reverse edge
+    /// stays silent instead of falling through to a fallback keysound.
+    pub fn consume_scratch_press_suppression(&mut self, input: InputEvent) -> bool {
+        self.lanes[input.lane.index()].scratch_press_suppression.take().is_some_and(|suppression| {
+            input.time.0 >= suppression.started_at.0
+                && input.time.0 <= suppression.expires_at.0
+                && input.scratch_direction == Some(suppression.direction)
+        })
+    }
+
     fn process_press(&mut self, chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
-        // A release-judged BSS still produces the reverse Press used by physical scratch
-        // controllers. Consume only that first matching edge before it can reach a note or Mine.
-        if let Some(suppression) = self.lanes[input.lane.index()].scratch_press_suppression.take()
-            && input.time.0 >= suppression.started_at.0
-            && input.time.0 <= suppression.expires_at.0
-            && input.scratch_direction == Some(suppression.direction)
-        {
+        // Consume the BSS reverse edge before it can reach a note or Mine.
+        if self.consume_scratch_press_suppression(input) {
             return JudgeOutcome { consumed_input: true, ..Default::default() };
         }
 
@@ -483,7 +497,7 @@ impl JudgeEngine {
                 debug_assert!(false, "normal candidate must have note id");
                 return JudgeOutcome { mine_hits, ..Default::default() };
             };
-            let Some(note) = chart.note_by_id(note_id) else {
+            let Some(note) = self.note_by_id(chart, note_id) else {
                 debug_assert!(false, "candidate note {note_id:?} must exist in chart");
                 return JudgeOutcome { mine_hits, ..Default::default() };
             };

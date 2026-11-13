@@ -57,6 +57,12 @@ impl FavoriteHints {
 }
 
 impl CollectionDatabase {
+    pub(crate) fn open_read_only(path: &Path) -> Result<Self> {
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        conn.busy_timeout(std::time::Duration::from_millis(100))?;
+        Ok(Self { conn })
+    }
+
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
         configure_connection(&conn)?;

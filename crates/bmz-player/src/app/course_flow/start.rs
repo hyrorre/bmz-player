@@ -113,9 +113,13 @@ impl WinitApp {
             same_arrange = !arrange_overrides.is_empty(),
             "starting course"
         );
+        let freq_semitones = crate::screens::play_start::course_freq_semitones(
+            definition.kind,
+            self.boot.profile_config.play.freq_semitones,
+        );
         let mut entry_start_options = Vec::with_capacity(definition.entries.len());
         for index in 0..definition.entries.len() {
-            let mut options = self.play_start_options();
+            let mut options = self.play_start_options_with_freq(freq_semitones);
             normalize_session_mode_for_course(&mut options);
             apply_course_constraints(&mut options, &definition.constraints);
             // Reapply each chart's recorded arrange after constraints so the
@@ -137,7 +141,8 @@ impl WinitApp {
         .context("failed to load course chart metadata")?;
         let metadata_elapsed = metadata_started_at.elapsed();
         let score_save_disabled = library_snapshot.has_score_disabling_key_mode_conversion
-            || self.boot.profile_config.cli_auto_scratch();
+            || self.boot.profile_config.cli_auto_scratch()
+            || freq_semitones < 0;
         if score_save_disabled {
             for options in &mut entry_start_options {
                 options.score_save_disabled = true;

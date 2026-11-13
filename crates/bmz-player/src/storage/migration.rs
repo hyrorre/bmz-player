@@ -106,6 +106,7 @@ pub fn migrate_collection_db(path: &Path) -> Result<()> {
 }
 
 pub fn run_migrations(conn: &mut Connection, migrations: &[Migration]) -> Result<()> {
+    repair_kaleid_migration_collisions(conn, migrations)?;
     let current_version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
 
     for migration in migrations {
@@ -119,6 +120,50 @@ pub fn run_migrations(conn: &mut Connection, migrations: &[Migration]) -> Result
         }
     }
 
+    Ok(())
+}
+
+/// PR #82 used library 37 / score 35 before main independently assigned them.
+/// Recognize only those exact branch schemas, add main's missing fields and
+/// advance past the already installed Kaleid migration in one transaction.
+fn repair_kaleid_migration_collisions(
+    conn: &mut Connection,
+    migrations: &[Migration],
+) -> Result<()> {
+    let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let includes = |expected: &Migration| {
+        migrations
+            .iter()
+            .any(|m| m.version == expected.version && m.statements == expected.statements)
+    };
+    let library = includes(LIBRARY_MIGRATIONS.iter().find(|m| m.version == 38).unwrap())
+        && version == 37
+        && column_exists(conn, "charts", "kaleid_json")?
+        && column_exists(conn, "charts", "has_defined_hln")?
+        && column_exists(conn, "charts", "defined_hln_pairs")?;
+    let score = includes(SCORE_MIGRATIONS.iter().find(|m| m.version == 36).unwrap())
+        && version == 35
+        && table_exists(conn, "score_kaleid_plays")?;
+    let (main_migration, next_version) = if library {
+        (LIBRARY_MIGRATIONS.iter().find(|m| m.version == 37).unwrap(), 38)
+    } else if score {
+        (SCORE_MIGRATIONS.iter().find(|m| m.version == 35).unwrap(), 36)
+    } else {
+        return Ok(());
+    };
+    let missing = if library {
+        !column_exists(conn, "chart_files", "failed_import_version")?
+    } else {
+        !column_exists(conn, "score_history", "normal_best_eligible")?
+    };
+    let tx = conn.transaction()?;
+    if missing {
+        for statement in main_migration.statements {
+            tx.execute_batch(statement)?;
+        }
+    }
+    tx.pragma_update(None, "user_version", next_version)?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -193,12 +238,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pre_merge_kaleid_databases_keep_data_and_gain_main_columns() {
+        for (migrations, before, old_version, new_version, table, column) in [
+            (LIBRARY_MIGRATIONS, 36, 37, 38, "chart_files", "failed_import_version"),
+            (SCORE_MIGRATIONS, 34, 35, 36, "score_history", "normal_best_eligible"),
+        ] {
+            let mut conn = Connection::open_in_memory().unwrap();
+            run_migrations(&mut conn, &migrations[..before]).unwrap();
+            let kaleid = migrations.last().unwrap();
+            run_migrations(
+                &mut conn,
+                &[Migration { version: old_version, statements: kaleid.statements }],
+            )
+            .unwrap();
+            assert!(!column_exists(&conn, table, column).unwrap());
+            if old_version == 37 {
+                conn.execute("INSERT INTO charts (sha256,md5,title,subtitle,artist,subartist,genre,difficulty_name,play_level,mode,total_notes,initial_bpm,ln_type,folder_path,stage_file,preview_file,import_version,kaleid_json) VALUES ('sha','md5','HLN','','','','','','1','7K',1,120,'hln','/song','','',10,'{\"version\":1}')", []).unwrap();
+            }
+            run_migrations(&mut conn, migrations).unwrap();
+            run_migrations(&mut conn, migrations).unwrap();
+            assert!(column_exists(&conn, table, column).unwrap());
+            assert_eq!(
+                conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0)).unwrap(),
+                new_version
+            );
+            if old_version == 37 {
+                assert_eq!(
+                    conn.query_row("SELECT kaleid_json FROM charts WHERE title='HLN'", [], |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .unwrap(),
+                    "{\"version\":1}"
+                );
+            } else {
+                assert!(table_exists(&conn, "score_kaleid_plays").unwrap());
+            }
+        }
+    }
+
+    #[test]
     fn library_migration_adds_long_note_pair_counts() {
         let mut conn = Connection::open_in_memory().unwrap();
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 37);
+        assert_eq!(version, 38);
 
         let mut stmt = conn.prepare("PRAGMA table_info(charts)").unwrap();
         let columns = stmt
@@ -462,7 +546,7 @@ mod tests {
             conn.query_row("SELECT headers_json FROM charts", [], |row| row.get(0)).unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(headers_json, "{}");
-        assert_eq!(version, 37);
+        assert_eq!(version, 38);
     }
 
     #[test]
@@ -529,7 +613,7 @@ mod tests {
             .unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(chart_ids, vec![Some(10), Some(20), None, Some(99)]);
-        assert_eq!(version, 37);
+        assert_eq!(version, 38);
     }
 
     #[test]

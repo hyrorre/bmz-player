@@ -41,8 +41,10 @@ pub(in crate::skin) fn lr2_number(id: i32, state: &SkinDrawState) -> Option<i64>
             }
             Some(if state.play_level != 0 { state.play_level } else { state.select_play_level })
         }
-        // EQ, FX and pitch settings do not exist in BMZ.
-        50..=56 | 60..=66 => None,
+        // LR2 `pitch_amount`: BMZ's FREQ in semitones. LR2's pitch type / on-off and the
+        // EQ and FX settings do not exist in BMZ.
+        66 => Some(i64::from(state.freq_semitones)),
+        50..=56 | 60..=65 => None,
         // My best score and rate of the selected song.
         70 | 73 if !select_score_metadata_available(state) => None,
         70 => Some(lr2_point_score(

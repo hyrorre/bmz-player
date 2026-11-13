@@ -189,11 +189,16 @@ BATTLE相手の非Replay時計は復元済みのViewer開始位置から進め�
 
 ## 永続形式と検証証拠
 
-- library.db 36→37: HLN構成とkaleid_json。取り込み版9→10で再スキャン対象にする。
-- score.db 34→35: score_kaleid_playsへ履歴と同じtransactionで証拠を保存する。
+- library.db 37→38: HLN構成とkaleid_json。取り込み版9→10で再スキャン対象にする。
+- score.db 35→36: score_kaleid_playsへ履歴と同じtransactionで証拠を保存する。
 - Replay 7→8: 入力・seed・配置・オプションに加え、採択枝、評価値、算出枝、基準／実採点数、
   開始時LAMP、判定窓、解釈版、終了時刻、手動終了を記録する。
 - BMZ IR Web SQLite migration 0017: HLN構成・動的分岐・解釈情報を追加する。
+
+mainのlibrary 37（取込失敗版）、score 35（通常BEST対象・機器別索引）を先に適用する。
+main統合前の本ブランチが使ったlibrary 37／score 35はKaleidの列・テーブルで識別し、
+データを保持したままmainの不足列を追加して38／36へ移行する。通常mainのDBと混同しない。
+FREQ・H-RANDOM設定等はmainの保存・Replay条件を引き継ぐ。
 
 証拠はplay_options.kaleidにも含め、device evidenceとは別に署名対象へ入れる。
 BMZ IRのcharts.kaleidはversion・declared・sourceだけを保持し、effective・diagnosticsは
@@ -205,18 +210,28 @@ DBを戻す際は整合したbackupを使い、user_versionだけを巻き戻さ
 
 ## 機能別IR条件
 
-| 原本・実効機能 | ローカル／BMZ IR | rianIR | BMS-IR |
-| --- | --- | --- | --- |
-| 拡張子だけBMC、表示・音声、小節線、CNOBJ/HCNOBJ終端音 | 既存条件で可 | 既存条件で可 | 解釈版が既知で整合すれば可 |
-| HLN、HLNをFORCE LN/CN/HCNへ変換 | 可 | canonical 0..4と既存条件で可 | 保留。元HLNを隠さない |
-| 通常LNをHLNへ変換 | 選択設定を提供しない | 同左 | 同左 |
-| 分岐・フリーゾーン・ポーション・ダミー | 可 | ED実装とサーバー条件を満たす場合 | 保留 |
-| ダミー等へEXTRA NOTE適用 | 既存アシスト制限 | 既存アシスト制限 | 元機能に基づき保留 |
-| 複数拡張 | 各既存制限を満たせば可 | 各条件の積 | 各条件の積 |
-| 部分対応・不正拡張 | 診断を残して可 | 同じ解釈が未確認の結果は保留 | 保留 |
-| 解釈証拠のない過去結果 | 既存保存・同期条件 | 旧通常結果の既存条件 | 証拠不足で保留 |
+| 原本・実効機能 | ローカル／BMZ IR | rianIR | BMS-IR | Bokutachi |
+| --- | --- | --- | --- | --- |
+| 拡張子だけBMC、表示・音声、小節線、CNOBJ/HCNOBJ終端音 | 既存条件で可 | 既存条件で可 | 解釈版が既知で整合すれば可 | 既知版・ForceLn・登録ノーツ数一致等の既存条件で可 |
+| 元HLNをAUTOのままプレイ | 可 | canonical 4と既存条件で可 | 保留 | 保留 |
+| HLNをFORCE LNへ変換 | 可 | canonical 1と既存条件で可 | 保留。元HLNを隠さない | 実効HLNなし・ForceLn・登録ノーツ数一致等を満たせば可 |
+| HLNをFORCE CN/HCNへ変換 | 可 | canonical 2/3と既存条件で可 | 保留 | LN以外は対象外 |
+| 通常LNをHLNへ変換 | 選択設定を提供しない | 同左 | 同左 | 同左 |
+| 分岐・フリーゾーン・ポーション・ダミー | 可 | ED実装とサーバー条件を満たす場合 | 保留 | 保留 |
+| ダミー等へEXTRA NOTE適用 | 既存アシスト制限 | 既存アシスト制限 | 元機能に基づき保留 | 元機能に基づき保留 |
+| 複数拡張 | 各既存制限を満たせば可 | 各条件の積 | 各条件の積 | 各条件の積 |
+| 部分対応・不正拡張 | 診断を残して可 | 同じ解釈が未確認の結果は保留 | 保留 | 保留 |
+| 解釈証拠のない過去結果 | 既存保存・同期条件 | 旧通常結果の既存条件 | 証拠不足で保留 | 新規送信・再POSTは保留。受付済みIDの確認は継続 |
 
 「可」はAUTO/Practice/アシスト等の除外を解除しない。rianIR canonical LNは
 0=なし、1=LN、2=CN、3=HCN、4=HLN。未変換は元構成、FORCEは実効種別を送る。
 分岐はhas_conditionalを送り、RANDOM同様の時間検査除外を使う。
 BMS-IRのBMZ専用APIでは同等契約が未確認。Javaプラグインのフラグを根拠に許可しない。
+
+BokutachiのHLN→FORCE LN許可は2026-11-13のユーザー合意によるBMZ側の条件であり、
+Kaleid拡張全体の公式受入確認を意味しない。元HLNは保存証拠へ残し、原本SHA256/MD5を維持する。
+採択枝・解釈版を表せないDirect Manualへ独自フラグを送って対応済みとは扱わない。
+単曲・コース各曲・段位・再送に同じ拡張条件を適用し、段位の変換HLN曲も事前に登録ノーツ数を照合する。
+ルール・アシスト・FREQ・静的RANDOM・キー変換等のmain側の制限は維持する。
+ランキング取得・ライバル比較・過去履歴の一括送信はmainと同じく未対応。
+詳細は[Bokutachi](bokutachi.md)、根拠は[main統合記録](../notes/2026/2026-11-13-kaleid-main-bokutachi.md)を参照。

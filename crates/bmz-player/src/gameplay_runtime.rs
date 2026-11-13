@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     mpsc,
 };
 use std::thread::{self, JoinHandle};
@@ -13,7 +13,8 @@ use crate::screens::{
     play_finish::FinishSessionSnapshot,
     play_session::AppliedArrange,
     play_snapshot::{
-        BgaFrameCatalog, PlayRenderSnapshotCache, PlayfieldProjection, ProjectionClock,
+        BgaFrameCatalog, HispeedTransition, PlayRenderSnapshotCache, PlayfieldProjection,
+        ProjectionClock,
     },
     result_model::{PlayJudgeGraphTracker, ResultGraphCollector},
 };
@@ -36,6 +37,7 @@ pub struct RuntimeRenderConfig {
     #[cfg(test)]
     pub probe: Option<Arc<tests::RuntimeProbe>>,
     pub effects: Option<crate::system_sound_manager::GameplaySoundOutput>,
+    pub hispeed_transition_ms: u32,
     pub best_ex_score: Option<u32>,
     pub best_ghost: Option<Vec<u8>>,
     pub target_ex_score: Option<u32>,
@@ -74,6 +76,7 @@ struct Worker {
     stop: Arc<AtomicBool>,
     snapshot_requested: Arc<AtomicBool>,
     event_ack: Arc<AtomicU64>,
+    hispeed_transition_ms: Arc<AtomicU32>,
     thread: JoinHandle<()>,
 }
 
@@ -156,6 +159,17 @@ impl GameplayClient {
         }
     }
 
+    /// Latest render-only setting wins even when the session command queue is full.
+    pub fn set_hispeed_transition_ms(&self, duration_ms: u32) {
+        let duration_ms = duration_ms.min(1000);
+        if let Some(worker) = &self.worker
+            && worker.hispeed_transition_ms.swap(duration_ms, Ordering::Relaxed) != duration_ms
+        {
+            worker.snapshot_requested.store(true, Ordering::Release);
+            worker.thread.thread().unpark();
+        }
+    }
+
     pub fn start(&mut self, audio: AudioEngineHandle, config: RuntimeRenderConfig) -> Result<()> {
         if self.worker.is_some() {
             return Ok(());
@@ -195,6 +209,9 @@ impl GameplayClient {
         let event_ack = Arc::new(AtomicU64::new(0));
         let worker_ack = event_ack.clone();
         let worker_final_notes_processed = self.final_notes_processed.clone();
+        let hispeed_transition_ms =
+            Arc::new(AtomicU32::new(config.hispeed_transition_ms.min(1000)));
+        let worker_hispeed_transition_ms = hispeed_transition_ms.clone();
         let thread =
             thread::Builder::new().name(format!("bmz-gameplay-{generation}")).spawn(move || {
                 run(
@@ -209,12 +226,20 @@ impl GameplayClient {
                         snapshot_requested: request,
                         event_ack: worker_ack,
                         final_notes_processed: worker_final_notes_processed,
+                        hispeed_transition_ms: worker_hispeed_transition_ms,
                     },
                     projection_pool,
                 )
             })?;
-        self.worker =
-            Some(Worker { commands, latest, stop, snapshot_requested, event_ack, thread });
+        self.worker = Some(Worker {
+            commands,
+            latest,
+            stop,
+            snapshot_requested,
+            event_ack,
+            hispeed_transition_ms,
+            thread,
+        });
         tracing::info!(
             generation,
             "gameplay runtime: dedicated thread; audio scheduling: gameplay runtime"
@@ -224,6 +249,18 @@ impl GameplayClient {
 
     pub fn final_notes_processed(&self) -> bool {
         self.final_notes_processed.load(Ordering::Acquire)
+    }
+
+    /// Project visual motion at the consumer's Play scene time, independent of chart time.
+    pub fn poll_with_play_elapsed(
+        &mut self,
+        play_elapsed_time: TimeUs,
+    ) -> Option<FrameOutput<RenderSnapshot>> {
+        let mut frame = self.poll()?;
+        self.projection
+            .as_ref()?
+            .apply_play_elapsed_time(&mut frame.render_snapshot, play_elapsed_time);
+        Some(frame)
     }
 
     pub fn poll(&mut self) -> Option<FrameOutput<RenderSnapshot>> {
@@ -333,6 +370,7 @@ struct WorkerSignals {
     snapshot_requested: Arc<AtomicBool>,
     event_ack: Arc<AtomicU64>,
     final_notes_processed: Arc<AtomicBool>,
+    hispeed_transition_ms: Arc<AtomicU32>,
 }
 
 fn run(
@@ -345,7 +383,13 @@ fn run(
     signals: WorkerSignals,
     mut projection_pool: [Arc<PlayfieldProjection>; 3],
 ) {
-    let WorkerSignals { stop, snapshot_requested, event_ack, final_notes_processed } = signals;
+    let WorkerSignals {
+        stop,
+        snapshot_requested,
+        event_ack,
+        final_notes_processed,
+        hispeed_transition_ms,
+    } = signals;
     let audio = audio.for_play(stop.clone());
     if let Some(effects) = &mut config.effects {
         effects.bind_play(stop.clone());
@@ -363,6 +407,7 @@ fn run(
     let mut terminal_result = false;
     let mut last_time = TimeUs(i64::MIN);
     let mut last_publication = Instant::now() - Duration::from_secs(1);
+    let mut hispeed_transition = HispeedTransition::new(runtime.session.hispeed);
     runtime.session.input_system.backend.set_waker(Some(thread::current()));
     while !stop.load(Ordering::Acquire) {
         let iteration_started = Instant::now();
@@ -383,6 +428,11 @@ fn run(
         if !Arc::ptr_eq(&previous_chart, &runtime.session.chart) {
             config.cache = config.cache.for_updated_chart(&runtime.session.chart);
         }
+        hispeed_transition.retarget(
+            runtime.session.hispeed,
+            Instant::now(),
+            Duration::from_millis(u64::from(hispeed_transition_ms.load(Ordering::Relaxed))),
+        );
         final_notes_processed.store(
             runtime.session.judge.is_exhausted(&runtime.session.chart)
                 && bmz_gameplay::session::conditional::next_evaluation(&runtime.session).is_none(),
@@ -417,22 +467,36 @@ fn run(
             probe.record(&runtime.session, &audio);
         }
         let terminal = matches!(runtime.session.state, PlayState::Finished | PlayState::Failed);
-        if (result.is_none()
-            && bmz_gameplay::session::result_is_settled(&runtime.session, last_time))
-            || (terminal && !terminal_result)
+        let play_duration_ms =
+            (runtime.session.audio_clock.elapsed_since(TimeUs(0)).0.max(0) / 1000) as u64;
+        if result.is_none()
+            && let Some(settled_at) = runtime.session.result_settled_at()
         {
+            // The session closed scoring after this update's last input batch.
+            // Score, lamp, every gauge, combo, judgements, replay and course carry
+            // all come from this one state, and the gauge history gets the same
+            // values as its end point instead of waiting for the next 500ms sample.
+            let mut result_graph = graph.clone();
+            result_graph.record_terminal_gauges(&runtime.session.gauge, settled_at);
             result = Some(Arc::new(RuntimeResult {
                 snapshot: FinishSessionSnapshot::from_session(
                     &runtime.session,
                     config.source_ln_profile,
                     &config.applied_arrange,
+                    Some(last_time),
                 ),
-                graph: graph.clone(),
-                settled_at: last_time,
-                play_duration_ms: (runtime.session.audio_clock.elapsed_since(TimeUs(0)).0.max(0)
-                    / 1000) as u64,
+                graph: result_graph,
+                settled_at,
+                play_duration_ms,
             }));
             terminal_result = terminal;
+        } else if terminal && !terminal_result {
+            // A later Finished keeps the settled scoring. Only the exit-time play
+            // duration keeps its existing meaning of the actual terminal instant.
+            if let Some(settled) = &result {
+                result = Some(Arc::new(RuntimeResult { play_duration_ms, ..(**settled).clone() }));
+            }
+            terminal_result = true;
         }
         for event in frame.skin_events.drain(..) {
             if history.len() == PRESENTATION_HISTORY_CAPACITY {
@@ -467,9 +531,9 @@ fn run(
             thread::park_timeout(SAFETY_WAKE.saturating_sub(iteration_started.elapsed()));
             continue;
         };
-        Arc::get_mut(projection)
-            .expect("unobserved projection")
-            .update(&runtime.session, last_time);
+        let projection_state = Arc::get_mut(projection).expect("unobserved projection");
+        projection_state.update(&runtime.session, last_time);
+        projection_state.set_hispeed_transition(hispeed_transition);
         let mut frame = crate::screens::play_loop::frame_output_from_session_frame_cached(
             &runtime.session,
             frame,

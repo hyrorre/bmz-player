@@ -90,6 +90,8 @@ pub struct ResultSummary {
 pub struct ResultGraphCollector {
     graph: ResultGraphSnapshot,
     next_gauge_sample_ms: i32,
+    /// 採用した結果の確定時刻 (ms)。全ゲージの終端点は一度だけ記録する。
+    terminal_gauge_ms: Option<i32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -323,11 +325,63 @@ impl ResultGraphCollector {
     }
 
     pub fn snapshot_for_session(&self, session: &GameSession) -> ResultGraphSnapshot {
-        self.snapshot_for_result_parts(
+        self.captured_for_session(session).snapshot_for_result_parts(
             &session.chart,
             &session.result_judgements,
             (session.state == bmz_gameplay::session::PlayState::Failed).then_some(&session.gauge),
         )
+    }
+
+    /// `session` から結果を取得するときと同じ状態で、全ゲージの終端点を加えた履歴。
+    /// 結果が未確定の `Playing` セッションには終端点を加えない。
+    pub(crate) fn captured_for_session(&self, session: &GameSession) -> Self {
+        let mut collector = self.clone();
+        if let Some(settled_at) = session.result_settled_at() {
+            collector.record_terminal_gauges(&session.gauge, settled_at);
+        }
+        collector
+    }
+
+    /// 結果を確定した譜面時刻に、Result画面で切り替えられる全ゲージの値を終端点として記録する。
+    ///
+    /// 500ms周期の定期記録とは独立に、確定時の `value / max / border / gauge_type` を残す。
+    /// 同じゲージ・同じ `time_ms` の末尾点があれば最新値へ更新し、時刻順を保つ。
+    /// 確定は一度だけなので、2回目以降の呼び出しは何もしない。
+    pub(crate) fn record_terminal_gauges(
+        &mut self,
+        gauge_state: &bmz_gameplay::gauge::GaugeState,
+        settled_at: bmz_core::time::TimeUs,
+    ) {
+        if self.terminal_gauge_ms.is_some() {
+            return;
+        }
+        let last_ms = self.graph.gauge_points.last().map_or(0, |point| point.time_ms);
+        let time_ms = clamp_us_to_ms(settled_at.0.max(0)).max(last_ms);
+        for gauge in &gauge_state.gauges {
+            let point = ResultGaugeGraphPoint {
+                time_ms,
+                value: gauge.value,
+                max: gauge.definition.max,
+                border: gauge.definition.border,
+                gauge_type: gauge.definition.gauge_type as i32,
+                course_section_start: false,
+            };
+            match self
+                .graph
+                .gauge_points
+                .iter_mut()
+                .rev()
+                .find(|existing| existing.gauge_type == point.gauge_type)
+            {
+                Some(existing) if existing.time_ms == time_ms => {
+                    existing.value = point.value;
+                    existing.max = point.max;
+                    existing.border = point.border;
+                }
+                _ => self.graph.gauge_points.push(point),
+            }
+        }
+        self.terminal_gauge_ms = Some(time_ms);
     }
 
     pub(crate) fn snapshot_for_result_parts(
@@ -344,13 +398,25 @@ impl ResultGraphCollector {
             fill_failed_gauge_tail(
                 &mut graph,
                 gauge,
-                self.next_gauge_sample_ms,
+                self.failed_tail_start_ms(),
                 clamp_us_to_ms(chart.end_time.0).saturating_add(RESULT_GAUGE_GRAPH_SAMPLE_MS),
             );
         }
         populate_result_note_graphs(&mut graph, chart, result_judgements);
         graph.refresh_timing_metrics();
         graph
+    }
+
+    /// 途中FAILEDの0埋めは、停止境界の終端点より後の定期サンプル位置から始める。
+    fn failed_tail_start_ms(&self) -> i32 {
+        let Some(terminal_ms) = self.terminal_gauge_ms else {
+            return self.next_gauge_sample_ms;
+        };
+        let after_terminal = terminal_ms
+            .div_euclid(RESULT_GAUGE_GRAPH_SAMPLE_MS)
+            .saturating_add(1)
+            .saturating_mul(RESULT_GAUGE_GRAPH_SAMPLE_MS);
+        self.next_gauge_sample_ms.max(after_terminal)
     }
 
     fn record_gauge(&mut self, snapshot: &RenderSnapshot) {

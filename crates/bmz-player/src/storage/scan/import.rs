@@ -90,6 +90,9 @@ pub fn scan_song_roots_with_progress(
                     report.summary.native_discovery_roots.saturating_add(1);
                 report.summary.everything_fallback_roots =
                     report.summary.everything_fallback_roots.saturating_add(1);
+                if report.summary.everything_fallback_reason.is_none() {
+                    report.summary.everything_fallback_reason = discovery.fallback_reason.clone();
+                }
             }
         }
         let root_files = usize_to_u32(discovery.entries.len());
@@ -229,6 +232,7 @@ pub fn scan_song_roots_with_progress(
         progress_done = progress_done.saturating_add(unchanged_count).min(files_total);
         on_progress(ScanProgress { done: progress_done, total: files_total });
 
+        let archive_start = Instant::now();
         let mut failed_archives = std::collections::HashSet::new();
         for (container, (generation, archive_entries)) in archives {
             let count = usize_to_u32(archive_entries.len());
@@ -266,6 +270,7 @@ pub fn scan_song_roots_with_progress(
             on_progress(ScanProgress { done: progress_done, total: files_total });
         }
 
+        report.timing.archive_ms += archive_start.elapsed().as_millis();
         let new_total = to_import.len();
         tracing::info!(
             new_files = new_total,
@@ -276,37 +281,46 @@ pub fn scan_song_roots_with_progress(
             "skip check complete"
         );
 
-        // Phase 3+4: バッチごとに並列パースし、1トランザクションでまとめて書き込む。
-        // パースは別スレッドで次のバッチへ進み、SQLiteへの書き込みと重ねる。
-        // 容量0のチャネルで受け渡すため、メモリ上のバッチは書き込み中とパース中の
-        // 高々2つ。書き込みが遅ければパース側は受け取りを待つ。書き込みが失敗すると
+        // Phase 3+4: 譜面ごとに並列パースし、結果をIMPORT_BATCH_SIZE件ずつ1トランザクションで
+        // 書き込む。パースは別スレッドのrayonで進み、SQLiteへの書き込みと重なる。重い譜面が
+        // あっても他のスレッドは次の譜面へ進む（バッチ全件の完了を待たない）。チャネルの容量は
+        // IMPORT_BATCH_SIZEなので、メモリ上の解析結果は書き込み中のバッチ、チャネル内、
+        // 解析中のものに限られる。書き込みが遅ければパース側は送信で待つ。書き込みが失敗すると
         // 受信側が破棄され、パース側の送信が失敗して終了してから scope が戻る。
         let mut last_log = std::time::Instant::now();
         let log_interval = std::time::Duration::from_secs(2);
-        let (parsed_tx, parsed_rx) = std::sync::mpsc::sync_channel(0);
-        std::thread::scope(|scope| -> Result<()> {
+        let (parsed_tx, parsed_rx) = std::sync::mpsc::sync_channel::<ParsedFile>(IMPORT_BATCH_SIZE);
+        let parse_ms = std::thread::scope(|scope| -> Result<u128> {
             let to_import = &to_import;
-            scope.spawn(move || {
-                for chunk in to_import.chunks(IMPORT_BATCH_SIZE) {
-                    let parse_start = std::time::Instant::now();
-                    let parsed: Vec<ParsedFile> = chunk
-                        .par_iter()
-                        .map(|todo| ParsedFile {
-                            path: todo.path.clone(),
-                            file_size: todo.file_size,
-                            modified_at: todo.modified_at,
-                            result: import_bms_chart_catching_unwind(&todo.path),
-                        })
-                        .collect();
-                    // A closed receiver means the writer failed; stop parsing.
-                    if parsed_tx.send((parsed, parse_start.elapsed().as_millis())).is_err() {
-                        break;
+            let parser = scope.spawn(move || {
+                let parse_start = std::time::Instant::now();
+                // A closed receiver means the writer failed; stop parsing.
+                let _ = to_import.par_iter().try_for_each_with(parsed_tx, |tx, todo| {
+                    tx.send(ParsedFile {
+                        path: todo.path.clone(),
+                        file_size: todo.file_size,
+                        modified_at: todo.modified_at,
+                        result: import_bms_chart_catching_unwind(&todo.path),
+                    })
+                    .map_err(drop)
+                });
+                parse_start.elapsed().as_millis()
+            });
+            // Owned here, so an early return drops it and stops the parser.
+            let parsed_rx = parsed_rx;
+            let mut batch_done = 0_usize;
+            for batch_idx in 0.. {
+                let Ok(first) = parsed_rx.recv() else {
+                    break;
+                };
+                let mut parsed = Vec::with_capacity(IMPORT_BATCH_SIZE);
+                parsed.push(first);
+                while parsed.len() < IMPORT_BATCH_SIZE {
+                    match parsed_rx.recv() {
+                        Ok(file) => parsed.push(file),
+                        Err(_) => break,
                     }
                 }
-            });
-
-            for (batch_idx, (parsed, parse_ms)) in parsed_rx.into_iter().enumerate() {
-                let batch_done = batch_idx * IMPORT_BATCH_SIZE;
                 let now = std::time::Instant::now();
                 if now.duration_since(last_log) >= log_interval || batch_idx == 0 {
                     last_log = now;
@@ -319,7 +333,6 @@ pub fn scan_song_roots_with_progress(
                         "importing"
                     );
                 }
-                report.timing.parse_ms += parse_ms;
 
                 // 1トランザクションでバッチ書き込み
                 let write_start = std::time::Instant::now();
@@ -347,6 +360,16 @@ pub fn scan_song_roots_with_progress(
                                 report.summary.imported += 1;
                                 report.summary.warnings += warnings_written as u32;
                             }
+                            // Deleted after discovery: nothing failed. An earlier
+                            // registration stays until the next scan finds it gone.
+                            Err(ImportError::Io { source, .. })
+                                if source.kind() == io::ErrorKind::NotFound =>
+                            {
+                                tracing::debug!(
+                                    path = %p.path.display(),
+                                    "chart disappeared before import"
+                                );
+                            }
                             Err(error) => {
                                 let message = error.to_string();
                                 LibraryDatabase::write_failed_chart(
@@ -357,6 +380,7 @@ pub fn scan_song_roots_with_progress(
                                     p.modified_at,
                                     scanned_at,
                                     &message,
+                                    failed_import_version(error),
                                 )?;
                                 report.summary.failed += 1;
                                 report.failures.push(ScanFailure { path: p.path.clone(), message });
@@ -371,18 +395,18 @@ pub fn scan_song_roots_with_progress(
                 tracing::info!(
                     batch = batch_idx,
                     files = parsed.len(),
-                    parse_ms,
                     write_ms,
                     root = %root_path.display(),
                     "batch timing"
                 );
+                batch_done += parsed.len();
                 progress_done =
                     progress_done.saturating_add(usize_to_u32(parsed.len())).min(files_total);
                 on_progress(ScanProgress { done: progress_done, total: files_total });
             }
-            Ok(())
+            parser.join().map_err(|_| anyhow::anyhow!("chart parser thread panicked"))
         })?;
-
+        report.timing.parse_ms += parse_ms;
         // Discovery already enumerated every song directory. Persist the shared
         // folder flag even when every chart was skipped as unchanged.
         folder_document_flags.retain(|(folder, _)| {
@@ -390,7 +414,9 @@ pub fn scan_song_roots_with_progress(
                 Ok(crate::chart_source::ChartLocator::Archive { container, .. })
                 if failed_archives.contains(&container))
         });
+        let folder_flags_start = Instant::now();
         db.update_folder_document_flags(&folder_document_flags)?;
+        report.timing.folder_flags_ms += folder_flags_start.elapsed().as_millis();
 
         tracing::info!(
             root_num = root.root_num,
@@ -416,7 +442,6 @@ pub fn scan_song_roots_with_progress(
                 root.root_id,
                 root.recursive,
                 root.backend,
-                entries.iter().map(|entry| library_path_key(&entry.path)).collect::<HashSet<_>>(),
                 root.archives,
             ));
         } else {
@@ -432,12 +457,20 @@ pub fn scan_song_roots_with_progress(
         }
     }
 
+    let prune_start = Instant::now();
     let mut validated = Vec::new();
-    for (root_path, root_id, recursive, backend, discovered, archives) in pending_prune {
+    for (root_path, root_id, recursive, backend, archives) in pending_prune {
         let mut valid = true;
         for archive in &archives {
-            match crate::song_archive::inspect(&archive.path, &Default::default()) {
-                Ok(index) if index.generation == archive.generation => {}
+            // An unchanged metadata stamp keeps the discovered generation; only an
+            // unknown stamp needs the index (and possibly a hash) again.
+            let current = match crate::song_archive::generation_record(&archive.path) {
+                Some(record) => Ok(record.generation),
+                None => crate::song_archive::inspect(&archive.path, &Default::default())
+                    .map(|index| index.generation),
+            };
+            match current {
+                Ok(generation) if generation == archive.generation => {}
                 Err(_) if matches!(archive.path.try_exists(), Ok(false)) => {}
                 _ => {
                     valid = false;
@@ -465,29 +498,42 @@ pub fn scan_song_roots_with_progress(
             });
             continue;
         }
-        validated.push((root_path, root_id, recursive, backend, discovered));
+        validated.push((root_path, root_id, recursive, backend));
     }
-    for (root_path, root_id, recursive, backend, discovered) in validated {
-        // Everything results may lag and do not establish absence from scope.
-        let discovered = (backend != ScanDiscoveryBackend::Everything).then_some(&discovered);
-        report.summary.removed_files += db.prune_missing_chart_files(
-            &root_path,
-            recursive,
-            scan.skip_hidden,
-            discovered,
-            &discovered_any,
-            &protected_roots,
-        )?;
-        db.update_root_scanned_at(root_id, scanned_at)?;
+    if !validated.is_empty() {
+        let mut index = db.chart_path_index()?;
+        for (root_path, root_id, recursive, backend) in validated {
+            let request = crate::storage::library_db::PruneRequest {
+                root: &root_path,
+                recursive,
+                // Everything results may lag and do not establish absence from scope.
+                omission_proves_absence: backend != ScanDiscoveryBackend::Everything,
+                discovered_any: &discovered_any,
+                protected_roots: &protected_roots,
+            };
+            report.summary.removed_files += db.prune_missing_chart_files(&mut index, &request)?;
+            db.update_root_scanned_at(root_id, scanned_at)?;
+        }
     }
 
+    report.timing.prune_ms = prune_start.elapsed().as_millis();
     on_progress(ScanProgress { done: files_total, total: files_total });
     report.timing.total_ms = total_start.elapsed().as_millis();
     Ok(report)
 }
 
+/// The importer version to record for a failure. Bytes that failed to parse fail the
+/// same way until the file or `CHART_IMPORT_VERSION` changes; a read error is retried.
+pub(super) fn failed_import_version(error: &ImportError) -> i64 {
+    if matches!(error, ImportError::Io { .. }) { 0 } else { CHART_IMPORT_VERSION }
+}
+
 pub(super) fn import_bms_chart_catching_unwind(path: &Path) -> Result<ImportResult, ImportError> {
-    match catch_unwind(AssertUnwindSafe(|| import_bms_chart(path, None, false))) {
+    // The library stores metadata and analysis only; resolving every BGA file on disk
+    // cost several lookups per #BMP line (about 95 ms for a chart with 234 of them).
+    let import =
+        || import_chart_with_assets(path, BmsRandomSource::Seed(None), AssetLookup::Declared);
+    match catch_unwind(AssertUnwindSafe(import)) {
         Ok(result) => result.map(|mut result| {
             result.chart.metadata.preview_file = crate::chart_asset::normalize_preview_file(
                 path,

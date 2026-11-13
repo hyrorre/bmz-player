@@ -1,6 +1,7 @@
 pub mod backfill;
 pub mod bms_ir;
 pub mod bmz_official;
+pub mod bokutachi;
 pub mod client_hash;
 pub mod course_payload;
 pub mod credentials;

@@ -306,8 +306,10 @@ pub struct EguiOutput {
     pub reset_skin_config: bool,
     /// スキン設定値のうち、再読込や即時反映が必要な対象。
     pub skin_reload_request: SkinReloadRequest,
-    /// 有効な曲ルートをライブラリ DB へ再スキャンする要求。
+    /// 有効な曲ルートをライブラリ DB へ再スキャンする要求。変更のない譜面は解析しない。
     pub trigger_song_rescan: bool,
+    /// 変更のない譜面も含めて、有効な曲ルートの全譜面を解析し直す要求。
+    pub trigger_full_song_rescan: bool,
     /// 曲フォルダのスキャン要求。
     pub song_scan_requests: Vec<SongScanRequest>,
     /// 難易度表の取得要求。空なら取得しない。

@@ -6,6 +6,7 @@ use bmz_gameplay::judge::model::HlnBodyVisualState;
 use bmz_gameplay::judge::model::{JudgeWindows, LaneJudgeState};
 use bmz_gameplay::session::HcnLaneTimer;
 use std::borrow::Cow;
+use std::time::Instant;
 
 pub(super) struct PlayfieldJudgeView<'a> {
     pub hln_bodies: Cow<'a, [HlnBodyVisualState]>,
@@ -66,6 +67,7 @@ pub(crate) struct PlayfieldProjection {
     window_set: JudgeWindows,
     lane_hcn_timer: [Option<HcnLaneTimer>; LANE_COUNT],
     hispeed: f32,
+    hispeed_transition: Option<HispeedTransition>,
     lift: f32,
     note_retention: bool,
     missed_note_fall: bool,
@@ -77,6 +79,8 @@ pub(crate) struct PlayfieldProjection {
     duration_lane_cover: f32,
     playback_rate_percent: u16,
     chart_miss_text: ChartMissTextClock,
+    lane_scratch_angle_delta_ms: [i64; LANE_COUNT],
+    skin_timers: PlaySkinTimers,
 }
 
 impl PlayfieldProjection {
@@ -95,6 +99,7 @@ impl PlayfieldProjection {
                 window_set: session.judge.window_set,
                 lane_hcn_timer: session.lane_hcn_timer,
                 hispeed: session.hispeed,
+                hispeed_transition: None,
                 lift: session.lift,
                 note_retention: session.note_retention,
                 missed_note_fall: session.missed_note_fall,
@@ -106,6 +111,8 @@ impl PlayfieldProjection {
                 duration_lane_cover: 0.0,
                 playback_rate_percent: session.audio_clock.playback_rate_percent(),
                 chart_miss_text: ChartMissTextClock::from_session(session),
+                lane_scratch_angle_delta_ms: session.lane_scratch_angle_delta_ms,
+                skin_timers: PlaySkinTimers::from_session(session),
             };
             projection.update(session, projection.published_time);
             Arc::new(projection)
@@ -130,13 +137,20 @@ impl PlayfieldProjection {
         }
         self.hln_bodies.clear();
         self.hln_bodies.extend(session.judge.hln_body_visuals());
-        self.judged_notes.clear();
-        self.judged_notes
-            .extend(session.judge.judged_notes.iter().map(|(&id, &judge)| (id, judge)));
+        if self.judged_notes.capacity() == session.judge.judged_notes.capacity() {
+            // Equal-sized tables can copy buckets without rehashing. Retain the
+            // preallocated pool capacity while the producer's map is growing.
+            self.judged_notes.clone_from(&session.judge.judged_notes);
+        } else {
+            self.judged_notes.clear();
+            self.judged_notes
+                .extend(session.judge.judged_notes.iter().map(|(&id, &judge)| (id, judge)));
+        }
         self.lanes = session.judge.lanes;
         self.window_set = session.judge.window_set;
         self.lane_hcn_timer = session.lane_hcn_timer;
         self.hispeed = session.hispeed;
+        self.hispeed_transition = None;
         self.lift = session.lift;
         self.note_retention = session.note_retention;
         self.missed_note_fall = session.missed_note_fall;
@@ -152,6 +166,29 @@ impl PlayfieldProjection {
         };
         self.playback_rate_percent = session.audio_clock.playback_rate_percent();
         self.chart_miss_text = ChartMissTextClock::from_session(session);
+        self.lane_scratch_angle_delta_ms = session.lane_scratch_angle_delta_ms;
+        self.skin_timers = PlaySkinTimers::from_session(session);
+    }
+
+    /// Turntables use the Play scene clock, including the negative chart-time READY countdown.
+    /// Keep the producer's input phase; only the idle rotation advances at render time.
+    pub(crate) fn apply_play_elapsed_time(
+        &self,
+        snapshot: &mut RenderSnapshot,
+        play_elapsed_time: TimeUs,
+    ) {
+        snapshot.play_elapsed_time = play_elapsed_time;
+        self.skin_timers.apply(snapshot);
+        set_scratch_angle_offsets(
+            &mut snapshot.skin_offsets,
+            self.chart.metadata.key_mode,
+            play_elapsed_time,
+            &self.lane_scratch_angle_delta_ms,
+        );
+    }
+
+    pub(crate) fn set_hispeed_transition(&mut self, transition: HispeedTransition) {
+        self.hispeed_transition = Some(transition);
     }
 
     pub(crate) fn project(
@@ -160,10 +197,27 @@ impl PlayfieldProjection {
         now: TimeUs,
         clock: &mut ProjectionClock,
     ) {
+        self.project_at(snapshot, now, clock, Instant::now());
+    }
+
+    pub(crate) fn project_at(
+        &self,
+        snapshot: &mut RenderSnapshot,
+        now: TimeUs,
+        clock: &mut ProjectionClock,
+        rendered_at: Instant,
+    ) {
         let (chart_now, lane_now) =
             clock.advance(now.max(self.published_time), self.visual_offset_us);
         snapshot.time = chart_now;
         snapshot.play_elapsed_time = TimeUs(chart_now.0.max(0));
+        self.skin_timers.apply(snapshot);
+        refresh_chart_skin_timers(
+            snapshot,
+            &self.timing_map,
+            &self.chart.bar_lines,
+            self.cache.end_of_note_time,
+        );
         let view = PlayfieldView {
             player_two: false,
             chart: &self.chart,
@@ -175,7 +229,9 @@ impl PlayfieldProjection {
                 window_set: self.window_set,
             },
             lane_hcn_timer: &self.lane_hcn_timer,
-            hispeed: self.hispeed,
+            hispeed: self
+                .hispeed_transition
+                .map_or(self.hispeed, |transition| transition.value_at(rendered_at)),
             lift: self.lift,
             note_retention: self.note_retention,
             missed_note_fall: self.missed_note_fall,

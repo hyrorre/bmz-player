@@ -476,7 +476,7 @@ fn library_migration_merges_windows_separator_variant_paths() {
 
     let version: i32 =
         db.conn().pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-    assert_eq!(version, 37);
+    assert_eq!(version, 38);
     assert_eq!(db.list_course_entries(course_id).unwrap()[0].entry.chart_id, Some(refreshed_id));
     assert_ne!(copy_id, refreshed_id, "a real copy at another path must remain separate");
 
@@ -611,7 +611,7 @@ fn library_migration_removes_windows_extended_path_prefixes() {
 
     let version: i32 =
         db.conn().pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-    assert_eq!(version, 37);
+    assert_eq!(version, 38);
     let counts: (i64, i64, i64) = db
         .conn()
         .query_row(

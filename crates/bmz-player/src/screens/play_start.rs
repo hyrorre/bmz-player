@@ -3,7 +3,7 @@ use bmz_chart::model::LongNoteMode;
 use bmz_core::clear::GaugeType;
 use bmz_core::course::{
     CourseClassConstraint, CourseConstraints, CourseGaugeConstraint, CourseJudgeConstraint,
-    CourseLnConstraint, CourseSpeedConstraint,
+    CourseKind, CourseLnConstraint, CourseSpeedConstraint,
 };
 use bmz_core::lane::KeyMode;
 use bmz_core::time::TimeUs;
@@ -14,7 +14,8 @@ use bmz_gameplay::replay::ReplayPlayer;
 use crate::audio::{AudioRuntime, RunningPlaySession, open_prepared_play_audio};
 use crate::config::app_config::AppConfig;
 use crate::config::play::{
-    bottom_shiftable_gauge_from_config, gauge_auto_shift_from_config, gauge_type_from_config,
+    bottom_shiftable_gauge_from_config, clamp_freq_semitones, freq_playback_rate_percent,
+    gauge_auto_shift_from_config, gauge_type_from_config,
 };
 use crate::config::profile_config::{
     AssistOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, KeyModeConversionConfig,
@@ -102,7 +103,11 @@ impl BattleTargetPlayback {
                     legacy_arrange_seed: false,
                     s_random_scheme: SRandomScheme::default(),
                     s_random_scheme_2p: None,
-                    h_random_threshold_ms: None,
+                    // Seed-only IR targets carry no threshold. Rebuild them with
+                    // the same default a fresh BMZ or beatoraja play would use.
+                    h_random_threshold_ms: Some(
+                        crate::screens::play_session::DEFAULT_H_RANDOM_THRESHOLD_MS,
+                    ),
                 }
             }
         }
@@ -154,6 +159,9 @@ pub struct PlayStartOptions {
     pub seven_to_nine_rule_mode: SevenToNineRuleMode,
     pub score_save_disabled: bool,
     pub playback_rate_percent: u16,
+    /// LR2 FREQ semitones that produced `playback_rate_percent`. Set both
+    /// together through [`apply_freq_option`].
+    pub freq_semitones: i8,
     pub assist: AssistOptionConfig,
     pub replay_player: Option<ReplayPlayer>,
     /// Target required by `SessionMode::GBattle`.
@@ -268,6 +276,12 @@ pub fn play_session_options_from_start(
         };
         BattleOpponentOptions {
             replay_player,
+            replay_judge_rate_percent: match &target.playback {
+                BattleTargetPlayback::Replay(replay) => {
+                    freq_playback_rate_percent(replay.recorded_freq_semitones())
+                }
+                BattleTargetPlayback::Seed { .. } => 100,
+            },
             gauge: target.gauge,
             arrange: arrangement.arrange,
             arrange_2p: arrangement.arrange_2p,
@@ -302,6 +316,7 @@ pub fn play_session_options_from_start(
                 start_options.playback_rate_percent
             },
         ),
+        freq_semitones: start_options.freq_semitones,
         assist: start_options.assist,
         assist_runtime: Default::default(),
         replay_player: start_options.replay_player,
@@ -414,8 +429,7 @@ pub fn start_running_play_session_for_chart_with_audio_runtime_and_input_backend
         input_backend,
     )?;
     let score_key = prepared.score_key;
-    let schedule_ahead = app_config.audio.schedule_ahead;
-    let mut running = open_prepared_play_audio(runtime, prepared, score_key, schedule_ahead);
+    let mut running = open_prepared_play_audio(runtime, prepared, score_key);
     // 表示値とFIRST_PLAY判定にはscore保存可否にかかわらず既存履歴が必要。
     let best = score_db.best_scores_for_charts(&[score_key]).ok().and_then(|mut rows| rows.pop());
     running.best_ex_score = best.as_ref().map(|best| best.ex_score);
@@ -490,11 +504,9 @@ pub fn open_prepared_winit_play_session(
     score_db: &ScoreDatabase,
     runtime: &AudioRuntime,
     prepared: PreparedInputPlaySession,
-    schedule_ahead: bool,
 ) -> Result<StartedInputPlaySession> {
     let score_key = prepared.prepared.score_key;
-    let mut running =
-        open_prepared_play_audio(runtime, prepared.prepared, score_key, schedule_ahead);
+    let mut running = open_prepared_play_audio(runtime, prepared.prepared, score_key);
     // 表示値とFIRST_PLAY判定にはscore保存可否にかかわらず既存履歴が必要。
     let best = score_db.best_scores_for_charts(&[score_key]).ok().and_then(|mut rows| rows.pop());
     running.best_ex_score = best.as_ref().map(|best| best.ex_score);
@@ -549,6 +561,27 @@ pub fn start_running_play_session_for_chart_with_winit_input(
         &runtime,
     )?;
     Ok(StartedInputPlaySession { running, input })
+}
+
+/// Applies LR2 FREQ to a fresh play start.
+///
+/// The rate follows [`freq_playback_rate_percent`]. A negative FREQ makes the
+/// chart easier to read, so it joins the other score-disabling options; a
+/// positive FREQ stays score eligible.
+pub fn apply_freq_option(options: &mut PlayStartOptions, semitones: i8) {
+    let semitones = clamp_freq_semitones(semitones);
+    options.freq_semitones = semitones;
+    options.playback_rate_percent = freq_playback_rate_percent(semitones);
+    options.score_save_disabled |= semitones < 0;
+}
+
+/// FREQ used by a course start. DAN courses always play at FREQ 0, while
+/// normal courses keep the player's setting.
+pub fn course_freq_semitones(kind: CourseKind, profile_semitones: i8) -> i8 {
+    match kind {
+        CourseKind::Dan => 0,
+        CourseKind::Course => profile_semitones,
+    }
 }
 
 /// Overrides `options` fields based on the course constraints.
@@ -684,6 +717,9 @@ pub fn apply_queued_replay(
     options.bms_random_choices = replay.replay.bms_random_choices.clone();
     options.bms_switch_choices = replay.replay.bms_switch_choices.clone();
     options.arrange_pattern = replay.replay.lane_shuffle_pattern.clone();
+    // Play back at the recorded rate, not the player's current FREQ.
+    options.freq_semitones = replay.replay.recorded_freq_semitones();
+    options.playback_rate_percent = freq_playback_rate_percent(options.freq_semitones);
     // Replays of past plays were recorded by a human; never autoplay them.
     options.autoplay = false;
     Ok(())
@@ -705,6 +741,7 @@ mod tests {
 
         let mut options = PlayStartOptions::default();
         let arrange = AppliedArrange {
+            source_key_mode: None,
             arrange: ArrangeOption::Random,
             arrange_2p: ArrangeOption::Mirror,
             double_option: crate::select_options::DoubleOption::Flip,
@@ -721,6 +758,7 @@ mod tests {
             seven_to_nine_pattern: SevenToNinePattern::default(),
             seven_to_nine_type: SevenToNineType::default(),
             seven_to_nine_rule_mode: SevenToNineRuleMode::default(),
+            freq_semitones: 0,
         };
         apply_arrange_override(&mut options, &arrange);
 
@@ -803,7 +841,8 @@ mod tests {
     fn play_session_options_carry_battle_legacy_seed_scheme() {
         let replay =
             ReplayFile::new([1; 32], 1, None, ArrangeOption::Random, Some(42), None, Vec::new())
-                .with_seed_scheme(crate::storage::replay::SEED_SCHEME_LEGACY_SHARED_V3);
+                .with_seed_scheme(crate::storage::replay::SEED_SCHEME_LEGACY_SHARED_V3)
+                .with_freq_semitones(12);
         let target = BattleTarget {
             provider: "local".to_string(),
             score_id: "1".to_string(),
@@ -820,7 +859,9 @@ mod tests {
             PlayStartOptions { battle_target: Some(target), ..Default::default() },
         );
 
-        assert!(options.battle_opponent.expect("battle opponent").legacy_arrange_seed);
+        let opponent = options.battle_opponent.expect("battle opponent");
+        assert!(opponent.legacy_arrange_seed);
+        assert_eq!(opponent.replay_judge_rate_percent, 200);
     }
 
     #[test]
@@ -888,6 +929,65 @@ mod tests {
             class: CourseClassConstraint::None,
             source_constraints: Vec::new(),
         }
+    }
+
+    #[test]
+    fn negative_freq_disables_score_saving_at_option_assembly() {
+        for (semitones, rate, disabled) in
+            [(-12, 50, true), (-3, 84, true), (0, 100, false), (3, 119, false), (12, 200, false)]
+        {
+            let mut options = PlayStartOptions::default();
+            apply_freq_option(&mut options, semitones);
+
+            let session = play_session_options_from_start(&AppConfig::default(), options);
+
+            assert_eq!(session.freq_semitones, semitones);
+            assert_eq!(session.playback_rate_percent, rate, "{semitones}");
+            assert_eq!(session.score_save_disabled, disabled, "{semitones}");
+        }
+
+        // A positive FREQ never clears a save-disable flag set by another option.
+        let mut options = PlayStartOptions { score_save_disabled: true, ..Default::default() };
+        apply_freq_option(&mut options, 3);
+        assert!(options.score_save_disabled);
+    }
+
+    #[test]
+    fn dan_course_start_forces_freq_zero_while_normal_course_keeps_it() {
+        for (kind, freq, rate, disabled) in
+            [(CourseKind::Dan, 0, 100, false), (CourseKind::Course, -3, 84, true)]
+        {
+            let mut options = PlayStartOptions::default();
+            apply_freq_option(&mut options, course_freq_semitones(kind, -3));
+            apply_course_constraints(&mut options, &default_constraints());
+
+            assert_eq!(options.freq_semitones, freq, "{kind:?}");
+            assert_eq!(options.playback_rate_percent, rate, "{kind:?}");
+            assert_eq!(options.score_save_disabled, disabled, "{kind:?}");
+        }
+        assert_eq!(course_freq_semitones(CourseKind::Dan, 5), 0);
+        assert_eq!(course_freq_semitones(CourseKind::Course, 5), 5);
+    }
+
+    #[test]
+    fn queued_course_replay_plays_at_its_recorded_freq() {
+        let replay =
+            ReplayFile::new([1; 32], 1, None, ArrangeOption::Normal, None, None, Vec::new())
+                .with_freq_semitones(4);
+        let queued = crate::storage::replay::QueuedCourseReplay {
+            position: 0,
+            chart_id: 1,
+            chart_sha256: [1; 32],
+            replay,
+        };
+        // The current profile FREQ must not leak into the replay.
+        let mut options = PlayStartOptions::default();
+        apply_freq_option(&mut options, -2);
+
+        apply_queued_replay(&mut options, &queued).unwrap();
+
+        assert_eq!(options.freq_semitones, 4);
+        assert_eq!(options.playback_rate_percent, 126);
     }
 
     #[test]

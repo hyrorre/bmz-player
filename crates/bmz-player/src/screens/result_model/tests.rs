@@ -475,3 +475,128 @@ fn note(id: u32, time_us: i64) -> bmz_chart::model::NoteEvent {
         damage: None,
     }
 }
+
+fn gauge_with(values: &[(GaugeType, f32)]) -> GaugeState {
+    let mut gauge = GaugeState::new(GaugeType::Normal, 160.0, 1000);
+    for (gauge_type, value) in values {
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == *gauge_type)
+            .expect("gauge type exists")
+            .value = *value;
+    }
+    gauge
+}
+
+fn periodic_collector(samples: &[(i64, &GaugeState)]) -> ResultGraphCollector {
+    let mut collector = ResultGraphCollector::default();
+    for (time_us, gauge) in samples {
+        collector.record_frame(&FrameOutput {
+            render_snapshot: RenderSnapshot {
+                time: TimeUs(*time_us),
+                play_elapsed_time: TimeUs(*time_us),
+                gauge_graph_points: gauge
+                    .gauges
+                    .iter()
+                    .map(|gauge| ResultGaugeGraphPoint {
+                        time_ms: 0,
+                        value: gauge.value,
+                        max: gauge.definition.max,
+                        border: gauge.definition.border,
+                        gauge_type: gauge.definition.gauge_type as i32,
+                        course_section_start: false,
+                    })
+                    .collect(),
+                ..RenderSnapshot::default()
+            },
+            judgements: Vec::new(),
+            mine_hits: Vec::new(),
+            keysound_volumes: Vec::new(),
+            skin_events: Vec::new(),
+            state: PlayState::Playing,
+        });
+    }
+    collector
+}
+
+fn points_of(graph: &ResultGraphSnapshot, gauge_type: GaugeType) -> Vec<(i32, f32)> {
+    graph
+        .gauge_points
+        .iter()
+        .filter(|point| point.gauge_type == gauge_type as i32)
+        .map(|point| (point.time_ms, point.value))
+        .collect()
+}
+
+#[test]
+fn terminal_gauges_record_the_change_after_the_last_periodic_sample() {
+    // Reported case: the last 500ms sample shows EASY 93, the settled gauge is 79.5.
+    let sampled = gauge_with(&[(GaugeType::Easy, 93.0), (GaugeType::Normal, 60.0)]);
+    let settled = gauge_with(&[(GaugeType::Easy, 79.5), (GaugeType::Normal, 64.0)]);
+    let mut collector = periodic_collector(&[(0, &sampled), (500_000, &sampled)]);
+
+    collector.record_terminal_gauges(&settled, TimeUs(820_000));
+    // The end point is recorded once for the settled result.
+    collector.record_terminal_gauges(&sampled, TimeUs(900_000));
+
+    let graph = collector.snapshot();
+    assert_eq!(points_of(&graph, GaugeType::Easy), vec![(0, 93.0), (500, 93.0), (820, 79.5)]);
+    // The opposite direction (a final recovery) reaches its end point too.
+    assert_eq!(points_of(&graph, GaugeType::Normal), vec![(0, 60.0), (500, 60.0), (820, 64.0)]);
+    // Every switchable gauge ends at its own settled value.
+    for gauge in &settled.gauges {
+        let last = graph
+            .gauge_points
+            .iter()
+            .rev()
+            .find(|point| point.gauge_type == gauge.definition.gauge_type as i32)
+            .unwrap();
+        assert_eq!((last.time_ms, last.value), (820, gauge.value));
+    }
+    let times: Vec<_> = graph.gauge_points.iter().map(|point| point.time_ms).collect();
+    assert!(times.windows(2).all(|pair| pair[0] <= pair[1]));
+}
+
+#[test]
+fn terminal_gauges_update_a_periodic_point_at_the_same_time() {
+    let sampled = gauge_with(&[(GaugeType::Easy, 93.0)]);
+    let settled = gauge_with(&[(GaugeType::Easy, 79.5)]);
+    let mut collector = periodic_collector(&[(0, &sampled), (500_000, &sampled)]);
+
+    // Settling in the same millisecond as the periodic sample still updates it.
+    collector.record_terminal_gauges(&settled, TimeUs(500_400));
+
+    let graph = collector.snapshot();
+    assert_eq!(points_of(&graph, GaugeType::Easy), vec![(0, 93.0), (500, 79.5)]);
+    assert_eq!(graph.gauge_points.len(), 2 * settled.gauges.len());
+}
+
+#[test]
+fn failed_tail_keeps_the_stop_point_and_fills_later_samples_only() {
+    // A manual stop at 1230ms with a non-zero gauge keeps the existing zero tail.
+    let sampled = gauge_with(&[(GaugeType::Normal, 70.0)]);
+    let stopped = gauge_with(&[(GaugeType::Normal, 66.0)]);
+    let mut collector =
+        periodic_collector(&[(0, &sampled), (500_000, &sampled), (1_000_000, &sampled)]);
+    collector.record_terminal_gauges(&stopped, TimeUs(1_230_000));
+    let mut chart = chart();
+    chart.end_time = TimeUs(2_400_000);
+
+    let graph = collector.snapshot_for_result_parts(&chart, &HashMap::new(), Some(&stopped));
+
+    assert_eq!(
+        points_of(&graph, GaugeType::Normal),
+        vec![
+            (0, 70.0),
+            (500, 70.0),
+            (1000, 70.0),
+            (1230, 66.0),
+            (1500, 0.0),
+            (2000, 0.0),
+            (2500, 0.0)
+        ]
+    );
+    let times: Vec<_> = graph.gauge_points.iter().map(|point| point.time_ms).collect();
+    assert!(times.windows(2).all(|pair| pair[0] <= pair[1]));
+}

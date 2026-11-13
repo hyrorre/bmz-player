@@ -34,6 +34,32 @@ pub fn rian_ir_block_reason(chart: &KaleidProvenance) -> Option<&'static str> {
     None
 }
 
+/// The caller must additionally verify saved ForceLn, actual LN, and the
+/// provider's existing mode/assist/chart match conditions. Source HLN alone is
+/// allowed after FORCE LN; no other gameplay extension is erased by options.
+pub fn bokutachi_block_reason(chart: &KaleidProvenance) -> Option<&'static str> {
+    if chart.version != bmz_chart::kaleid::INTERPRETATION_VERSION {
+        return Some(
+            "Bokutachi: this play has no supported Kaleid interpretation evidence; rescanning cannot certify an old result",
+        );
+    }
+    if chart.partial() {
+        return Some("Bokutachi: partial or invalid extensions are not eligible");
+    }
+    if chart.effective.hln {
+        return Some(
+            "Bokutachi: native HLN is not eligible; FORCE LN and matching registered note counts are required",
+        );
+    }
+    let features = chart.source.union(chart.effective);
+    if features.conditional || features.free_zone || features.potion || features.dummy {
+        return Some(
+            "Bokutachi: dynamic branches, free zones, potions and dummy notes are not eligible, including after option conversion",
+        );
+    }
+    None
+}
+
 pub fn block_reason(
     provider: &crate::config::profile_config::IrProviderConfig,
     chart: &KaleidProvenance,
@@ -42,6 +68,8 @@ pub fn block_reason(
         bms_ir_block_reason(chart)
     } else if super::rian_ir::is_rian_ir_config(provider) {
         rian_ir_block_reason(chart)
+    } else if super::bokutachi::is_config(provider) {
+        bokutachi_block_reason(chart)
     } else {
         None
     }

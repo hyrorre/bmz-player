@@ -6,7 +6,9 @@ use std::{
 };
 
 use crate::{
-    import::{error::ImportError, intermediate::*, normalize::normalize_chart},
+    import::{
+        AssetLookup, error::ImportError, intermediate::*, normalize::normalize_chart_with_assets,
+    },
     model::*,
     timing::{IMPORT_TICK_SCALE, TICKS_PER_MEASURE},
 };
@@ -230,6 +232,7 @@ pub struct ConditionalProgram {
     source: PathBuf,
     positions: BTreeMap<(usize, u32, u32, u32), u32>,
     voice_ids: BTreeMap<(u32, u32, usize), SoundId>,
+    bga_assets: Option<Vec<BgaAssetRef>>,
     pub margin: TimeUs,
     pub transform: Option<Arc<ChartTransform>>,
 }
@@ -454,6 +457,7 @@ fn compile_checked(
         source: source.into(),
         positions: BTreeMap::new(),
         voice_ids: BTreeMap::new(),
+        bga_assets: None,
         margin: TimeUs(0),
         transform: None,
     };
@@ -544,7 +548,9 @@ fn finish_program(
             union.measures = branch.measures.clone();
         }
     }
-    if let Ok(result) = normalize_chart(&program.source, union, &mut Vec::new(), false) {
+    if let Ok(result) =
+        normalize_chart_with_assets(&program.source, union, &mut Vec::new(), AssetLookup::Declared)
+    {
         program.source_ln_modes |= modes(&result);
     }
     program.common.metadata.kaleid.source.hln |= program.source_ln_modes & 16 != 0;
@@ -602,6 +608,11 @@ fn position_key(lane: usize, o: &IntermediateObject) -> (usize, u32, u32, u32) {
 }
 
 impl ConditionalProgram {
+    /// Keep the import's resolved (or scan-only declared) paths stable throughout play.
+    pub(crate) fn set_bga_assets(&mut self, assets: &[BgaAssetRef]) {
+        self.bga_assets = Some(assets.to_vec());
+    }
+
     pub(crate) fn set_identity(&mut self, identity: bmz_core::chart::ChartIdentity) {
         self.common.identity = identity;
     }
@@ -782,8 +793,15 @@ impl ConditionalProgram {
 
     pub fn materialize(&self, choices: &[Option<usize>]) -> Result<PlayableChart, ImportError> {
         let intermediate = self.intermediate(choices);
-        let mut chart =
-            normalize_chart(&self.source, intermediate.clone(), &mut Vec::new(), false)?;
+        let mut chart = normalize_chart_with_assets(
+            &self.source,
+            intermediate.clone(),
+            &mut Vec::new(),
+            AssetLookup::Declared,
+        )?;
+        if let Some(assets) = &self.bga_assets {
+            chart.bga_assets.clone_from(assets);
+        }
         self.stabilize(&intermediate, &mut chart)?;
         chart.metadata.conditional_revision = 1;
         crate::start_margin::apply_fixed_start_margin(&mut chart, self.margin);

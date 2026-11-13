@@ -132,8 +132,31 @@ impl WinitApp {
     /// 決定的なLua documentと画像は共有cacheで再利用される一方、ロード時乱数や
     /// wildcardのRandom指定はこのdecode要求を単位として再抽選される。
     pub(super) fn reload_skin_for_scene_entry(&mut self, kind: SkinKind) {
+        if kind == SkinKind::Select && self.enter_select_with_prewarmed_skin() {
+            return;
+        }
+        self.discard_skin_prewarm(kind);
         self.reload_skin_for_scene_entry_with_chart(kind, None);
-        self.ensure_skin_ready(kind);
+        self.request_scene_skin(kind);
+    }
+
+    /// The Select decode inputs a scene entry would use now.
+    pub(super) fn select_skin_load(&self) -> Option<FrontendSkinLoad> {
+        let frontend_chart = self.select_load_chart_snapshot();
+        frontend_skin_load(
+            &self.boot.app_paths,
+            SkinKind::Select,
+            FrontendLuaLoadInputs {
+                player_name: &self.boot.profile_config.display_name,
+                ir_name: result_ir_skin_name(&self.boot.profile_config.ir),
+                player_stats: &self.select.player_stats,
+            },
+            &self.boot.profile_config.skin,
+            self.skin.lua_runtime_mode,
+            self.boot.app_config.select.experimental_detail_options,
+            self.select_snapshot().last_played_at,
+            Some(&frontend_chart),
+        )
     }
 
     /// Decide進入時の再decodeへ、表示するsnapshotの選択譜面の値を渡す。

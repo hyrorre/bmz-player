@@ -19,25 +19,38 @@ pub(super) fn skin_offsets_from_session(
             },
         );
     }
-    let visual_time = skin_visual_time(chart_time, play_elapsed);
-    let active_lanes = session.chart.metadata.key_mode.active_lanes();
+    set_scratch_angle_offsets(
+        &mut values,
+        session.chart.metadata.key_mode,
+        skin_visual_time(chart_time, play_elapsed),
+        &session.lane_scratch_angle_delta_ms,
+    );
+    values
+}
+
+pub(super) fn set_scratch_angle_offsets(
+    values: &mut SkinOffsetValues,
+    key_mode: KeyMode,
+    visual_time: TimeUs,
+    lane_scratch_angle_delta_ms: &[i64; LANE_COUNT],
+) {
+    let active_lanes = key_mode.active_lanes();
     if active_lanes.contains(&Lane::Scratch) {
         set_scratch_angle_offset(
-            &mut values,
+            values,
             SCRATCH_ANGLE_OFFSET_1P,
             visual_time,
-            session.lane_scratch_angle_delta_ms[Lane::Scratch.index()],
+            lane_scratch_angle_delta_ms[Lane::Scratch.index()],
         );
     }
     if active_lanes.contains(&Lane::Scratch2) {
         set_scratch_angle_offset(
-            &mut values,
+            values,
             SCRATCH_ANGLE_OFFSET_2P,
             visual_time,
-            session.lane_scratch_angle_delta_ms[Lane::Scratch2.index()],
+            lane_scratch_angle_delta_ms[Lane::Scratch2.index()],
         );
     }
-    values
 }
 
 pub(super) fn set_scratch_angle_offset(

@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, HashMap, VecDeque, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -91,6 +90,7 @@ use select_state::*;
 use state_value_bpm_change::*;
 use state_value_gauge_graph::*;
 use state_value_graph::*;
+pub use state_value_graph::{lr2_pitch_slider_progress, lr2_pitch_slider_semitones};
 use state_value_image::*;
 use state_value_note_graph::*;
 pub use state_value_number::lane::{duration_to_green_number_ms, green_duration_to_duration_i32};

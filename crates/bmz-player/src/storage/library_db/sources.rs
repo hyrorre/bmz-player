@@ -332,7 +332,8 @@ impl LibraryDatabase {
     ) -> Result<()> {
         self.conn.execute(
             "INSERT INTO song_archive_fingerprints (path, stamp, generation) VALUES (?1, ?2, ?3)
-             ON CONFLICT(path) DO UPDATE SET stamp = excluded.stamp, generation = excluded.generation",
+             ON CONFLICT(path) DO UPDATE SET stamp = excluded.stamp, generation = excluded.generation
+             WHERE stamp IS NOT excluded.stamp OR generation IS NOT excluded.generation",
             rusqlite::params![
                 record.path.to_string_lossy(),
                 record.stamp,

@@ -72,7 +72,9 @@ pub(in crate::song_archive) fn dictionary_size(method: &[u8], properties: &[u8])
                 (2 | (value as u64 & 1)) << (value / 2 + 11)
             })
         }
-        [6, 0xf1, 7, 1] => anyhow::bail!("encrypted song archives are unsupported"),
+        [6, 0xf1, 7, 1] => {
+            Err(crate::song_archive::unsupported("encrypted song archives are unsupported"))
+        }
         _ => Ok(0),
     }
 }

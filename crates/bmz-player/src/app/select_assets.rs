@@ -18,6 +18,8 @@ use crate::generated_preview::{
     parse_generated_preview_cache_key, render_generated_preview_for_chart,
 };
 
+mod stamp;
+
 pub(super) const SELECT_PREVIEW_FADE_DURATION: Duration = Duration::from_millis(150);
 const SELECT_PREVIEW_CACHE_LIMIT: usize = 8;
 /// Decoded animation frames kept in the meta image cache; older animations keep their
@@ -160,6 +162,7 @@ struct SelectMetaImageState {
 /// GPU texture upload、profile 音量の解釈、audio stream 起動は `WinitApp` に残す。
 /// worker、CPU cache、ロードキュー、選択変更とfadeの状態遷移は本runtimeが所有する。
 pub(super) struct SelectAssetRuntime {
+    source_stamp: stamp::SelectedArchiveStamp,
     pub(super) archive_preload: super::select_archive_preload::SelectArchivePreload,
     stage: SelectMetaImageState,
     backbmp: SelectMetaImageState,
@@ -187,6 +190,32 @@ pub(super) struct SelectAssetRuntime {
 }
 
 impl SelectAssetRuntime {
+    pub(super) fn asset_cache_key(&self, folder: &str, file: &str) -> Option<String> {
+        Some(crate::chart_asset::asset_cache_key_with_stamp(
+            folder,
+            file,
+            self.source_stamp.get(folder)?,
+        ))
+    }
+
+    pub(super) fn update_source(&mut self, folder: Option<&str>, now: Instant) {
+        self.source_stamp.update(folder, now);
+    }
+
+    pub(super) fn generated_preview_cache_key(
+        &self,
+        chart_id: i64,
+        start_ms: i64,
+        folder: &str,
+    ) -> Option<String> {
+        Some(crate::generated_preview::generated_preview_cache_key_with_stamp(
+            chart_id,
+            start_ms,
+            folder,
+            self.source_stamp.get(folder)?,
+        ))
+    }
+
     pub(super) fn invalidate_library(&mut self) {
         self.stop_preview();
         // Drop old worker receivers too, so stale results cannot refill the caches.
@@ -202,6 +231,7 @@ impl SelectAssetRuntime {
         let (meta_image_tx, meta_image_rx) = mpsc::channel();
         let (preview_tx, preview_rx) = mpsc::channel();
         Self {
+            source_stamp: Default::default(),
             archive_preload: Default::default(),
             stage: SelectMetaImageState::default(),
             backbmp: SelectMetaImageState::default(),
@@ -766,6 +796,88 @@ pub(super) fn select_preview_fade_factor(fade: SelectPreviewFade, now: Instant) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "CPU benchmark; run alone with --release --ignored --nocapture"]
+    fn profile_select_archive_cache_keys() -> anyhow::Result<()> {
+        anyhow::ensure!(!cfg!(debug_assertions), "run with --release");
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("songs.zip");
+        std::fs::write(&archive, b"metadata probe").unwrap();
+        let folder = format!("{}!/song", archive.display());
+        let mut runtime = SelectAssetRuntime::new(None, PathBuf::new(), PathBuf::new());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            runtime.update_source(Some(&folder), Instant::now());
+            if runtime.asset_cache_key(&folder, "stage.png").is_some() {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        for cached in [false, true] {
+            let mut timings = Vec::new();
+            for iteration in 0..1100 {
+                let start = Instant::now();
+                if cached {
+                    runtime.update_source(Some(&folder), Instant::now());
+                }
+                for file in ["stage.png", "back.png", "banner.png", "", "", "", ""] {
+                    std::hint::black_box(if cached {
+                        runtime.asset_cache_key(&folder, file).unwrap()
+                    } else {
+                        crate::chart_asset::asset_cache_key(&folder, file)
+                    });
+                }
+                if iteration >= 100 {
+                    timings.push(start.elapsed().as_secs_f64() * 1_000_000.0);
+                }
+            }
+            timings.sort_by(f64::total_cmp);
+            eprintln!(
+                "archive_keys cached={cached} files=7 n={} median_us={:.3} p95_us={:.3} p99_us={:.3} max_us={:.3}",
+                timings.len(),
+                timings[500],
+                timings[949],
+                timings[989],
+                timings[999]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn archive_metadata_refresh_updates_image_and_generated_preview_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("songs.zip");
+        std::fs::write(&path, b"first").unwrap();
+        let folder = format!("{}!/song", path.display());
+        let mut runtime = SelectAssetRuntime::new(None, PathBuf::new(), PathBuf::new());
+        let start = Instant::now();
+        let mut wait_for = |now: Instant, expected: &str| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                runtime.update_source(Some(&folder), now);
+                if runtime.asset_cache_key(&folder, "stage.png").as_deref() == Some(expected) {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "metadata worker did not complete");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(
+                runtime.generated_preview_cache_key(1, 0, &folder),
+                Some(crate::generated_preview::generated_preview_cache_key_for_source(
+                    1, 0, &folder
+                ))
+            );
+        };
+        let before = crate::chart_asset::asset_cache_key(&folder, "stage.png");
+        wait_for(start, &before);
+        std::fs::write(&path, b"second with different size").unwrap();
+        let after = crate::chart_asset::asset_cache_key(&folder, "stage.png");
+        assert_ne!(before, after);
+        wait_for(start + Duration::from_secs(2), &after);
+    }
 
     fn animated_image(color: u8) -> SelectMetaImage {
         let frames = [color, 255 - color]

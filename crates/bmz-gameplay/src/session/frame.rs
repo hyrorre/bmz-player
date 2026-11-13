@@ -12,12 +12,12 @@ pub fn sync_judge_windows(session: &mut GameSession, now: TimeUs) {
         session.rule_mode,
         session.primary_key_mode,
     );
-    // Replay timestamps already use chart time; viewing speed must not change scoring.
-    let windows = if session.replay_player.is_some() {
-        windows
+    let rate = if session.replay_player.is_some() {
+        session.replay_judge_rate_percent
     } else {
-        scale_judge_windows_for_playback_rate(windows, session.audio_clock.playback_rate_percent())
+        session.audio_clock.playback_rate_percent()
     };
+    let windows = scale_judge_windows_for_playback_rate(windows, rate);
     session.judge.set_window_set(windows);
 }
 
@@ -61,7 +61,10 @@ pub fn advance_session_frame(
     if session.state == PlayState::Playing {
         sync_judge_windows(session, times.audio_now);
 
-        if super::conditional::uses_ordered_timeline(&session.chart) {
+        if session.scoring_closed_at.is_some() {
+            // 採点確定後も、キー表示・キー音・skin入力イベントは従来どおり進める。
+            present_inputs_after_scoring_closed(session, times.audio_now);
+        } else if super::conditional::uses_ordered_timeline(&session.chart) {
             while let Some(at) =
                 super::conditional::next_evaluation(session).filter(|at| *at <= times.audio_now)
             {
@@ -83,7 +86,7 @@ pub fn advance_session_frame(
             // mines and hold gauge updates even when there are no recorded inputs.
             drain_human_inputs(session);
             let scoring_times =
-                session.replay_player.as_mut().unwrap().scoring_times_until(times.audio_now);
+                session.replay_player.as_ref().unwrap().scoring_times_until(times.audio_now);
             for now in scoring_times {
                 sync_judge_windows(session, now);
                 judgements.extend(process_replay_inputs(session, now));
@@ -92,6 +95,9 @@ pub fn advance_session_frame(
                 update_hcn_lane_timers(session, now);
                 apply_hcn_gauge(session, now);
                 update_failed_state_from_gauge(session);
+                if let Some(replay) = &mut session.replay_player {
+                    replay.complete_scoring_tick(now);
+                }
                 if session.state != PlayState::Playing {
                     break;
                 }
@@ -117,7 +123,8 @@ pub fn advance_session_frame(
                 apply_auto_key_release(session, times.audio_now);
             }
         }
-        if !super::conditional::uses_ordered_timeline(&session.chart)
+        if session.scoring_closed_at.is_none()
+            && !super::conditional::uses_ordered_timeline(&session.chart)
             && (session.replay_player.is_none() || session.replay_lane_mask.is_some())
         {
             if session.state == PlayState::Playing {
@@ -149,9 +156,22 @@ pub fn advance_session_frame(
             session.state = PlayState::Failed;
         }
 
+        // この更新で取得した入力・見逃し・地雷・LN処理を終えた後に採点を閉じる。
+        if session.scoring_closed_at.is_none()
+            && session.state == PlayState::Playing
+            && natural_result_settled(session, times.audio_now)
+        {
+            session.scoring_closed_at = Some(times.audio_now);
+        }
         if session.state == PlayState::Playing && should_finish(session, times.audio_now) {
             session.state = PlayState::Finished;
         }
+    }
+    if session.scoring_closed_at.is_none()
+        && matches!(session.state, PlayState::Finished | PlayState::Failed)
+    {
+        // 途中落ち・手動中断・明示的な退出は、その停止境界で確定する。
+        session.scoring_closed_at = Some(times.audio_now);
     }
     update_gauge_max_timer(session, times.audio_now);
     if matches!(session.state, PlayState::Failed | PlayState::Finished) {
@@ -388,8 +408,8 @@ fn advance_battle_opponent(session: &mut GameSession, now: TimeUs) {
     let replay_times = session
         .opponent
         .independent
-        .as_mut()
-        .and_then(|opponent| opponent.replay_player.as_mut())
+        .as_ref()
+        .and_then(|opponent| opponent.replay_player.as_ref())
         .map(|replay| replay.scoring_times_until(now));
     let mut replay_times = replay_times.map(Vec::into_iter);
     loop {
@@ -417,6 +437,14 @@ fn advance_battle_opponent(session: &mut GameSession, now: TimeUs) {
             );
         }
         advance_battle_opponent_at(session, time);
+        if let Some(replay) = session
+            .opponent
+            .independent
+            .as_mut()
+            .and_then(|opponent| opponent.replay_player.as_mut())
+        {
+            replay.complete_scoring_tick(time);
+        }
     }
 }
 
@@ -500,11 +528,12 @@ fn advance_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
         opponent.rule_mode,
         opponent.key_mode,
     );
-    let windows = if opponent.replay_player.is_some() {
-        windows
+    let rate = if opponent.replay_player.is_some() {
+        opponent.replay_judge_rate_percent
     } else {
-        scale_judge_windows_for_playback_rate(windows, playback_rate_percent)
+        playback_rate_percent
     };
+    let windows = scale_judge_windows_for_playback_rate(windows, rate);
     opponent.judge.set_window_set(windows);
     // The first update may jump directly to a note/zone boundary. Set this
     // before inputs, which can themselves settle a zone at that same timestamp.
@@ -555,7 +584,7 @@ fn advance_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
             display
                 .judgement
                 .note_id
-                .and_then(|note_id| session.chart.note_by_id(note_id))
+                .and_then(|note_id| session.judge.note_by_id(&session.chart, note_id))
                 .map_or(display.judgement.lane, |note| note.lane)
         } else {
             display.judgement.lane
@@ -779,15 +808,80 @@ pub fn should_finish(session: &GameSession, audio_now: TimeUs) -> bool {
         && audio_now.0 > end_time.0.saturating_add(SESSION_END_MARGIN_US)
 }
 
-/// 最終ノーツに対する Poor / Empty Poor / Mine の SLOW 側受付が終了し、
-/// これ以上スコアが変化しない状態かを返す。
+/// 採用する結果が確定し、これ以上スコア・ゲージ・判定詳細が変化しない状態かを返す。
+///
+/// 一度採点を閉じたセッションは、その後のオフセット変更や時計によらず確定のまま扱う。
+/// 未確定のセッションでは [`natural_result_settled`] の条件を `audio_now` で確認する。
 pub fn result_is_settled(session: &GameSession, audio_now: TimeUs) -> bool {
-    let result_settle_at =
-        session.chart.end_time.0.saturating_add(session.judge.window_set.result_settle_margin_us());
-    super::conditional::next_evaluation(session).is_none()
-        && session.judge.is_exhausted(&session.chart)
-        && audio_now.0 > result_settle_at
+    session.scoring_closed_at.is_some() || natural_result_settled(session, audio_now)
 }
+
+/// 通常完走で、最終ノーツに対する Poor / Empty Poor / Mine の SLOW 側受付が終わり、
+/// その範囲の採点処理も完了したかを返す。
+///
+/// - 全ノーツ（LN/CN/HCN の終端を含む）が判定済みであること。
+/// - 人間入力が採点対象に残る場合、以後に取得する入力の判定時刻
+///   (`取得時刻 + input_offset_us`) が `E + W` を超えること。
+///   すなわち `audio_now > E + W + max(0, -input_offset_us)`。
+/// - フルリプレイでは、外側の時計ではなく実際に処理を終えた 1ms tick が `E + W` を超えること。
+///   記録済み入力には現在のオフセットを再適用しないため、負オフセット分は待たない。
+/// - 独立した対戦相手を持つ場合は、その採点も同じ条件で終わっていること。
+///
+/// `E` は `chart.end_time`、`W` は適用済み判定窓の
+/// [`JudgeWindows::result_settle_margin_us`]（ルール・キー種別・ランク・再生速度を反映済み）。
+/// 判定窓の境界 (`delta == W`) は Empty Poor として受け付けるため、比較は厳密な `>` にする。
+/// `PlayState` は確認しない。採点を閉じる判断は `Playing` の更新内でだけ行う。
+pub fn natural_result_settled(session: &GameSession, audio_now: TimeUs) -> bool {
+    if super::conditional::next_evaluation(session).is_some()
+        || !session.judge.is_exhausted(&session.chart)
+    {
+        return false;
+    }
+    let deadline =
+        session.chart.end_time.0.saturating_add(session.judge.window_set.result_settle_margin_us());
+    let primary_settled = if session.replay_player.is_some() && session.replay_lane_mask.is_none() {
+        let scored = if super::conditional::uses_ordered_timeline(&session.chart) {
+            session.conditional.processed_time
+        } else {
+            session.replay_player.as_ref().and_then(ReplayPlayer::scored_until)
+        };
+        scored.is_some_and(|scored| scored.0 > deadline)
+    } else {
+        audio_now.0 > deadline.saturating_add(human_input_settle_margin_us(session))
+    };
+    primary_settled
+        && session
+            .opponent
+            .independent
+            .as_ref()
+            .is_none_or(|opponent| battle_opponent_result_settled(opponent, audio_now))
+}
+
+/// 人間入力が採点対象に残る場合の追加待機。入力時刻へ加えるオフセットが負のとき、
+/// 取得時刻が `E + W` を過ぎた入力もまだ判定窓内に入り得る。
+fn human_input_settle_margin_us(session: &GameSession) -> i64 {
+    let human_scored = !session.autoplay.as_ref().is_some_and(AutoplayController::is_full);
+    if human_scored { session.offsets.input_offset_us.saturating_neg().max(0) } else { 0 }
+}
+
+fn battle_opponent_result_settled(opponent: &BattleOpponentSession, audio_now: TimeUs) -> bool {
+    if super::conditional::next_evaluation_for(&opponent.chart, &opponent.conditional).is_some()
+        || !opponent.judge.is_exhausted(&opponent.chart)
+    {
+        return false;
+    }
+    let deadline = opponent
+        .chart
+        .end_time
+        .0
+        .saturating_add(opponent.judge.window_set.result_settle_margin_us());
+    let progress = match &opponent.replay_player {
+        Some(replay) => replay.scored_until().map_or(i64::MIN, |scored| scored.0),
+        None => audio_now.0,
+    };
+    progress > deadline
+}
+
 use super::*;
 
 fn schedule_chart_audio(session: &mut GameSession, until: TimeUs, audio: &mut dyn AudioScheduler) {

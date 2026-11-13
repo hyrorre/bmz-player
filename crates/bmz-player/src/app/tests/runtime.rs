@@ -13,31 +13,34 @@ fn download_scan_coalescing_tracks_running_and_queued_directories() {
     });
     assert!(scans.has_download_scan_for(Path::new("shared")));
     assert!(!scans.has_download_scan_for(Path::new("other")));
-    scans.queued.push_back((
-        vec![PathEntry { path: "other".into(), enabled: true, recursive: true }],
-        true,
-        "other scan".into(),
-        SongScanScope::Paths,
-    ));
+    scans.queued.push_back(QueuedSongScan {
+        roots: vec![PathEntry { path: "other".into(), enabled: true, recursive: true }],
+        force: true,
+        label: "other scan".into(),
+        scope: SongScanScope::Paths,
+        start_failures: 0,
+    });
     assert!(scans.has_download_scan_for(Path::new("other")));
-    scans.queued.push_back((
-        vec![PathEntry { path: "disabled".into(), enabled: false, recursive: true }],
-        true,
-        "disabled scan".into(),
-        SongScanScope::Paths,
-    ));
-    scans.queued.push_back((
-        vec![PathEntry { path: "shallow".into(), enabled: true, recursive: false }],
-        true,
-        "shallow scan".into(),
-        SongScanScope::Paths,
-    ));
+    scans.queued.push_back(QueuedSongScan {
+        roots: vec![PathEntry { path: "disabled".into(), enabled: false, recursive: true }],
+        force: true,
+        label: "disabled scan".into(),
+        scope: SongScanScope::Paths,
+        start_failures: 0,
+    });
+    scans.queued.push_back(QueuedSongScan {
+        roots: vec![PathEntry { path: "shallow".into(), enabled: true, recursive: false }],
+        force: true,
+        label: "shallow scan".into(),
+        scope: SongScanScope::Paths,
+        start_failures: 0,
+    });
     assert!(!scans.has_download_scan_for(Path::new("disabled")));
     assert!(!scans.has_download_scan_for(Path::new("shallow")));
     scans.pending = None;
     assert!(!scans.has_download_scan_for(Path::new("shared")));
     assert!(scans.has_download_scan_for(Path::new("other")));
-    assert_eq!(scans.queued.pop_front().unwrap().0[0].path, "other");
+    assert_eq!(scans.queued.pop_front().unwrap().roots[0].path, "other");
 }
 use crate::app::input_lifecycle::{
     gamepad_runtime_config_changed, keyboard_runtime_config_changed,
@@ -350,25 +353,24 @@ fn settings_key_repeat_is_accepted_only_while_editing_value() {
 #[test]
 fn settings_browse_keeps_cursor_navigation_direction() {
     let profile = ProfileConfig::new_default("default", "Default", 0);
-    let bindings = SettingsBindings::from_profile(&profile.input);
-    let select_bindings = SelectKeyBindings::from_profile(&profile.input);
+    let select_bindings = SceneInputResolver::from_profile(&profile.input);
 
     assert_eq!(
-        settings_browse_move_control("ArrowUp", &bindings, &select_bindings),
+        settings_browse_move_control(&resolve_named(&select_bindings, "ArrowUp")),
         Some(SelectMove::Previous)
     );
     assert_eq!(
-        settings_browse_move_control("ArrowDown", &bindings, &select_bindings),
+        settings_browse_move_control(&resolve_named(&select_bindings, "ArrowDown")),
         Some(SelectMove::Next)
     );
-    assert_eq!(settings_browse_move_control("DPadUp", &bindings, &select_bindings), None);
-    assert_eq!(settings_browse_move_control("DPadDown", &bindings, &select_bindings), None);
+    assert_eq!(settings_browse_move_control(&resolve_named(&select_bindings, "DPadUp")), None);
+    assert_eq!(settings_browse_move_control(&resolve_named(&select_bindings, "DPadDown")), None);
     assert_eq!(
-        settings_browse_move_control("LShift", &bindings, &select_bindings),
+        settings_browse_move_control(&resolve_named(&select_bindings, "LShift")),
         Some(SelectMove::Previous)
     );
     assert_eq!(
-        settings_browse_move_control("LControl", &bindings, &select_bindings),
+        settings_browse_move_control(&resolve_named(&select_bindings, "LControl")),
         Some(SelectMove::Next)
     );
 }
@@ -377,14 +379,14 @@ fn settings_browse_keeps_cursor_navigation_direction() {
 fn final_notes_fadeout_accepts_e1_e2_and_escape_controls() {
     let keys = default_select_keys();
 
-    assert!(play_fadeout_after_final_notes_control("Q", &keys));
-    assert!(play_fadeout_after_final_notes_control("W", &keys));
-    assert!(play_fadeout_after_final_notes_control("Escape", &keys));
+    assert!(play_fadeout_after_final_notes_control(&resolve_named_input(&keys, "Q")));
+    assert!(play_fadeout_after_final_notes_control(&resolve_named_input(&keys, "W")));
+    assert!(play_fadeout_after_final_notes_control(&resolve_named_input(&keys, "Escape")));
     // プレイ画面ではE4 (R) もE1と同じ。
-    assert!(play_fadeout_after_final_notes_control("R", &keys));
-    assert!(keys.is_play_start("R"));
-    assert!(!keys.is_start("R"));
-    assert!(!play_fadeout_after_final_notes_control("Z", &keys));
+    assert!(play_fadeout_after_final_notes_control(&resolve_named_input(&keys, "R")));
+    assert!(resolve_named(&keys, "R").is_play_start());
+    assert!(!resolve_named(&keys, "R").is_start());
+    assert!(!play_fadeout_after_final_notes_control(&resolve_named_input(&keys, "Z")));
 }
 
 #[test]
@@ -392,64 +394,56 @@ fn final_notes_fadeout_requires_active_finished_note_state() {
     let keys = default_select_keys();
 
     assert!(should_begin_play_fadeout_after_final_notes(
-        "Q",
-        &keys,
+        &resolve_named_input(&keys, "Q"),
         true,
         false,
         bmz_gameplay::session::PlayState::Playing,
         true,
     ));
     assert!(should_begin_play_fadeout_after_final_notes(
-        "Escape",
-        &keys,
+        &resolve_named_input(&keys, "Escape"),
         true,
         false,
         bmz_gameplay::session::PlayState::Playing,
         true,
     ));
     assert!(!should_begin_play_fadeout_after_final_notes(
-        "Q",
-        &keys,
+        &resolve_named_input(&keys, "Q"),
         false,
         false,
         bmz_gameplay::session::PlayState::Playing,
         true,
     ));
     assert!(!should_begin_play_fadeout_after_final_notes(
-        "Escape",
-        &keys,
+        &resolve_named_input(&keys, "Escape"),
         true,
         true,
         bmz_gameplay::session::PlayState::Playing,
         true,
     ));
     assert!(!should_begin_play_fadeout_after_final_notes(
-        "Escape",
-        &keys,
+        &resolve_named_input(&keys, "Escape"),
         true,
         false,
         bmz_gameplay::session::PlayState::Playing,
         false,
     ));
     assert!(!should_begin_play_fadeout_after_final_notes(
-        "Q",
-        &keys,
+        &resolve_named_input(&keys, "Q"),
         true,
         false,
         bmz_gameplay::session::PlayState::Playing,
         false,
     ));
     assert!(!should_begin_play_fadeout_after_final_notes(
-        "Q",
-        &keys,
+        &resolve_named_input(&keys, "Q"),
         true,
         true,
         bmz_gameplay::session::PlayState::Playing,
         true,
     ));
     assert!(!should_begin_play_fadeout_after_final_notes(
-        "Q",
-        &keys,
+        &resolve_named_input(&keys, "Q"),
         true,
         false,
         bmz_gameplay::session::PlayState::Failed,
@@ -527,20 +521,30 @@ fn landmine_se_should_play_respects_auto_keysound_mine_flag() {
 #[test]
 fn target_cycle_maps_start_arrow_and_scratch_controls() {
     let keys = default_select_keys();
-    let gamepad_keys =
-        SelectKeyBindings::from_profile(&ProfileConfig::new_default("default", "Default", 1).input);
+    let gamepad_keys = SceneInputResolver::from_profile(
+        &ProfileConfig::new_default("default", "Default", 1).input,
+    );
 
-    assert_eq!(target_cycle_from_key(PhysicalKey::Code(KeyCode::ArrowUp)), Some(TargetCycle::Next));
+    assert_eq!(target_cycle_from_input(&resolve_named(&keys, "ArrowUp")), Some(TargetCycle::Next));
     assert_eq!(
-        target_cycle_from_key(PhysicalKey::Code(KeyCode::ArrowDown)),
+        target_cycle_from_input(&resolve_named(&keys, "ArrowDown")),
         Some(TargetCycle::Previous)
     );
-    assert_eq!(target_cycle_from_control("ScratchUp", &keys), Some(TargetCycle::Next));
-    assert_eq!(target_cycle_from_control("ScratchDown", &keys), Some(TargetCycle::Previous));
-    assert_eq!(target_cycle_from_control("Axis1+", &gamepad_keys), Some(TargetCycle::Next));
-    assert_eq!(target_cycle_from_control("Axis1-", &gamepad_keys), Some(TargetCycle::Previous));
-    assert_eq!(target_cycle_from_control("Axis2-", &gamepad_keys), None);
-    assert_eq!(target_cycle_from_control("Axis2+", &gamepad_keys), None);
+    assert_eq!(target_cycle_from_input(&resolve_named(&keys, "LShift")), Some(TargetCycle::Next));
+    assert_eq!(
+        target_cycle_from_input(&resolve_named(&keys, "LControl")),
+        Some(TargetCycle::Previous)
+    );
+    assert_eq!(
+        target_cycle_from_input(&resolve_named(&gamepad_keys, "Axis1+")),
+        Some(TargetCycle::Next)
+    );
+    assert_eq!(
+        target_cycle_from_input(&resolve_named(&gamepad_keys, "Axis1-")),
+        Some(TargetCycle::Previous)
+    );
+    assert_eq!(target_cycle_from_input(&resolve_named(&gamepad_keys, "Axis2-")), None);
+    assert_eq!(target_cycle_from_input(&resolve_named(&gamepad_keys, "Axis2+")), None);
 }
 
 #[test]
@@ -572,14 +576,14 @@ fn skin_volume_channels_map_beatoraja_volumes_to_the_audio_mix() {
 fn detail_option_control_maps_key5_and_key7_to_visual_offset() {
     let keys = select_keys_with_full_2p_bindings();
 
-    assert_eq!(visual_offset_delta_control("C", &keys), Some(-1));
-    assert_eq!(visual_offset_delta_control("V", &keys), Some(1));
-    assert_eq!(visual_offset_delta_control("Period", &keys), Some(-1));
-    assert_eq!(visual_offset_delta_control("P2K7", &keys), Some(1));
-    assert_eq!(visual_offset_delta_control("Z", &keys), None);
-    assert_eq!(green_number_delta_control("D", &keys), Some(-1));
-    assert_eq!(green_number_delta_control("F", &keys), Some(1));
-    assert_eq!(green_number_delta_control("C", &keys), None);
+    assert_eq!(visual_offset_delta_control(&resolve_named(&keys, "C")), Some(-1));
+    assert_eq!(visual_offset_delta_control(&resolve_named(&keys, "V")), Some(1));
+    assert_eq!(visual_offset_delta_control(&resolve_named(&keys, "Period")), Some(-1));
+    assert_eq!(visual_offset_delta_control(&resolve_named(&keys, "P2K7")), Some(1));
+    assert_eq!(visual_offset_delta_control(&resolve_named(&keys, "Z")), None);
+    assert_eq!(green_number_delta_control(&resolve_named(&keys, "D")), Some(-1));
+    assert_eq!(green_number_delta_control(&resolve_named(&keys, "F")), Some(1));
+    assert_eq!(green_number_delta_control(&resolve_named(&keys, "C")), None);
 }
 
 #[test]
@@ -747,7 +751,7 @@ fn chart_download_rows_use_endless_dream_progress_cells() {
             sha256: "01".repeat(32),
         },
         title: "Chart".into(),
-        download_root: PathBuf::from("data/songs"),
+        save_dir: PathBuf::from("data/songs"),
     });
     let task = &manager.tasks()[0];
     let progress = |state| {

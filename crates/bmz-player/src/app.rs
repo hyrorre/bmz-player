@@ -63,7 +63,6 @@ use crate::config::app_config::{
 use crate::config::app_settings_registry::{AppSettingsChoices, AppSettingsEntryId};
 use crate::config::key_config::{
     KeyBindingSlot, KeyBindingTarget, apply_play_binding, clear_play_binding,
-    is_scratch_down_control, is_scratch_up_control,
 };
 use crate::config::load::load_profile_config;
 use crate::config::play::{
@@ -139,8 +138,7 @@ use crate::screens::select_model::{
     table_folder_items_for_active_sources, table_level_folder_items, table_source_url_from_context,
 };
 use crate::screens::settings_edit::{
-    AppSettingsEditSession, SelectSettingsEditSession, SettingsBindings, SettingsEditSession,
-    adjust_settings_draft,
+    AppSettingsEditSession, SelectSettingsEditSession, SettingsEditSession, adjust_settings_draft,
 };
 use crate::screens::settings_model::{
     CONFIG_KEYS_PATH, in_settings_stack, settings_breadcrumb_for_locale,
@@ -198,9 +196,12 @@ use bmz_render::skin::{
 };
 
 mod app_support;
+mod startup_diagnostics;
+use startup_diagnostics::StartupPhase;
 mod background_jobs;
 mod bga_runtime;
 mod chart_assets;
+mod config_saver;
 #[path = "app/course_editor.rs"]
 mod course_editor;
 #[path = "app/course_flow/advance.rs"]
@@ -219,6 +220,7 @@ mod download_flow;
 mod event_loop_probe;
 mod frame_flow;
 mod frame_runtime;
+mod input_resolve;
 mod input_runtime;
 mod integration_support;
 mod integrations;
@@ -300,6 +302,7 @@ mod select_folder_summary;
 mod select_ir_battle;
 mod select_ir_battle_preview;
 mod select_key_bindings;
+mod select_list_loader;
 mod select_lr2_skin_settings;
 #[path = "app/select_random_mix.rs"]
 mod select_random_mix;
@@ -307,6 +310,10 @@ mod select_same_folder;
 mod select_search;
 mod select_support;
 mod skin_catalog;
+#[path = "app/skin_flow/entry.rs"]
+mod skin_flow_entry;
+#[path = "app/skin_flow/prewarm.rs"]
+mod skin_flow_prewarm;
 #[path = "app/skin_flow/profile.rs"]
 mod skin_flow_profile;
 #[path = "app/skin_flow/reload.rs"]
@@ -336,13 +343,14 @@ use play_preload::PlayPreloadSource;
 use play_preload_state::*;
 use play_transition_state::*;
 use runtime_state::*;
+use skin_flow_prewarm::PrewarmedSceneSkin;
 use skin_runtime_types::*;
 use update_prompt::*;
 
-use select_key_bindings::{
-    SelectKeyBindings, play_analog_lane_cover_delta, select_analog_scroll_delta,
-    take_analog_scroll_steps, update_analog_scroll_buffer,
+use input_resolve::{
+    InputSource, PlayerSide, ResolvedControl, ResolvedInput, SceneInputResolver, StandardKey,
 };
+use select_key_bindings::{take_analog_scroll_steps, update_analog_scroll_buffer};
 
 #[cfg(test)]
 use crate::config::profile_config::{LaneConfig, SelectInputModeConfig};
@@ -403,8 +411,9 @@ use skin_pipeline::{
 use skin_video::*;
 use skin_workers::*;
 use table_fetch_runtime::{
-    RianTableFetchOutcome, RianTableFetchWorkerResult, TableFetchProgress, TableFetchRuntime,
-    TableFetchWorkerEvent, startup_difficulty_table_fetch_urls_for_boot,
+    PendingTableStore, RianTableFetchOutcome, RianTableFetchWorkerResult, TableFetchProgress,
+    TableFetchRuntime, TableFetchWorkerEvent, TableStoreCompletion,
+    startup_difficulty_table_fetch_urls_for_boot,
 };
 
 #[cfg(test)]
@@ -474,91 +483,122 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
     profile_id: Option<&str>,
 ) -> Result<()> {
     let startup_started_at = Instant::now();
-    let (mut boot, viewer_cleanup) = if options.viewer_play {
-        let path = options
-            .boot_play_path
-            .as_deref()
-            .map(Path::new)
-            .context("viewer play requires a chart path")?;
-        let bms_random_seed = options
-            .play_overrides
-            .seed
-            .unwrap_or_else(crate::random_option_seed::fresh_bms_random_seed);
-        let viewer = bootstrap::bootstrap_viewer_with_paths(
-            app_paths,
-            path,
-            options.start_measure.unwrap_or(0),
-            bms_random_seed,
-            profile_id,
-        )?;
-        options.boot_play_path = Some(viewer.chart_path.to_string_lossy().into_owned());
-        options.boot_start_time_us = Some(viewer.start_time.0);
-        options.boot_bms_random_seed = Some(bms_random_seed);
-        tracing::info!(
-            chart_id = viewer.chart_id,
-            path = %viewer.chart_path.display(),
-            start_time_us = viewer.start_time.0,
-            "prepared transient viewer chart"
-        );
-        (viewer.app, Some(viewer.cleanup))
-    } else {
-        (bootstrap::bootstrap_with_paths_profile(app_paths, profile_id)?, None)
-    };
-    prepare_boot_chart_options(&mut boot, &mut options)?;
-    boot.app_config.set_cli_window(options.window_overrides.clone())?;
-    if options.boot_play_path.as_ref().is_some_and(|p| {
-        !Path::new(p).is_file()
-            && !crate::chart_source::ChartLocator::parse(Path::new(p))
-                .is_ok_and(|locator| locator.is_archive())
-    }) {
-        options.play_overrides = Default::default();
-    }
-    boot.profile_config.set_cli_play(options.play_overrides.clone());
+    let phase = StartupPhase::begin(startup_started_at, "startup_environment");
+    startup_diagnostics::log_environment(&app_paths);
+    phase.complete();
+    let phase = StartupPhase::begin(startup_started_at, "bootstrap_and_boot_options");
+    let (boot, viewer_cleanup) = phase.result_with_error(
+        (|| -> Result<_> {
+            let (mut boot, viewer_cleanup) = if options.viewer_play {
+                let path = options
+                    .boot_play_path
+                    .as_deref()
+                    .map(Path::new)
+                    .context("viewer play requires a chart path")?;
+                let bms_random_seed = options
+                    .play_overrides
+                    .seed
+                    .unwrap_or_else(crate::random_option_seed::fresh_bms_random_seed);
+                let viewer = bootstrap::bootstrap_viewer_with_paths(
+                    app_paths,
+                    path,
+                    options.start_measure.unwrap_or(0),
+                    bms_random_seed,
+                    profile_id,
+                )?;
+                options.boot_play_path = Some(viewer.chart_path.to_string_lossy().into_owned());
+                options.boot_start_time_us = Some(viewer.start_time.0);
+                options.boot_bms_random_seed = Some(bms_random_seed);
+                tracing::info!(
+                    chart_id = viewer.chart_id,
+                    path = %viewer.chart_path.display(),
+                    start_time_us = viewer.start_time.0,
+                    "prepared transient viewer chart"
+                );
+                (viewer.app, Some(viewer.cleanup))
+            } else {
+                (bootstrap::bootstrap_with_paths_profile(app_paths, profile_id)?, None)
+            };
+            prepare_boot_chart_options(&mut boot, &mut options)?;
+            boot.app_config.set_cli_window(options.window_overrides.clone())?;
+            if options.boot_play_path.as_ref().is_some_and(|p| {
+                !Path::new(p).is_file()
+                    && !crate::chart_source::ChartLocator::parse(Path::new(p))
+                        .is_ok_and(|locator| locator.is_archive())
+            }) {
+                options.play_overrides = Default::default();
+            }
+            boot.profile_config.set_cli_play(options.play_overrides.clone());
+            Ok((boot, viewer_cleanup))
+        })(),
+        startup_diagnostics::bootstrap_error_for_log,
+    )?;
     tracing::info!(
         startup_elapsed_ms = startup_started_at.elapsed().as_millis(),
         "application bootstrap complete"
     );
 
-    // Raw Input へ実行中に切り替えられるよう、Windows message hook は起動時から
-    // 常設する。デバイス usage の登録は RawInputBackend の attach 時まで行わない。
-    let raw_input_bridge = cfg!(windows).then(crate::input::rawinput::RawInputBridge::new);
-    let mut event_loop_builder = EventLoop::<AppUserEvent>::with_user_event();
-    #[cfg(windows)]
-    if let Some(bridge) = raw_input_bridge.clone() {
-        use winit::platform::windows::EventLoopBuilderExtWindows;
+    let phase = StartupPhase::begin(startup_started_at, "event_loop_setup");
+    let (
+        raw_input_bridge,
+        event_loop,
+        event_proxy,
+        shutdown_requested,
+        maintenance_select_tx,
+        show_surface_dialog,
+    ) = phase.result((|| -> Result<_> {
+        // Raw Input へ実行中に切り替えられるよう、Windows message hook は起動時から
+        // 常設する。デバイス usage の登録は RawInputBackend の attach 時まで行わない。
+        let raw_input_bridge = cfg!(windows).then(crate::input::rawinput::RawInputBridge::new);
+        let mut event_loop_builder = EventLoop::<AppUserEvent>::with_user_event();
+        #[cfg(windows)]
+        if let Some(bridge) = raw_input_bridge.clone() {
+            use winit::platform::windows::EventLoopBuilderExtWindows;
 
-        event_loop_builder.with_msg_hook(move |message| {
-            bridge.handle_message(message);
-            false
-        });
-    }
-    let event_loop = event_loop_builder.build().context("failed to create event loop")?;
-    // 描画間隔は `FramePacer` の deadline を `WaitUntil` へ渡して制御する。
-    // event loop thread 自体を sleep させず、フレーム待機中も入力イベントを処理する。
-    event_loop.set_control_flow(ControlFlow::Wait);
-    let event_proxy = event_loop.create_proxy();
-    if options.viewer_play {
-        let viewer_event_proxy = event_proxy.clone();
-        crate::viewer_ipc::start_listener(move |command| {
-            let _ = viewer_event_proxy.send_event(AppUserEvent::ViewerCommand(command));
-        })?;
-    }
-
-    // Ctrl-C(SIGINT)で event loop を正常終了させ、cpal/ASIO ストリームの Drop を
-    // 走らせる。捕捉しないと既定ハンドラがプロセスを即殺し、ASIO の停止処理が走らず
-    // ドライバがノイズを流し続ける。
-    let shutdown_requested = Arc::new(AtomicBool::new(false));
-    {
-        let shutdown_requested = Arc::clone(&shutdown_requested);
-        if let Err(error) =
-            ctrlc::set_handler(move || shutdown_requested.store(true, Ordering::SeqCst))
-        {
-            tracing::warn!(%error, "failed to install Ctrl-C handler");
+            event_loop_builder.with_msg_hook(move |message| {
+                bridge.handle_message(message);
+                false
+            });
         }
-    }
+        let event_loop = event_loop_builder.build().context("failed to create event loop")?;
+        // 描画間隔は `FramePacer` の deadline を `WaitUntil` へ渡して制御する。
+        // event loop thread 自体を sleep させず、フレーム待機中も入力イベントを処理する。
+        event_loop.set_control_flow(ControlFlow::Wait);
+        let event_proxy = event_loop.create_proxy();
+        if options.viewer_play {
+            let viewer_event_proxy = event_proxy.clone();
+            crate::viewer_ipc::start_listener(move |command| {
+                let _ = viewer_event_proxy.send_event(AppUserEvent::ViewerCommand(command));
+            })?;
+        }
 
-    let (maintenance_select_tx, _) = tokio::sync::watch::channel(false);
+        // Ctrl-C(SIGINT)で event loop を正常終了させ、cpal/ASIO ストリームの Drop を
+        // 走らせる。捕捉しないと既定ハンドラがプロセスを即殺し、ASIO の停止処理が走らず
+        // ドライバがノイズを流し続ける。
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
+        {
+            let shutdown_requested = Arc::clone(&shutdown_requested);
+            if let Err(error) =
+                ctrlc::set_handler(move || shutdown_requested.store(true, Ordering::SeqCst))
+            {
+                tracing::warn!(%error, "failed to install Ctrl-C handler");
+            }
+        }
 
+        let (maintenance_select_tx, _) = tokio::sync::watch::channel(false);
+
+        // Smoke counters/options can be consumed during the run. Preserve the
+        // initial notification policy so unattended runs never wait on a dialog.
+        let show_surface_dialog = show_surface_error_dialog(&options);
+        Ok((
+            raw_input_bridge,
+            event_loop,
+            event_proxy,
+            shutdown_requested,
+            maintenance_select_tx,
+            show_surface_dialog,
+        ))
+    })())?;
     let mut app = WinitApp::new(
         boot,
         options,
@@ -571,10 +611,16 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
         maintenance_select_tx,
         raw_input_bridge,
     )?;
+    let phase = StartupPhase::begin(startup_started_at, "event_loop_handoff");
     app.restart_profile_ir_sync();
-    tracing::info!("starting winit event loop");
+    phase.complete();
+    tracing::info!(
+        startup_elapsed_ms = startup_started_at.elapsed().as_millis(),
+        "starting winit event loop"
+    );
     let result = event_loop.run_app(app.as_mut()).context("winit event loop failed");
     let startup_error = app.startup_error.take();
+    let surface_error = app.surface_error.take();
     if let Some(obs) = app.integrations.obs_controller.take() {
         // The game loop has ended; yield asynchronously while MAIN_END drains.
         obs.shutdown().await;
@@ -582,6 +628,17 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
     drop(app);
     drop(viewer_cleanup);
     result?;
+    if let Some(error) = surface_error {
+        // The surface cannot display an egui toast. Show the native dialog after
+        // the event loop and normal shutdown have released gameplay/audio/GPU.
+        return report_surface_failure(error, show_surface_dialog, |error| {
+            rfd::MessageDialog::new()
+                .set_title("BMZ Player — rendering error")
+                .set_description(format!("The window surface could not be restored. BMZ Player has closed.\nPlease include the session log when reporting this error.\n\n{error}"))
+                .set_level(rfd::MessageLevel::Error)
+                .show();
+        });
+    }
     if let Some(error) = startup_error {
         bail!("{error}");
     }
@@ -785,6 +842,7 @@ fn spawn_ir_sync_worker(
 
 struct WinitApp {
     startup_error: Option<String>,
+    surface_error: Option<String>,
     boot: BootstrappedApp,
     window: Option<Arc<Window>>,
     first_frame_startup_completed: bool,
@@ -888,6 +946,9 @@ pub(crate) fn offline_play_options(
         seven_to_nine_pattern: profile.play.seven_to_nine_pattern,
         seven_to_nine_type: profile.play.seven_to_nine_type,
         seven_to_nine_rule_mode: profile.play.seven_to_nine_rule_mode,
+        s_random_scheme: crate::screens::play_session::SRandomScheme::from_correction(
+            profile.play.s_random_correction,
+        ),
         assist: profile.play.assist,
         ln_policy_setting: profile.play.ln_mode_policy,
         rule_mode: profile.play.rule_mode,

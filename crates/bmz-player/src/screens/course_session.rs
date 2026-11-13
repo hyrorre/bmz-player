@@ -511,6 +511,7 @@ mod tests {
                         rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
                         assist: Default::default(),
                         score_data_changed: false,
+                        bokutachi_dan_stage: None,
                     },
                 }
             })
@@ -551,6 +552,51 @@ mod tests {
             replay_stage_limit: None,
             auto_advance_intermediate_results: false,
         }
+    }
+
+    #[test]
+    fn bokutachi_dan_capture_keeps_played_order_and_rejects_incomplete_or_changed_courses() {
+        use crate::ir::bokutachi::dan;
+        let mut course = make_session(7, vec![(ScoreState::default(), 100); 4]);
+        course.rule_mode = RuleMode::Lr2Oraja;
+        for (i, entry) in course.entry_results.iter_mut().enumerate() {
+            let evidence = dan::tests::stage(i, bmz_core::lane::KeyMode::K7);
+            course.definition.entries[i].md5 = Some(evidence.chart_md5.clone());
+            course.definition.entries[i].sha256 = Some(evidence.chart_sha256.clone());
+            entry.finished.result.gauge_type = GaugeType::Class;
+            entry.finished.result.clear_type = ClearType::Normal;
+            entry.finished.bokutachi_dan_stage = Some(evidence);
+        }
+        let frozen = serde_json::to_value(dan::capture(&course).unwrap()).unwrap();
+        for i in 0..4 {
+            assert_eq!(frozen["stages"][i]["chart_md5"], format!("{:032x}", i + 1));
+        }
+        let mut changed = course.clone();
+        changed.definition.entries.swap(0, 1);
+        assert!(dan::capture(&changed).is_err());
+        changed = course.clone();
+        changed.definition.entries[0].md5 = Some("ff".repeat(16));
+        assert!(dan::capture(&changed).is_err());
+        changed = course.clone();
+        changed.entry_results[1].finished.bokutachi_dan_stage.as_mut().unwrap().completed = false;
+        assert_eq!(changed.entry_results.len(), 4);
+        assert!(changed.clone().into_result().course_clear);
+        assert!(
+            dan::capture(&changed).is_err(),
+            "played count and course_clear alone cannot prove completion"
+        );
+        for count in [0, 1, 3, 5] {
+            changed = course.clone();
+            changed.definition.entries.resize(count, course.definition.entries[0].clone());
+            assert!(dan::capture(&changed).is_err());
+        }
+        changed = course.clone();
+        changed.entry_results.pop();
+        assert!(dan::capture(&changed).is_err());
+        changed = course;
+        changed.entry_results[2].finished.bokutachi_dan_stage = None;
+        assert!(dan::capture(&changed).is_err());
+        assert_eq!(frozen["stages"][0]["chart_md5"], format!("{:032x}", 1));
     }
 
     #[test]
@@ -710,6 +756,7 @@ mod tests {
                         rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
                         assist: Default::default(),
                         score_data_changed: false,
+                        bokutachi_dan_stage: None,
                     },
                 }
             })

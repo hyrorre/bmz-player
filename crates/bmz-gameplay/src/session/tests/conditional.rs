@@ -20,6 +20,40 @@ pub(super) fn advance(session: &mut GameSession, time: i64, audio: &mut Schedule
 }
 
 #[test]
+fn empty_default_does_not_close_scoring_before_a_later_branch_and_replay_finishes() {
+    let chart = imported("#CONDITIONAL 4\n#WHEN RATE>=100\n#00511:01\n#DEFAULT\n#ENDCONDITIONAL");
+    for replay in [false, true] {
+        let mut session = session_with_autoplay(chart.clone());
+        if replay {
+            session.autoplay = None;
+            session.replay_player = Some(ReplayPlayer {
+                branch_decisions: Some(vec![bmz_core::replay::BranchDecision {
+                    block: 0,
+                    branch: 0,
+                    time: TimeUs(8_000_000),
+                }]),
+                ..Default::default()
+            });
+            session.conditional = super::super::conditional::ConditionalRuntime::from_player(
+                session.replay_player.as_ref(),
+            );
+        }
+        let mut audio = ScheduledSoundQueue::new();
+        advance(&mut session, 1_000_000, &mut audio);
+        assert_eq!(session.scoring_closed_at, None);
+        assert_eq!(session.state, PlayState::Playing);
+        advance(&mut session, 12_000_000, &mut audio);
+        assert_eq!(session.conditional.decisions[0].branch, 0);
+        assert_eq!(session.score.past_notes, 1);
+        assert!(session.scoring_closed_at.is_some());
+        // Scoring closes before the existing audio tail; wait through that tail.
+        let finished_at = session.chart.end_time.0 + SESSION_END_MARGIN_US + 1_000;
+        advance(&mut session, finished_at, &mut audio);
+        assert_eq!(session.state, PlayState::Finished);
+    }
+}
+
+#[test]
 fn same_time_snapshot_and_actual_count_are_frame_rate_independent() {
     let body = "#00011:01\n#00111:01\n#CONDITIONAL 1\n#WHEN COMBO>=2\n#00211:0101\n#DEFAULT\n#00211:01\n#ENDCONDITIONAL\n#CONDITIONAL 1\n#WHEN SCORE==2\n#00312:01\n#DEFAULT\n#00312:0101\n#ENDCONDITIONAL";
     for step in [1_000, 16_000, 9_000_000] {
@@ -254,6 +288,7 @@ fn battle_players_select_independently_before_same_time_inputs() {
         let mut session = session_with_autoplay(imported(body));
         let opponent = session_with_autoplay(imported(body));
         session.opponent.independent = Some(BattleOpponentSession {
+            replay_judge_rate_percent: 100,
             conditional: Default::default(),
             chart: opponent.chart,
             key_mode: opponent.primary_key_mode,

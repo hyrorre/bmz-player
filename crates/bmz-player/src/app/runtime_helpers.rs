@@ -1,5 +1,24 @@
 use super::*;
 
+pub(super) fn show_surface_error_dialog(options: &AppOptions) -> bool {
+    options.smoke_exit_after_frames.is_none()
+        && options.smoke_exit_after_play_frames.is_none()
+        && options.smoke_exit_after_result_frames.is_none()
+        && !options.smoke_exit_on_result
+        && options.smoke_screenshot_path.is_none()
+}
+
+pub(super) fn report_surface_failure(
+    error: String,
+    show_dialog: bool,
+    notify: impl FnOnce(&str),
+) -> Result<()> {
+    if show_dialog {
+        notify(&error);
+    }
+    bail!("{error}")
+}
+
 pub(super) fn surface_size_for_window(window: &Window) -> SurfaceSize {
     let size = window.inner_size();
     SurfaceSize { width: size.width, height: size.height }
@@ -177,5 +196,46 @@ pub(super) fn log_startup_options(options: &AppOptions) {
     }
     if let Some(path) = &options.smoke_screenshot_path {
         tracing::info!(arg = SMOKE_SCREENSHOT_ARG, path, "smoke screenshot enabled");
+    }
+}
+
+#[cfg(test)]
+mod surface_failure_tests {
+    use super::*;
+
+    #[test]
+    fn smoke_surface_failure_returns_error_without_waiting_for_a_dialog() {
+        for options in [
+            AppOptions { smoke_exit_after_frames: Some(3), ..Default::default() },
+            AppOptions { smoke_exit_after_play_frames: Some(3), ..Default::default() },
+            AppOptions { smoke_exit_after_result_frames: Some(3), ..Default::default() },
+            AppOptions { smoke_exit_on_result: true, ..Default::default() },
+            AppOptions { smoke_screenshot_path: Some("capture.png".into()), ..Default::default() },
+        ] {
+            // Capture the policy before the event loop consumes smoke options.
+            let show_dialog = show_surface_error_dialog(&options);
+            let error =
+                report_surface_failure("injected surface failure".into(), show_dialog, |_| {
+                    panic!("smoke must not open a blocking dialog");
+                })
+                .unwrap_err();
+            assert_eq!(error.to_string(), "injected surface failure");
+        }
+    }
+
+    #[test]
+    fn interactive_surface_failure_notifies_once_and_returns_error() {
+        let mut notifications = 0;
+        let error = report_surface_failure(
+            "injected surface failure".into(),
+            show_surface_error_dialog(&AppOptions::default()),
+            |message| {
+                notifications += 1;
+                assert_eq!(message, "injected surface failure");
+            },
+        )
+        .unwrap_err();
+        assert_eq!(notifications, 1);
+        assert_eq!(error.to_string(), "injected surface failure");
     }
 }

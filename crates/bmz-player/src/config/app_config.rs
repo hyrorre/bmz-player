@@ -73,7 +73,8 @@ pub fn normalize_song_root_paths(roots: &mut Vec<PathEntry>) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanConfig {
     pub follow_symlinks: bool,
-    pub skip_hidden: bool,
+    // `skip_hidden` was removed: like beatoraja, scans no longer consult hidden
+    // attributes. An old config's key is ignored when loading and dropped on save.
     /// Windows の Everything インデックスを曲ファイル探索に使用する。
     /// 利用できない場合は通常のファイルシステム探索へフォールバックする。
     #[serde(default)]
@@ -85,9 +86,6 @@ pub struct ScanConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "AudioConfigWire")]
 pub struct AudioConfig {
-    /// System-clock deadlines are queued ahead when enabled; otherwise sounds
-    /// are requested when their chart time is reached. Shared by all profiles.
-    pub schedule_ahead: bool,
     pub backend: AudioBackend,
     /// OS の通常共有出力、Windows の IAudioClient3 低遅延共有出力、または WASAPI 排他出力。
     #[serde(default)]
@@ -111,8 +109,6 @@ pub struct AudioConfig {
 /// `exclusive_mode` は output mode 導入前の設定との読み込み互換にだけ使用する。
 #[derive(Deserialize)]
 struct AudioConfigWire {
-    #[serde(default = "default_audio_schedule_ahead")]
-    schedule_ahead: bool,
     backend: AudioBackend,
     #[serde(default)]
     output_mode: Option<AudioOutputMode>,
@@ -135,7 +131,6 @@ impl From<AudioConfigWire> for AudioConfig {
             if value.exclusive_mode { AudioOutputMode::Exclusive } else { AudioOutputMode::Shared }
         });
         Self {
-            schedule_ahead: value.schedule_ahead,
             backend: value.backend,
             output_mode,
             output_device: value.output_device,
@@ -147,10 +142,6 @@ impl From<AudioConfigWire> for AudioConfig {
             output_channel_pair: value.output_channel_pair,
         }
     }
-}
-
-fn default_audio_schedule_ahead() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -652,10 +643,15 @@ pub struct ChartDownloadsConfig {
     pub http_enabled: bool,
     #[serde(default)]
     pub http_api_url: String,
-    /// 取得した譜面の保存先。空なら `data/songs`、相対パスは `data/` を基準にする。
-    /// 実際の保存先はこの下の方式別フォルダ（`http` / `ipfs`）。
+    /// IPFSで取得した譜面の保存先。空なら `data/songs/ipfs`、相対パスは `data/` を基準にする。
     #[serde(default)]
-    pub save_dir: String,
+    pub ipfs_save_dir: String,
+    /// HTTPで取得した譜面の保存先。空なら `data/songs/http`、相対パスは `data/` を基準にする。
+    #[serde(default)]
+    pub http_save_dir: String,
+    /// 旧形式の保存先。方式別フォルダの親を指す。読み込み時に方式別の設定へ移す。
+    #[serde(default, rename = "save_dir", skip_serializing)]
+    pub legacy_save_dir: String,
 }
 
 fn default_download_parallelism() -> u8 {
@@ -672,19 +668,37 @@ impl Default for ChartDownloadsConfig {
             ipfs_api_url: String::new(),
             http_enabled: false,
             http_api_url: String::new(),
-            save_dir: String::new(),
+            ipfs_save_dir: String::new(),
+            http_save_dir: String::new(),
+            legacy_save_dir: String::new(),
         }
     }
 }
 
 impl ChartDownloadsConfig {
-    /// 方式別フォルダを置く保存先の基準フォルダを返す。
-    pub fn download_root(&self, data_dir: &std::path::Path) -> std::path::PathBuf {
-        // 空白だけの値は未設定として扱い、それ以外は前後の空白も含めてフォルダ名として扱う。
-        if self.save_dir.trim().is_empty() {
-            data_dir.join("songs")
-        } else {
-            data_dir.join(&self.save_dir)
+    /// IPFSで取得した譜面の保存先フォルダを返す。
+    pub fn ipfs_save_path(&self, data_dir: &std::path::Path) -> std::path::PathBuf {
+        resolve_save_dir(&self.ipfs_save_dir, data_dir, DEFAULT_IPFS_SAVE_DIR)
+    }
+
+    /// HTTPで取得した譜面の保存先フォルダを返す。
+    pub fn http_save_path(&self, data_dir: &std::path::Path) -> std::path::PathBuf {
+        resolve_save_dir(&self.http_save_dir, data_dir, DEFAULT_HTTP_SAVE_DIR)
+    }
+
+    /// 旧 `save_dir`（方式別フォルダの親）を方式別の保存先へ移す。
+    /// 方式別の値が既にあればそちらを優先する。
+    pub fn migrate_legacy_save_dir(&mut self) {
+        let legacy = std::mem::take(&mut self.legacy_save_dir);
+        if legacy.trim().is_empty() {
+            return;
+        }
+        let base = std::path::Path::new(&legacy);
+        for (target, name) in [(&mut self.ipfs_save_dir, "ipfs"), (&mut self.http_save_dir, "http")]
+        {
+            if target.trim().is_empty() {
+                *target = base.join(name).to_string_lossy().into_owned();
+            }
         }
     }
 
@@ -695,6 +709,19 @@ impl ChartDownloadsConfig {
             self.http_api_url.trim()
         }
     }
+}
+
+/// 譜面取得の保存先の既定値（`data/` 基準）。
+pub const DEFAULT_IPFS_SAVE_DIR: &str = "songs/ipfs";
+pub const DEFAULT_HTTP_SAVE_DIR: &str = "songs/http";
+
+pub(crate) fn resolve_save_dir(
+    value: &str,
+    data_dir: &std::path::Path,
+    default: &str,
+) -> std::path::PathBuf {
+    // 空白だけの値は未設定として扱い、それ以外は前後の空白も含めてフォルダ名として扱う。
+    if value.trim().is_empty() { data_dir.join(default) } else { data_dir.join(value) }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -793,13 +820,11 @@ impl Default for AppConfig {
             songs: SongPathsConfig { roots: Vec::new() },
             scan: ScanConfig {
                 follow_symlinks: true,
-                skip_hidden: true,
                 use_everything: false,
                 auto_rescan_on_startup: false,
                 rescan_missing_files: true,
             },
             audio: AudioConfig {
-                schedule_ahead: true,
                 backend: AudioBackend::Auto,
                 output_mode: AudioOutputMode::Shared,
                 output_device: String::new(),

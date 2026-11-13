@@ -268,6 +268,8 @@ pub struct SkinLogicalInputSnapshot {
     /// Current system / key / BGM volumes (0.0..=1.0), read by number 57..59 and
     /// Lua `main_state.volume_*` in every scene.
     pub audio_volumes: [f32; 3],
+    /// Profile FREQ in semitones (-12..=12), read by LR2 number 66 / slider 26 in every scene.
+    pub freq_semitones: i8,
 }
 
 impl Default for SkinLogicalInputSnapshot {
@@ -277,6 +279,7 @@ impl Default for SkinLogicalInputSnapshot {
             keyboard: [0; 4],
             // The renderer's previous fixed value outside Select.
             audio_volumes: [1.0; 3],
+            freq_semitones: 0,
         }
     }
 }
@@ -540,6 +543,9 @@ pub struct RenderSnapshot {
     pub keyon_ms: [Option<i32>; LANE_COUNT],
     /// 各レーンのキー解放からの経過 ms(離した直後のみ Some)。skin timer 120..=127 に渡る。
     pub keyoff_ms: [Option<i32>; LANE_COUNT],
+    /// Input timer identities in their source clock, independent of render/scene time.
+    pub keyon_started_at: [Option<TimeUs>; LANE_COUNT],
+    pub keyoff_started_at: [Option<TimeUs>; LANE_COUNT],
     /// 各レーンの LN ホールド開始からの経過 ms(ホールド中のみ Some)。
     /// beatoraja の TIMER_HOLD (skin timer 70..=77 / 80..=87) に渡る。
     pub hold_ms: [Option<i32>; LANE_COUNT],

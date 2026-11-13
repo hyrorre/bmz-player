@@ -159,6 +159,8 @@ DB migration / storage / scanの検証でコピー先が更新されても、元
 
 ## 起動とsmoke
 
+初回描画までの段階別INFOログと既存集計の読み方は[起動診断](startup-diagnostics.md)を参照してください。
+
 ```bash
 cargo run -p bmz-player
 cargo run -p bmz-player -- --help
@@ -170,6 +172,12 @@ cargo run -p bmz-player --release -- --boot-play-sample --autoplay-on-start --sm
 ```
 
 `--smoke-exit-after-play-frames`はPlay sceneの描画フレームだけを数えます。
+`--smoke-exit-after-frames`と`--smoke-exit-after-result-frames`も、対象の描画が成功したときだけ
+件数を進めます。Surface復旧待ち・0サイズ・画像取得失敗などのスキップは含めません。
+最小化などで描画不能な状態が続くと指定件数に達しないため、無人実行には呼び出し側で
+プロセスのタイムアウトを設けてください。`--smoke-exit-on-result`は描画件数によらず
+プレイ終了時に終了します。Surface復旧の打ち切り・SurfaceLost・DeviceLostによる終了では、
+smoke指定時はモーダルダイアログを省略し、ログとエラー終了で失敗を通知します。
 FPS等の比較には同じ譜面・設定・バックエンド・計測条件が必要です。smoke成功だけでは性能を判断しません。
 リプレイ確認は、対象profile・譜面に保存済みのslotがある場合に
 `--boot-replay 1 --smoke-exit-on-result`を使います。
@@ -239,6 +247,11 @@ cargo test -p bmz-player --release --lib --locked screens::play_session::archive
 比較条件と結果は[ロードの追加最適化](../notes/2026/2026-10-26-load-latency-followup.md)を参照してください。
 
 IR Webの環境・DB・検証コマンドは[ir.md](ir.md)の「開発環境と実装の入口」を参照します。
+
+LN保存区分の変更では、`cargo test -p bmz-player --locked ln_policy`で16 profile × 6設定の
+固定期待値・pair実効型・採点対象数・コース復元を確認します。保存済みoutbox本文の保持は
+`resend_legacy_auto_outbox_retains_gameplay_and_idempotency_key`、サーバーの新旧policy受理は
+`bun run test:ir`に含まれます。
 
 Luaの画面寸法helperを変更した場合は、ロード・cache・非同期世代の回帰に加え、
 GPUを使う次のテストで全sceneとoffscreen出力の物理寸法を確認します。

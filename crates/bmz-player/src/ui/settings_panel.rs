@@ -8,6 +8,8 @@ pub(super) struct SettingsPanelActions {
     pub(super) save_profile: bool,
     pub(super) check_update: bool,
     pub(super) rescan: bool,
+    /// Re-parse every chart, including unchanged ones.
+    pub(super) full_rescan: bool,
     pub(super) song_scan_requests: Vec<SongScanRequest>,
     pub(super) table_fetch_urls: Vec<String>,
     pub(super) score_import_request: Option<ScoreImportRequest>,

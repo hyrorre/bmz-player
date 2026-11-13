@@ -17,7 +17,7 @@ struct KeyloggerMetadata {
 
 impl ObjectFunctionMetadata {
     pub(super) fn from_entries(
-        entries: &[(Value, Value)],
+        entries: &[LuaTableEntry],
         path: &str,
         main_state_probe: &Arc<Mutex<MainStateProbe>>,
     ) -> Self {

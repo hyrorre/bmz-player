@@ -35,6 +35,59 @@ pub fn spawn_result_ir_task(
     )
 }
 
+/// オートプレイ・リプレイ再生のリザルト用 state を作る。IR 未設定なら `None`。
+///
+/// 送信は行わず、IR 接続 timer も進めない。Global ranking は
+/// [`ResultIrState::apply_select_cache`] で選曲キャッシュから反映する。
+pub fn cached_result_ir_state(
+    profile_root: PathBuf,
+    ir_config: &IrConfig,
+    chart_sha256_hex: String,
+    ln_policy: LnScorePolicy,
+    double_option: DoubleOptionScoreBucket,
+    rule_mode: RuleMode,
+) -> Option<ResultIrState> {
+    let provider = crate::ir::provider_key::primary_provider_config(ir_config)?;
+    let provider_key = crate::ir::provider_key::configured_provider_key(provider)?;
+    let (sender, receiver) = channel();
+    Some(ResultIrState {
+        submit: IrSubmitState::Done { submitted: 0, failed: 0, message: None, status: None },
+        provider_submissions: Vec::new(),
+        local_submission_notice: None,
+        global: RankingLoadState::Loading,
+        self_and_rivals: RankingLoadState::NotRequested,
+        active_tab: ResultRankingTab::Global,
+        chart_restricted: false,
+        ir_connect_begin_at: None,
+        ir_connect_success_at: None,
+        ir_connect_fail_at: None,
+        provider_name: bmz_render::scene::ResultIrRankingName::from_display_name(
+            crate::ir::provider_key::configured_provider_display_name(provider)?,
+        ),
+        user_name: bmz_render::scene::ResultIrRankingName::from_display_name(
+            &provider.account_display_name,
+        ),
+        global_skin_scroll_offset: 0,
+        self_and_rivals_skin_scroll_offset: 0,
+        source: ResultIrSource::SelectCache { resolved: false },
+        query: ResultIrTaskQuery {
+            profile_root,
+            provider: provider_key.to_string(),
+            account_id: provider.account_id.clone(),
+            base_url: provider.base_url.clone(),
+            target: ResultIrTarget::Chart {
+                local_score_id: 0,
+                chart_sha256_hex,
+                ln_policy,
+                double_option,
+                rule_mode,
+            },
+        },
+        sender,
+        receiver,
+    })
+}
+
 pub fn spawn_course_result_ir_task(
     profile_root: PathBuf,
     score_db_path: PathBuf,
@@ -74,7 +127,16 @@ pub(super) fn spawn_result_ir_task_for_target(
     ir_config: &IrConfig,
     target: ResultIrTarget,
 ) -> Option<ResultIrState> {
-    let provider = crate::ir::provider_key::primary_provider_config(ir_config)?;
+    // A submit-only provider still needs Result submission feedback, even when
+    // no ranking provider is configured. This does not select a ranking primary.
+    let provider = crate::ir::provider_key::primary_provider_config(ir_config).or_else(|| {
+        ir_config.providers.iter().find(|p| {
+            p.enabled
+                && crate::ir::bokutachi::is_config(p)
+                && !p.base_url.is_empty()
+                && crate::ir::provider_key::configured_provider_key(p).is_some()
+        })
+    })?;
     let provider_key = crate::ir::provider_key::configured_provider_key(provider)?;
     let query = ResultIrTaskQuery {
         profile_root,
@@ -105,13 +167,14 @@ pub(super) fn spawn_result_ir_task_for_target(
         provider_submissions.push(ResultIrProviderSubmission {
             provider_key: configured_key.to_string(),
             display_name: display_name.to_string(),
-            primary: configured_key == provider_key,
+            primary: configured_key == provider_key && !crate::ir::bokutachi::is_config(configured),
             state: IrSubmitState::Sending,
         });
     }
     let (sender, receiver) = channel();
 
     let mut state = ResultIrState {
+        local_submission_notice: None,
         submit: IrSubmitState::Sending,
         provider_submissions,
         global: RankingLoadState::NotRequested,
@@ -129,6 +192,7 @@ pub(super) fn spawn_result_ir_task_for_target(
         ),
         global_skin_scroll_offset: 0,
         self_and_rivals_skin_scroll_offset: 0,
+        source: ResultIrSource::Submission,
         query: query.clone(),
         sender: sender.clone(),
         receiver,
@@ -138,9 +202,31 @@ pub(super) fn spawn_result_ir_task_for_target(
     let ir_config = ir_config.clone();
     let submit_query = query.clone();
     let submission_targets_for_task = submission_targets.clone();
+    let bokutachi_targets: Vec<_> = submission_targets
+        .iter()
+        .filter(|target| crate::ir::bokutachi::is_provider(&target.provider))
+        .cloned()
+        .collect();
+    if !bokutachi_targets.is_empty() {
+        let path = network_db_path.clone();
+        let query = query.clone();
+        let sender = sender.clone();
+        // Observe the durable outbox while this Result is visible. Network polling
+        // remains one GET per worker claim; dropping the view stops this observer.
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                for event in watch_result_submissions(&path, &query, &bokutachi_targets).await {
+                    if sender.send(event).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+    }
     // global は Result スキンの NUMBER_IR_RANK / OPTION_IR_* 表示にも使うため、
     // prefetch 設定に関わらず常に取得する。rivals scope のみ設定に従う。
-    let prefetch_global = true;
+    let prefetch_global = query.supports_scope(IrRankingScope::Global);
     let prefetch_rivals =
         query.supports_scope(IrRankingScope::SelfAndRivals) && state_prefetch_rivals(&ir_config);
     tokio::spawn(async move {
@@ -179,6 +265,7 @@ pub(super) fn spawn_result_ir_task_for_target(
                 if primary_processed > 0 {
                     let _ = submit_sender.send(ResultIrEvent::Submit {
                         provider: submit_query.provider.clone(),
+                        status: None,
                         submitted: report.submitted,
                         failed: report.failed,
                         message: report.messages.first().cloned(),
@@ -294,6 +381,7 @@ pub(super) fn spawn_result_ir_task_for_target(
                 for target in &submission_targets_for_task {
                     let _ = submit_sender.send(ResultIrEvent::Submit {
                         provider: target.provider.clone(),
+                        status: None,
                         submitted: 0,
                         failed: 0,
                         message: Some(message.clone()),
@@ -444,6 +532,7 @@ pub(super) async fn watch_result_submissions(
                     {
                         events.push(ResultIrEvent::Submit {
                             provider: target.provider.clone(),
+                            status: submission_status_from_jobs(&provider_jobs),
                             submitted,
                             failed,
                             message,
@@ -462,6 +551,7 @@ pub(super) async fn watch_result_submissions(
                     .iter()
                     .map(|target| ResultIrEvent::Submit {
                         provider: target.provider.clone(),
+                        status: None,
                         submitted: 0,
                         failed: 0,
                         message: Some(message.clone()),
@@ -484,9 +574,24 @@ pub(super) async fn watch_result_submissions(
                 .collect::<Vec<_>>();
             let (submitted, failed, message) = submission_result_from_jobs(&provider_jobs)
                 .unwrap_or_else(|| (0, 0, Some("timed out waiting for IR submission".to_string())));
-            ResultIrEvent::Submit { provider: target.provider.clone(), submitted, failed, message }
+            ResultIrEvent::Submit {
+                provider: target.provider.clone(),
+                submitted,
+                failed,
+                message,
+                status: submission_status_from_jobs(&provider_jobs),
+            }
         })
         .collect()
+}
+
+fn submission_status_from_jobs(jobs: &[IrScoreJobRecord]) -> Option<IrScoreJobStatus> {
+    let [job] = jobs else {
+        return None;
+    };
+    crate::ir::bokutachi::is_provider(&job.provider)
+        .then(|| IrScoreJobStatus::parse(&job.status))
+        .flatten()
 }
 
 pub(super) fn submission_result_from_jobs(
@@ -494,6 +599,20 @@ pub(super) fn submission_result_from_jobs(
 ) -> Option<(u32, u32, Option<String>)> {
     if jobs.is_empty() {
         return Some((0, 0, None));
+    }
+    if jobs.iter().all(|job| crate::ir::bokutachi::is_provider(&job.provider)) {
+        let submitted = jobs.iter().filter(|job| job.status == "succeeded").count() as u32;
+        let failed = jobs.iter().filter(|job| job.status == "failed").count() as u32;
+        let message = jobs.iter().find_map(|job| {
+            (!job.last_error.is_empty()).then(|| {
+                if job.status == "ineligible" {
+                    format!("Bokutachi: ineligible: {}", job.last_error)
+                } else {
+                    job.last_error.clone()
+                }
+            })
+        });
+        return Some((submitted, failed, message));
     }
     let failed: Vec<_> =
         jobs.iter().filter(|job| job.status == IrScoreJobStatus::Failed.as_str()).collect();
@@ -702,6 +821,40 @@ pub(super) fn now_unix_seconds() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bokutachi_result_status_does_not_depend_on_message_wording() {
+        let mut job = IrScoreJobRecord {
+            id: 1,
+            provider: "bokutachi".into(),
+            account_id: "42".into(),
+            kind: IrJobKind::Course,
+            local_score_id: 1,
+            chart_sha256: [7; 32],
+            ln_policy: LnScorePolicy::ForceLn,
+            payload_json: "{}".into(),
+            status: String::new(),
+            attempt_count: 1,
+            next_attempt_at: 0,
+            last_error: "a diagnostic whose wording may change".into(),
+            created_at: 1,
+            updated_at: 2,
+        };
+        for status in [
+            IrScoreJobStatus::Succeeded,
+            IrScoreJobStatus::NoChange,
+            IrScoreJobStatus::NotCleared,
+            IrScoreJobStatus::Ineligible,
+            IrScoreJobStatus::Failed,
+        ] {
+            job.status = status.as_str().into();
+            assert_eq!(submission_status_from_jobs(std::slice::from_ref(&job)), Some(status));
+            job.last_error.clear();
+            assert_eq!(submission_status_from_jobs(std::slice::from_ref(&job)), Some(status));
+        }
+        job.status = "unexpected".into();
+        assert_eq!(submission_status_from_jobs(&[job]), None);
+    }
 
     fn spawn_test_ranking_fetch(
         query: ResultIrTaskQuery,

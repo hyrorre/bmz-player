@@ -3,12 +3,12 @@
 Kaleid拡張・部分対応結果も、下記の既存モード／アシスト制限を満たせばローカル保存と
 BMZ公式IR送信の対象です。原本ハッシュと既存LN/rule等の区分へ集約し、採択枝の差で
 ランキングを分けません。独立ベストの各元プレイと履歴証拠を保持します。
-score.db 35のscore_kaleid_plays、Replay 8、provider別条件は[Kaleid拡張](kaleid.md)を参照。
+score.db 36のscore_kaleid_plays、Replay 8、provider別条件は[Kaleid拡張](kaleid.md)を参照。
 
 この文書は、通常プレイ・アシスト・譜面オプション・特殊モードについて、
 BMZがクリアランプ、数値ベスト、履歴、リプレイ、IRを更新する条件を整理します。
 beatoraja互換を判断するときはこの文書を入口とし、IR固有の詳細は
-`docs/ir.md`と`docs/rian-ir.md`を参照します。
+`docs/ir.md`と`docs/rian-ir.md`、新規単曲・コース各曲送信と段位更新の[Bokutachi](bokutachi.md)を参照します。
 
 レビュー基準日は2026-08-27です。BMZの現行実装と、`.local/beatoraja/`の
 参照ソースを静的に比較した結果です。未解決の差は「互換差分」に明記します。
@@ -140,6 +140,18 @@ BATTLEはBMZでは`Off` / `Battle` / `BattleAutoScratch`のscore bucketを分離
 ローカル保存する設計です。BMZ公式IRもそのbucketをpayloadに持ちます。rianIRは
 BATTLE専用ランキングを持たないためclient側で除外します。BMS-IRは`Battle`と
 `BattleAutoScratch`を互いに分離したnative rankingとして保存し、通常bucketへ混ぜません。
+
+### H-RANDOMの閾値
+
+H-RANDOM / ALL-SCRの鍵盤は、同じレーンの直前ノーツから閾値以内の間隔にならないよう配置します。
+閾値はbeatorajaの既定`hranThresholdBPM = 120`を`ceil(15000 / BPM)`で換算した125msです。
+境界と等しい間隔も避けます。7K→6K変換のスクラッチ・KEY4の移動先と、
+7K→9K変換のスクラッチ振り分けも同じ閾値を使います。
+
+新しいプレイは閾値をreplayへ記録します。閾値の記録が無い過去のreplayでは、
+当時の配置を再現するため、H-RANDOM / ALL-SCRは100ms、7K→9Kは125msのまま扱います。
+beatorajaのreplay取込は`config_player.json`の`hranThresholdBPM`から閾値を求め、
+見つからなければ125msを記録します。
 
 ## Key mode 変換
 
@@ -350,6 +362,14 @@ BMZのコースIRはproviderの単曲`send_policy`を参照せず、course defin
 `release=true`でprovider条件を満たせばenqueueします。beatorajaもCourseResultの
 `CompleteSong` / `UpdateScore`分岐が実質無効で、`updateCourseScore`とreleaseのみで
 送信可否が決まるため、この点は一致します。
+
+Bokutachiのコース各曲は単曲の送信方針に従い、原則NO PLAY、フルコンボ系だけFULL COMBOとして送ります。
+COMPLETE SONGはその曲の実際の完奏状態を使います。9Kは各曲に保存された入力機器別に送信・BEST比較します。
+PMSのUPDATE SCOREは通常BEST更新対象の`source_kind=Local`履歴だけを比較し、外部プレイヤー由来の取り込み成績を除外します。
+今回保存した履歴を除き、EX・ランプ・コンボ・BP・CBを独立に集計します。全体BESTと他IRの比較元は変えません。
+Bokutachiのコース全体は合計スコアを登録せず、適格なBMS 7K／14K・4曲クリアだけ段位更新を行います。
+この段位更新には単曲・コース合計のBEST更新や各曲送信の成功を要求しません。
+条件・段位APIの配置制限・未対応範囲は[Bokutachi](bokutachi.md)を参照してください。
 
 保存構造は異なります。beatorajaはcourse best行をclear-only更新するのに対し、BMZは
 assist courseも数値0のattempt行として残し、best scoreとbest lampを別クエリで

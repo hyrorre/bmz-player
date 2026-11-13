@@ -128,57 +128,44 @@ pub(in crate::ui) fn build_skin_panel(
         ),
         ("skin-target-battle", &[SkinSlot::Battle5, SkinSlot::Battle7]),
     ];
-    egui::ComboBox::new("skin_target", tr!(text, "skin-target"))
-        .selected_text(skin_scene_label(editor.slot, text))
-        .show_ui(ui, |ui| {
-            for (heading, slots) in groups {
-                ui.strong(text.text(heading));
-                for &slot in *slots {
-                    ui.selectable_value(&mut editor.slot, slot, skin_scene_label(slot, text));
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt("skin_target")
+            .selected_text(skin_scene_label(editor.slot, text))
+            .show_ui(ui, |ui| {
+                for (heading, slots) in groups {
+                    ui.strong(text.text(heading));
+                    for &slot in *slots {
+                        ui.selectable_value(&mut editor.slot, slot, skin_scene_label(slot, text));
+                    }
+                    ui.separator();
                 }
-                ui.separator();
-            }
-        });
+            });
+        let candidates = match editor.slot {
+            SkinSlot::Select => &skin_catalog.select,
+            SkinSlot::Decide => &skin_catalog.decide,
+            SkinSlot::Play4 => &skin_catalog.play4,
+            SkinSlot::Play5 => &skin_catalog.play5,
+            SkinSlot::Play6 => &skin_catalog.play6,
+            SkinSlot::Play7 => &skin_catalog.play7,
+            SkinSlot::Play8 => &skin_catalog.play8,
+            SkinSlot::Play9 => &skin_catalog.play9,
+            SkinSlot::Play10 => &skin_catalog.play10,
+            SkinSlot::Play14 => &skin_catalog.play14,
+            SkinSlot::Battle5 => &skin_catalog.battle5,
+            SkinSlot::Battle7 => &skin_catalog.battle7,
+            SkinSlot::Result => &skin_catalog.result,
+            SkinSlot::CourseResult => &skin_catalog.course_result,
+        };
+        if skin_path_combo(ui, skin, editor.slot, candidates, show_bundled_origin, text) {
+            request_skin_reload(&mut reload, editor.slot, true);
+        }
+    });
     if editor.slot != previous_slot {
         let search = ui.ctx().data_mut(|data| {
             data.get_temp(egui::Id::new(("skin_preferences", editor.slot))).unwrap_or_default()
         });
         editor.search = search;
     }
-    ui.push_id("skin_selection", |ui| {
-        for (slot, candidates) in [
-            (SkinSlot::Select, skin_catalog.select.as_slice()),
-            (SkinSlot::Decide, skin_catalog.decide.as_slice()),
-            (SkinSlot::Play4, skin_catalog.play4.as_slice()),
-            (SkinSlot::Play5, skin_catalog.play5.as_slice()),
-            (SkinSlot::Play6, skin_catalog.play6.as_slice()),
-            (SkinSlot::Play7, skin_catalog.play7.as_slice()),
-            (SkinSlot::Play8, skin_catalog.play8.as_slice()),
-            (SkinSlot::Play9, skin_catalog.play9.as_slice()),
-            (SkinSlot::Play10, skin_catalog.play10.as_slice()),
-            (SkinSlot::Play14, skin_catalog.play14.as_slice()),
-            (SkinSlot::Battle5, skin_catalog.battle5.as_slice()),
-            (SkinSlot::Battle7, skin_catalog.battle7.as_slice()),
-            (SkinSlot::Result, skin_catalog.result.as_slice()),
-            (SkinSlot::CourseResult, skin_catalog.course_result.as_slice()),
-        ] {
-            if slot != editor.slot {
-                continue;
-            }
-            if skin_path_combo(
-                ui,
-                skin,
-                slot,
-                &tr!(text, "skin-selected"),
-                candidates,
-                app_paths,
-                show_bundled_origin,
-                text,
-            ) {
-                request_skin_reload(&mut reload, slot, true);
-            }
-        }
-    });
     if editor.slot != previous_slot || reload.any() {
         // このフレームのメタデータは変更前の対象に対応する。古い定義で
         // options / offsets を正規化せず、次フレームのロードを待つ。
@@ -188,26 +175,6 @@ pub(in crate::ui) fn build_skin_panel(
         return SkinPanelActions { save: false, reset: false, reload };
     }
     let selected_path = skin_slot_path(skin, editor.slot);
-    if !selected_path.trim().is_empty() {
-        match app_paths.resolve_path_ref(selected_path) {
-            Ok(path) => {
-                if app_paths.skin_library_roots().len() > 1 {
-                    if path.starts_with(&app_paths.data_dir) {
-                        ui.label(tr!(text, "skin-origin-user"));
-                    } else if path.starts_with(&app_paths.resource_dir) {
-                        ui.label(tr!(text, "skin-origin-bundled"));
-                    } else {
-                        ui.label(tr!(text, "skin-origin-external"));
-                    }
-                }
-                let path = std::path::absolute(&path).unwrap_or(path);
-                ui.label(path.display().to_string());
-            }
-            Err(error) => {
-                ui.colored_label(ui.visuals().error_fg_color, error.to_string());
-            }
-        }
-    }
     if let Some(load_error) = &skin_meta.load_error
         && load_error.path == selected_path
     {
@@ -232,7 +199,7 @@ pub(in crate::ui) fn build_skin_panel(
     egui::ScrollArea::vertical()
         .id_salt(("skin_details", editor.slot, &editor.search))
         .auto_shrink([false, false])
-        .max_height((ui.available_height() - 65.0).max(40.0))
+        .max_height(ui.available_height().max(40.0))
         .show(ui, |ui| match editor.slot {
             SkinSlot::Select => {
                 build_scene_skin_defs_with_reload(
@@ -459,8 +426,6 @@ pub(in crate::ui) fn build_skin_panel(
                 );
             }
         });
-    ui.separator();
-    ui.label(tr!(text, "settings-autosave-help"));
     SkinPanelActions { save: save_clicked, reset: reset_clicked, reload }
 }
 

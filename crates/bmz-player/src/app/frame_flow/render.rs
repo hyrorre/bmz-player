@@ -2,6 +2,21 @@ use super::*;
 
 impl WinitApp {
     pub(in crate::app) fn render_current_scene(&mut self) -> Option<SceneFrameProfileSample> {
+        if self.scene_skin_entry_loading() {
+            self.sync_select_maintenance_gate();
+            // Keep the last scene image and draw egui's animated loading indicator.
+            // Do not run the old skin's callbacks against the next scene's state.
+            let notify = self.uses_wayland_frame_callbacks();
+            let window = self.window.as_deref();
+            let status = self.renderer.render_last_plan_with_pre_present_notify(|| {
+                if notify && let Some(window) = window {
+                    window.pre_present_notify();
+                }
+            });
+            self.frame.record_surface_status(Instant::now(), status.as_ref().ok().copied());
+            log_render_status(status);
+            return None;
+        }
         let select_view = matches!(self.view_state(), AppViewState::Select);
         let decide_view = matches!(self.view_state(), AppViewState::Decide);
         let play_view = matches!(self.view_state(), AppViewState::Play);
@@ -76,6 +91,9 @@ impl WinitApp {
                 startup_to_first_present_ms = self.smoke.startup_started_at.elapsed().as_millis(),
                 "first surface frame presented"
             );
+            if let Some(phase) = self.smoke.first_present_phase.take() {
+                phase.complete();
+            }
         }
         self.arm_select_scene_timers_after_render(select_view, surface_status);
         self.log_pending_skin_render_probe(
@@ -188,6 +206,7 @@ fn log_render_status(render_status: Result<RenderSurfaceStatus>) {
     match render_status {
         Ok(RenderSurfaceStatus::Rendered)
         | Ok(RenderSurfaceStatus::SkippedNoSurface)
+        | Ok(RenderSurfaceStatus::Recovering)
         | Ok(RenderSurfaceStatus::SkippedZeroSize) => {}
         Ok(RenderSurfaceStatus::Reconfigured) => {
             tracing::debug!("renderer surface reconfigured");

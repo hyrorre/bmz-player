@@ -185,6 +185,8 @@ pub struct GameSession {
     pub gauge: GaugeState,
     pub replay_recorder: ReplayRecorder,
     pub replay_player: Option<ReplayPlayer>,
+    /// Recorded chart-time judgement scale, independent of viewing speed.
+    pub replay_judge_rate_percent: u16,
     /// Optional source-mode replay normalization used by presentation-only
     /// key-mode conversions such as score-eligible 7K-to-9K.
     pub replay_lane_projection: Option<ReplayLaneProjection>,
@@ -311,8 +313,61 @@ pub struct GameSession {
     /// プレイヤーの操作 (Esc / START+SELECT 長押しなど) で曲の途中に止めたか。
     /// `state` はゲージ落ちと同じ `Failed` になるため、完走判定にはこちらを使う。
     pub manually_stopped: bool,
+    /// 採用する結果を確定し、採点を閉じた譜面時刻。
+    ///
+    /// 自然確定 ([`super::natural_result_settled`]) か、`Finished` / `Failed` への
+    /// 停止境界で一度だけ設定する。以後の入力はスコア・ゲージ・コンボ・判定詳細・
+    /// 記録用リプレイを変更せず、表示とキー音だけを進める。新しいセッションでは `None`。
+    pub scoring_closed_at: Option<TimeUs>,
     /// HCN ゲージ増減の前回更新時刻。
     pub last_hcn_gauge_at: Option<TimeUs>,
+}
+
+impl GameSession {
+    /// 採用する結果の確定時刻。採点を閉じていない `Playing` の間は `None`。
+    ///
+    /// 更新を経ずに終了状態へ置かれたセッションは、現在の譜面時刻を停止境界とする。
+    pub fn result_settled_at(&self) -> Option<TimeUs> {
+        self.scoring_closed_at.or_else(|| {
+            matches!(self.state, PlayState::Finished | PlayState::Failed)
+                .then(|| self.audio_clock.now())
+        })
+    }
+
+    /// 手動中断を、gameplay の所有スレッドで現在の状態に対して再確認してから適用する。
+    ///
+    /// 全ノーツ処理後・採点確定後・終了後に届いた要求は、確定済みの結果を
+    /// FAILED へ再分類しないよう無視する。
+    pub fn request_manual_stop(&mut self) -> bool {
+        if !matches!(self.state, PlayState::Ready | PlayState::Playing)
+            || self.scoring_closed_at.is_some()
+            || self.judge.is_exhausted(&self.chart)
+        {
+            return false;
+        }
+        self.state = PlayState::Failed;
+        self.manually_stopped = true;
+        true
+    }
+
+    /// Practice の中断要求。ノーツが残る間は手動中断し、所有スレッドで既に全ノーツを
+    /// 処理していた場合は明示的な退出として完走扱いで終える。
+    ///
+    /// Practice は要求の直後に時計を止めて終了演出へ進むため、要求を拒否して
+    /// `Playing` のまま残すと自然確定へ進めず、そのラウンドの結果を取得できない。
+    pub fn request_practice_round_end(&mut self) -> bool {
+        self.request_manual_stop() || self.request_finish()
+    }
+
+    /// 全ノーツ処理後の明示的な退出要求。`Playing` の間だけ `Finished` にし、
+    /// 途中 FAILED などの確定済みの終了理由を上書きしない。
+    pub fn request_finish(&mut self) -> bool {
+        if self.state != PlayState::Playing {
+            return false;
+        }
+        self.state = PlayState::Finished;
+        true
+    }
 }
 
 /// G-BATTLE opponent state. The opponent uses its own chart and judge cursor so
@@ -328,6 +383,8 @@ pub struct BattleOpponentSession {
     pub score: ScoreState,
     pub gauge: GaugeState,
     pub replay_player: Option<ReplayPlayer>,
+    /// The opponent replay's recorded rate, independent of the primary clock.
+    pub replay_judge_rate_percent: u16,
     /// Full autoplay fallback used when the provider has no input replay.
     pub autoplay: Option<AutoplayController>,
     /// G-BATTLE presents the opponent on the primary player's final lane

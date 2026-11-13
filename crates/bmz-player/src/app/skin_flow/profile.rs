@@ -71,6 +71,10 @@ impl WinitApp {
 
     pub(super) fn sync_active_play_realtime_profile_settings(&mut self) {
         if let Some(active_play) = &mut self.play.active_play {
+            active_play
+                .running
+                .gameplay
+                .set_hispeed_transition_ms(self.boot.profile_config.lane.hispeed_transition_ms);
             let profile = self.boot.profile_config.clone();
             active_play.running.gameplay.edit(move |session| {
                 let key_mode = session.play_config_key_mode;
@@ -127,6 +131,7 @@ impl WinitApp {
     }
 
     pub(super) fn reset_skin_config_from_disk(&mut self) {
+        self.jobs.config_saver.flush();
         match load_profile_config(&self.boot.profile_paths.profile_toml) {
             Ok(profile) => {
                 replace_skin_config_from_loaded_profile(&mut self.boot.profile_config, profile);

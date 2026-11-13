@@ -4,7 +4,7 @@ impl WinitApp {
     pub(super) fn should_exit_via_select_hold(&mut self) -> bool {
         let allowed = matches!(self.view_state(), AppViewState::Select)
             && self.select.select_option_panel == 0
-            && self.input.pressed_controls.contains("Escape");
+            && self.input.keyboard_key_held("Escape");
         select_exit_hold_due(&mut self.select.select_exit_hold_started_at, allowed, Instant::now())
     }
 
@@ -117,39 +117,19 @@ impl WinitApp {
         TimeUs(micros)
     }
 
-    pub(super) fn set_start_held(&mut self, held: bool) {
-        if self.input.start_held != held {
-            self.input.start_held = held;
-            self.update_select_option_panel();
-        }
-    }
-
-    pub(super) fn set_select_held(&mut self, held: bool) {
-        if self.input.select_held != held {
-            self.input.select_held = held;
-            self.update_select_option_panel();
-        }
-    }
-
+    /// 押下中の入力元を現在の設定でそれぞれ解決し、E1〜E4 の保持状態を集約する。
     pub(super) fn reconcile_select_holds_from_pressed_controls(&mut self) {
-        reconcile_select_holds_from_pressed_controls(&mut self.input, &self.select.select_keys);
+        let (start_held, select_held, e_action_holds) =
+            select_hold_state_from_resolved(self.pressed_scene_controls());
+        self.input.select_e_action_holds = e_action_holds;
+        self.input.start_held = start_held;
+        self.input.select_held = select_held;
     }
 
     pub(super) fn sync_select_holds_from_pressed_controls(&mut self) {
         self.reconcile_select_holds_from_pressed_controls();
         self.release_select_hold_without_pressed_control();
         self.update_select_option_panel();
-    }
-
-    pub(super) fn update_select_e_action_hold(&mut self, control: &str, held: bool) {
-        let Some(action) = self.select.select_keys.e_action_for_control(control) else {
-            return;
-        };
-        if held {
-            self.input.select_e_action_holds.insert(action);
-        } else {
-            self.input.select_e_action_holds.remove(&action);
-        }
     }
 
     pub(super) fn select_e_action_held(&self) -> bool {
@@ -332,8 +312,7 @@ impl WinitApp {
         let entry_id = session.entry_id();
         let before = ProfileSettingsSnapshot::capture(&self.boot.profile_config);
         self.boot.profile_config.updated_at = now_unix_seconds();
-        match save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
-        {
+        match self.save_profile_config_now() {
             Ok(()) => {
                 self.apply_profile_settings_changes(&before, Some(entry_id));
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
@@ -350,7 +329,7 @@ impl WinitApp {
 
     fn commit_app_settings_edit(&mut self, session: AppSettingsEditSession) {
         let entry_id = session.entry_id;
-        match save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config) {
+        match self.save_app_config_now() {
             Ok(()) => {
                 if !entry_id.is_audio() {
                     let window = self.window.clone();
@@ -370,8 +349,7 @@ impl WinitApp {
     }
 
     pub(super) fn apply_select_audio_settings(&mut self) {
-        if let Err(error) = save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config)
-        {
+        if let Err(error) = self.save_app_config_now() {
             tracing::error!(%error, "failed to save audio settings before apply");
             let text = Localizer::new(self.boot.profile_config.ui.locale());
             self.show_left_overlay_toast(text.text("settings-audio-apply-failed"));
@@ -529,7 +507,7 @@ impl WinitApp {
     }
 
     fn rebuild_select_key_bindings(&mut self) {
-        self.select.select_keys = SelectKeyBindings::from_profile(&self.boot.profile_config.input);
+        self.select.select_keys = SceneInputResolver::from_profile(&self.boot.profile_config.input);
         self.sync_select_holds_from_pressed_controls();
     }
 
@@ -612,59 +590,54 @@ impl WinitApp {
         self.select.session_mode = options.session_mode;
     }
 
-    pub(super) fn route_settings_control(
-        &mut self,
-        control: &str,
-        synthesized_analog_axis: bool,
-    ) -> bool {
-        let bindings = SettingsBindings::from_profile(&self.boot.profile_config.input);
+    pub(super) fn route_settings_control(&mut self, input: &ResolvedInput) -> bool {
+        let control = input.scene();
+        let bindings = control.settings_input();
 
-        if synthesized_analog_axis
-            && (self.select.select_keys.is_select_scratch_up(control)
-                || self.select.select_keys.is_select_scratch_down(control))
+        if input.synthesized_analog_axis() && (control.is_scratch_up() || control.is_scratch_down())
         {
             return true;
         }
 
         if self.select.key_config_edit.is_some() {
-            if bindings.is_back(control) {
+            if bindings.back {
                 self.cancel_key_config_edit();
             }
             return true;
         }
 
         if self.select.settings_edit.is_some() {
-            if bindings.is_confirm(control) {
+            if bindings.confirm {
                 self.commit_settings_edit();
                 return true;
             }
-            if bindings.is_back(control) {
+            if bindings.back {
                 self.cancel_settings_edit();
                 return true;
             }
-            if bindings.is_increase(control) {
+            if bindings.increase {
                 self.adjust_settings_edit(1);
                 return true;
             }
-            if bindings.is_decrease(control) {
+            if bindings.decrease {
                 self.adjust_settings_edit(-1);
                 return true;
             }
             return true;
         }
 
-        if bindings.is_back(control) {
+        if bindings.back {
             self.exit_folder();
             return true;
         }
-        if let Some(select_move) =
-            settings_browse_move_control(control, &bindings, &self.select.select_keys)
-        {
+        if let Some(select_move) = settings_browse_move_control(control) {
             self.move_selection(select_move);
-            self.start_select_hold_move(select_move, control.to_string());
+            if let Some(source) = input.source() {
+                self.start_select_hold_move(select_move, source.clone());
+            }
             return true;
         }
-        if bindings.is_confirm(control) {
+        if bindings.confirm {
             return match self.select.select_items.get(self.select.selected_index) {
                 Some(SelectItem::Config(row)) => {
                     self.begin_settings_edit(row.entry_id);
@@ -728,61 +701,75 @@ impl WinitApp {
         );
     }
 
-    pub(super) fn apply_play_option_control(&mut self, control: &str) -> bool {
+    /// 選曲 PLAY OPTION パネルの操作。KEY1 / KEY2 は入力元の側の配置、KEY3〜KEY7 は
+    /// 側に依存しない共通操作。
+    pub(super) fn apply_play_option_input(&mut self, control: &ResolvedControl) -> bool {
         if self.lr2_select_active() {
             // The LR2 button plays the option sound itself, only when a value changes.
-            self.apply_lr2_option_control(control);
+            if let Some(lane) = control.option_lane() {
+                self.apply_lr2_option_lane(lane);
+            }
             return false;
         }
-        if self.select.select_keys.is_key1(control) {
-            self.apply_arrange_option_lane(Lane::Key1)
-        } else if self.select.select_keys.is_key2(control) {
-            self.apply_arrange_option_lane(Lane::Key2)
-        } else if self.select.select_keys.is_key8(control) {
-            self.apply_arrange_option_lane(Lane::Key8)
-        } else if self.select.select_keys.is_key9(control) {
-            self.apply_arrange_option_lane(Lane::Key9)
-        } else if self.select.select_keys.is_ui_key3(control) {
-            self.select.gauge_option = cycle_gauge_option(self.select.gauge_option);
-            tracing::info!(gauge = ?self.select.gauge_option, "gauge option changed");
-            true
-        } else if self.select.select_keys.is_ui_key4(control) {
-            self.select.gauge_option = cycle_gauge_option_prev(self.select.gauge_option);
-            tracing::info!(gauge = ?self.select.gauge_option, "gauge option changed");
-            true
-        } else if self.select.select_keys.is_ui_key5(control) {
-            if !self.begin_selected_play_mode_edit() {
-                return false;
+        if let Some((side, forward)) = control.arrange_input() {
+            let lane = match (side, forward) {
+                (PlayerSide::P1, true) => Lane::Key1,
+                (PlayerSide::P1, false) => Lane::Key2,
+                (PlayerSide::P2, true) => Lane::Key8,
+                (PlayerSide::P2, false) => Lane::Key9,
+            };
+            return self.apply_arrange_option_lane(lane);
+        }
+        match control.ui_key() {
+            Some(3) => {
+                self.select.gauge_option = cycle_gauge_option(self.select.gauge_option);
+                tracing::info!(gauge = ?self.select.gauge_option, "gauge option changed");
+                true
             }
-            self.select.hs_fix_option = self.select.hs_fix_option.cycle();
-            self.boot.profile_config.play.hs_fix =
-                hs_fix_config_from_option(self.select.hs_fix_option);
-            self.finish_selected_play_mode_edit();
-            tracing::info!(hs_fix = self.select.hs_fix_option.as_str(), "HS-FIX option changed");
-            true
-        } else if self.select.select_keys.is_ui_key6(control) {
-            self.select.double_option = self.select.double_option.cycle();
-            if matches!(
-                self.select.double_option,
-                DoubleOption::Battle | DoubleOption::BattleAutoScratch
-            ) && self.boot.profile_config.play.key_mode_conversion
-                != KeyModeConversionConfig::Off
-            {
-                self.boot.profile_config.play.key_mode_conversion = KeyModeConversionConfig::Off;
-                self.boot.profile_config.updated_at = now_unix_seconds();
-                self.invalidate_play_preload();
-                self.play.play_media_cache = None;
+            Some(4) => {
+                self.select.gauge_option = cycle_gauge_option_prev(self.select.gauge_option);
+                tracing::info!(gauge = ?self.select.gauge_option, "gauge option changed");
+                true
             }
-            tracing::info!(
-                double_option = self.select.double_option.as_str(),
-                "double option changed"
-            );
-            true
-        } else if self.select.select_keys.is_ui_key7(control) {
-            self.cycle_select_session_mode(1);
-            true
-        } else {
-            false
+            Some(5) => {
+                if !self.begin_selected_play_mode_edit() {
+                    return false;
+                }
+                self.select.hs_fix_option = self.select.hs_fix_option.cycle();
+                self.boot.profile_config.play.hs_fix =
+                    hs_fix_config_from_option(self.select.hs_fix_option);
+                self.finish_selected_play_mode_edit();
+                tracing::info!(
+                    hs_fix = self.select.hs_fix_option.as_str(),
+                    "HS-FIX option changed"
+                );
+                true
+            }
+            Some(6) => {
+                self.select.double_option = self.select.double_option.cycle();
+                if matches!(
+                    self.select.double_option,
+                    DoubleOption::Battle | DoubleOption::BattleAutoScratch
+                ) && self.boot.profile_config.play.key_mode_conversion
+                    != KeyModeConversionConfig::Off
+                {
+                    self.boot.profile_config.play.key_mode_conversion =
+                        KeyModeConversionConfig::Off;
+                    self.boot.profile_config.updated_at = now_unix_seconds();
+                    self.invalidate_play_preload();
+                    self.play.play_media_cache = None;
+                }
+                tracing::info!(
+                    double_option = self.select.double_option.as_str(),
+                    "double option changed"
+                );
+                true
+            }
+            Some(7) => {
+                self.cycle_select_session_mode(1);
+                true
+            }
+            _ => false,
         }
     }
 
@@ -800,43 +787,9 @@ impl WinitApp {
         true
     }
 
-    pub(super) fn apply_gamepad_play_option_control(
-        &mut self,
-        device: DeviceId,
-        control: &str,
-    ) -> bool {
-        let app_config = self.play_session_app_config();
-        let slots = crate::input::gamepad::GamepadSlotMap::from_runtime_or_legacy(
-            app_config.input.gamepad_slot_runtime_device_ids,
-            app_config.input.gamepad_slot_gilrs_ids,
-        );
-        let lane =
-            select_option_lane_for_gamepad(&self.boot.profile_config.input, slots, device, control);
-        if self.lr2_select_active() {
-            // The LR2 button plays the option sound itself, only when a value changes.
-            if let Some(lane) = lane {
-                self.apply_lr2_option_lane(lane);
-            }
-            return false;
-        }
-        if lane.is_some_and(|lane| self.apply_arrange_option_lane(lane)) {
-            true
-        } else {
-            self.apply_play_option_control(control)
-        }
-    }
-
-    pub(super) fn apply_gamepad_legacy_assist_control(&mut self, device: DeviceId, control: &str) {
-        let config = self.play_session_app_config();
-        let slots = crate::input::gamepad::GamepadSlotMap::from_runtime_or_legacy(
-            config.input.gamepad_slot_runtime_device_ids,
-            config.input.gamepad_slot_gilrs_ids,
-        );
-        let event_id =
-            select_option_lane_for_gamepad(&self.boot.profile_config.input, slots, device, control)
-                .and_then(legacy_assist_event_for_lane)
-                .or_else(|| self.select.select_keys.legacy_assist_event(control));
-        if let Some(event_id) = event_id {
+    /// 旧3パネル方式のアシストパネル。
+    pub(super) fn apply_legacy_assist_input(&mut self, control: &ResolvedControl) {
+        if let Some(event_id) = control.legacy_assist_event() {
             self.execute_select_skin_event(event_id, 1);
         }
     }
@@ -865,17 +818,13 @@ impl WinitApp {
         tracing::info!(target = self.select.target_option.as_str(), "target option changed");
     }
 
-    pub(super) fn apply_detail_option_control(&mut self, control: &str) -> bool {
-        if self.select.select_keys.cycle_bga() == Some(control)
-            || self.select.select_keys.is_ui_key1(control)
-        {
+    pub(super) fn apply_detail_option_control(&mut self, control: &ResolvedControl) -> bool {
+        if control.is_ui_key(1) {
             self.cycle_bga_option();
             true
-        } else if let Some(delta) = green_number_delta_control(control, &self.select.select_keys) {
+        } else if let Some(delta) = green_number_delta_control(control) {
             self.adjust_select_green_number(delta)
-        } else if let Some(delta_ms) =
-            visual_offset_delta_control(control, &self.select.select_keys)
-        {
+        } else if let Some(delta_ms) = visual_offset_delta_control(control) {
             self.adjust_visual_offset_ms(delta_ms)
         } else {
             false
@@ -933,7 +882,11 @@ impl WinitApp {
         changed
     }
 
-    pub(super) fn apply_select_action(&mut self, action: SelectAction, hold_control: Option<&str>) {
+    pub(super) fn apply_select_action(
+        &mut self,
+        action: SelectAction,
+        hold_control: Option<&InputSource>,
+    ) {
         if self.jobs.profile_change.is_some() {
             return;
         }
@@ -962,7 +915,7 @@ impl WinitApp {
                             | SelectMove::JumpNext
                     ) && let Some(control) = hold_control
                     {
-                        self.start_select_hold_move(select_move, control.to_string());
+                        self.start_select_hold_move(select_move, control.clone());
                     }
                 }
                 SelectAction::FavoriteSong
@@ -1012,7 +965,7 @@ impl WinitApp {
                         | SelectMove::JumpNext
                 ) && let Some(control) = hold_control
                 {
-                    self.start_select_hold_move(select_move, control.to_string());
+                    self.start_select_hold_move(select_move, control.clone());
                 }
             }
         }

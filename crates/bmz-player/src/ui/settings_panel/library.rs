@@ -3,6 +3,7 @@ use super::*;
 pub(super) struct LibrarySettingsActions<'a> {
     pub(super) save_clicked: &'a mut bool,
     pub(super) rescan_clicked: &'a mut bool,
+    pub(super) full_rescan_clicked: &'a mut bool,
     pub(super) song_scan_requests: &'a mut Vec<SongScanRequest>,
     pub(super) table_fetch_urls: &'a mut Vec<String>,
     pub(super) score_import_request: &'a mut Option<ScoreImportRequest>,
@@ -21,6 +22,7 @@ pub(super) fn build_library_settings_sections(
     let LibrarySettingsActions {
         save_clicked,
         rescan_clicked,
+        full_rescan_clicked,
         song_scan_requests,
         table_fetch_urls,
         score_import_request,
@@ -66,7 +68,7 @@ pub(super) fn build_library_settings_sections(
                                         {
                                             song_scan_requests.push(SongScanRequest {
                                                 roots: vec![root.clone()],
-                                                force: true,
+                                                force: false,
                                                 label: "egui song reload".to_string(),
                                             });
                                         }
@@ -167,10 +169,16 @@ pub(super) fn build_library_settings_sections(
             if !state.add_root_error.is_empty() {
                 ui.colored_label(egui::Color32::RED, state.add_root_error.as_str());
             }
-            if ui.button(tr!(text, "settings-library-rescan")).clicked() {
-                *rescan_clicked = true;
-            }
+            ui.horizontal_wrapped(|ui| {
+                if ui.button(tr!(text, "settings-library-rescan")).clicked() {
+                    *rescan_clicked = true;
+                }
+                if ui.button(tr!(text, "settings-library-reparse-all")).clicked() {
+                    *full_rescan_clicked = true;
+                }
+            });
             ui.label(tr!(text, "settings-song-scan-help"));
+            ui.small(tr!(text, "settings-library-reparse-all-help"));
         });
 
     SettingsSection::new(SettingsPage::Library, tr!(text, "settings-scan-title"))
@@ -181,7 +189,6 @@ pub(super) fn build_library_settings_sections(
                 &mut config.scan.follow_symlinks,
                 tr!(text, "settings-scan-follow-symlinks"),
             );
-            ui.checkbox(&mut config.scan.skip_hidden, tr!(text, "settings-scan-skip-hidden"));
             #[cfg(windows)]
             {
                 ui.checkbox(
@@ -432,29 +439,50 @@ fn build_download_save_dir_setting(
     data_dir: &std::path::Path,
     text: Localizer,
 ) {
-    let save_dir = &mut config.save_dir;
-    ui.horizontal(|ui| {
-        ui.label(tr!(text, "settings-downloads-save-dir"));
-        // 相対パスは data/ 基準なので、既定値の相対表記は `songs` になる。
-        ui.add(egui::TextEdit::singleline(save_dir).desired_width(300.0).hint_text("songs"));
-    });
-    ui.horizontal(|ui| {
-        if ui.button(tr!(text, "common-choose-folder")).clicked()
-            && let Some(folder) = rfd::FileDialog::new().pick_folder()
-        {
-            *save_dir = folder.to_string_lossy().into_owned();
-        }
-        if ui
-            .add_enabled(
-                !save_dir.trim().is_empty(),
-                egui::Button::new(tr!(text, "common-default")),
-            )
-            .clicked()
-        {
-            save_dir.clear();
-        }
-    });
-    let path = config.download_root(data_dir).to_string_lossy().into_owned();
-    ui.label(tr!(text, "settings-downloads-save-path", "path" => path));
+    use crate::config::app_config::{DEFAULT_HTTP_SAVE_DIR, DEFAULT_IPFS_SAVE_DIR};
+    for (id, label, save_dir, default) in [
+        (
+            "ipfs",
+            tr!(text, "settings-downloads-ipfs-save-dir"),
+            &mut config.ipfs_save_dir,
+            DEFAULT_IPFS_SAVE_DIR,
+        ),
+        (
+            "http",
+            tr!(text, "settings-downloads-http-save-dir"),
+            &mut config.http_save_dir,
+            DEFAULT_HTTP_SAVE_DIR,
+        ),
+    ] {
+        ui.push_id(id, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                // 相対パスは data/ 基準なので、既定値の相対表記をヒントに出す。
+                ui.add(
+                    egui::TextEdit::singleline(save_dir).desired_width(300.0).hint_text(default),
+                );
+            });
+            ui.horizontal(|ui| {
+                if ui.button(tr!(text, "common-choose-folder")).clicked()
+                    && let Some(folder) = rfd::FileDialog::new().pick_folder()
+                {
+                    *save_dir = folder.to_string_lossy().into_owned();
+                }
+                if ui
+                    .add_enabled(
+                        !save_dir.trim().is_empty(),
+                        egui::Button::new(tr!(text, "common-default")),
+                    )
+                    .clicked()
+                {
+                    save_dir.clear();
+                }
+            });
+            let path = crate::config::app_config::resolve_save_dir(save_dir, data_dir, default)
+                .to_string_lossy()
+                .into_owned();
+            ui.label(tr!(text, "settings-downloads-save-path", "path" => path));
+        });
+    }
     ui.label(tr!(text, "settings-downloads-save-dir-help"));
 }

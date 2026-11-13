@@ -243,8 +243,8 @@ where
 /// 難易度表を並行取得するが、DBには保存せず取得結果を順次呼び出し元へ渡す。
 ///
 /// Appはこの関数をbackground workerで実行し、結果をSelect画面で受信したときだけ
-/// [`store_fetched_table`]を呼ぶ。これにより、Selectで開始した取得がPlayへまたがっても
-/// SQLite書き込みはPlay終了後まで保留される。
+/// 保存workerを開始する。Select外で届いた結果は次のSelectまで保留する。
+/// Select中に開始済みのtransactionは画面遷移後もworker上で完了させる。
 pub(crate) async fn download_table_urls_with_progress<F>(
     urls: Vec<String>,
     mut maintenance_allowed: tokio::sync::watch::Receiver<bool>,
@@ -355,6 +355,10 @@ fn print_table_fetch_success(success: &TableFetchSuccess) {
         println!("  {} course(s) stored.", success.courses);
     }
 }
+
+#[cfg(test)]
+#[path = "table_cmd/profile.rs"]
+pub(crate) mod profile;
 
 #[cfg(test)]
 mod tests {

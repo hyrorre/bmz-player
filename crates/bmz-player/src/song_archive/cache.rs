@@ -41,6 +41,57 @@ pub(super) fn remember_index(
     }
 }
 
+struct CachedListing {
+    stamp: ArchiveStamp,
+    limits: ArchiveLimits,
+    listing: Arc<ChartListing>,
+}
+
+#[derive(Default)]
+struct Listings {
+    by_path: HashMap<PathBuf, CachedListing>,
+    charts: usize,
+}
+
+static LISTINGS: OnceLock<Mutex<Listings>> = OnceLock::new();
+/// A listing holds only charts, about 0.5 KiB per archive of a typical library, so the
+/// bounds fit libraries of thousands of archives and stay near 30 MiB when full.
+const MAX_LISTINGS: usize = 1 << 14;
+const MAX_LISTED_CHARTS: usize = 1 << 18;
+
+pub(super) fn cached_listing(
+    path: &Path,
+    stamp: &ArchiveStamp,
+    limits: &ArchiveLimits,
+) -> Option<Arc<ChartListing>> {
+    let listings = LISTINGS.get_or_init(Mutex::default).lock().unwrap();
+    listings
+        .by_path
+        .get(path)
+        .filter(|cached| cached.stamp == *stamp && cached.limits == *limits)
+        .map(|cached| cached.listing.clone())
+}
+
+pub(super) fn remember_listing(
+    path: PathBuf,
+    stamp: ArchiveStamp,
+    limits: ArchiveLimits,
+    listing: Arc<ChartListing>,
+) {
+    let mut listings = LISTINGS.get_or_init(Mutex::default).lock().unwrap();
+    if let Some(previous) = listings.by_path.remove(&path) {
+        listings.charts -= previous.listing.charts.len();
+    }
+    if listings.by_path.len() >= MAX_LISTINGS
+        || listings.charts + listing.charts.len() > MAX_LISTED_CHARTS
+    {
+        // Rebuilding a listing costs one index read of that archive.
+        *listings = Listings::default();
+    }
+    listings.charts += listing.charts.len();
+    listings.by_path.insert(path, CachedListing { stamp, limits, listing });
+}
+
 type Generations = Mutex<HashMap<PathBuf, (String, ArchiveGeneration)>>;
 static GENERATIONS: OnceLock<Generations> = OnceLock::new();
 const MAX_GENERATIONS: usize = 1 << 16;

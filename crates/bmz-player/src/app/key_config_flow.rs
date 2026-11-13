@@ -168,17 +168,17 @@ impl WinitApp {
     ) -> bool {
         let previous_updated_at = self.boot.profile_config.updated_at;
         self.boot.profile_config.updated_at = now_unix_seconds();
-        if let Err(error) =
-            save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
-        {
+        if let Err(error) = self.save_profile_config_now() {
             tracing::error!(%error, ?session.target, "failed to save key config");
             session.cancel(&mut self.boot.profile_config);
             self.boot.profile_config.updated_at = previous_updated_at;
             return false;
         }
 
-        self.select.select_keys = SelectKeyBindings::from_profile(&self.boot.profile_config.input);
+        self.select.select_keys = SceneInputResolver::from_profile(&self.boot.profile_config.input);
+        // 押したままの入力元も新しい設定で解決し直し、E1〜E4 の保持状態を揃える。
         self.clear_select_hold();
+        self.sync_select_holds_from_pressed_controls();
         self.invalidate_play_preload();
         self.play.play_media_cache = None;
         self.suppress_select_analog_until_idle();

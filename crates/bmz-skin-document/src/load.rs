@@ -8,12 +8,94 @@ use bmz_skin_assets::SkinPathContext;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 pub fn load_json_value(path: &Path) -> Result<JsonValue> {
-    let text = std::fs::read_to_string(path)
+    let bytes = std::fs::read(path)
         .with_context(|| format!("failed to read skin json: {}", path.display()))?;
+    parse_json_skin_text(&decode_json_skin_bytes(&bytes))
+        .with_context(|| format!("failed to parse skin json: {}", path.display()))
+}
+
+/// Parses beatoraja JSON skin text after the lenient preprocessing that libGDX's
+/// `JsonReader` accepts: comments, missing commas between values, and trailing commas.
+pub fn parse_json_skin_text(text: &str) -> Result<JsonValue> {
+    let text = strip_json_comments(text)?;
     let text = strip_json_trailing_commas(&text);
     let text = insert_missing_commas_between_json_values(&text);
-    serde_json::from_str(&text)
-        .with_context(|| format!("failed to parse skin json: {}", path.display()))
+    Ok(serde_json::from_str(&text)?)
+}
+
+/// Decodes skin JSON bytes as UTF-8 (with an optional BOM), falling back to
+/// Shift_JIS (CP932). beatoraja reads JSON skins with `FileReader`, whose
+/// platform-default charset is MS932 on Japanese Windows, so CP932 skins exist.
+pub fn decode_json_skin_bytes(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    match std::str::from_utf8(bytes) {
+        Ok(text) => std::borrow::Cow::Borrowed(text),
+        Err(_) => encoding_rs::SHIFT_JIS.decode_without_bom_handling(bytes).0,
+    }
+}
+
+/// Removes `// ...` line comments and `/* ... */` block comments outside strings.
+///
+/// A line comment keeps its terminating newline, and a block comment becomes a
+/// space plus the newlines it contained, so token boundaries and line numbers in
+/// later parse errors stay intact. An unterminated block comment is an error.
+pub fn strip_json_comments(input: &str) -> Result<String> {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        if in_string {
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            in_string = true;
+            output.push(ch);
+            continue;
+        }
+        if ch != '/' {
+            output.push(ch);
+            continue;
+        }
+        match chars.peek() {
+            Some('/') => {
+                while let Some(next) = chars.peek() {
+                    if matches!(next, '\n' | '\r') {
+                        break;
+                    }
+                    chars.next();
+                }
+            }
+            Some('*') => {
+                chars.next();
+                output.push(' ');
+                let mut closed = false;
+                while let Some(next) = chars.next() {
+                    if next == '*' && chars.peek() == Some(&'/') {
+                        chars.next();
+                        closed = true;
+                        break;
+                    }
+                    if matches!(next, '\n' | '\r') {
+                        output.push(next);
+                    }
+                }
+                anyhow::ensure!(closed, "unterminated block comment in skin json");
+            }
+            _ => output.push(ch),
+        }
+    }
+
+    Ok(output)
 }
 
 pub fn strip_json_trailing_commas(input: &str) -> String {
@@ -176,49 +258,40 @@ pub fn normalize_json_skin_integer_value(value: JsonValue) -> JsonValue {
 /// スカラー期待の整数キー (`op` / `offsets` / `time` 以外) では配列を
 /// アンラップしてスカラーへ畳み込む点。`offset` は定義の配列にも使うため、
 /// オブジェクトや配列を含む場合は1件でも配列を維持する。
-pub fn normalize_lua_json_skin_integer_numbers(value: JsonValue) -> JsonValue {
-    normalize_lua_json_skin_integer_numbers_for_key(None, value)
+pub fn normalize_lua_json_skin_integer_numbers(mut value: JsonValue) -> JsonValue {
+    // In place: rebuilding every map of a large document costs more than the rounding.
+    normalize_lua_json_skin_integer_numbers_for_key(None, &mut value);
+    value
 }
 
-fn normalize_lua_json_skin_integer_numbers_for_key(
-    key: Option<&str>,
-    value: JsonValue,
-) -> JsonValue {
+fn normalize_lua_json_skin_integer_numbers_for_key(key: Option<&str>, value: &mut JsonValue) {
     match value {
-        JsonValue::Array(mut values)
+        JsonValue::Array(values)
             if is_json_skin_scalar_integer_key(key)
                 && values.len() == 1
                 && !matches!(values[0], JsonValue::Object(_) | JsonValue::Array(_)) =>
         {
-            normalize_lua_json_skin_integer_value(values.remove(0))
+            let mut scalar = values.remove(0);
+            normalize_lua_json_skin_integer_value(&mut scalar);
+            *value = scalar;
         }
-        JsonValue::Array(values) => JsonValue::Array(
-            values
-                .into_iter()
-                .map(|value| {
-                    if is_json_skin_integer_key(key) {
-                        normalize_lua_json_skin_integer_value(value)
-                    } else {
-                        normalize_lua_json_skin_integer_numbers_for_key(key, value)
-                    }
-                })
-                .collect(),
-        ),
-        JsonValue::Object(map) => JsonValue::Object(
-            map.into_iter()
-                .map(|(key, value)| {
-                    let value = normalize_lua_json_skin_integer_numbers_for_key(Some(&key), value);
-                    (key, value)
-                })
-                .collect::<JsonMap<_, _>>(),
-        ),
-        JsonValue::Number(number) if is_json_skin_integer_key(key) => {
-            json_number_to_rounded_i64(&number)
-                .and_then(serde_json::Number::from_i128)
-                .map(JsonValue::Number)
-                .unwrap_or(JsonValue::Number(number))
+        JsonValue::Array(values) => {
+            let integer_key = is_json_skin_integer_key(key);
+            for value in values {
+                if integer_key {
+                    normalize_lua_json_skin_integer_value(value);
+                } else {
+                    normalize_lua_json_skin_integer_numbers_for_key(key, value);
+                }
+            }
         }
-        value => value,
+        JsonValue::Object(map) => {
+            for (key, value) in map.iter_mut() {
+                normalize_lua_json_skin_integer_numbers_for_key(Some(key), value);
+            }
+        }
+        JsonValue::Number(number) if is_json_skin_integer_key(key) => round_json_integer(number),
+        _ => {}
     }
 }
 
@@ -226,24 +299,26 @@ fn is_json_skin_scalar_integer_key(key: Option<&str>) -> bool {
     is_json_skin_integer_key(key) && !matches!(key, Some("op" | "offsets" | "time"))
 }
 
-fn normalize_lua_json_skin_integer_value(value: JsonValue) -> JsonValue {
+fn normalize_lua_json_skin_integer_value(value: &mut JsonValue) {
     match value {
-        JsonValue::Number(number) => json_number_to_rounded_i64(&number)
-            .and_then(serde_json::Number::from_i128)
-            .map(JsonValue::Number)
-            .unwrap_or(JsonValue::Number(number)),
-        JsonValue::Array(values) => JsonValue::Array(
-            values.into_iter().map(normalize_lua_json_skin_integer_value).collect(),
-        ),
-        JsonValue::Object(map) => JsonValue::Object(
-            map.into_iter()
-                .map(|(key, value)| {
-                    let value = normalize_lua_json_skin_integer_numbers_for_key(Some(&key), value);
-                    (key, value)
-                })
-                .collect::<JsonMap<_, _>>(),
-        ),
-        value => value,
+        JsonValue::Number(number) => round_json_integer(number),
+        JsonValue::Array(values) => {
+            values.iter_mut().for_each(normalize_lua_json_skin_integer_value)
+        }
+        JsonValue::Object(map) => {
+            for (key, value) in map.iter_mut() {
+                normalize_lua_json_skin_integer_numbers_for_key(Some(key), value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn round_json_integer(number: &mut serde_json::Number) {
+    if let Some(rounded) =
+        json_number_to_rounded_i64(number).and_then(serde_json::Number::from_i128)
+    {
+        *number = rounded;
     }
 }
 

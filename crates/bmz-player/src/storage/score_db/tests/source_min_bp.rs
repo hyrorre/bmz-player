@@ -270,6 +270,7 @@ fn migration_v34_preserves_existing_records_and_reimport_backfills_without_guess
     run_migrations(db.conn_mut(), SCORE_MIGRATIONS).unwrap();
     let mut after = snapshot(&db);
     for row in &mut after[1] {
+        assert_eq!(row.pop(), Some(Value::Integer(1))); // v35: existing BEST-eligible history
         assert_eq!(row.pop(), Some(Value::Null));
     }
     assert_eq!(after, before);
@@ -283,6 +284,7 @@ fn migration_v34_preserves_existing_records_and_reimport_backfills_without_guess
     );
     let mut after = snapshot(&db);
     for row in &mut after[1] {
+        assert_eq!(row.pop(), Some(Value::Integer(1)));
         assert_eq!(row.pop(), Some(Value::Integer(5)));
     }
     // Only best.bp differs; every old history column, IR identity, ghost and count survives.

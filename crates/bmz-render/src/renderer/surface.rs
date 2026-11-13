@@ -151,3 +151,17 @@ pub(super) fn wgpu_present_mode_label(mode: wgpu::PresentMode) -> &'static str {
     }
 }
 use super::*;
+
+#[cfg(test)]
+#[derive(Default)]
+pub(super) struct SurfaceTest {
+    pub(super) failures_remaining: u32,
+    pub(super) configure_calls: u32,
+    pub(super) acquire_calls: u32,
+    pub(super) acquire_result: Option<wgpu::CurrentSurfaceTexture>,
+    pub(super) lose_device_during_configure: bool,
+}
+
+#[cfg(test)]
+#[path = "surface_recovery_tests.rs"]
+mod recovery_tests;

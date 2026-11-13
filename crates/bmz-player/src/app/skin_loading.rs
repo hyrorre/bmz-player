@@ -18,6 +18,7 @@ pub(super) fn load_initial_skin_textures(
     load_frontend_skins: bool,
     lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
     experimental_detail_options: bool,
+    startup_started_at: Instant,
 ) -> (Option<SkinManifest>, HashMap<SkinKind, Vec<ActiveSkinVideoSource>>, bool, bool, bool) {
     tracing::info!("startup initial skin texture load begin");
     // Frontend payload decoding overlaps window/surface initialization. The
@@ -132,16 +133,18 @@ pub(super) fn load_initial_skin_textures(
 
     let default_skin_started_at = Instant::now();
     tracing::info!("startup default skin manifest load begin");
-    let default_manifest = match load_default_skin_into_renderer_from_paths(renderer, app_paths) {
-        Ok(manifest) => Some(manifest),
-        Err(error) => {
-            tracing::warn!(
-                error = %format_error_chain(&error),
-                "failed to load default skin; using fallback drawing"
-            );
-            None
-        }
-    };
+    let phase = StartupPhase::begin(startup_started_at, "default_skin_assets_load");
+    let default_manifest =
+        match phase.result(load_default_skin_into_renderer_from_paths(renderer, app_paths)) {
+            Ok(manifest) => Some(manifest),
+            Err(error) => {
+                tracing::warn!(
+                    error = %format_error_chain(&error),
+                    "failed to load default skin; using fallback drawing"
+                );
+                None
+            }
+        };
     tracing::info!(
         load_ms = default_skin_started_at.elapsed().as_millis(),
         loaded = default_manifest.is_some(),
@@ -249,110 +252,159 @@ pub(super) fn reload_skin_textures(
     let mut pending_decide = false;
     let mut pending_result = false;
 
-    for (enabled, path_text, kind, options, files, offsets) in [
-        (
-            request.select,
-            skin.select.as_str(),
-            SkinKind::Select,
-            &skin.select_options,
-            &skin.select_files,
-            skin.select_offsets.as_slice(),
-        ),
-        (
-            request.decide,
-            skin.decide.as_str(),
-            SkinKind::Decide,
-            &skin.decide_options,
-            &skin.decide_files,
-            skin.decide_offsets.as_slice(),
-        ),
-        (
-            request.result,
-            skin.result.as_str(),
-            SkinKind::Result,
-            &skin.result_options,
-            &skin.result_files,
-            skin.result_offsets.as_slice(),
-        ),
+    for (enabled, kind) in [
+        (request.select, SkinKind::Select),
+        (request.decide, SkinKind::Decide),
+        (request.result, SkinKind::Result),
     ] {
         if !enabled {
             continue;
         }
         let generation = pipeline.generations.bump(kind);
-        let trimmed = path_text.trim();
-        let path = if trimmed.is_empty() {
-            default_skin_document_path_from_paths(app_paths, kind)
-        } else {
-            match app_paths.resolve_path_ref(trimmed) {
-                Ok(path) => path,
-                Err(error) => {
-                    tracing::warn!(
-                        path = %trimmed,
-                        kind = ?kind,
-                        error = %format_error_chain(&error),
-                        "failed to resolve skin path; ignoring"
-                    );
-                    continue;
-                }
-            }
+        let Some(load) = frontend_skin_load(
+            app_paths,
+            kind,
+            frontend,
+            skin,
+            lua_runtime_mode,
+            experimental_detail_options,
+            select_last_played_at,
+            frontend_chart,
+        ) else {
+            continue;
         };
-        if is_decodable_skin_path(&path) {
-            let skin_options = if trimmed.is_empty() { BTreeMap::new() } else { options.clone() };
-            let mut runtime_state = frontend.lua_runtime_state(if kind == SkinKind::Select {
-                select_last_played_at
-            } else {
-                None
-            });
-            if kind == SkinKind::Select {
-                apply_chart_hashes_lua_load_state(
-                    &mut runtime_state,
-                    frontend_chart.and_then(|chart| chart.chart_md5),
-                    frontend_chart.and_then(|chart| chart.chart_sha256),
-                );
-            }
-            if kind == SkinKind::Decide {
-                let no_chart = RenderSnapshot::default();
-                apply_decide_chart_lua_load_state(
-                    &mut runtime_state,
-                    frontend_chart.unwrap_or(&no_chart),
-                );
-            }
-            spawn_skin_decode(
-                pipeline,
-                SkinDecodeRequest::new(
-                    generation,
-                    path.clone(),
-                    kind,
-                    if kind == SkinKind::Select {
-                        select_skin_options(&skin_options, experimental_detail_options)
-                    } else {
-                        skin_options
-                    },
-                    if trimmed.is_empty() { BTreeMap::new() } else { files.clone() },
-                    lua_runtime_state_with_mode(
-                        lua_runtime_state_with_skin_offsets(runtime_state, offsets),
-                        lua_runtime_mode,
-                    ),
-                )
-                .with_skin_access(app_paths, skin)
-                .reuse_installed_fonts(pipeline),
-            );
-            match kind {
-                SkinKind::Select => pending_select = true,
-                SkinKind::Decide => pending_decide = true,
-                SkinKind::Result => pending_result = true,
-                SkinKind::Play => unreachable!("play skin handled via spawn_play_skin_decode_for"),
-            }
-        } else {
-            tracing::warn!(
-                path = %path.display(),
-                kind = ?kind,
-                "skin path is not a supported beatoraja skin file; ignoring"
-            );
+        spawn_frontend_skin_decode(app_paths, pipeline, skin, generation, kind, load);
+        match kind {
+            SkinKind::Select => pending_select = true,
+            SkinKind::Decide => pending_decide = true,
+            SkinKind::Result => pending_result = true,
+            SkinKind::Play => unreachable!("play skin handled via spawn_play_skin_decode_for"),
         }
     }
 
     (pending_select, pending_decide, pending_result)
+}
+
+/// The path, options and load-time values a Select / Decide / startup Result decode
+/// is requested with. Equal loads read the same values, so one decoded ahead of a
+/// scene entry stands in for the entry's own load.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct FrontendSkinLoad {
+    pub(super) path: PathBuf,
+    pub(super) options: BTreeMap<String, String>,
+    pub(super) files: BTreeMap<String, String>,
+    pub(super) runtime_state: bmz_skin::LuaLoadRuntimeState,
+}
+
+pub(super) fn frontend_skin_load(
+    app_paths: &crate::paths::AppPaths,
+    kind: SkinKind,
+    frontend: FrontendLuaLoadInputs<'_>,
+    skin: &SkinConfig,
+    lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
+    experimental_detail_options: bool,
+    select_last_played_at: Option<i64>,
+    frontend_chart: Option<&RenderSnapshot>,
+) -> Option<FrontendSkinLoad> {
+    let (path_text, options, files, offsets) = match kind {
+        SkinKind::Select => (
+            skin.select.as_str(),
+            &skin.select_options,
+            &skin.select_files,
+            skin.select_offsets.as_slice(),
+        ),
+        SkinKind::Decide => (
+            skin.decide.as_str(),
+            &skin.decide_options,
+            &skin.decide_files,
+            skin.decide_offsets.as_slice(),
+        ),
+        SkinKind::Result => (
+            skin.result.as_str(),
+            &skin.result_options,
+            &skin.result_files,
+            skin.result_offsets.as_slice(),
+        ),
+        SkinKind::Play => unreachable!("play skin handled via spawn_play_skin_decode_for"),
+    };
+    let trimmed = path_text.trim();
+    let path = if trimmed.is_empty() {
+        default_skin_document_path_from_paths(app_paths, kind)
+    } else {
+        match app_paths.resolve_path_ref(trimmed) {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::warn!(
+                    path = %trimmed,
+                    kind = ?kind,
+                    error = %format_error_chain(&error),
+                    "failed to resolve skin path; ignoring"
+                );
+                return None;
+            }
+        }
+    };
+    if !is_decodable_skin_path(&path) {
+        tracing::warn!(
+            path = %path.display(),
+            kind = ?kind,
+            "skin path is not a supported beatoraja skin file; ignoring"
+        );
+        return None;
+    }
+    let skin_options = if trimmed.is_empty() { BTreeMap::new() } else { options.clone() };
+    let mut runtime_state = frontend.lua_runtime_state(if kind == SkinKind::Select {
+        select_last_played_at
+    } else {
+        None
+    });
+    if kind == SkinKind::Select {
+        apply_chart_hashes_lua_load_state(
+            &mut runtime_state,
+            frontend_chart.and_then(|chart| chart.chart_md5),
+            frontend_chart.and_then(|chart| chart.chart_sha256),
+        );
+    }
+    if kind == SkinKind::Decide {
+        let no_chart = RenderSnapshot::default();
+        apply_decide_chart_lua_load_state(&mut runtime_state, frontend_chart.unwrap_or(&no_chart));
+    }
+    Some(FrontendSkinLoad {
+        path,
+        options: if kind == SkinKind::Select {
+            select_skin_options(&skin_options, experimental_detail_options)
+        } else {
+            skin_options
+        },
+        files: if trimmed.is_empty() { BTreeMap::new() } else { files.clone() },
+        runtime_state: lua_runtime_state_with_mode(
+            lua_runtime_state_with_skin_offsets(runtime_state, offsets),
+            lua_runtime_mode,
+        ),
+    })
+}
+
+pub(super) fn spawn_frontend_skin_decode(
+    app_paths: &crate::paths::AppPaths,
+    pipeline: &SkinPipelineRuntime,
+    skin: &SkinConfig,
+    generation: u64,
+    kind: SkinKind,
+    load: FrontendSkinLoad,
+) {
+    spawn_skin_decode(
+        pipeline,
+        SkinDecodeRequest::new(
+            generation,
+            load.path,
+            kind,
+            load.options,
+            load.files,
+            load.runtime_state,
+        )
+        .with_skin_access(app_paths, skin)
+        .reuse_installed_fonts(pipeline),
+    );
 }
 
 /// Profile values that Select / Decide skins read while loading.

@@ -66,27 +66,33 @@ pub(super) fn build_metadata(bms: &Bms) -> IntermediateMetadata {
     }
 }
 
+#[cfg(test)]
 pub(super) fn extract_bms_headers_from_text(text: &str) -> BTreeMap<String, String> {
     let mut headers = BTreeMap::new();
     for line in text.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with('#') {
-            continue;
-        }
-        let body = trimmed.strip_prefix('#').unwrap_or(trimmed).trim_start();
-        if body.is_empty() || is_bms_channel_command(body) {
-            continue;
-        }
-        let (name, value) = split_bms_header_command(body);
-        if name.is_empty() {
-            continue;
-        }
-        let name = name.to_ascii_uppercase();
-        if !value.is_empty() || !headers.contains_key(&name) {
-            headers.insert(name, value);
-        }
+        insert_bms_header_line(&mut headers, line);
     }
     headers
+}
+
+/// Records a header line of the original text. A later non-empty value replaces an
+/// earlier one; an empty value only fills a header not seen yet.
+pub(super) fn insert_bms_header_line(headers: &mut BTreeMap<String, String>, line: &str) {
+    let Some(body) = line.trim().strip_prefix('#') else {
+        return;
+    };
+    let body = body.trim_start();
+    if body.is_empty() || is_bms_channel_command(body) {
+        return;
+    }
+    let (name, value) = split_bms_header_command(body);
+    if name.is_empty() {
+        return;
+    }
+    let name = name.to_ascii_uppercase();
+    if !value.is_empty() || !headers.contains_key(&name) {
+        headers.insert(name, value.to_string());
+    }
 }
 
 pub(super) fn apply_raw_judge_rank_headers(
@@ -105,11 +111,10 @@ pub(super) fn parse_header_i32(value: &str) -> Option<i32> {
     value.split_whitespace().next()?.parse().ok()
 }
 
-pub(super) fn split_bms_header_command(body: &str) -> (String, String) {
-    if let Some((name, value)) = body.split_once(char::is_whitespace) {
-        (name.to_string(), value.trim().to_string())
-    } else {
-        (body.to_string(), String::new())
+pub(super) fn split_bms_header_command(body: &str) -> (&str, &str) {
+    match body.split_once(char::is_whitespace) {
+        Some((name, value)) => (name, value.trim()),
+        None => (body, ""),
     }
 }
 
@@ -126,20 +131,6 @@ pub(super) fn append_url_from_headers(headers: &BTreeMap<String, String>) -> Str
         }
     }
     String::new()
-}
-
-pub(super) fn source_text_has_bms_random(text: &str) -> bool {
-    text.lines().any(|line| {
-        matches!(
-            beatoraja_random_control_line(line),
-            Some(
-                BeatorajaRandomControl::Random(_)
-                    | BeatorajaRandomControl::SetRandom(_)
-                    | BeatorajaRandomControl::Switch(_)
-                    | BeatorajaRandomControl::SetSwitch(_)
-            )
-        )
-    })
 }
 
 pub(super) fn bms_uses_base62_obj_ids(bms: &Bms) -> bool {

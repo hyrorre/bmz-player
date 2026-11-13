@@ -44,6 +44,7 @@ fn builtin_origin(provider: &str) -> Result<Option<String>> {
             super::bmz_official::BMZ_IR_DEFAULT_BASE_URL
         }
         super::bms_ir::BMS_IR_PROVIDER => super::bms_ir::BMS_IR_DEFAULT_BASE_URL,
+        super::bokutachi::PROVIDER => super::bokutachi::DEFAULT_BASE_URL,
         super::rian_ir::RIAN_IR_PROVIDER | "rianir" => super::rian_ir::RIAN_IR_DEFAULT_BASE_URL,
         _ => return Ok(None),
     };

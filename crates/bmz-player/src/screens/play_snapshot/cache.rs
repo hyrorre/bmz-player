@@ -54,6 +54,7 @@ pub struct PlayRenderSnapshotCache {
 pub(super) struct ScrollIntegralCache {
     pub(super) segments: Arc<[(f64, f64)]>,
     pub(super) integral_at_event: Arc<[f64]>,
+    strictly_forward: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +69,11 @@ impl PlayRenderSnapshotCache {
         let mut cache = Self::from_chart(chart);
         cache.judge_graph_density = self.judge_graph_density.clone();
         cache
+    }
+    pub(crate) fn bga_event_at(&self, kind: BgaEventKind, time: TimeUs) -> Option<&BgaEvent> {
+        let events = self.bga_events.events(kind);
+        let end = events.partition_point(|event| event.time <= time);
+        events[..end].last()
     }
     pub fn from_chart(chart: &PlayableChart) -> Self {
         let judge_graph_density = Arc::from(build_judge_graph_density(chart).into_boxed_slice());
@@ -181,14 +187,40 @@ impl ScrollIntegralCache {
             previous_factor = next_factor;
         }
 
+        let strictly_forward = segments
+            .iter()
+            .all(|&(tick, factor)| tick.is_finite() && factor.is_finite() && factor > 0.0)
+            && integral_at_event.iter().all(|value| value.is_finite());
         Self {
             segments: Arc::from(segments.into_boxed_slice()),
             integral_at_event: Arc::from(integral_at_event.into_boxed_slice()),
+            strictly_forward,
         }
     }
 
-    pub(super) fn is_empty(&self) -> bool {
-        self.segments.is_empty()
+    /// Invert only a finite, strictly increasing scroll timeline. Zero/reverse
+    /// segments keep the unrestricted path, including when they are far away.
+    pub(super) fn tick_after_distance(&self, from: f64, distance: f64) -> Option<f64> {
+        if !self.strictly_forward || !from.is_finite() || !distance.is_finite() || distance <= 0.0 {
+            return None;
+        }
+        let origin = self.primitive(from);
+        // A huge earlier SCROLL can dwarf the visible distance. Preserve notes
+        // whose primitive difference rounds to zero, instead of inverting an
+        // origin + distance that rounded back to origin and culling them.
+        let target = origin + distance + origin.abs() * (4.0 * f64::EPSILON);
+        if !target.is_finite() {
+            return None;
+        }
+        let tick = self
+            .integral_at_event
+            .partition_point(|&value| value <= target)
+            .checked_sub(1)
+            .map_or(target, |index| {
+                self.segments[index].0
+                    + (target - self.integral_at_event[index]) / self.segments[index].1
+            });
+        tick.is_finite().then_some(tick)
     }
 
     pub(super) fn factor_at(&self, tick: f64) -> f64 {

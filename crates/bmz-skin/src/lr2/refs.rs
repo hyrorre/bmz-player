@@ -54,7 +54,8 @@ pub(super) fn lr2_number_ref(skin_type: i32, id: i32) -> Option<i32> {
         212 if is_result(skin_type) => Some(423),
         214 if is_result(skin_type) => Some(424),
         216 if is_result(skin_type) => Some(425),
-        // EQ, FX and pitch have no BMZ setting; beatoraja uses 54/55 for other options.
+        // EQ / FX (no BMZ setting) and the pitch amount (BMZ FREQ); beatoraja uses 54/55
+        // for other options.
         50..=56 | 60..=66 => Some(LR2_NUMBER_BASE + id),
         // LR2 duplicates the max/min BPM at 290/291.
         290 | 291 => Some(id - 200),

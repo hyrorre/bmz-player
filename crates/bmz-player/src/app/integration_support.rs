@@ -42,29 +42,18 @@ pub(super) fn physical_key_name(physical_key: PhysicalKey) -> Option<String> {
     }
 }
 
-pub(super) fn physical_control_name(control: &PhysicalControl) -> Option<&str> {
-    match control {
-        PhysicalControl::KeyboardKey(name) | PhysicalControl::GamepadButton(name) => {
-            Some(name.as_str())
-        }
-        PhysicalControl::HidButton(_) => None,
-    }
-}
-
-pub(super) fn result_panel_for_control(control: &PhysicalControl) -> Option<i32> {
-    match physical_control_name(control)? {
-        "ArrowLeft" => Some(2),
-        "ArrowRight" => Some(1),
+pub(super) fn result_panel_for_control(control: &ResolvedControl) -> Option<i32> {
+    match control.standard()? {
+        StandardKey::ArrowLeft => Some(2),
+        StandardKey::ArrowRight => Some(1),
         _ => None,
     }
 }
 
-pub(super) fn digit_to_replay_slot(physical_key: PhysicalKey) -> Option<u8> {
-    match physical_key {
-        PhysicalKey::Code(KeyCode::Digit1 | KeyCode::Numpad1) => Some(0),
-        PhysicalKey::Code(KeyCode::Digit2 | KeyCode::Numpad2) => Some(1),
-        PhysicalKey::Code(KeyCode::Digit3 | KeyCode::Numpad3) => Some(2),
-        PhysicalKey::Code(KeyCode::Digit4 | KeyCode::Numpad4) => Some(3),
+/// E1 + 数字キー1〜4 (テンキーを含む) のリプレイスロット。
+pub(super) fn digit_to_replay_slot(control: &ResolvedControl) -> Option<u8> {
+    match control.standard()? {
+        StandardKey::Digit(digit @ 1..=4) => Some(digit - 1),
         _ => None,
     }
 }
@@ -86,6 +75,9 @@ pub(super) fn primary_ir_page_url(
     provider: &crate::config::profile_config::IrProviderConfig,
     identity: &PrimaryIrPageIdentity,
 ) -> Result<String> {
+    if crate::ir::bokutachi::is_config(provider) {
+        return crate::ir::credentials::credential_origin(&provider.base_url);
+    }
     match identity {
         PrimaryIrPageIdentity::Chart { md5, sha256 } => {
             if crate::ir::bms_ir::is_bms_ir_config(provider) {
@@ -140,60 +132,19 @@ pub(super) enum TargetCycle {
     Next,
 }
 
-pub(super) fn target_cycle_from_key(physical_key: PhysicalKey) -> Option<TargetCycle> {
-    match physical_key {
-        PhysicalKey::Code(KeyCode::ArrowUp) => Some(TargetCycle::Next),
-        PhysicalKey::Code(KeyCode::ArrowDown) => Some(TargetCycle::Previous),
-        _ => None,
+/// TARGET 変更。キーボード既定の↑で次・↓で前、スクラッチ上で次・下で前。
+/// 9K は KEY8 / KEY9 (beatoraja POPN_9K と同じ)。
+pub(super) fn target_cycle_from_input(control: &ResolvedControl) -> Option<TargetCycle> {
+    match control.standard() {
+        Some(StandardKey::ArrowUp) => return Some(TargetCycle::Next),
+        Some(StandardKey::ArrowDown) => return Some(TargetCycle::Previous),
+        _ => {}
     }
-}
-
-pub(super) fn target_cycle_from_control(
-    control: &str,
-    bindings: &SelectKeyBindings,
-) -> Option<TargetCycle> {
-    // Scratch up cycles forward; 9K KEY8 / KEY9 follow beatoraja POPN_9K.
-    if control == "ScratchUp"
-        || bindings.is_select_scratch_up(control)
-        || bindings.is_target_next(control)
-    {
+    if control.is_scratch_up() || control.nine_key_target() == Some(1) {
         Some(TargetCycle::Next)
-    } else if control == "ScratchDown"
-        || bindings.is_select_scratch_down(control)
-        || bindings.is_target_previous(control)
-    {
+    } else if control.is_scratch_down() || control.nine_key_target() == Some(-1) {
         Some(TargetCycle::Previous)
     } else {
         None
     }
-}
-
-pub(super) fn legacy_assist_event_for_lane(lane: Lane) -> Option<i32> {
-    match lane {
-        Lane::Key1 => Some(301),
-        Lane::Key2 => Some(302),
-        Lane::Key3 => Some(303),
-        Lane::Key4 => Some(304),
-        Lane::Key5 => Some(305),
-        Lane::Key6 => Some(306),
-        Lane::Key7 => Some(307),
-        _ => None,
-    }
-}
-
-pub(super) fn select_option_lane_for_gamepad(
-    input: &ProfileInputConfig,
-    slots: crate::input::gamepad::GamepadSlotMap,
-    device: DeviceId,
-    control: &str,
-) -> Option<Lane> {
-    // 9K select input must not resolve controller buttons through the 14K layout.
-    let mode =
-        if input.select_input_mode == crate::config::profile_config::SelectInputModeConfig::Key9 {
-            KeyMode::K9
-        } else {
-            KeyMode::K14
-        };
-    crate::config::play::lane_binding_for_chart_with_slots(input, mode, slots)
-        .resolve(device, &PhysicalControl::GamepadButton(control.to_string()))
 }

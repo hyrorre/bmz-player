@@ -92,6 +92,10 @@ fn lr2_select_values_with_other_meanings_use_the_lr2_namespace() {
         number_refs(&select),
         vec![lr2(12), lr2(45), lr2(54), json!(57), lr2(70), lr2(73), lr2(210), lr2(219)]
     );
+    // The pitch amount (BMZ FREQ) uses the LR2 namespace in every scene.
+    for skin_type in [0, 5, 7] {
+        assert_eq!(number_refs(&load(skin_type, &number(66))), vec![lr2(66)], "type {skin_type}");
+    }
     // Extended LR2 result FAST / SLOW / combo break.
     let result = load(7, &[212, 214, 216].map(number).concat());
     assert_eq!(number_refs(&result), vec![json!(423), json!(424), json!(425)]);

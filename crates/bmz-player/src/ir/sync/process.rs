@@ -44,6 +44,7 @@ pub(super) async fn sync_pending_ir_jobs_with_filter(
         )?,
     };
     let job_count = jobs.len();
+    report.processed = u32::try_from(job_count).unwrap_or(u32::MAX);
     let replay_paths = match replay_paths_for_jobs(score_db_path, &jobs) {
         Ok(paths) => paths,
         Err(error) => {
@@ -123,6 +124,20 @@ pub(super) async fn sync_pending_ir_jobs_with_filter(
         }
         // Keep the checked token for this job: loading it again during submission
         // could pick up a different account after a concurrent login.
+        if crate::ir::bokutachi::is_config(provider) {
+            crate::ir::bokutachi::sync::process(
+                network_db,
+                profile_root,
+                provider,
+                &job,
+                job_now,
+                retry == IrJobRetryFilter::ExplicitResend
+                    && filter.is_some_and(|f| f.local_score_id.is_some()),
+                &mut report,
+            )
+            .await?;
+            continue;
+        }
         let credentials =
             match credentials_for_job(profile_root, provider, &job.account_id, job_now).await {
                 Ok(credentials) => credentials,

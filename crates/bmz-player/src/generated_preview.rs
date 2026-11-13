@@ -52,9 +52,23 @@ pub(crate) fn generated_preview_cache_key_for_source(
     start_ms: i64,
     folder: &str,
 ) -> String {
+    generated_preview_cache_key_with_stamp(
+        chart_id,
+        start_ms,
+        folder,
+        crate::chart_asset::archive_asset_stamp(folder).as_deref(),
+    )
+}
+
+pub(crate) fn generated_preview_cache_key_with_stamp(
+    chart_id: i64,
+    start_ms: i64,
+    folder: &str,
+    stamp: Option<&str>,
+) -> String {
     use std::hash::{Hash, Hasher};
     let mut key = generated_preview_cache_key(chart_id, start_ms);
-    if let Some(stamp) = crate::chart_asset::archive_asset_stamp(folder) {
+    if let Some(stamp) = stamp {
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         (folder, stamp).hash(&mut hash);
         key.push_str(&format!("|archive-{:016x}", hash.finish()));

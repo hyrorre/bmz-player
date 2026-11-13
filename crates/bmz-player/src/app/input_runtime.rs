@@ -14,9 +14,9 @@ use crate::input::winit::{
 };
 
 /// keyboard/gamepadに依存しないapp controlの押下・解放イベント。
+#[derive(Debug, Clone)]
 pub(super) struct ControlInputEvent {
     pub(super) device: DeviceId,
-    pub(super) name: Option<String>,
     pub(super) physical: Option<PhysicalControl>,
     pub(super) pressed: bool,
     pub(super) repeat: bool,
@@ -34,15 +34,9 @@ impl ControlInputEvent {
         state: ElementState,
         repeat: bool,
     ) -> Self {
-        let physical = physical_key_to_control(physical_key);
-        let name = match physical.as_ref() {
-            Some(PhysicalControl::KeyboardKey(name)) => Some(name.clone()),
-            _ => None,
-        };
         Self {
             device: W_KEYBOARD_DEVICE_ID,
-            name,
-            physical,
+            physical: physical_key_to_control(physical_key),
             pressed: state == ElementState::Pressed,
             repeat,
             timestamp: DeviceTimestamp::MonotonicNs(monotonic_timestamp_ns()),
@@ -53,7 +47,6 @@ impl ControlInputEvent {
     pub(super) fn gamepad(device: DeviceId, name: &str, pressed: bool) -> Self {
         Self {
             device,
-            name: Some(name.to_string()),
             physical: Some(PhysicalControl::GamepadButton(name.to_string())),
             pressed,
             repeat: false,
@@ -69,18 +62,6 @@ impl ControlInputEvent {
             ..Self::gamepad(event.device_id, &event.name, event.pressed)
         }
     }
-
-    /// Scratch movement is handled by axis ticks, while its button edges still
-    /// update physical holds and gameplay. Digitalized axes have no ticks.
-    pub(super) fn uses_analog_scroll(
-        &self,
-        keys: &super::select_key_bindings::SelectKeyBindings,
-    ) -> bool {
-        self.synthesized_analog_axis
-            && self.name.as_deref().is_some_and(|control| {
-                keys.is_select_scratch_up(control) || keys.is_select_scratch_down(control)
-            })
-    }
 }
 
 /// app全体で共有する押下集合とkeyboard bounce状態。
@@ -89,9 +70,10 @@ pub(super) struct AppInputRuntime {
     pub(super) start_held: bool,
     pub(super) select_held: bool,
     pub(super) select_e_action_holds: HashSet<InputActionConfig>,
-    pub(super) pressed_controls: HashSet<String>,
-    pressed_control_sources: HashSet<(DeviceId, String)>,
+    /// 押下中の物理入力 (入力元ごと)。同名ボタンでもデバイスが違えば別の入力として扱う。
     pub(super) pressed_play_inputs: HashSet<(DeviceId, PhysicalControl)>,
+    /// 最新の論理スロット割り当て。gamepad poll ごとに更新し、入力の解決に使う。
+    pub(super) gamepad_slots: crate::input::gamepad::GamepadSlotMap,
     raw_input_pressed_keys: HashSet<PhysicalKey>,
     window_input_pressed_keys: HashSet<PhysicalKey>,
     app_bounce_filter: InputBounceFilter,
@@ -105,8 +87,34 @@ pub(super) struct InputReleaseBatch {
 }
 
 impl AppInputRuntime {
-    pub(super) fn pressed_control_sources(&self) -> impl Iterator<Item = &(DeviceId, String)> {
-        self.pressed_control_sources.iter()
+    /// 押下中の物理入力 (入力元ごと)。
+    pub(super) fn pressed_sources(&self) -> impl Iterator<Item = (DeviceId, &PhysicalControl)> {
+        self.pressed_play_inputs.iter().map(|(device, control)| (*device, control))
+    }
+
+    /// キーボードのキーを押しているか。コントローラーの同名ボタンは含めない。
+    /// 起動時の 1P / 2P 割り当てで初期化する。最初の入力から割り当てどおりに解決する。
+    pub(super) fn with_gamepad_slots(gamepad_slots: crate::input::gamepad::GamepadSlotMap) -> Self {
+        Self { gamepad_slots, ..Self::default() }
+    }
+
+    pub(super) fn keyboard_key_held(&self, name: &str) -> bool {
+        self.pressed_play_inputs
+            .iter()
+            .any(|(_, control)| matches!(control, PhysicalControl::KeyboardKey(key) if key == name))
+    }
+
+    /// 押下中のキーボードのキー名。スキンの libGDX キー状態に使う。
+    pub(super) fn pressed_keyboard_keys(&self) -> impl Iterator<Item = &str> {
+        self.pressed_play_inputs.iter().filter_map(|(_, control)| match control {
+            PhysicalControl::KeyboardKey(key) => Some(key.as_str()),
+            _ => None,
+        })
+    }
+
+    /// この入力元が押下中か。
+    pub(super) fn source_held(&self, device: DeviceId, control: &PhysicalControl) -> bool {
+        self.pressed_play_inputs.contains(&(device, control.clone()))
     }
     /// Windows may mark the other Shift's first Press as a repeat because
     /// both keys share VK_SHIFT. Only an already held physical key can repeat.
@@ -146,17 +154,6 @@ impl AppInputRuntime {
     }
 
     pub(super) fn track_control(&mut self, event: &ControlInputEvent) {
-        if let Some(name) = event.name.as_deref() {
-            if event.pressed {
-                self.pressed_control_sources.insert((event.device, name.to_string()));
-                self.pressed_controls.insert(name.to_string());
-            } else {
-                self.pressed_control_sources.remove(&(event.device, name.to_string()));
-                if !self.pressed_control_sources.iter().any(|(_, pressed)| pressed == name) {
-                    self.pressed_controls.remove(name);
-                }
-            }
-        }
         if let Some(physical) = event.physical.as_ref() {
             let input = (event.device, physical.clone());
             if event.pressed {
@@ -171,16 +168,12 @@ impl AppInputRuntime {
         &mut self,
         pressed_buttons: &[GamepadPressedButton],
     ) {
-        self.pressed_control_sources.retain(|(device, _)| *device == W_KEYBOARD_DEVICE_ID);
         self.pressed_play_inputs
             .retain(|(_, control)| matches!(control, PhysicalControl::KeyboardKey(_)));
         for button in pressed_buttons {
-            self.pressed_control_sources.insert((button.device_id, button.name.clone()));
             self.pressed_play_inputs
                 .insert((button.device_id, PhysicalControl::GamepadButton(button.name.clone())));
         }
-        self.pressed_controls =
-            self.pressed_control_sources.iter().map(|(_, name)| name.clone()).collect();
     }
 
     pub(super) fn select_e_action_held(&self) -> bool {
@@ -261,8 +254,6 @@ impl AppInputRuntime {
 
     pub(super) fn handle_focus_lost(&mut self) -> InputReleaseBatch {
         self.discard_gamepad_output_until_resynced = true;
-        self.pressed_controls.clear();
-        self.pressed_control_sources.clear();
         self.pressed_play_inputs.clear();
         self.release_keyboard_inputs()
     }
@@ -330,6 +321,13 @@ mod tests {
         }
     }
 
+    fn held_named(runtime: &AppInputRuntime, name: &str) -> bool {
+        runtime.pressed_play_inputs.iter().any(|(_, control)| match control {
+            PhysicalControl::KeyboardKey(key) | PhysicalControl::GamepadButton(key) => key == name,
+            _ => false,
+        })
+    }
+
     fn track_and_filter_gamepad(
         runtime: &mut AppInputRuntime,
         config: InputBounceConfig,
@@ -367,8 +365,8 @@ mod tests {
                 ElementState::Pressed,
                 false,
             ));
-            assert!(runtime.pressed_controls.contains("LShift"));
-            assert!(runtime.pressed_controls.contains("RShift"));
+            assert!(held_named(&runtime, "LShift"));
+            assert!(held_named(&runtime, "RShift"));
             assert!(runtime.keyboard_repeat(first, true));
             assert!(runtime.keyboard_repeat(second, true));
         }
@@ -393,8 +391,8 @@ mod tests {
             assert_eq!(release.window_keyboard.len(), 1);
             assert_eq!(release.window_keyboard[0].kind, InputKind::Release);
             assert!(runtime.reconcile_keyboard_releases(&[key]).window_keyboard.is_empty());
-            assert!(runtime.pressed_controls.contains("Z"));
-            assert!(runtime.pressed_controls.contains("Button9"));
+            assert!(held_named(&runtime, "Z"));
+            assert!(held_named(&runtime, "Button9"));
             assert_eq!(runtime.pressed_play_inputs.len(), 2);
             assert_eq!(runtime.release_keyboard_inputs().window_keyboard.len(), 1);
         }
@@ -405,7 +403,7 @@ mod tests {
         let mut runtime = AppInputRuntime::default();
         let gamepad = ControlInputEvent::gamepad(DeviceId(2), "ButtonSouth", true);
         runtime.track_control(&gamepad);
-        assert!(runtime.pressed_controls.contains("ButtonSouth"));
+        assert!(held_named(&runtime, "ButtonSouth"));
         assert!(
             runtime.pressed_play_inputs.contains(&(
                 DeviceId(2),
@@ -415,7 +413,7 @@ mod tests {
 
         let released = ControlInputEvent::gamepad(DeviceId(2), "ButtonSouth", false);
         runtime.track_control(&released);
-        assert!(!runtime.pressed_controls.contains("ButtonSouth"));
+        assert!(!held_named(&runtime, "ButtonSouth"));
         assert!(runtime.pressed_play_inputs.is_empty());
     }
 
@@ -438,7 +436,7 @@ mod tests {
                 .count();
 
             assert_eq!(accepted_press_count, 1, "{control}の再Pressは単発操作へ渡さない");
-            assert!(runtime.pressed_controls.contains(control));
+            assert!(held_named(&runtime, control));
             assert!(
                 runtime
                     .pressed_play_inputs
@@ -455,7 +453,7 @@ mod tests {
 
         runtime.track_control(&ControlInputEvent::gamepad(DeviceId(2), "Button9", false));
 
-        assert!(runtime.pressed_controls.contains("Button9"));
+        assert!(held_named(&runtime, "Button9"));
         assert!(
             runtime
                 .pressed_play_inputs
@@ -478,9 +476,9 @@ mod tests {
             device_id: DeviceId(3),
         }]);
 
-        assert!(runtime.pressed_controls.contains("Q"));
-        assert!(!runtime.pressed_controls.contains("Button9"));
-        assert!(runtime.pressed_controls.contains("Button10"));
+        assert!(held_named(&runtime, "Q"));
+        assert!(!held_named(&runtime, "Button9"));
+        assert!(held_named(&runtime, "Button10"));
         assert!(
             runtime
                 .pressed_play_inputs
@@ -578,7 +576,7 @@ mod tests {
             name: "Button9".to_string(),
             device_id: DeviceId(2),
         }]);
-        assert!(runtime.pressed_controls.contains("Button9"));
+        assert!(held_named(&runtime, "Button9"));
         assert!(
             runtime
                 .pressed_play_inputs

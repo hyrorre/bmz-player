@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn hispeed_transition_defaults_for_old_profiles_and_preserves_zero() {
+    let mut profile = ProfileConfig::new_default("default", "Player", 0);
+    assert_eq!(profile.lane.hispeed_transition_ms, 150);
+    let mut value = toml::Value::try_from(&profile).unwrap();
+    value.get_mut("lane").unwrap().as_table_mut().unwrap().remove("hispeed_transition_ms");
+    let decoded: ProfileConfig = value.try_into().unwrap();
+    assert_eq!(decoded.lane.hispeed_transition_ms, 150);
+    for duration in [0, 150, 200, 500, 1000] {
+        profile.lane.hispeed_transition_ms = duration;
+        let mut decoded: ProfileConfig =
+            toml::from_str(&toml::to_string(&profile).unwrap()).unwrap();
+        decoded.normalize_play_mode_configs();
+        decoded.activate_play_mode(KeyMode::K9);
+        assert_eq!(decoded.lane.hispeed_transition_ms, duration);
+    }
+    profile.lane.hispeed_transition_ms = u32::MAX;
+    profile.normalize_play_mode_configs();
+    assert_eq!(profile.lane.hispeed_transition_ms, 1000);
+}
+
+#[test]
 fn lr2_new_title_hours_default_for_old_profiles_and_roundtrip_disabled() {
     let mut profile = ProfileConfig::new_default("default", "Player", 0);
     assert_eq!(profile.select.new_title_hours, 24);
@@ -109,6 +130,7 @@ fn play_defaults_uses_default_misslayer_duration_for_old_profiles() {
     assert_eq!(play.seven_to_nine_pattern, SevenToNinePattern::Sc9Key1To7);
     assert_eq!(play.seven_to_nine_type, SevenToNineType::Fixed);
     assert_eq!(play.seven_to_nine_rule_mode, SevenToNineRuleMode::Keys7);
+    assert_eq!(play.s_random_correction, SRandomCorrectionConfig::Lm120Hz);
     assert!(!play.seven_to_six);
     assert_eq!(play.bga, BgaModeConfig::On);
     assert_eq!(play.bga_expand, BgaExpandConfig::KeepAspect);
@@ -632,7 +654,7 @@ fn ir_provider_normalization_moves_builtins_first_and_preserves_accounts_and_cus
     };
 
     assert!(ir.normalize_builtin_providers());
-    assert_eq!(ir.providers.len(), 5);
+    assert_eq!(ir.providers.len(), 6);
     assert_eq!(ir.providers[0].provider, "bmz");
     assert_eq!(ir.providers[0].base_url, "https://bmz-player.hyrorre.workers.dev/");
     assert_eq!(ir.providers[0].provider_key, "bmz-account");
@@ -650,8 +672,9 @@ fn ir_provider_normalization_moves_builtins_first_and_preserves_accounts_and_cus
     assert_eq!(ir.providers[2].account_display_name, "1234");
     assert!(ir.providers[2].enabled);
     assert_eq!(ir.providers[2].role, IrProviderRoleConfig::Primary);
-    assert_eq!(ir.providers[3], custom);
-    assert_eq!(ir.providers[4], duplicate);
+    assert_eq!(ir.providers[3], IrProviderConfig::bokutachi());
+    assert_eq!(ir.providers[4], custom);
+    assert_eq!(ir.providers[5], duplicate);
     assert!(!ir.normalize_builtin_providers());
 }
 
@@ -669,6 +692,7 @@ fn ir_provider_normalization_adds_missing_builtins_before_custom_entries() {
             IrProviderConfig::bmz_ir(),
             IrProviderConfig::rian_ir(),
             IrProviderConfig::bms_ir(),
+            IrProviderConfig::bokutachi(),
             custom,
         ]
     );
@@ -1259,6 +1283,21 @@ fn lane_cover_key_settings_default_for_old_profiles() {
 }
 
 #[test]
+fn e2_key_green_number_inversion_defaults_off_and_roundtrips() {
+    let mut profile = ProfileConfig::new_default("default", "Player", 0);
+    assert!(!profile.input.invert_e2_key_green_number);
+    let mut value = toml::Value::try_from(&profile).unwrap();
+    let input = value.get_mut("input").unwrap().as_table_mut().unwrap();
+    assert!(input.remove("invert_e2_key_green_number").is_some());
+    let decoded: ProfileConfig = value.try_into().unwrap();
+    assert!(!decoded.input.invert_e2_key_green_number);
+
+    profile.input.invert_e2_key_green_number = true;
+    let decoded: ProfileConfig = toml::from_str(&toml::to_string(&profile).unwrap()).unwrap();
+    assert!(decoded.input.invert_e2_key_green_number);
+}
+
+#[test]
 fn play_start_fills_only_enabled_zero_lane_covers() {
     let mut profile = ProfileConfig::new_default("default", "Player", 0);
     profile.play.lane_effect = LaneEffectConfig::Sudden;
@@ -1283,4 +1322,17 @@ fn play_start_fills_only_enabled_zero_lane_covers() {
     profile.lane.lift_enabled = true;
     assert!(profile.fill_zero_lane_cover_amounts());
     assert_eq!(profile.lane.lift, DEFAULT_LANE_COVER_AMOUNT);
+}
+
+#[test]
+fn s_random_correction_roundtrips_each_choice() {
+    for correction in SRandomCorrectionConfig::VALUES {
+        let mut profile = ProfileConfig::new_default("default", "Player", 0);
+        profile.play.s_random_correction = correction;
+        let encoded = toml::to_string(&profile).unwrap();
+        let decoded: ProfileConfig = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.play.s_random_correction, correction);
+    }
+    let profile = ProfileConfig::new_default("default", "Player", 0);
+    assert!(toml::to_string(&profile).unwrap().contains("s_random_correction = \"Lm120Hz\""));
 }

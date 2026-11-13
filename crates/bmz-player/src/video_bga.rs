@@ -13,6 +13,7 @@ pub struct ActiveVideoBgaDecoder {
     pub event_start_time: TimeUs,
     pub decoder: VideoBgaDecoder,
     pub last_pts: Option<i64>,
+    last_used: std::time::Instant,
 }
 
 /// Resolve an immutable BGA timeline selection against renderer-owned assets.
@@ -41,9 +42,16 @@ pub fn resolve_snapshot_textures(
     }
 }
 
-/// Sentinel so a reused decoder is treated as needing a fresh event binding (and
-/// `restart`) on the first activation after install / quick retry.
+/// A reused decoder must bind to the first event of the new playback position.
 pub const REUSED_VIDEO_EVENT_START: TimeUs = TimeUs(i64::MIN);
+
+// A normal event can first be observed a few frames late. Decode from the start
+// in that case: some demuxers can seek to a keyframe after a near-zero target.
+const MIN_DIRECT_SEEK_OFFSET_US: i64 = 250_000;
+
+fn video_seek_offset_us(video_offset_us: i64) -> i64 {
+    if video_offset_us < MIN_DIRECT_SEEK_OFFSET_US { 0 } else { video_offset_us }
+}
 
 /// BGA asset on screen and the chart time its playback started.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,12 +66,11 @@ pub struct ActiveBgaChannel {
 pub fn active_bga_channels(
     session: &crate::gameplay_runtime::PlaySessionObservation,
     chart_now: TimeUs,
+    cache: &crate::screens::play_snapshot::PlayRenderSnapshotCache,
 ) -> Vec<ActiveBgaChannel> {
-    let chart = &session.chart;
     let mut channels = Vec::with_capacity(4);
     for kind in [BgaEventKind::Base, BgaEventKind::Layer, BgaEventKind::Layer2] {
-        if let Some(event) =
-            chart.bga_events.iter().rev().find(|e| e.time <= chart_now && e.kind == kind)
+        if let Some(event) = cache.bga_event_at(kind, chart_now)
             && let Some(asset_id) = event.asset
         {
             channels.push(ActiveBgaChannel { kind, asset_id, origin: event.time });
@@ -77,11 +84,7 @@ pub fn active_bga_channels(
                 && chart_now.0 >= j.time.0
                 && chart_now.0 < j.time.0 + poor_duration_us
         })
-        && let Some(event) = chart
-            .bga_events
-            .iter()
-            .rev()
-            .find(|e| e.time <= judgement.time && e.kind == BgaEventKind::Poor)
+        && let Some(event) = cache.bga_event_at(BgaEventKind::Poor, judgement.time)
         && let Some(asset_id) = event.asset
     {
         channels.push(ActiveBgaChannel {
@@ -101,17 +104,27 @@ pub fn update_video_bga_frames(
     chart_now: TimeUs,
 ) {
     if !running.session.bga_enabled || !running.session.chart.metadata.has_bga {
-        // Keep warm decoders across BGA-disabled stretches so quick retry can reuse them.
+        trim_video_decoders(
+            &mut running.video_bga_decoders,
+            &HashSet::new(),
+            &running.gameplay.session.chart,
+        );
         return;
     }
 
-    let RunningPlaySession { gameplay, video_bga_decoders, failed_video_bga, bga_frames, .. } =
-        running;
+    let RunningPlaySession {
+        gameplay,
+        video_bga_decoders,
+        failed_video_bga,
+        bga_frames,
+        render_snapshot_cache,
+        ..
+    } = running;
     let session = &gameplay.session;
     let chart = &session.chart;
     let mut active_video_assets = HashSet::new();
 
-    for channel in active_bga_channels(session, chart_now) {
+    for channel in active_bga_channels(session, chart_now, render_snapshot_cache) {
         let Some(asset) = chart.bga_assets.iter().find(|a| a.id == channel.asset_id) else {
             continue;
         };
@@ -131,15 +144,39 @@ pub fn update_video_bga_frames(
         );
     }
 
-    // Drop only decoders that are no longer part of this chart's video assets.
-    // Inactive-but-still-chart videos stay warm for reuse / quick retry (beatoraja style).
-    video_bga_decoders.retain(|asset_id, _| {
-        active_video_assets.contains(asset_id)
-            || chart
-                .bga_assets
-                .iter()
-                .any(|asset| asset.id == *asset_id && asset.kind == BgaAssetKind::Video)
-    });
+    trim_video_decoders(video_bga_decoders, &active_video_assets, chart);
+}
+
+/// Inactive video decoders kept for re-display and quick retry. Covers charts
+/// that switch among about ten videos per play without reopening; the cap bounds
+/// idle decode threads and queued RGBA frames for charts with dozens of videos.
+const WARM_VIDEO_DECODERS: usize = 10;
+
+fn most_recent_warm_assets(mut inactive: Vec<(BgaAssetId, std::time::Instant)>) -> Vec<BgaAssetId> {
+    inactive.sort_unstable_by_key(|(id, used)| (std::cmp::Reverse(*used), id.0));
+    inactive.truncate(WARM_VIDEO_DECODERS);
+    inactive.into_iter().map(|(id, _)| id).collect()
+}
+
+fn trim_video_decoders(
+    decoders: &mut VideoBgaDecoderMap,
+    active: &HashSet<BgaAssetId>,
+    chart: &bmz_chart::model::PlayableChart,
+) {
+    let warm = most_recent_warm_assets(
+        decoders
+            .iter()
+            .filter_map(|(&id, decoder)| {
+                (!active.contains(&id)
+                    && chart
+                        .bga_assets
+                        .iter()
+                        .any(|asset| asset.id == id && asset.kind == BgaAssetKind::Video))
+                .then_some((id, decoder.last_used))
+            })
+            .collect(),
+    );
+    decoders.retain(|id, _| active.contains(id) || warm.contains(id));
 }
 
 fn update_single_video(
@@ -164,16 +201,19 @@ fn update_single_video(
 
     if needs_new {
         if let Some(active) = video_bga_decoders.get_mut(&asset_id) {
-            // Same path reuse: seek directly to the current event offset instead of reopening.
             if active.decoder.path() == path {
-                active.decoder.restart_at(video_offset_us);
+                active.decoder.restart_at(video_seek_offset_us(video_offset_us));
                 active.event_start_time = event_start_time;
                 active.last_pts = None;
             } else {
                 match open_video_decoder_at(path, video_offset_us) {
                     Ok(decoder) => {
-                        *active =
-                            ActiveVideoBgaDecoder { event_start_time, decoder, last_pts: None };
+                        *active = ActiveVideoBgaDecoder {
+                            event_start_time,
+                            decoder,
+                            last_pts: None,
+                            last_used: std::time::Instant::now(),
+                        };
                         tracing::info!(
                             asset_id = asset_id.0,
                             path = %path.display(),
@@ -197,7 +237,12 @@ fn update_single_video(
                 Ok(decoder) => {
                     video_bga_decoders.insert(
                         asset_id,
-                        ActiveVideoBgaDecoder { event_start_time, decoder, last_pts: None },
+                        ActiveVideoBgaDecoder {
+                            event_start_time,
+                            decoder,
+                            last_pts: None,
+                            last_used: std::time::Instant::now(),
+                        },
                     );
                     tracing::info!(
                         asset_id = asset_id.0,
@@ -215,6 +260,7 @@ fn update_single_video(
     }
 
     let active = video_bga_decoders.get_mut(&asset_id).unwrap();
+    active.last_used = std::time::Instant::now();
     if let Some(frame) = active.decoder.poll_frame(video_offset_us)
         && active.last_pts != Some(frame.pts_us)
     {
@@ -230,8 +276,9 @@ fn open_video_decoder_at(
     video_offset_us: i64,
 ) -> anyhow::Result<VideoBgaDecoder> {
     let mut decoder = VideoBgaDecoder::open(path)?;
-    if video_offset_us > 0 {
-        decoder.restart_at(video_offset_us);
+    let seek_offset_us = video_seek_offset_us(video_offset_us);
+    if seek_offset_us > 0 {
+        decoder.restart_at(seek_offset_us);
     }
     Ok(decoder)
 }
@@ -260,29 +307,41 @@ fn upload_video_bga_frame(
     }
 }
 
-/// Prepare reused video decoders for a new play session (seek to start, clear PTS).
+/// Rebind reused decoders on first activation after a retry or Viewer seek.
 pub fn prepare_reused_video_decoders(decoders: &mut VideoBgaDecoderMap) {
     for active in decoders.values_mut() {
-        active.decoder.restart();
         active.event_start_time = REUSED_VIDEO_EVENT_START;
         active.last_pts = None;
     }
 }
 
-/// Mark reused decoders for Viewer seek without first rewinding them to zero.
-/// The first active BGA update supplies the exact event-relative target to `restart_at`.
-pub fn prepare_reused_video_decoders_for_seek(decoders: &mut VideoBgaDecoderMap) {
-    for active in decoders.values_mut() {
-        active.event_start_time = REUSED_VIDEO_EVENT_START;
-        active.last_pts = None;
-    }
-}
+pub use prepare_reused_video_decoders as prepare_reused_video_decoders_for_seek;
 
 pub type VideoBgaDecoderMap = HashMap<BgaAssetId, ActiveVideoBgaDecoder>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn early_bga_activation_decodes_from_the_start() {
+        assert_eq!(video_seek_offset_us(0), 0);
+        assert_eq!(video_seek_offset_us(30_000), 0);
+        assert_eq!(video_seek_offset_us(MIN_DIRECT_SEEK_OFFSET_US - 1), 0);
+        assert_eq!(video_seek_offset_us(MIN_DIRECT_SEEK_OFFSET_US), MIN_DIRECT_SEEK_OFFSET_US);
+        assert_eq!(video_seek_offset_us(10_000_000), 10_000_000);
+    }
+
+    #[test]
+    fn only_most_recent_inactive_videos_stay_warm() {
+        let now = std::time::Instant::now();
+        let warm = most_recent_warm_assets(
+            (0..32)
+                .map(|i| (BgaAssetId(i), now + std::time::Duration::from_millis(i as u64)))
+                .collect(),
+        );
+        assert_eq!(warm, (22..32).rev().map(BgaAssetId).collect::<Vec<_>>());
+    }
     #[test]
     fn immutable_bga_selection_resolves_late_video_upload_and_preserves_tint() {
         let mut selected = display_video_bga_frame(BgaAssetId(7), 1, 1);

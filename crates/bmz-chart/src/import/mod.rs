@@ -62,15 +62,42 @@ pub fn import_chart(
     )
 }
 
+/// How import treats the sound and image files a chart refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssetLookup {
+    /// Resolve each BGA file on disk, trying same-stem alternatives, as playback needs.
+    /// With `warn_missing`, also report missing sounds and images as warnings.
+    Resolve { warn_missing: bool },
+    /// Keep the declared paths and derive BGA kinds from them, without touching the
+    /// file system. A library scan stores only metadata and analysis, and a chart with
+    /// hundreds of `#BMP` lines would otherwise cost several file lookups per line.
+    Declared,
+}
+
+impl AssetLookup {
+    const fn from_check(check_resource_existence: bool) -> Self {
+        Self::Resolve { warn_missing: check_resource_existence }
+    }
+}
+
 /// 拡張子に応じて BMS / BMSON を import し、BMS の乱数分岐方法を指定する。
 pub fn import_chart_with_random_source(
     path: &Path,
     random_source: BmsRandomSource,
     check_resource_existence: bool,
 ) -> Result<ImportResult, ImportError> {
+    import_chart_with_assets(path, random_source, AssetLookup::from_check(check_resource_existence))
+}
+
+/// [`import_chart_with_random_source`] with an explicit [`AssetLookup`].
+pub fn import_chart_with_assets(
+    path: &Path,
+    random_source: BmsRandomSource,
+    assets: AssetLookup,
+) -> Result<ImportResult, ImportError> {
     let bytes = bmz_song_resource::read_file(path)
         .map_err(|source| ImportError::Io { path: path.to_path_buf(), source })?;
-    import_chart_bytes_with_random_source(path, &bytes, random_source, check_resource_existence)
+    import_chart_bytes_with_assets(path, &bytes, random_source, assets)
 }
 
 /// Import original chart bytes, using `path` only for format, diagnostics and asset bases.
@@ -80,6 +107,21 @@ pub fn import_chart_bytes_with_random_source(
     bytes: &[u8],
     random_source: BmsRandomSource,
     check_resource_existence: bool,
+) -> Result<ImportResult, ImportError> {
+    import_chart_bytes_with_assets(
+        path,
+        bytes,
+        random_source,
+        AssetLookup::from_check(check_resource_existence),
+    )
+}
+
+/// [`import_chart_bytes_with_random_source`] with an explicit [`AssetLookup`].
+pub fn import_chart_bytes_with_assets(
+    path: &Path,
+    bytes: &[u8],
+    random_source: BmsRandomSource,
+    assets: AssetLookup,
 ) -> Result<ImportResult, ImportError> {
     let mut warnings = Vec::new();
     let mut bms_random_choices = Vec::new();
@@ -107,11 +149,13 @@ pub fn import_chart_bytes_with_random_source(
         )?,
     };
     let mut chart =
-        normalize::normalize_chart(path, intermediate, &mut warnings, check_resource_existence)?;
+        normalize::normalize_chart_with_assets(path, intermediate, &mut warnings, assets)?;
     chart.metadata.source_format = file_format.source_format();
-    if let Some(program) = chart.metadata.conditional.clone() {
+    if let Some(mut program) = chart.metadata.conditional.take() {
+        std::sync::Arc::make_mut(&mut program).set_bga_assets(&chart.bga_assets);
         program.stabilize_default(&mut chart)?;
         chart.sounds = program.all_sounds()?;
+        chart.metadata.conditional = Some(program);
     }
     for message in &chart.metadata.kaleid.diagnostics {
         warnings.push(ImportWarning::ParserDiagnostic {

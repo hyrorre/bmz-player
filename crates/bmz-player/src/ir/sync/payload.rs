@@ -6,6 +6,9 @@ pub(super) async fn submit_score_attestation_job(
     payload_json: &str,
     credentials: IrStoredCredentials,
 ) -> Result<(String, String, String)> {
+    if crate::ir::bokutachi::is_config(provider) {
+        return Err(crate::ir::bokutachi::unsupported());
+    }
     if crate::ir::bms_ir::is_bms_ir_config(provider) {
         bail!("BMS-IR score attestation is not supported");
     }
@@ -50,6 +53,9 @@ pub(super) async fn submit_course_job_payload(
     payload_json: &str,
     credentials: IrStoredCredentials,
 ) -> Result<(String, String)> {
+    if crate::ir::bokutachi::is_config(provider) {
+        return Err(crate::ir::bokutachi::unsupported());
+    }
     let mut payload: serde_json::Value =
         serde_json::from_str(payload_json).context("failed to parse stored IR course payload")?;
     normalize_legacy_course_payload(&mut payload);

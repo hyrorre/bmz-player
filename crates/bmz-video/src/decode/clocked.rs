@@ -260,7 +260,7 @@ pub(crate) fn wait_until_playback_reaches_frame(
         }
         highest_target_us = highest_target_us.max(target_us);
         let sleep_us = (frame_pts_us - target_us).clamp(1_000, CLOCKED_FRAME_WAIT_MAX_SLEEP_US);
-        std::thread::sleep(Duration::from_micros(sleep_us as u64));
+        std::thread::park_timeout(Duration::from_micros(sleep_us as u64));
     }
 }
 

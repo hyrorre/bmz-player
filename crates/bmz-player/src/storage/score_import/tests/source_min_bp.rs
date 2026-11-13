@@ -101,7 +101,7 @@ fn all_rows(db: &ScoreDatabase, table: &str, omit: &[&str]) -> Vec<Vec<Value>> {
 
 fn metadata(db: &ScoreDatabase) -> Vec<Vec<Vec<Value>>> {
     vec![
-        all_rows(db, "score_history", &["source_min_bp"]),
+        all_rows(db, "score_history", &["source_min_bp", "normal_best_eligible"]),
         all_rows(db, "score_best", &["bp"]),
         all_rows(db, "player_stats", &[]),
         all_rows(db, "score_history_ir_identity", &[]),
@@ -211,16 +211,24 @@ fn reimport_repairs_v33_import_without_inventing_missing_bp_during_migration() {
     let ghost = crate::storage::score_db::encode_beatoraja_ghost(&vec![1; 1100]).unwrap();
     source.execute("UPDATE score SET ghost = ?1", [ghost]).unwrap();
     import(&source, kind, &mut library, &mut db, InputDeviceKind::Keyboard);
-    // Remove only the new column to construct the actual pre-v34 schema.
+    // Remove later columns and indices to construct the actual pre-v34 schema.
     db.conn_mut()
         .execute_batch(
             "DROP TABLE score_kaleid_plays;
+             DROP INDEX idx_score_history_device_best;
+        ALTER TABLE score_history DROP COLUMN normal_best_eligible;
         ALTER TABLE score_history DROP COLUMN source_min_bp;
         PRAGMA user_version = 33;",
         )
         .unwrap();
     let before = metadata(&db);
     run_migrations(db.conn_mut(), SCORE_MIGRATIONS).unwrap();
+    assert_eq!(
+        db.conn()
+            .query_row("SELECT normal_best_eligible FROM score_history", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
     assert_eq!(best(&db, sha, kind).bp, 20);
     assert_eq!(metadata(&db), before);
     source.execute("UPDATE score SET minbp = 5", []).unwrap();

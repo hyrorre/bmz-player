@@ -80,10 +80,17 @@ impl WinitApp {
     }
 
     pub(super) fn current_frame_limit(&self) -> u32 {
-        if self.ui.focused {
+        let frame_limit = if self.ui.focused {
             self.boot.app_config.video.target_fps
         } else {
             self.boot.app_config.video.frame_limit_in_background
+        };
+        // Keep CPU/egui updates alive without raising a lower user limit,
+        // including when a zero-size surface has suspended presentation.
+        if self.renderer.surface_drawing_suspended() {
+            suspended_frame_limit(frame_limit, self.boot.app_config.video.frame_limit_in_background)
+        } else {
+            frame_limit
         }
     }
 
@@ -119,7 +126,11 @@ impl WinitApp {
         match self.frame.begin_scheduled_frame(now, pacing_state) {
             FrameSchedule::Start => true,
             FrameSchedule::WaitUntil(deadline) => {
-                match pacing_state.wait_plan(now, deadline, cfg!(windows)) {
+                match pacing_state.wait_plan(
+                    now,
+                    deadline,
+                    cfg!(windows) && !self.renderer.surface_drawing_suspended(),
+                ) {
                     frame_runtime::FrameWait::SleepUntil(wake) => {
                         event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
                         false
@@ -145,8 +156,16 @@ impl WinitApp {
     pub(super) fn schedule_next_frame(&self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
         let fps = self.current_frame_limit();
-        if let Some(deadline) = self.frame.next_deadline(now, fps) {
-            match self.current_frame_pacing_state().wait_plan(now, deadline, cfg!(windows)) {
+        let deadline = earlier_frame_deadline(
+            self.frame.next_deadline(now, fps),
+            self.renderer.surface_retry_deadline(),
+        );
+        if let Some(deadline) = deadline.filter(|deadline| *deadline > now) {
+            match self.current_frame_pacing_state().wait_plan(
+                now,
+                deadline,
+                cfg!(windows) && !self.renderer.surface_drawing_suspended(),
+            ) {
                 frame_runtime::FrameWait::SleepUntil(wake) => {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
                 }
@@ -501,6 +520,10 @@ impl WinitApp {
     }
 
     fn spawn_play_result_ir_if_needed(&mut self) {
+        if self.result.result_ir.as_ref().is_some_and(|state| state.awaiting_select_cache()) {
+            self.update_cached_result_ir();
+            return;
+        }
         if self.result.result_ir.is_some() {
             return;
         }
@@ -508,6 +531,14 @@ impl WinitApp {
             return;
         };
         if finished.stored.score_history_id <= 0 {
+            if super::result_support::cached_result_ir_applies(
+                finished.result.autoplay,
+                finished.replay_playback,
+                self.select.autoplay_folder.is_some(),
+                self.viewer_mode || crate::cli::latency_validation_enabled(),
+            ) {
+                self.start_cached_result_ir();
+            }
             return;
         }
         self.result.result_ir = crate::screens::result_ir::spawn_result_ir_task(
@@ -522,6 +553,72 @@ impl WinitApp {
             finished.double_option,
             finished.rule_mode,
         );
+        if let Some(state) = self.result.result_ir.as_mut() {
+            state.local_submission_notice = finished.summary.ir_last_error.clone();
+        }
+    }
+
+    /// オートプレイ・リプレイ再生のリザルトで、選曲キャッシュのランキングを表示する。
+    ///
+    /// beatoraja と同じく送信はせず、選曲で取得したランキングを使い回す。キャッシュに
+    /// 無い場合は1回だけ取得して選曲キャッシュへ入れる。コース中の単曲リザルトも同じ。
+    /// 対象の判定は [`super::result_support::cached_result_ir_applies`]。
+    fn start_cached_result_ir(&mut self) {
+        let Some(finished) = &self.result.finished_play else {
+            return;
+        };
+        let chart_sha256_hex = crate::storage::common::hash_to_hex(&finished.result.chart_sha256);
+        let state = crate::screens::result_ir::cached_result_ir_state(
+            self.boot.profile_paths.root_dir.clone(),
+            &self.boot.profile_config.ir,
+            chart_sha256_hex,
+            finished.ln_policy,
+            finished.double_option,
+            finished.rule_mode,
+        );
+        let Some(mut state) = state else {
+            return;
+        };
+        if let Some(lookup) = self.cached_result_ir_lookup() {
+            state.apply_select_cache(lookup);
+        }
+        self.result.result_ir = Some(state);
+    }
+
+    fn update_cached_result_ir(&mut self) {
+        let Some(lookup) = self.cached_result_ir_lookup() else {
+            return;
+        };
+        if let Some(state) = &mut self.result.result_ir {
+            state.apply_select_cache(lookup);
+        }
+    }
+
+    fn cached_result_ir_lookup(
+        &mut self,
+    ) -> Option<crate::screens::select_ir::SelectIrResultLookup> {
+        let finished = self.result.finished_play.as_ref()?;
+        let context = select_ir_cache_context(
+            self.boot.profile_config.play.ln_mode_policy,
+            finished.ln_policy,
+            finished.double_option,
+            finished.rule_mode,
+        );
+        let (ln_policy, double_option, rule_mode, sha256) = (
+            finished.ln_policy,
+            finished.double_option,
+            finished.rule_mode,
+            finished.result.chart_sha256,
+        );
+        Some(self.select.select_ir.result_chart_ranking(
+            &self.boot.profile_config.ir,
+            &self.boot.profile_paths.root_dir,
+            &context,
+            ln_policy,
+            double_option,
+            rule_mode,
+            sha256,
+        ))
     }
 
     fn poll_result_ir_into_select_cache(&mut self) {
@@ -695,7 +792,7 @@ impl WinitApp {
 
         let apply_obs_config = output.obs_enabled_changed;
         if output.save_app_config {
-            let result = save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config);
+            let result = self.save_app_config_now();
             if let Some(egui) = self.ui.egui.as_mut() {
                 egui.settings_save_finished(
                     true,
@@ -733,8 +830,8 @@ impl WinitApp {
         for request in output.song_scan_requests {
             self.spawn_song_scan_request(request);
         }
-        if output.trigger_song_rescan {
-            self.load_songs_and_reload();
+        if output.trigger_song_rescan || output.trigger_full_song_rescan {
+            self.load_songs_and_reload(output.trigger_full_song_rescan);
         }
         if let Some(request) = output.score_import_request {
             self.import_external_scores(request);
@@ -746,10 +843,7 @@ impl WinitApp {
             self.cancel_beatoraja_replay_import();
         }
         if output.save_profile_config {
-            let result = save_profile_config(
-                &self.boot.profile_paths.profile_toml,
-                &self.boot.profile_config,
-            );
+            let result = self.save_profile_config_now();
             if let Some(egui) = self.ui.egui.as_mut() {
                 egui.settings_save_finished(
                     false,
@@ -854,12 +948,19 @@ impl WinitApp {
     }
 
     pub(super) fn handle_smoke_exit_after_redraw(&mut self, event_loop: &ActiveEventLoop) {
+        if self.scene_skin_entry_loading() {
+            return;
+        }
         if self.smoke.smoke_exit_on_result && self.result.finished_play.is_some() {
             self.smoke.smoke_exit_on_result = false;
             tracing::info!("smoke result reached; leaving event loop");
             self.save_configs_for_exit(None, "game exit");
             self.flush_pending_screenshots("smoke result exit");
             event_loop.exit();
+            return;
+        }
+
+        if !self.frame.last_frame_rendered {
             return;
         }
 
@@ -1034,7 +1135,7 @@ impl WinitApp {
         key_mode: KeyMode,
         hispeed: Option<f32>,
         reason: &'static str,
-    ) -> bool {
+    ) {
         self.boot.profile_config.activate_play_mode(key_mode);
         let (hispeed, lane_state) = lane_state_for_profile_save(
             active_course_speed_locked(self.play.active_course.as_ref()),
@@ -1051,15 +1152,7 @@ impl WinitApp {
             now_unix_seconds(),
         );
         self.boot.profile_config.sync_active_play_mode();
-        if let Err(error) =
-            save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
-        {
-            tracing::error!(%error, reason, "failed to save profile play options");
-            false
-        } else {
-            tracing::info!(reason, "saved profile play options");
-            true
-        }
+        self.queue_profile_config_save(reason);
     }
 
     pub(super) fn save_configs_for_exit(&mut self, hispeed: Option<f32>, reason: &'static str) {
@@ -1067,17 +1160,14 @@ impl WinitApp {
             return;
         }
         self.save_configs_after_play(hispeed, reason);
+        self.jobs.config_saver.flush();
         self.integrations.exit_configs_saved = true;
     }
 
+    /// Queued: play end and quick retry must not wait for TOML serialization.
     pub(super) fn save_configs_after_play(&mut self, hispeed: Option<f32>, reason: &'static str) {
         self.save_current_play_options(hispeed, reason);
-        if let Err(error) = save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config)
-        {
-            tracing::error!(%error, reason, "failed to save app config");
-        } else {
-            tracing::info!(reason, "saved app config");
-        }
+        self.queue_app_config_save(reason);
     }
 }
 
@@ -1087,6 +1177,16 @@ fn should_arm_select_scene_timers(
     render_status: Option<RenderSurfaceStatus>,
 ) -> bool {
     select_view && !timer_armed && render_status == Some(RenderSurfaceStatus::Rendered)
+}
+
+fn suspended_frame_limit(frame_limit: u32, background_limit: u32) -> u32 {
+    // Zero means unlimited. Still wake for CPU updates without busy polling.
+    [frame_limit, background_limit].into_iter().filter(|&limit| limit != 0).fold(30, u32::min)
+}
+
+fn earlier_frame_deadline(frame: Option<Instant>, retry: Option<Instant>) -> Option<Instant> {
+    // None means the CPU frame is already due; do not delay it until a retry.
+    frame.map(|deadline| retry.map_or(deadline, |retry| deadline.min(retry)))
 }
 
 fn frame_idle_control_flow(fps: u32, wayland_frame_callbacks: bool) -> ControlFlow {
@@ -1103,7 +1203,28 @@ fn frame_idle_control_flow(fps: u32, wayland_frame_callbacks: bool) -> ControlFl
 mod select_scene_timer_tests {
     use super::{
         ControlFlow, RenderSurfaceStatus, frame_idle_control_flow, should_arm_select_scene_timers,
+        suspended_frame_limit,
     };
+
+    #[test]
+    fn suspended_frames_preserve_lower_limits_and_bound_unlimited_updates() {
+        for (frame_limit, background_limit, expected) in
+            [(240, 60, 30), (1, 1, 1), (240, 10, 10), (10, 60, 10), (0, 10, 10), (0, 0, 30)]
+        {
+            assert_eq!(suspended_frame_limit(frame_limit, background_limit), expected);
+        }
+    }
+
+    #[test]
+    fn surface_retry_wakes_without_resize_and_does_not_delay_cpu_frames() {
+        let now = std::time::Instant::now();
+        let retry = now + std::time::Duration::from_millis(250);
+        let frame = now + std::time::Duration::from_secs(1);
+        assert_eq!(super::earlier_frame_deadline(Some(frame), Some(retry)), Some(retry));
+        assert_eq!(super::earlier_frame_deadline(Some(retry), Some(frame)), Some(retry));
+        assert_eq!(super::earlier_frame_deadline(None, Some(retry)), None);
+        assert_eq!(super::earlier_frame_deadline(Some(frame), None), Some(frame));
+    }
 
     #[test]
     fn unlimited_wayland_frames_wait_for_the_compositor_without_spinning() {
@@ -1115,6 +1236,11 @@ mod select_scene_timer_tests {
 
     #[test]
     fn select_timer_arms_only_after_first_rendered_surface() {
+        assert!(!should_arm_select_scene_timers(
+            true,
+            false,
+            Some(RenderSurfaceStatus::Recovering)
+        ));
         assert!(!should_arm_select_scene_timers(
             true,
             false,

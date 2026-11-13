@@ -7,10 +7,24 @@ pub fn normalize_chart(
     warnings: &mut Vec<ImportWarning>,
     check_resource_existence: bool,
 ) -> Result<PlayableChart, ImportError> {
+    normalize_chart_with_assets(
+        source_path,
+        intermediate,
+        warnings,
+        AssetLookup::Resolve { warn_missing: check_resource_existence },
+    )
+}
+
+/// [`normalize_chart`] with an explicit [`AssetLookup`].
+pub fn normalize_chart_with_assets(
+    source_path: &Path,
+    intermediate: IntermediateChart,
+    warnings: &mut Vec<ImportWarning>,
+    assets: AssetLookup,
+) -> Result<PlayableChart, ImportError> {
     let metadata = normalize_metadata(&intermediate.metadata);
-    let sound_table =
-        build_sound_table(source_path, &intermediate, warnings, check_resource_existence);
-    let bga_table = build_bga_table(source_path, &intermediate, warnings, check_resource_existence);
+    let sound_table = build_sound_table(source_path, &intermediate, warnings, assets);
+    let bga_table = build_bga_table(source_path, &intermediate, warnings, assets);
     let tick_objects = materialize_tick_objects(&intermediate)?;
     let tick_timing_events = collect_timing_events(&intermediate, warnings)?;
     let timing_map = build_timing_map_with_tick_scale(

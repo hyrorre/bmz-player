@@ -124,15 +124,10 @@ impl CpalSharedOutput {
         self.inner.diagnostics.take_snapshot()
     }
 
-    /// callback から退避した source を app thread で破棄する。
-    ///
-    /// source が最後に保持する chart sample bank は大きくなり得るため、callback
-    /// 中での `Drop` を避ける。callback と競合中でも app thread は待機してよい。
+    /// callbackから退避したsourceの破棄を専用workerへ通知する。
+    /// window threadはmutex取得や大きなsample bankの破棄を行わない。
     pub fn reap_retired_sources(&self) {
-        let Ok(mut sources) = self.inner.retired_sources.lock() else {
-            return;
-        };
-        sources.clear();
+        self.inner.source_reaper.wake();
     }
 
     pub fn add_source(&self, engine: SharedAudioEngine) -> CpalOutputSource {

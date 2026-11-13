@@ -165,6 +165,7 @@ fn hln_independent_battle_autoplay_matches_primary() {
     session.gauge = GaugeState::new(bmz_core::clear::GaugeType::Normal, 160.0, 100);
     session.gauge.set_initial_value(50.0);
     session.opponent.independent = Some(BattleOpponentSession {
+        replay_judge_rate_percent: 100,
         conditional: Default::default(),
         chart: Arc::clone(&chart),
         key_mode: chart.metadata.key_mode,

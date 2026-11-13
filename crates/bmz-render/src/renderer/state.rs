@@ -1,8 +1,12 @@
 pub(super) struct WgpuRenderer {
     pub(super) device: wgpu::Device,
+    pub(super) device_loss: std::sync::Arc<DeviceLoss>,
     pub(super) queue: wgpu::Queue,
     pub(super) adapter_info: wgpu::AdapterInfo,
     pub(super) config: wgpu::SurfaceConfiguration,
+    pub(super) surface_recovery: Option<SurfaceRecovery>,
+    #[cfg(test)]
+    pub(super) surface_test: Option<surface::SurfaceTest>,
     pub(super) present_modes: Vec<wgpu::PresentMode>,
     pub(super) rect_pipeline: wgpu::RenderPipeline,
     pub(super) rect_buffer: Option<wgpu::Buffer>,

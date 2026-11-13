@@ -137,6 +137,21 @@ function courseSubmission() {
   }
 }
 
+test('new normalized course FORCE and historical AUTO remain accepted in separate buckets', async () => {
+  for (const policy of ['AutoLn', 'AutoCn', 'AutoHcn', 'ForceLn', 'ForceCn', 'ForceHcn']) {
+    const payload = courseSubmission()
+    payload.rule.ln_policy = policy
+    payload.idempotency_key = `uniform-course-${policy}`
+    expect((await submitCourseScore(user, validateCourseScoreSubmission(payload))).accepted).toBe(
+      true,
+    )
+  }
+  const scores = await db.select().from(schema.courseScores)
+  expect(scores.map((row) => row.lnPolicy).sort()).toEqual(
+    ['AutoLn', 'AutoCn', 'AutoHcn', 'ForceLn', 'ForceCn', 'ForceHcn'].sort(),
+  )
+})
+
 function sizedJson(size: number, options = false): Record<string, string> {
   const value: Record<string, string> = options
     ? { device_type: 'keyboard', padding: '' }

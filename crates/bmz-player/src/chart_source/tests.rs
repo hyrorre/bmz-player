@@ -55,7 +55,6 @@ impl Fixture {
     fn scan(&mut self) -> ScanReport {
         let scan = crate::config::app_config::ScanConfig {
             use_everything: false,
-            skip_hidden: true,
             ..AppConfig::default().scan
         };
         scan_song_roots(&mut self.db, &self.roots, &scan, 10, false).unwrap()
@@ -155,7 +154,7 @@ fn shallow_scan_registers_nested_archive_charts_bytes_and_metadata_without_mater
 }
 
 #[test]
-fn hidden_archive_members_obey_scan_setting_and_appledouble_is_always_excluded() {
+fn archive_members_skip_only_appledouble_and_macosx_names() {
     let mut f = Fixture::new();
     f.zip(
         "songs.zip",
@@ -167,14 +166,9 @@ fn hidden_archive_members_obey_scan_setting_and_appledouble_is_always_excluded()
             ("._song.bms", BMS),
         ],
     );
-    assert_eq!(f.scan().summary.imported, if cfg!(windows) { 3 } else { 1 });
-    let scan = crate::config::app_config::ScanConfig {
-        use_everything: false,
-        skip_hidden: false,
-        ..AppConfig::default().scan
-    };
-    let report = scan_song_roots(&mut f.db, &f.roots, &scan, 11, false).unwrap();
+    let report = f.scan();
     assert_eq!(report.summary.files_seen, 3);
+    assert_eq!(report.summary.imported, 3);
     assert_eq!(f.db.list_charts(20, 0).unwrap().len(), 3);
 }
 

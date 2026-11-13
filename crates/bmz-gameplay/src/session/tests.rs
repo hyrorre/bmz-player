@@ -163,7 +163,8 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
         },
         judge: JudgeEngine::new(JudgeWindow::symmetric(
             16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000,
-        )),
+        ))
+        .with_chart_index(chart.clone()),
         base_judge_window: JudgeWindow::symmetric(
             16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000,
         ),
@@ -179,6 +180,7 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
         gauge: GaugeState::new(bmz_core::clear::GaugeType::Normal, 160.0, chart.total_notes),
         replay_recorder: ReplayRecorder::default(),
         replay_player: None,
+        replay_judge_rate_percent: 100,
         replay_lane_projection: None,
         replay_lane_mask: None,
         display_only_lane_mask: [false; LANE_COUNT],
@@ -255,6 +257,7 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
         pending_mine_hits: Vec::new(),
         state: PlayState::Ready,
         manually_stopped: false,
+        scoring_closed_at: None,
         last_hcn_gauge_at: None,
     }
 }
@@ -365,5 +368,9 @@ mod kaleid_tests;
 mod long_end_tests;
 #[path = "tests/optional_play_behaviors.rs"]
 mod optional_play_behaviors;
+#[path = "tests/performance.rs"]
+mod performance;
 #[path = "tests/replay_speed.rs"]
 mod replay_speed;
+#[path = "tests/result_settlement.rs"]
+mod result_settlement;

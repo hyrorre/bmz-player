@@ -55,6 +55,8 @@ pub struct StorePlayResultRequest {
     pub s_random_scheme: SRandomScheme,
     pub s_random_scheme_2p: Option<SRandomScheme>,
     pub h_random_threshold_ms: Option<u32>,
+    /// LR2 FREQ semitones the play ran at; 0 is not written to the replay.
+    pub freq_semitones: i8,
     pub arrange_pattern: Option<Vec<u8>>,
     /// false の場合は beatoraja の `updateScore=false` と同様に、
     /// クリアランプ・回数・profile 全体統計だけを更新する。
@@ -152,7 +154,8 @@ pub fn store_play_result(
             request.applied_double_option,
             result.gauge_type,
             request.h_random_threshold_ms,
-        );
+        )
+        .with_freq_semitones(request.freq_semitones);
         let hash = save_replay_with_hash(&path, &replay)?;
         (format!("replay/{file_name}"), Some(hash))
     } else {
@@ -241,7 +244,8 @@ pub fn store_play_result(
                 request.applied_double_option,
                 result.gauge_type,
                 request.h_random_threshold_ms,
-            );
+            )
+            .with_freq_semitones(request.freq_semitones);
             save_replay(&path, &replay)?;
             let rel_path = format!("replay/{file_name}");
             score_db.upsert_replay_slot(&ReplaySlotRecord {

@@ -1270,6 +1270,15 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 35,
+        statements: &[
+            "ALTER TABLE score_history ADD COLUMN normal_best_eligible INTEGER NOT NULL DEFAULT 1;",
+            "CREATE INDEX idx_score_history_device_best ON score_history
+                (chart_sha256, ln_policy, double_option, rule_mode, device_type, id)
+                WHERE normal_best_eligible = 1;",
+        ],
+    },
+    Migration {
+        version: 36,
         // Evidence belongs to a real play, never to a synthetic combination of best metrics.
         // Missing rows identify legacy/imported histories with unknown interpretation.
         statements: &["CREATE TABLE score_kaleid_plays (

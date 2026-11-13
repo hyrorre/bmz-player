@@ -28,7 +28,7 @@ impl WinitApp {
             options.session_mode,
             play_skin_runtime_state,
         );
-        self.ensure_skin_ready(SkinKind::Play);
+        self.request_scene_skin(SkinKind::Play);
     }
 
     /// 既に開始済みの preload を維持したまま Play シーンへ入場する。
@@ -52,7 +52,7 @@ impl WinitApp {
     ) {
         self.normalize_key_mode_conversion_options(chart_id, &mut options);
         self.resolve_play_target_from_cache(chart_id, &mut options);
-        self.ensure_skin_ready(SkinKind::Decide);
+        self.request_scene_skin(SkinKind::Decide);
         self.prepare_play_skin_for_scene(chart_id, &options);
         if self.play.play_media_cache.as_ref().is_some_and(|cache| cache.chart_id != chart_id) {
             self.play.play_media_cache = None;
@@ -87,7 +87,7 @@ impl WinitApp {
         };
         self.normalize_key_mode_conversion_options(chart_id, &mut options);
         self.resolve_play_target_from_cache(chart_id, &mut options);
-        self.ensure_skin_ready(SkinKind::Decide);
+        self.request_scene_skin(SkinKind::Decide);
         // Decide preload を通らない direct boot / replay / retry も新しい
         // Play scene entry として必ずロード時Randomを再評価する。
         self.skin.last_play_skin_signature = None;
@@ -247,6 +247,9 @@ impl WinitApp {
         mut snapshot: RenderSnapshot,
         presentation: PlayEntryPresentation,
     ) {
+        if !self.scene_skin_entry_waiting(SkinKind::Play) {
+            self.skin.skin_pipeline.lr2_assets.previous_scene = Some(SkinKind::Play);
+        }
         self.normalize_key_mode_conversion_options(chart_id, &mut options);
         self.resolve_play_target_from_cache(chart_id, &mut options);
         if let Some(score_key) = self.play_skin_score_key_for_chart_id(chart_id, &options) {
@@ -267,11 +270,14 @@ impl WinitApp {
         // Decide / retry / direct boot のどの経路でも、Play 入場後の常時表示が
         // pending state の破棄に左右されないよう、ここで今回の mode を記録する。
         self.result.last_play_session_mode = options.session_mode;
+        self.result.last_play_freq_semitones = options.freq_semitones;
         self.play.last_battle_target = options.battle_target.clone();
         // リザルトの非同期 IR state は今回の試行だけを表す。retry 中にも残すと
         // 同じ chart hash の前回スコアを次の Result で表示し得るため、Play へ
         // 入る時点で直ちに手放す（バックグラウンド送信自体は継続する）。
         self.result.result_ir = None;
+        self.discard_skin_prewarm(SkinKind::Result);
+        self.discard_skin_prewarm(SkinKind::Select);
         self.clear_result_ir_scroll_input();
         self.play.play_ending = None;
         self.result.result_exit = None;
@@ -337,6 +343,11 @@ impl WinitApp {
         let mut session_options =
             play_session_options_from_start(&self.play_session_app_config(), options.clone());
         session_options.play_config_key_mode = Some(play_config_key_mode);
+        // ノーツ入力は preload したセッションの割り当てで動くので、E1〜E4 や補助操作も
+        // 同じ割り当てに揃える。
+        if let Some(slots) = self.play_preload_gamepad_slots(chart_id) {
+            session_options.gamepad_slots = slots;
+        }
         // CLIの一時上書き中とコースのNoSpeed制約中は、profileの量を書き換えない。
         if self.boot.profile_config.cli_play.is_none()
             && session_options.speed_constraint != bmz_core::course::CourseSpeedConstraint::NoSpeed

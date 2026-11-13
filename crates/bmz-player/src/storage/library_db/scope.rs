@@ -109,18 +109,57 @@ pub(crate) fn song_root_contains_file(root: &PathEntry, path: &str) -> bool {
 }
 
 fn song_root_path_contains_file(root_path: &str, recursive: bool, path: &str) -> bool {
-    let root_path = normalize_library_path(root_path);
+    RootScope::new(root_path, recursive).contains_key(&scope_key(path))
+}
+
+/// The spelling [`RootScope`] compares: the archive container for a virtual entry,
+/// normalized, and case-folded on Windows. Compute it once per registered path.
+pub(crate) fn scope_key(path: &str) -> String {
     let path = crate::chart_source::ChartLocator::parse(Path::new(path))
         .map(|locator| normalize_library_path(&locator.container_path().to_string_lossy()))
         .unwrap_or_else(|_| normalize_library_path(path));
     #[cfg(windows)]
-    let (root_path, path) = (root_path.to_lowercase(), path.to_lowercase());
-    if crate::chart_source::is_archive_file(Path::new(&root_path)) && root_path == path {
-        return true;
+    let path = path.to_lowercase();
+    path
+}
+
+/// A root's lexical scope, normalized once for many membership checks.
+pub(crate) struct RootScope {
+    /// Normalized root, case-folded on Windows and without a trailing separator.
+    key: String,
+    prefix: String,
+    recursive: bool,
+    archive: bool,
+}
+
+impl RootScope {
+    pub(crate) fn new(root_path: &str, recursive: bool) -> Self {
+        let root_path = normalize_library_path(root_path);
+        #[cfg(windows)]
+        let root_path = root_path.to_lowercase();
+        let archive = crate::chart_source::is_archive_file(Path::new(&root_path));
+        let key = root_path.trim_end_matches('/').to_string();
+        Self { prefix: format!("{key}/"), key, recursive, archive }
     }
-    let prefix = format!("{}/", root_path.trim_end_matches('/'));
-    path.strip_prefix(&prefix)
-        .is_some_and(|relative| !relative.is_empty() && (recursive || !relative.contains('/')))
+
+    pub(crate) fn of(root: &PathEntry) -> Self {
+        Self::new(&root.path, root.recursive)
+    }
+
+    /// Whether the registered path with this [`scope_key`] lies in the scope.
+    pub(crate) fn contains_key(&self, key: &str) -> bool {
+        if self.archive && self.key == key {
+            return true;
+        }
+        key.strip_prefix(&self.prefix).is_some_and(|relative| {
+            !relative.is_empty() && (self.recursive || !relative.contains('/'))
+        })
+    }
+
+    /// Whether `key` names this root itself (an archive root's own entries).
+    pub(crate) fn is_root_key(&self, key: &str) -> bool {
+        self.key == key.trim_end_matches('/')
+    }
 }
 
 impl LibraryDatabase {
@@ -221,9 +260,26 @@ impl LibraryDatabase {
             stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
+        // Same membership as `scope.contains_file`, with each root normalized once.
+        let scopes: Vec<RootScope> = scope
+            .roots
+            .iter()
+            .flatten()
+            .filter(|root| !root.partial_scan)
+            .flat_map(|root| {
+                let canonical = root
+                    .canonical_path
+                    .as_deref()
+                    .map(|path| RootScope::new(path, root.entry.recursive));
+                std::iter::once(RootScope::of(&root.entry)).chain(canonical)
+            })
+            .collect();
         let removed: Vec<i64> = candidates
             .into_iter()
-            .filter(|(_, path)| !scope.contains_file(path))
+            .filter(|(_, path)| {
+                let key = scope_key(path);
+                !scopes.iter().any(|scope| scope.contains_key(&key))
+            })
             .map(|(id, _)| id)
             .collect();
         super::database_write::delete_chart_files(&tx, &removed)?;

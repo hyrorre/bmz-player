@@ -104,10 +104,7 @@ impl WinitApp {
                 );
                 if changed {
                     self.boot.profile_config.updated_at = now_unix_seconds();
-                    if let Err(error) = save_profile_config(
-                        &self.boot.profile_paths.profile_toml,
-                        &self.boot.profile_config,
-                    ) {
+                    if let Err(error) = self.save_profile_config_now() {
                         self.boot.profile_config.rival = previous_rival;
                         self.boot.profile_config.updated_at = previous_updated_at;
                         tracing::warn!(%error, "failed to save startup rianIR rival sync");

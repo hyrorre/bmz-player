@@ -48,6 +48,10 @@ pub struct ReplayFile {
     /// does not carry it, so importers may recover it from config_player.json.
     #[serde(default)]
     pub h_random_threshold_ms: Option<u32>,
+    /// LR2 FREQ semitones the play ran at. Omitted for FREQ 0, so replays
+    /// from before FREQ and FREQ 0 plays share one layout and play at 100%.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freq_semitones: Option<i8>,
     #[serde(default)]
     pub arrange_seed: Option<i64>,
     #[serde(default)]
@@ -153,6 +157,7 @@ impl ReplayFile {
             applied_double_option: double_option.as_double_option().to_persistent_str().to_string(),
             gauge_type: String::new(),
             h_random_threshold_ms: None,
+            freq_semitones: None,
             arrange_seed,
             arrange_seed_2p: None,
             bms_random_choices: Some(Vec::new()),
@@ -211,6 +216,16 @@ impl ReplayFile {
         self.gauge_type = gauge_type.as_str().to_string();
         self.h_random_threshold_ms = h_random_threshold_ms;
         self
+    }
+
+    pub fn with_freq_semitones(mut self, freq_semitones: i8) -> Self {
+        self.freq_semitones = (freq_semitones != 0).then_some(freq_semitones);
+        self
+    }
+
+    /// FREQ to restore on playback. Replays without the field play at 0 (100%).
+    pub fn recorded_freq_semitones(&self) -> i8 {
+        self.freq_semitones.map_or(0, crate::config::play::clamp_freq_semitones)
     }
 
     pub fn effective_seed_scheme(&self) -> &str {
@@ -681,6 +696,24 @@ events = []
         assert_eq!(replay.double_option(), DoubleOption::Battle);
         assert_eq!(replay.recorded_gauge_type(), None);
         assert_eq!(replay.h_random_threshold_ms, None);
+        assert_eq!(replay.freq_semitones, None);
+        assert_eq!(replay.recorded_freq_semitones(), 0);
+    }
+
+    #[test]
+    fn replay_records_nonzero_freq_and_omits_freq_zero() {
+        let replay =
+            ReplayFile::new([1; 32], 1, None, ArrangeOption::Normal, None, None, Vec::new());
+
+        let neutral = replay.clone().with_freq_semitones(0);
+        let text = toml::to_string(&neutral).unwrap();
+        assert!(!text.contains("freq_semitones"));
+        assert_eq!(text, toml::to_string(&replay).unwrap());
+
+        let raised = replay.with_freq_semitones(7);
+        let loaded: ReplayFile = toml::from_str(&toml::to_string(&raised).unwrap()).unwrap();
+        assert_eq!(loaded.freq_semitones, Some(7));
+        assert_eq!(loaded.recorded_freq_semitones(), 7);
     }
 
     #[test]

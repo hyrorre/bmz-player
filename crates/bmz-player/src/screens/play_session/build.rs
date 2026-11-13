@@ -490,6 +490,11 @@ pub fn build_game_session_with_input_backend(
                 .and_then(|evidence| evidence.options.get("judge_windows"))
                 .and_then(|value| serde_json::from_value(value.clone()).ok())
                 .unwrap_or(base_judge_windows);
+            let judge_rate = if opponent.replay_player.is_some() {
+                opponent.replay_judge_rate_percent
+            } else {
+                options.playback_rate_percent
+            };
             let gauge_type = opponent.gauge.unwrap_or(gauge_type);
             let gauge_total = gauge_total_for_chart_and_rule_mode(
                 chart.metadata.total,
@@ -514,12 +519,13 @@ pub fn build_game_session_with_input_backend(
                             rule_mode,
                             key_mode,
                         ),
-                        options.playback_rate_percent,
+                        judge_rate,
                     ),
                     rule_mode,
                     judge_algorithm_from_config(profile.judge.judge_algorithm),
                     key_mode,
-                ),
+                )
+                .with_chart_index(chart.clone()),
                 gauge: GaugeState::new_with_property_and_rule_mode_and_keymode(
                     gauge_type,
                     gauge_total,
@@ -536,6 +542,7 @@ pub fn build_game_session_with_input_backend(
                 score: ScoreState::for_rule_mode(key_mode, rule_mode),
                 autoplay: opponent.replay_player.is_none().then(AutoplayController::default),
                 replay_player: opponent.replay_player,
+                replay_judge_rate_percent: opponent.replay_judge_rate_percent,
                 display_uses_primary_arrangement: session_mode == SessionMode::GBattle,
                 publish_display_judgements: session_mode.uses_battle_skin(),
                 gauge_increase_started_at: None,
@@ -569,7 +576,8 @@ pub fn build_game_session_with_input_backend(
         rule_mode,
         judge_algorithm_from_config(profile.judge.judge_algorithm),
         primary_key_mode,
-    );
+    )
+    .with_chart_index(chart.clone());
     if let Some(projection) = &replay_lane_projection {
         judge.set_scratch_lane_mask(projection.playback_scratch_lane_mask);
     }
@@ -605,6 +613,7 @@ pub fn build_game_session_with_input_backend(
         course_max_combo: initial_course_combo,
         replay_recorder: ReplayRecorder::default(),
         replay_player,
+        replay_judge_rate_percent: options.playback_rate_percent,
         replay_lane_projection,
         replay_lane_mask,
         display_only_lane_mask,
@@ -676,6 +685,7 @@ pub fn build_game_session_with_input_backend(
         session_mode_index: crate::skin_extension::session_mode_index(session_mode) as u8,
         state: PlayState::Ready,
         manually_stopped: false,
+        scoring_closed_at: None,
         last_hcn_gauge_at: None,
     }
 }

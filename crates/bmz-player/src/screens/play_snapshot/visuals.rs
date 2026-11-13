@@ -168,12 +168,7 @@ pub(super) fn lane_keyoff_ms(
 pub fn refresh_play_skin_visuals(snapshot: &mut RenderSnapshot, session: &GameSession) {
     snapshot.skin_offsets =
         skin_offsets_from_session(session, snapshot.time, snapshot.play_elapsed_time);
-    snapshot.keyon_ms = lane_keyon_ms(session, snapshot.time, snapshot.play_elapsed_time);
-    snapshot.keyoff_ms = lane_keyoff_ms(session, snapshot.time, snapshot.play_elapsed_time);
-    snapshot.gauge_increase_elapsed_ms =
-        optional_skin_timer_elapsed_ms(snapshot.time, session.gauge_increase_started_at);
-    snapshot.gauge_max_elapsed_ms =
-        optional_skin_timer_elapsed_ms(snapshot.time, session.gauge_max_started_at);
+    PlaySkinTimers::from_session(session).apply(snapshot);
 }
 
 /// 通常アニメーション用の `play_elapsed_time` と、押下エフェクト用の実経過時間が
@@ -184,6 +179,7 @@ pub fn refresh_play_skin_visuals_with_input_elapsed(
     input_elapsed: TimeUs,
 ) {
     snapshot.skin_offsets = skin_offsets_from_session(session, snapshot.time, input_elapsed);
+    PlaySkinTimers::from_session(session).apply(snapshot);
     snapshot.keyon_ms = std::array::from_fn(|lane_index| {
         session.lane_keyon_started_at[lane_index]
             .map(|started_at| skin_timer_elapsed_ms(input_elapsed, started_at))
@@ -192,10 +188,6 @@ pub fn refresh_play_skin_visuals_with_input_elapsed(
         session.lane_keyoff_started_at[lane_index]
             .map(|started_at| skin_timer_elapsed_ms(input_elapsed, started_at))
     });
-    snapshot.gauge_increase_elapsed_ms =
-        optional_skin_timer_elapsed_ms(snapshot.time, session.gauge_increase_started_at);
-    snapshot.gauge_max_elapsed_ms =
-        optional_skin_timer_elapsed_ms(snapshot.time, session.gauge_max_started_at);
 }
 
 pub fn refresh_pending_play_input_visuals(
@@ -206,6 +198,8 @@ pub fn refresh_pending_play_input_visuals(
     lane_scratch_angle_delta_ms: [i64; LANE_COUNT],
     input_elapsed: TimeUs,
 ) {
+    snapshot.keyon_started_at = lane_keyon_started_at;
+    snapshot.keyoff_started_at = lane_keyoff_started_at;
     snapshot.keyon_ms = std::array::from_fn(|lane_index| {
         lane_keyon_started_at[lane_index]
             .map(|started_at| skin_timer_elapsed_ms(input_elapsed, started_at))
@@ -214,21 +208,10 @@ pub fn refresh_pending_play_input_visuals(
         lane_keyoff_started_at[lane_index]
             .map(|started_at| skin_timer_elapsed_ms(input_elapsed, started_at))
     });
-    let active_lanes = key_mode.active_lanes();
-    if active_lanes.contains(&Lane::Scratch) {
-        set_scratch_angle_offset(
-            &mut snapshot.skin_offsets,
-            SCRATCH_ANGLE_OFFSET_1P,
-            input_elapsed,
-            lane_scratch_angle_delta_ms[Lane::Scratch.index()],
-        );
-    }
-    if active_lanes.contains(&Lane::Scratch2) {
-        set_scratch_angle_offset(
-            &mut snapshot.skin_offsets,
-            SCRATCH_ANGLE_OFFSET_2P,
-            input_elapsed,
-            lane_scratch_angle_delta_ms[Lane::Scratch2.index()],
-        );
-    }
+    set_scratch_angle_offsets(
+        &mut snapshot.skin_offsets,
+        key_mode,
+        input_elapsed,
+        &lane_scratch_angle_delta_ms,
+    );
 }

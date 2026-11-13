@@ -48,14 +48,14 @@ pub(super) fn app_test_chart() -> bmz_chart::model::PlayableChart {
     }
 }
 
-fn default_select_keys() -> SelectKeyBindings {
-    SelectKeyBindings::from_profile(&crate::config::play_input::default_profile_input())
+fn default_select_keys() -> SceneInputResolver {
+    SceneInputResolver::from_profile(&crate::config::play_input::default_profile_input())
 }
 
-fn select_keys_9k() -> SelectKeyBindings {
+fn select_keys_9k() -> SceneInputResolver {
     let mut input = crate::config::play_input::default_profile_input();
     input.select_input_mode = SelectInputModeConfig::Key9;
-    SelectKeyBindings::from_profile(&input)
+    SceneInputResolver::from_profile(&input)
 }
 
 fn play_option_input_for(input: &ProfileInputConfig, key_mode: KeyMode) -> PlayOptionInput {
@@ -67,17 +67,125 @@ fn play_option_input_for(input: &ProfileInputConfig, key_mode: KeyMode) -> PlayO
     )
 }
 
-fn keyboard_play_option(
-    control: &str,
+/// 1P = DeviceId(16)、2P = DeviceId(17) の割り当て。
+fn test_slots() -> crate::input::gamepad::GamepadSlotMap {
+    crate::input::gamepad::GamepadSlotMap::from_slot_ids([Some(0), Some(1)])
+}
+
+/// 物理入力を選曲側の意味へ解決する。コントローラーは 1P 機器からの入力として扱う。
+fn resolve_physical(keys: &SceneInputResolver, control: &PhysicalControl) -> ResolvedControl {
+    let device = match control {
+        PhysicalControl::KeyboardKey(_) => W_KEYBOARD_DEVICE_ID,
+        _ => DeviceId(16),
+    };
+    keys.resolve_control(device, control, test_slots())
+}
+
+/// 入力名から物理入力を作って解決する。`Button` / `Axis` で始まる名前はコントローラー。
+fn resolve_named(keys: &SceneInputResolver, name: &str) -> ResolvedControl {
+    let control = if name.starts_with("Button") || name.starts_with("Axis") {
+        PhysicalControl::GamepadButton(name.into())
+    } else {
+        PhysicalControl::KeyboardKey(name.into())
+    };
+    resolve_physical(keys, &control)
+}
+
+/// 指定機器のコントローラー入力を選曲オプション用の 14K 相当レーン (9K は 9K レーン) へ解決する。
+fn option_lane_for(
+    input: &ProfileInputConfig,
+    slots: crate::input::gamepad::GamepadSlotMap,
+    device: DeviceId,
+    name: &str,
+) -> Option<Lane> {
+    let keys = SceneInputResolver::from_profile(input);
+    let control = keys.resolve_control(device, &PhysicalControl::GamepadButton(name.into()), slots);
+    if control.is_nine_key() { control.nine_key_lane() } else { control.option_lane() }
+}
+
+/// 押下中の入力元をそれぞれ解決して集約した E1 / E2 / E1〜E4 ホールド。
+fn hold_state(
+    runtime: &AppInputRuntime,
+    keys: &SceneInputResolver,
+) -> (bool, bool, HashSet<InputActionConfig>) {
+    select_hold_state_from_resolved(
+        runtime
+            .pressed_sources()
+            .map(|(device, control)| keys.resolve_control(device, control, test_slots())),
+    )
+}
+
+/// 入力名の集合 (キーボード / 1P コントローラー) を解決して集約したホールド。
+fn hold_state_named(
+    pressed: &HashSet<String>,
+    keys: &SceneInputResolver,
+) -> (bool, bool, HashSet<InputActionConfig>) {
+    select_hold_state_from_resolved(pressed.iter().map(|name| resolve_named(keys, name)))
+}
+
+/// キーボードの物理キーを選曲側の意味へ解決する。
+fn resolve_key(keys: &SceneInputResolver, code: KeyCode) -> ResolvedControl {
+    resolve_physical(keys, &physical_key_to_control(PhysicalKey::Code(code)).unwrap())
+}
+
+/// 入力名の押下を、プレイ文脈なしで共通入口から解決する。
+fn resolve_named_input(keys: &SceneInputResolver, name: &str) -> input_resolve::ResolvedInput {
+    let physical = if name.starts_with("Button") || name.starts_with("Axis") {
+        PhysicalControl::GamepadButton(name.into())
+    } else {
+        PhysicalControl::KeyboardKey(name.into())
+    };
+    let device = match physical {
+        PhysicalControl::KeyboardKey(_) => W_KEYBOARD_DEVICE_ID,
+        _ => DeviceId(16),
+    };
+    let event = ControlInputEvent {
+        device,
+        physical: Some(physical),
+        pressed: true,
+        repeat: false,
+        timestamp: bmz_gameplay::input::backend::DeviceTimestamp::MonotonicNs(1),
+        synthesized_analog_axis: false,
+    };
+    input_resolve::resolve_input(keys, None, test_slots(), event)
+}
+
+/// 機器未割り当てのまま、選曲側とプレイ側の両方で解決した押下。
+fn resolved_play_press(
+    keys: &SceneInputResolver,
+    play_input: &PlayOptionInput,
+    device: DeviceId,
+    control: &PhysicalControl,
+) -> input_resolve::ResolvedInput {
+    let event = ControlInputEvent {
+        device,
+        physical: Some(control.clone()),
+        pressed: true,
+        repeat: false,
+        timestamp: bmz_gameplay::input::backend::DeviceTimestamp::MonotonicNs(1),
+        synthesized_analog_axis: false,
+    };
+    input_resolve::resolve_input(
+        keys,
+        Some(play_input),
+        crate::input::gamepad::GamepadSlotMap::default(),
+        event,
+    )
+}
+
+/// 旧来の (device, control) 形式のテスト入力を、共通入口で解決してから判定する。
+fn play_option_for(
+    device: DeviceId,
+    control: &PhysicalControl,
     e1_held: bool,
     e2_held: bool,
-    _keys: &SelectKeyBindings,
-    play_input: &PlayOptionInput,
+    play_input: Option<&PlayOptionInput>,
     input: &ProfileInputConfig,
 ) -> Option<PlayOptionControl> {
+    let keys = SceneInputResolver::from_profile(input);
+    let play_input = play_input?;
     play_option_control_for_input(
-        W_KEYBOARD_DEVICE_ID,
-        &PhysicalControl::KeyboardKey(control.to_string()),
+        &resolved_play_press(&keys, play_input, device, control),
         e1_held,
         e2_held,
         Some(play_input),
@@ -85,7 +193,24 @@ fn keyboard_play_option(
     )
 }
 
-fn select_keys_with_full_2p_bindings() -> SelectKeyBindings {
+fn keyboard_play_option(
+    control: &str,
+    e1_held: bool,
+    e2_held: bool,
+    keys: &SceneInputResolver,
+    play_input: &PlayOptionInput,
+    input: &ProfileInputConfig,
+) -> Option<PlayOptionControl> {
+    let resolved = resolved_play_press(
+        keys,
+        play_input,
+        W_KEYBOARD_DEVICE_ID,
+        &PhysicalControl::KeyboardKey(control.to_string()),
+    );
+    play_option_control_for_input(&resolved, e1_held, e2_held, Some(play_input), input)
+}
+
+fn select_keys_with_full_2p_bindings() -> SceneInputResolver {
     let mut input = crate::config::play_input::default_profile_input();
     let key = KeyMode::K14.play_map_key().to_string();
     input.play.insert(
@@ -99,7 +224,7 @@ fn select_keys_with_full_2p_bindings() -> SelectKeyBindings {
     let play14 = input.play.get_mut(&key).expect("14K bindings");
     play14.bindings.push(crate::config::play_input::play_binding("P2K6", LaneConfig::Key13));
     play14.bindings.push(crate::config::play_input::play_binding("P2K7", LaneConfig::Key14));
-    SelectKeyBindings::from_profile(&input)
+    SceneInputResolver::from_profile(&input)
 }
 
 fn chart_row_with_mode(index: usize, mode: &str) -> SelectItem {
@@ -233,6 +358,70 @@ fn best_score_with_replay(ex_score: u32, replay_path: &str) -> BestScoreSummary 
     }
 }
 
+#[cfg(target_os = "windows")]
+impl WinitApp {
+    /// テスト用: 物理入力を、現在の画面・プレイセッション・機器割り当てで共通入口から解決する。
+    /// コントローラーは DeviceId(16) からの入力として扱う。
+    fn test_input(
+        &self,
+        control: &PhysicalControl,
+        pressed: bool,
+        repeat: bool,
+    ) -> input_resolve::ResolvedInput {
+        let device = match control {
+            PhysicalControl::KeyboardKey(_) => W_KEYBOARD_DEVICE_ID,
+            _ => DeviceId(16),
+        };
+        self.test_device_input(device, control, pressed, repeat)
+    }
+
+    /// テスト用: プロファイルの入力設定と 1P / 2P の割り当てを直接変えた後、
+    /// 設定保存・機器更新と同じく resolver とスロットを作り直す。
+    fn test_apply_input_config(&mut self) {
+        self.select.select_keys = SceneInputResolver::from_profile(&self.boot.profile_config.input);
+        let slots =
+            resolve_gamepad_runtime_slots(&self.boot.app_config.input, self.gamepad.as_ref());
+        self.update_gamepad_slot_assignment(
+            crate::input::gamepad::GamepadSlotMap::from_device_ids(slots),
+        );
+        self.sync_select_holds_from_pressed_controls();
+    }
+
+    /// テスト用: キーボードのキー名を選曲オプション操作として解決して適用する。
+    fn test_apply_keyboard_option(&mut self, name: &str) -> bool {
+        let control =
+            *self.test_input(&PhysicalControl::KeyboardKey(name.into()), true, false).scene();
+        self.apply_play_option_input(&control)
+    }
+
+    /// テスト用: 指定機器のボタンを選曲オプション操作として解決して適用する。
+    fn test_apply_gamepad_option(&mut self, device: DeviceId, name: &str) -> bool {
+        let control = *self
+            .test_device_input(device, &PhysicalControl::GamepadButton(name.into()), true, false)
+            .scene();
+        self.apply_play_option_input(&control)
+    }
+
+    fn test_device_input(
+        &self,
+        device: DeviceId,
+        control: &PhysicalControl,
+        pressed: bool,
+        repeat: bool,
+    ) -> input_resolve::ResolvedInput {
+        self.resolve_control_event(ControlInputEvent {
+            device,
+            physical: Some(control.clone()),
+            pressed,
+            repeat,
+            timestamp: bmz_gameplay::input::backend::DeviceTimestamp::MonotonicNs(1),
+            synthesized_analog_axis: false,
+        })
+    }
+}
+
+#[path = "tests/autoplay_folder.rs"]
+mod autoplay_folder;
 #[path = "tests/boot_chart.rs"]
 mod boot_chart;
 #[path = "tests/course.rs"]
@@ -244,6 +433,8 @@ mod course_sources;
 mod course_transitions;
 #[path = "tests/decide_difficulty.rs"]
 mod decide_difficulty;
+#[path = "tests/frame_stalls.rs"]
+mod frame_stalls;
 #[path = "tests/play.rs"]
 mod play;
 #[path = "tests/play_chart_length.rs"]

@@ -5,6 +5,7 @@ use bmz_render::renderer::{RenderFrameTimings, RenderSurfaceStatus, WgpuPresentM
 use crate::i18n::{FluentArgs, Localizer};
 
 pub(super) struct FrameRuntime {
+    pub(super) last_frame_rendered: bool,
     last_present: Option<Instant>,
     present_window: Instant,
     present_intervals: bmz_core::latency::LatencyHistogram,
@@ -30,6 +31,7 @@ pub(super) enum FrameSchedule {
 impl FrameRuntime {
     pub(super) fn new(now: Instant) -> Self {
         Self {
+            last_frame_rendered: false,
             last_present: None,
             present_window: now,
             present_intervals: Default::default(),
@@ -136,7 +138,8 @@ impl FrameRuntime {
         now: Instant,
         status: Option<RenderSurfaceStatus>,
     ) {
-        if status == Some(RenderSurfaceStatus::Rendered) {
+        self.last_frame_rendered = status == Some(RenderSurfaceStatus::Rendered);
+        if self.last_frame_rendered {
             if tracing::enabled!(tracing::Level::DEBUG) {
                 if let Some(last) = self.last_present.replace(now) {
                     self.present_intervals
@@ -940,6 +943,13 @@ mod tests {
             started_at + Duration::from_secs(1),
             Some(RenderSurfaceStatus::Rendered),
         );
+        assert_eq!(runtime.current_fps(), 1);
+        assert!(runtime.last_frame_rendered);
+        runtime.record_surface_status(
+            started_at + Duration::from_secs(1),
+            Some(RenderSurfaceStatus::Recovering),
+        );
+        assert!(!runtime.last_frame_rendered);
         assert_eq!(runtime.current_fps(), 1);
     }
 

@@ -22,7 +22,15 @@ pub(super) fn parse_ir_command(rest: &[String]) -> Result<Command> {
                     other => bail!("unknown flag for ir login: {other}"),
                 }
             }
-            let email = email.ok_or_else(|| anyhow::anyhow!("ir login requires --id <ID>"))?;
+            let email = if crate::ir::bokutachi::is_provider(&provider) {
+                anyhow::ensure!(
+                    email.is_none() && password.is_none(),
+                    "Bokutachi uses an API key prompted on stdin; omit --id, --email and --password"
+                );
+                String::new()
+            } else {
+                email.ok_or_else(|| anyhow::anyhow!("ir login requires --id <ID>"))?
+            };
             Ok(Command::Ir(IrCommand::Login { email, password, base_url, provider }))
         }
         Some("logout") => {
