@@ -32,7 +32,7 @@ impl Builder {
             if !self.image(&part, path.into_iter().collect(), 0, None) {
                 self.push(
                     "text",
-                    json!({"id":part,"constantText":label,"size":height.round() as i32}),
+                    json!({"id":part,"constantText":label,"size":self.element_height(10,height).round() as i32}),
                 );
             }
         }
@@ -76,7 +76,11 @@ impl Builder {
                         if w <= 0.0 {
                             continue;
                         }
-                        let rect = self.rect(px + dx, y, w, height);
+                        let rect = self.group_rect(
+                            10,
+                            [left + dx, y, front + width * f64::from(digits) + unit, height],
+                            [px + dx, y, w, height],
+                        );
                         let dest = self.destination(10, part, rect, Some(46), Some(1000));
                         dest["draw"] = json!(if is_label {
                             format!("{condition} and number(525) != 0")

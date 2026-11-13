@@ -5,6 +5,7 @@ mod completion;
 mod extras;
 mod hud;
 mod information;
+pub(super) mod offsets;
 
 /// beatoraja's common play offsets that BMZ shows for every play skin.
 const OFFSET_LIFT: i32 = 3;
@@ -28,6 +29,7 @@ pub(super) struct Builder {
     lane_cover: LaneCoverChoice,
     destinations: BTreeMap<i32, Vec<Json>>,
     source_ids: BTreeMap<(Vec<String>, usize), String>,
+    element_offsets: BTreeMap<String, LuaSkinOffsetValue>,
 }
 impl Builder {
     pub fn new(
@@ -36,6 +38,7 @@ impl Builder {
         resources: Resources,
         context: &SkinPathContext,
         lane_cover: LaneCoverChoice,
+        element_offsets: &BTreeMap<String, LuaSkinOffsetValue>,
     ) -> Result<Self> {
         let lane_covers = customize::lane_cover_names(context);
         let mut document = eval.definition.header(&eval.available, &lane_covers);
@@ -53,6 +56,7 @@ impl Builder {
             lane_cover,
             destinations: BTreeMap::new(),
             source_ids: BTreeMap::new(),
+            element_offsets: element_offsets.clone(),
         })
     }
     fn push(&mut self, field: &str, value: Json) {
@@ -320,7 +324,10 @@ impl Builder {
                     } else {
                         0.0
                     };
-                    let rect = self.rect(lane.x + dx - extra / 2.0, y, lane.width + extra, h);
+                    let rect = self.element_rect(
+                        pipeline,
+                        [lane.x + dx - extra / 2.0, y, lane.width + extra, h],
+                    );
                     let dest = self.destination(pipeline, &id, rect.clone(), timer, None);
                     if matches!(pipeline, 8 | 31) {
                         dest["offset"] = json!(OFFSET_LIFT);
@@ -359,7 +366,10 @@ impl Builder {
                     self.destination(
                         45,
                         &id,
-                        self.rect(lane.x + lane.width / 2.0 + dx, self.layout.judge_y + dy, w, h),
+                        self.element_rect(
+                            45,
+                            [lane.x + lane.width / 2.0 + dx, self.layout.judge_y + dy, w, h],
+                        ),
                         Some(timer),
                         (!long).then_some(cycle),
                     )["offset"] = json!(OFFSET_LIFT);
@@ -372,7 +382,7 @@ impl Builder {
         let [x, y, w, h] = self.area("media")?;
         self.document["bga"] = json!({"id":"qw-bga"});
         for dx in self.alt_offsets("alt-media", 0)? {
-            self.destination(0, "qw-bga", self.rect(x + dx, y, w, h), None, None);
+            self.destination(0, "qw-bga", self.element_rect(0, [x + dx, y, w, h]), None, None);
         }
         for index in 0..256 {
             let values = self.eval.list("point", &format!("paintProperty{index}"))?;
@@ -549,10 +559,11 @@ impl Builder {
                 Ok(self.resources.frame(&format!("Paint/{prefix} {qw}"), frame, ""))
             })?;
             self.image(&id, paths, cycle, None);
-            let mut last = self.rect(x, y, w, h);
+            let first = self.element_rect(15, [x, y, w, h]);
+            let mut last = first.clone();
             last["time"] = json!(duration);
             images.push(json!({"id":id,"loop":-1,"filter":1,"offsets":[OFFSET_LIFT,OFFSET_JUDGE],
-                "dst":[self.rect(x,y,w,h),last]}));
+                "dst":[first,last]}));
         }
         self.push(
             "judge",
@@ -563,6 +574,7 @@ impl Builder {
         Ok(())
     }
     fn hud(&mut self) -> Result<()> {
+        let count_bounds = self.judgment_count_bounds()?;
         for (pipeline, name, bin, prefix_fn, prefix, reference, digits) in [
             (9, "band", "binBand", "_GetBandBin", "C", 104, 5),
             (11, "stand", "binStand", "_GetStandBin", "S", 71, 6),
@@ -654,7 +666,12 @@ impl Builder {
                     _ => "alt-unused",
                 };
                 for dx in self.alt_offsets(alt, if name == "band" { 2 } else { 0 })? {
-                    let rect = self.rect(x + dx, y, width, height);
+                    let bounds = if (35..=40).contains(&pipeline) {
+                        count_bounds
+                    } else {
+                        [x + dx, y, width * f64::from(digits), height]
+                    };
+                    let rect = self.group_rect(pipeline, bounds, [x + dx, y, width, height]);
                     let destination = self.destination(pipeline, &id, rect, None, None);
                     // beatoraja's Judge offset moves the combo with the judgment.
                     if name == "band" {
@@ -858,7 +875,9 @@ impl Builder {
                     ] {
                         if visible && w > 0.0 {
                             let destination = json!({"id":part,"filter":1,"draw":condition,
-                                "dst":[self.rect(px,y,w,height)]});
+                                "dst":[self.group_rect(pipeline,
+                                    [left - if suffix {0.0} else {unit_width}, y, number_width + unit_width, height],
+                                    [px,y,w,height])]});
                             self.destinations.entry(pipeline).or_default().push(destination);
                         }
                     }
@@ -873,7 +892,7 @@ impl Builder {
                 let infinity_width =
                     self.point("judgmentVSVisualizerInfinityDrawingLength", width * 2.0)?;
                 if !self.image(&id, path.into_iter().collect(), 0, None) {
-                    self.push("text", json!({"id":id,"constantText":"∞","size":height as i32}));
+                    self.push("text", json!({"id":id,"constantText":"∞","size":self.element_height(pipeline, height).round() as i32}));
                 }
                 for dx in offsets {
                     let x = x + dx
@@ -885,7 +904,7 @@ impl Builder {
                     self.destination(
                         pipeline,
                         &id,
-                        self.rect(x, y, infinity_width, height),
+                        self.element_rect(pipeline, [x, y, infinity_width, height]),
                         None,
                         None,
                     )["draw"] = json!(format!("number({whole_ref}) < 0"));

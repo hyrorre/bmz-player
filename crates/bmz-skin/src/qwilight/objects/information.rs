@@ -38,7 +38,7 @@ impl Builder {
                 _ => 0.0,
             };
             let id = format!("qw-text-{name}");
-            let mut text = json!({"id":id,"ref":reference,"size":size.round() as i32,"align":align,"overflow":1});
+            let mut text = json!({"id":id,"ref":reference,"size":self.element_height(pipeline,size).round() as i32,"align":align,"overflow":1});
             if name == "levelText" {
                 text["value_expr"] = json!("bmz:play_level");
             }
@@ -54,10 +54,18 @@ impl Builder {
                     self.eval.definition.text("paint", &paint).as_deref().unwrap_or("White"),
                 );
                 for dx in self.alt_offsets(&format!("alt-{name}"), 0)? {
-                    let mut rect = self.rect(x + dx, y, width, size);
+                    let left = x + dx
+                        - match align {
+                            1 => width / 2.0,
+                            2 => width,
+                            _ => 0.0,
+                        };
+                    let mut rect =
+                        self.group_rect(pipeline, [left, y, width, size], [x + dx, y, width, size]);
                     for (component, value) in ["r", "g", "b", "a"].into_iter().zip(color) {
                         rect[component] = json!(value);
                     }
+                    rect["a"] = json!(self.element_alpha(pipeline, i32::from(color[3])));
                     let destination = self.destination(pipeline, &id, rect, None, None);
                     if variants > 1 {
                         destination["op"] = json!([150 + difficulty]);
@@ -75,8 +83,13 @@ impl Builder {
             let id = format!("qw-level-{difficulty}");
             if w > 0.0 && h > 0.0 && self.image(&id, paths, cycle, None) {
                 for dx in self.alt_offsets("alt-level", 0)? {
-                    self.destination(60, &id, self.rect(x + dx, y, w, h), None, None)["op"] =
-                        json!([150 + difficulty]);
+                    self.destination(
+                        60,
+                        &id,
+                        self.element_rect(60, [x + dx, y, w, h]),
+                        None,
+                        None,
+                    )["op"] = json!([150 + difficulty]);
                 }
             }
         }
@@ -96,12 +109,18 @@ impl Builder {
                 "qwilightVisualizer",
                 json!({"id":id,"kind":kind,
                 "system":self.point(&format!("{name}System"),3.0)? as i32,
-                "lineWidth":self.point(&format!("{name}ContentsLength"),1.0)?.round() as i32,
-                "lineHeight":self.point(&format!("{name}ContentsHeight"),h)?.round() as i32}),
+                "lineWidth":(self.point(&format!("{name}ContentsLength"),1.0)? * (w+f64::from(self.element_offset(pipeline).w)).max(1.0)/w).round() as i32,
+                "lineHeight":(self.point(&format!("{name}ContentsHeight"),h)? * self.element_height(pipeline,h)/h).round() as i32,
+                "opacity": if pipeline == 1 { Some((0.1+f64::from(self.element_offset(pipeline).a)/255.0).clamp(0.0,1.0)) } else { None }}),
             );
             for dx in self.alt_offsets(alt, 0)? {
-                let destination =
-                    self.destination(pipeline, &id, self.rect(x + dx, y, w, h), None, None);
+                let destination = self.destination(
+                    pipeline,
+                    &id,
+                    self.element_rect(pipeline, [x + dx, y, w, h]),
+                    None,
+                    None,
+                );
                 if pipeline == 43 {
                     destination["offset"] = json!(OFFSET_LIFT);
                 }
@@ -138,7 +157,13 @@ impl Builder {
                     2 => 4.0 * w,
                     _ => 0.0,
                 };
-            self.destination(44, id, self.rect(left, y, w, h), None, None);
+            self.destination(
+                44,
+                id,
+                self.group_rect(44, [left, y, 4.0 * w, h], [left, y, w, h]),
+                None,
+                None,
+            );
         }
         Ok(())
     }
@@ -170,7 +195,7 @@ impl Builder {
                 0,
                 None,
             ) {
-                self.push("text", json!({"id":id,"constantText":fallback,"size":h.round() as i32}));
+                self.push("text", json!({"id":id,"constantText":fallback,"size":self.element_height(29,h).round() as i32}));
             }
         }
         let colon = self.point("hmsColonDrawingLength", w)?;
@@ -200,6 +225,7 @@ impl Builder {
                             2 => width,
                             _ => 0.0,
                         };
+                    let bounds = [left, y, width, h];
                     for (name, length, cell) in [
                         ("minutes", m as f64 * w, w),
                         ("colon", colon, colon),
@@ -212,7 +238,7 @@ impl Builder {
                         self.destination(
                             29,
                             &format!("qw-time-{name}"),
-                            self.rect(left, y, cell, h),
+                            self.group_rect(29, bounds, [left, y, cell, h]),
                             None,
                             None,
                         )["draw"] = json!(condition);

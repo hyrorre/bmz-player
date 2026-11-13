@@ -18,6 +18,9 @@ pub struct SkinQwilightVisualizerDef {
     pub line_width: i32,
     #[serde(default = "default_grid_division", rename = "lineHeight")]
     pub line_height: i32,
+    /// Optional spectrum opacity. Omitted values retain Qwilight's 10% default.
+    #[serde(default)]
+    pub opacity: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

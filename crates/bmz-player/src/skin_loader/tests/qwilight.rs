@@ -8,6 +8,9 @@ use bmz_render::snapshot::{
 #[path = "qwilight_visuals.rs"]
 mod visual_regressions;
 
+#[path = "qwilight_offsets.rs"]
+mod element_offsets;
+
 #[test]
 fn qwilight_unequal_frame_sizes_fill_each_atlas_cell() {
     use std::io::Write;
@@ -352,6 +355,16 @@ fn decode_qwilight(
     mode: i32,
     options: BTreeMap<String, String>,
 ) -> DecodedSkin {
+    decode_qwilight_with_offsets(path, root, mode, options, BTreeMap::new())
+}
+
+fn decode_qwilight_with_offsets(
+    path: &Path,
+    root: &Path,
+    mode: i32,
+    options: BTreeMap<String, String>,
+    offsets: BTreeMap<String, bmz_skin::LuaSkinOffsetValue>,
+) -> DecodedSkin {
     decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
         pinned_sources: None,
         skin_path: path,
@@ -360,6 +373,7 @@ fn decode_qwilight(
         files: &BTreeMap::new(),
         runtime_state: &LuaLoadRuntimeState {
             number_values: BTreeMap::from([(bmz_render::skin::SKIN_REF_BMZ_KEY_MODE, mode)]),
+            offset_values: offsets,
             ..Default::default()
         },
         library_roots: &[root.to_path_buf()],

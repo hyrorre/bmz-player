@@ -181,6 +181,37 @@ LIFTを変更すると、ノーツに加えて判定線・押下画像・ボム�
 「All offset(%)」は画面全体、「Notes offset」（30）はノーツ、「Judge offset」（32）は判定画像・コンボ数（`band`）・判定誤差msへ適用します。
 対応する要素を描画しない「Judge Detail offset」と「Bar Line offset」は表示しません。
 
+BMZ独自の要素別調整は「Qwilight elements」の`Qwilight <要素名> offset`に表示します。
+スキンの配置定義がある項目だけを追加し、値はPlay枠・スキン履歴ごとに保存します。
+表示ON/OFFを切り替えても調整値は保持します。既存のQwilight互換調整をLuaへ渡した後に適用し、
+LIFT・共通Judge offsetは引き続き描画時に加わります。第三者製YAML/Lua/画像は変更しません。
+
+| 対象 | 調整単位 |
+|---|---|
+| Judgment / Combo / Timing ms | 判定画像・コンボ・FAST/SLOWのmsをそれぞれ独立 |
+| FAST / SLOW / RATE / Judgment counts | 累計FAST・累計SLOW・比率を独立、判定数6行は一覧全体 |
+| Score / Score rate / Max combo | EXスコア・EXスコアレート・最大コンボを独立 |
+| BPM / HS / Playback speed / Target difference | BPM・表示HS・再生倍率・目標差を独立 |
+| Title / Artist / Genre / Level / Table / Difficulty | 曲情報・譜面レベル・難易度表レベル・バッジを独立 |
+| NPS / Time | NPSと経過・総時間を独立 |
+| Gauge / Gauge percent / Judgment ratio bar | ゲージ・ゲージ%・判定内訳の帯を独立 |
+| Timing / Judgment graph / Spectrum / BGA | 各ビジュアライザーとBGAを独立 |
+| Progress | 進行バーとつまみ・移動範囲を一組 |
+| Bomb / Key beam / Lane timing | ボム・キービーム・レーン別FAST/SLOWを種類ごと、各レーン共通の補正 |
+| Judgment line | 判定線の見た目。yは追加せずLIFTを使う |
+
+- xは右、yは上への移動量、w/hは表示領域の幅・高さへの加算量です。単位はスキン座標のpxです。
+  w/hは領域の中心を基準に拡縮し、各部品の間隔・数字・小数点・単位も同じ倍率で変えます。
+  整数値は最大桁数の領域、条件付きの小数値・時間・msはその桁数の領域を基準にします。
+  テキストのwは表示幅、hは文字サイズも変更します。正の領域を1px未満には縮めません。
+- DPの複製表示はそれぞれの領域、レーン別表示はそれぞれのレーンを基準にし、複製間・レーン間の距離を拡大しません。
+  幅0の非表示レーンはサイズ補正で復活させません。判定線の厚さを変えても上端は固定します。
+- aは不透明度への加算量（255で100%相当）です。通常は0が元の表示、-255で透明です。
+  スペクトラムは既定10%なので、正のaで濃くできます。最終値は0〜100%に制限します。
+  判定誤差msの時間減衰やレーン別FAST/SLOWのフェードは補正後の不透明度に掛かります。
+- フルコン/PERFECT/CLEAR演出、AUTO PLAY、背景・フレーム・`paintProperty`装飾は個別調整の対象外です。
+  装飾画像に焼き込まれたラベルは移動しません。描画順・表示条件・判定処理は変更しません。
+
 **レーンカバー（Qwilightのveil）**
 
 - BMZのSUDDEN+でレーンの上側を隠すときに描画します。カバーの下端がSUDDEN+の位置になり、1Pのレーン幅に合わせて縦横比を保ちます。

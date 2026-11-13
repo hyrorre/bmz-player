@@ -142,6 +142,8 @@ impl Definition {
             .collect();
         visibility::properties(&mut properties, &mut labels);
         properties.push(customize::lane_cover_property(lane_covers));
+        let mut offsets = customize::adjustment_defs(self);
+        offsets.extend(objects::offsets::definitions(self));
         json!({"type": 0,
             // Qwilight's transitions belong to the separate @theme. Use BMZ's
             // default fade for play-only imports; don't start notes under black.
@@ -149,7 +151,7 @@ impl Definition {
             "loadstart": 500, "playstart": 1000, "fadeout": 500, "close": 500,
             "name": self.text("format", "title-1041").or_else(|| self.text("format", "title")).unwrap_or_else(|| "Qwilight play skin".into()),
             "property": properties, "propertyLabels": labels,
-            "offset": customize::adjustment_defs(self),
+            "offset": offsets,
             "source": [], "image": [], "destination": [], "slider": [],
             "value": [], "text": [], "panel": [], "judge": [], "graph": [],
             "qwilightVisualizer": [], "sourceFrames": {}
@@ -187,7 +189,8 @@ pub fn load_qwilight_play_skin(
     let layout = layout::Layout::build(&mut eval, mode)?;
     let resources = resources::Resources::new(context, &eval)?;
     let lane_cover = customize::LaneCoverChoice::from_options(options);
-    let mut builder = objects::Builder::new(eval, layout, resources, context, lane_cover)?;
+    let mut builder =
+        objects::Builder::new(eval, layout, resources, context, lane_cover, &state.offset_values)?;
     builder.build()?;
     let document =
         serde_json::from_value(builder.document).context("invalid converted Qwilight play skin")?;

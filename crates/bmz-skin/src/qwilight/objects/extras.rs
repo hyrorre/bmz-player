@@ -49,7 +49,13 @@ impl Builder {
                     };
                     self.document["image"].as_array_mut().unwrap().last_mut().unwrap()["qwilightAnimation"] = json!({"mode":mode,"count":frames,"fps":fps as u32,"index":variant,"system":if mode=="ratio" {system^1} else {system},"looping":i32::from(beat)});
                     for dx in self.alt_offsets(alt, 2)? {
-                        self.destination(pipeline, &id, self.rect(x + dx, y, w, h), None, None);
+                        self.destination(
+                            pipeline,
+                            &id,
+                            self.element_rect(pipeline, [x + dx, y, w, h]),
+                            None,
+                            None,
+                        );
                     }
                 }
             }
@@ -67,9 +73,22 @@ impl Builder {
         let cw = self.point("statusSliderContentsLength", w)?;
         let ch = self.point("statusSliderContentsHeight", h)?;
         let system = self.point("statusSliderSystem", 0.0)? as i32;
+        let offset = self.element_offset(28);
+        let mut bounds =
+            if offset.w != 0 || offset.h != 0 { self.area("status")? } else { [x, y, w, h] };
+        if bounds[2] <= 0.0 || bounds[3] <= 0.0 {
+            bounds = [x, y, w, h];
+        }
+        let axis = if system < 2 { 3 } else { 2 };
+        let delta = if system < 2 { offset.h } else { offset.w };
+        let scale = if bounds[axis] > 0.0 {
+            (bounds[axis] + f64::from(delta)).max(1.0) / bounds[axis]
+        } else {
+            1.0
+        };
         let src = self.source(vec![path], 1);
         self.push("slider",json!({"id":"qw-status-thumb","src":src,"w":-1,"h":-1,"type":6,
-            "angle":match system {0=>0,1=>2,2=>3,_=>1},"range":(if system<2 {h} else {w}).round() as i32,"changeable":false}));
+            "angle":match system {0=>0,1=>2,2=>3,_=>1},"range":((if system<2 {h} else {w})*scale).round() as i32,"changeable":false}));
         let (x, y) = match system {
             0 => (x, y + h - ch / 2.0),
             1 => (x, y - ch / 2.0),
@@ -77,7 +96,17 @@ impl Builder {
             _ => (x - cw / 2.0, y),
         };
         for dx in self.alt_offsets("alt-status-slider", 0)? {
-            self.destination(58, "qw-status-thumb", self.rect(x + dx, y, cw, ch), None, None);
+            self.destination(
+                58,
+                "qw-status-thumb",
+                self.group_rect(
+                    28,
+                    [bounds[0] + dx, bounds[1], bounds[2], bounds[3]],
+                    [x + dx, y, cw, ch],
+                ),
+                None,
+                None,
+            );
         }
         Ok(())
     }
@@ -121,8 +150,13 @@ impl Builder {
             let id = format!("qw-lane-timing-{i}");
             if self.image(&id, paths, cycle, None) {
                 self.document["image"].as_array_mut().unwrap().last_mut().unwrap()["qwilightAnimation"] = json!({"mode":"laneTiming","count":count+1,"fps":fps as u32,"lane":lane.timer_index});
-                self.destination(57, &id, self.rect(lane.x, y, lane.width, h), None, None)["offset"] =
-                    json!(OFFSET_LIFT);
+                self.destination(
+                    57,
+                    &id,
+                    self.element_rect(57, [lane.x, y, lane.width, h]),
+                    None,
+                    None,
+                )["offset"] = json!(OFFSET_LIFT);
             }
         }
         Ok(())
@@ -252,18 +286,26 @@ impl Builder {
                         self.destination(
                             pipeline,
                             &number,
-                            self.rect(left + dx + if pipeline == 46 { u } else { 0.0 }, y, w, h),
+                            self.group_rect(
+                                pipeline,
+                                [left + dx, y, length, h],
+                                [left + dx + if pipeline == 46 { u } else { 0.0 }, y, w, h],
+                            ),
                             None,
                             None,
                         )["draw"] = json!(draw);
                         self.destination(
                             pipeline,
                             &symbol,
-                            self.rect(
-                                left + dx + if pipeline == 34 { length - u } else { 0.0 },
-                                y,
-                                u,
-                                h,
+                            self.group_rect(
+                                pipeline,
+                                [left + dx, y, length, h],
+                                [
+                                    left + dx + if pipeline == 34 { length - u } else { 0.0 },
+                                    y,
+                                    u,
+                                    h,
+                                ],
                             ),
                             None,
                             None,

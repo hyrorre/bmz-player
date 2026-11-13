@@ -36,7 +36,12 @@ pub(in crate::skin::document_render) fn qwilight_visualizer_items(
                     1.0 - height,
                     1.0 / 32.0,
                     height,
-                    Color::rgba(1.0, 1.0, 1.0, 0.1),
+                    Color::rgba(
+                        1.0,
+                        1.0,
+                        1.0,
+                        visualizer.opacity.filter(|v| v.is_finite()).unwrap_or(0.1).clamp(0.0, 1.0),
+                    ),
                 );
             }
         }
