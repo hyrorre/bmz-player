@@ -178,7 +178,7 @@ impl WgpuRenderer {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        PreparedTexture { texture, view, width: size.width, height: size.height }
+        PreparedTexture { texture, view, width: size.width, height: size.height, yuv: None }
     }
 
     fn ambient_binding(

@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-14 | [動画BGAのバッファ再利用・表示領域に応じた縮小・GPU色変換](2026/2026-11-14-video-bga-transfer-followups.md) |
 | 2026-11-14 | [書庫内動画の世代テストとFFmpegの色変換差](2026/2026-11-14-archive-video-color-test.md) |
 | 2026-11-14 | [動画BGAの縮小とFast Vsyncの表示間隔](2026/2026-11-14-video-bga-playback-resolution.md) |
 | 2026-11-14 | [v0.5.2のリリースで失敗したBokutachiのPrimary設定テスト](2026/2026-11-14-release-bokutachi-primary-test.md) |

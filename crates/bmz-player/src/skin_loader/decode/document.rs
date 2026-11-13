@@ -186,7 +186,7 @@ pub(in crate::skin_loader) fn load_skin_video_first_frame_rgba(
 ) -> Result<RgbaImageAsset> {
     let frame = bmz_video::decode_first_frame(path)
         .with_context(|| format!("failed to decode first video frame: {}", path.display()))?;
-    Ok(RgbaImageAsset { width: frame.width, height: frame.height, pixels: frame.rgba })
+    Ok(RgbaImageAsset { width: frame.width, height: frame.height, pixels: frame.pixels })
 }
 
 pub(in crate::skin_loader) struct LoadedSkinDocumentForDecode {

@@ -48,6 +48,7 @@ struct RetiredDecoder {
     pending: VecDeque<DecodedFrame>,
     current: Option<DecodedFrame>,
     clocked: Option<Arc<Mutex<ClockedFrameState>>>,
+    _channel_decode: Arc<ChannelDecodeState>,
     // Released after the thread and frame buffers, including on error.
     _permit: Permit,
 }
@@ -101,6 +102,7 @@ impl Retirement {
             pending: std::mem::take(&mut decoder.pending),
             current: decoder.current.take(),
             clocked: decoder.clocked_frames.take(),
+            _channel_decode: std::mem::take(&mut decoder.channel_decode),
             _permit: self.permit,
         };
         if let Err(error) = self.sender.send(retired) {

@@ -161,7 +161,7 @@ pub(crate) fn rgba_frame_from_video(
     rgba_frame_from_video_with_scaler(decoded, pts_us, &mut scaler, None, [0; 2])
 }
 
-fn rgba_output_size([width, height]: [u32; 2], [canvas_w, canvas_h]: [u32; 2]) -> [u32; 2] {
+fn video_output_size([width, height]: [u32; 2], [canvas_w, canvas_h]: [u32; 2]) -> [u32; 2] {
     if canvas_w == 0 || canvas_h == 0 || width <= canvas_w || height <= canvas_h {
         return [width, height];
     }
@@ -174,6 +174,69 @@ fn rgba_output_size([width, height]: [u32; 2], [canvas_w, canvas_h]: [u32; 2]) -
     } else {
         [canvas_w, height_at_canvas_w.div_ceil(u64::from(width)) as u32]
     }
+}
+
+pub(crate) fn playback_frame(
+    decoded: &ffmpeg_next::frame::Video,
+    pts_us: i64,
+    scaler: &mut Option<ffmpeg_next::software::scaling::context::Context>,
+    mut pixels: Option<Vec<u8>>,
+    canvas_size: [u32; 2],
+    allow_yuv: bool,
+) -> Result<DecodedFrame> {
+    use ffmpeg_next::{color, format::Pixel};
+    let [width, height] = [decoded.width(), decoded.height()];
+    validate_video_dimensions(width, height)?;
+    // The existing swscale conversion uses limited-range BT.601 for untagged
+    // 8-bit YUV. Keep other matrices and ranges on the existing conversion path.
+    if allow_yuv
+        && decoded.format() == Pixel::YUV420P
+        && matches!(decoded.color_range(), color::Range::Unspecified | color::Range::MPEG)
+        && matches!(
+            decoded.color_space(),
+            color::Space::Unspecified | color::Space::SMPTE170M | color::Space::BT470BG
+        )
+        && matches!(
+            decoded.color_transfer_characteristic(),
+            color::TransferCharacteristic::Unspecified
+                | color::TransferCharacteristic::BT709
+                | color::TransferCharacteristic::SMPTE170M
+                | color::TransferCharacteristic::IEC61966_2_1
+        )
+        // The conversion pass targets large transfers that bypass the existing
+        // reusable RGBA staging buffers (8 MiB per slot).
+        && u64::from(width) * u64::from(height) > 2 * 1024 * 1024
+        && height > 0
+        && width.is_multiple_of(2)
+        && height.is_multiple_of(2)
+        && video_output_size([width, height], canvas_size) == [width, height]
+        && decoded.planes() == 3
+        && (0..3).all(|plane| {
+            decoded.stride(plane) >= decoded.plane_width(plane) as usize
+                && decoded.stride(plane) <= i32::MAX as usize
+        })
+    {
+        let mut bytes = pixels.take().unwrap_or_default();
+        bytes.clear();
+        bytes.reserve(width as usize * height as usize * 3 / 2);
+        for plane in 0..3 {
+            let width = decoded.plane_width(plane) as usize;
+            let stride = decoded.stride(plane);
+            let rows = decoded.plane_height(plane) as usize;
+            for row in decoded.data(plane).chunks_exact(stride).take(rows) {
+                bytes.extend_from_slice(&row[..width]);
+            }
+        }
+        return Ok(DecodedFrame {
+            pts_us,
+            pixels: bytes,
+            width,
+            height,
+            source_size: [width, height],
+            format: DecodedPixelFormat::Yuv420,
+        });
+    }
+    rgba_frame_from_video_with_scaler(decoded, pts_us, scaler, pixels, canvas_size)
 }
 
 pub(crate) fn rgba_frame_from_video_with_scaler(
@@ -193,7 +256,7 @@ pub(crate) fn rgba_frame_from_video_with_scaler(
         width: w,
         height: h,
     };
-    let [width, height] = rgba_output_size([w, h], canvas_size);
+    let [width, height] = video_output_size([w, h], canvas_size);
     if scaler.as_ref().is_none_or(|scaler| {
         scaler.input() != &input
             || scaler.output().width != width
@@ -226,7 +289,14 @@ pub(crate) fn rgba_frame_from_video_with_scaler(
     let rgba =
         copy_rgba_frame_data_with_buffer(data, stride, row_bytes, height as usize, rgba_buffer);
 
-    Ok(DecodedFrame { pts_us, rgba, width, height, source_size: [w, h] })
+    Ok(DecodedFrame {
+        pts_us,
+        pixels: rgba,
+        width,
+        height,
+        source_size: [w, h],
+        format: DecodedPixelFormat::Rgba,
+    })
 }
 
 #[cfg(test)]

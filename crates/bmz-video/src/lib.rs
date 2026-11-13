@@ -18,12 +18,20 @@ const CLOCKED_FRAME_WAIT_MAX_SLEEP_US: i64 = 4_000;
 #[derive(Debug, Clone)]
 pub struct DecodedFrame {
     pub pts_us: i64,
-    pub rgba: Vec<u8>,
-    /// Dimensions of the RGBA pixels.
+    pub pixels: Vec<u8>,
+    /// Dimensions of the decoded pixels.
     pub width: u32,
     pub height: u32,
     /// Dimensions before downscaling, used for display geometry.
     pub source_size: [u32; 2],
+    pub format: DecodedPixelFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecodedPixelFormat {
+    Rgba,
+    /// Tightly packed Y, U, then V planes, using limited-range BT.601.
+    Yuv420,
 }
 
 /// Opens a video file, or a song archive entry already read into memory. Seeking and
@@ -169,12 +177,17 @@ enum ClockedFrameWait {
 
 impl VideoBgaDecoder {
     pub fn open(path: &Path) -> Result<Self> {
-        Self::open_inner(path, false, [0; 2])
+        Self::open_inner(path, false, ChannelDecodeState::default())
     }
 
     /// Open a chart video for live playback at the given canvas size.
     pub fn open_for_playback(path: &Path, canvas_size: [u32; 2]) -> Result<Self> {
-        Self::open_inner(path, false, canvas_size)
+        Self::open_inner(path, false, ChannelDecodeState::for_playback(canvas_size, false))
+    }
+
+    /// Allow packed YUV420 for the live renderer when the source is eligible.
+    pub fn open_for_gpu_playback(path: &Path, canvas_size: [u32; 2]) -> Result<Self> {
+        Self::open_inner(path, false, ChannelDecodeState::for_playback(canvas_size, true))
     }
 
     /// Open a decoder that follows the playback clock reported by `poll_frame`.
@@ -183,10 +196,14 @@ impl VideoBgaDecoder {
     /// frames instead of queueing every decoded frame, closer to beatoraja's
     /// SkinSourceMovie behavior.
     pub fn open_following_playback_time(path: &Path) -> Result<Self> {
-        Self::open_inner(path, true, [0; 2])
+        Self::open_inner(path, true, ChannelDecodeState::default())
     }
 
-    fn open_inner(path: &Path, follow_playback_time: bool, canvas_size: [u32; 2]) -> Result<Self> {
+    fn open_inner(
+        path: &Path,
+        follow_playback_time: bool,
+        channel_decode: ChannelDecodeState,
+    ) -> Result<Self> {
         bmz_ffmpeg::ensure_init().map_err(|e| anyhow::anyhow!(e))?;
         let retirement = Some(retirement::Retirement::new()?);
 
@@ -194,8 +211,7 @@ impl VideoBgaDecoder {
         let stop_decode = Arc::new(AtomicBool::new(false));
         let restart_clocked_decode = Arc::new(AtomicBool::new(false));
         let playback_target_us = Arc::new(AtomicI64::new(0));
-        let channel_decode = Arc::new(ChannelDecodeState::default());
-        channel_decode.set_canvas_size(canvas_size);
+        let channel_decode = Arc::new(channel_decode);
         if follow_playback_time {
             let clocked_frames = Arc::new(Mutex::new(ClockedFrameState::default()));
             let thread_playback_target_us = Arc::clone(&playback_target_us);
@@ -286,8 +302,10 @@ impl VideoBgaDecoder {
     /// rewind-and-rebase behavior because it is used by looping skin movie sources.
     pub fn restart_at(&mut self, video_offset_us: i64) {
         let video_offset_us = video_offset_us.max(0);
-        self.pending.clear();
-        self.current = None;
+        self.channel_decode.recycle(self.current.take());
+        for frame in self.pending.drain(..) {
+            self.channel_decode.recycle(Some(frame));
+        }
         self.finished = false;
         self.playback_target_us.store(video_offset_us, Ordering::Release);
 
@@ -296,7 +314,7 @@ impl VideoBgaDecoder {
                 && let Ok(mut state) = frames.lock()
             {
                 if let Some(previous) = state.frame.take() {
-                    recycle_clocked_rgba(&mut state, previous.rgba);
+                    recycle_clocked_rgba(&mut state, previous.pixels);
                 }
                 state.finished = false;
             }
@@ -306,7 +324,9 @@ impl VideoBgaDecoder {
         }
 
         if let Some(receiver) = self.receiver.as_ref() {
-            while receiver.try_recv().is_ok() {}
+            while let Ok(queued) = receiver.try_recv() {
+                self.channel_decode.recycle(Some(queued.frame));
+            }
         }
         // A blocked sender can still publish an old frame after the drain.
         // Its generation lets the receiver discard it after the restart.
@@ -377,6 +397,7 @@ impl VideoBgaDecoder {
         // 複数枚を持っていても presentation order のまま安全に compact する。
         let mut latest_due = None;
         while self.pending.front().is_some_and(|frame| frame.pts_us <= video_offset_us) {
+            self.channel_decode.recycle(latest_due.take());
             latest_due = self.pending.pop_front();
         }
 
@@ -388,9 +409,11 @@ impl VideoBgaDecoder {
             let decode_generation = self.channel_decode.generation();
             loop {
                 match receiver.try_recv() {
-                    Ok(queued) if queued.generation != decode_generation => continue,
+                    Ok(queued) if queued.generation != decode_generation => {
+                        self.channel_decode.recycle(Some(queued.frame));
+                    }
                     Ok(QueuedDecodedFrame { frame, .. }) if frame.pts_us <= video_offset_us => {
-                        latest_due = Some(frame);
+                        self.channel_decode.recycle(latest_due.replace(frame));
                     }
                     Ok(QueuedDecodedFrame { frame, .. }) => {
                         self.pending.push_back(frame);
@@ -405,13 +428,12 @@ impl VideoBgaDecoder {
             }
         }
 
-        // Wake after draining: a decoder parked on a full channel must see the
-        // freed slots now, not at the next frame's poll.
-        self.wake_decoder();
-
         if let Some(frame) = latest_due {
-            self.current = Some(frame);
+            self.channel_decode.recycle(self.current.replace(frame));
         }
+
+        // Publish returned buffers before waking a decoder parked on a full channel.
+        self.wake_decoder();
 
         if self.channel_decode.finished() && self.pending.is_empty() {
             self.finished = true;
@@ -431,7 +453,7 @@ impl VideoBgaDecoder {
         if let Some(frame) = state.frame.take()
             && let Some(previous) = self.current.replace(frame)
         {
-            recycle_clocked_rgba(&mut state, previous.rgba);
+            recycle_clocked_rgba(&mut state, previous.pixels);
         }
         if state.finished && state.frame.is_none() {
             self.finished = true;

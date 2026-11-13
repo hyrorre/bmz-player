@@ -137,7 +137,7 @@ pub(crate) fn publish_clocked_frame(
         .lock()
         .map_err(|_| anyhow::anyhow!("clocked video frame state lock poisoned"))?;
     if let Some(previous) = state.frame.replace(frame) {
-        recycle_clocked_rgba(&mut state, previous.rgba);
+        recycle_clocked_rgba(&mut state, previous.pixels);
     }
     state.finished = false;
     Ok(())

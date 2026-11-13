@@ -1,3 +1,64 @@
+fn collect_video_sample_sizes(
+    commands: &[DrawCommand],
+    [width, height]: [u32; 2],
+    sizes: &mut [Option<(TextureId, [u32; 2])>],
+) {
+    for command in commands {
+        // A draw samples only its UV span. A crop can therefore need the
+        // original sampling density even when its destination is small.
+        let (texture, rect, uv, scale) = match command {
+            DrawCommand::Image { texture, rect, uv, .. } => (*texture, rect, uv, 1.0),
+            DrawCommand::RotatedImage { texture, rect, uv, post_scale, .. } => {
+                (*texture, rect, uv, post_scale.x.abs().max(post_scale.y.abs()).max(1.0))
+            }
+            DrawCommand::Ambient { layers, .. } => {
+                collect_video_sample_sizes(layers, [width, height], sizes);
+                continue;
+            }
+            _ => continue,
+        };
+        if !sizes.iter().flatten().any(|(id, _)| *id == texture) {
+            continue;
+        }
+        let required = |pixels: u32, extent: f32, fraction: f32| {
+            // Round up in steps so an animated destination doesn't rebuild the
+            // decoder scaler and texture on every frame. Degenerate UVs retain
+            // the canvas size, as do sizes above the existing canvas policy.
+            let needed = pixels as f32 * scale * extent.abs() / fraction.abs();
+            if !needed.is_finite() {
+                return pixels;
+            }
+            ((needed / 64.0).ceil() as u32).saturating_mul(64).clamp(1, pixels)
+        };
+        let needed =
+            [required(width, rect.width, uv.width), required(height, rect.height, uv.height)];
+        for (_, size) in sizes.iter_mut().flatten().filter(|(id, _)| *id == texture) {
+            size[0] = size[0].max(needed[0]);
+            size[1] = size[1].max(needed[1]);
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn bga_sampling_accounts_for_crops_and_multiple_draws() {
+    let video = TextureId(crate::plan::CHART_BGA_TEXTURE_BASE);
+    let image = |width, uv_width| DrawCommand::Image {
+        texture: video,
+        rect: Rect { x: 0.0, y: 0.0, width, height: 0.25 },
+        uv: UvRect { x: 0.0, y: 0.0, width: uv_width, height: 1.0 },
+        source_size: None,
+        tint: Color::rgba(1.0, 1.0, 1.0, 1.0),
+        blend: BlendMode::Normal,
+        linear_filter: true,
+    };
+    let mut sizes = [Some((video, [0; 2]))];
+    collect_video_sample_sizes(&[image(0.25, 1.0)], [1280, 720], &mut sizes);
+    assert_eq!(sizes[0], Some((video, [320, 192])));
+    collect_video_sample_sizes(&[image(0.5, 0.5)], [1280, 720], &mut sizes);
+    assert_eq!(sizes[0], Some((video, [1280, 192])));
+}
+
 impl Renderer {
     /// Create a GPU target without a window or presentation clock.
     pub fn attach_offscreen(&mut self, size: SurfaceSize) -> Result<()> {
@@ -176,6 +237,22 @@ impl Renderer {
             self.pending_sprite_sheets.retain(|sheet| sheet.id != id);
             self.pending_textures.push(PendingTexture { id, width, height, rgba: rgba.to_vec() });
         }
+        self.forget_deferred_image(id);
+        Ok(())
+    }
+
+    /// Upload tightly packed limited-range BT.601 Y, U and V planes.
+    pub fn upsert_yuv420_texture(
+        &mut self,
+        id: TextureId,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+    ) -> Result<()> {
+        self.gpu
+            .as_mut()
+            .context("video planes require a GPU")?
+            .upsert_yuv420_texture(id, width, height, pixels)?;
         self.forget_deferred_image(id);
         Ok(())
     }
@@ -732,6 +809,29 @@ impl Renderer {
             let content = CanvasViewport::from_policy(target, policy).content_size();
             [content.width, content.height]
         })
+    }
+
+    /// Required full-texture dimensions for the prepared Play draw commands.
+    /// An absent texture keeps its previous decode size until it is drawn again.
+    pub fn play_video_sample_sizes(&self) -> [Option<(TextureId, [u32; 2])>; 4] {
+        let canvas = self.play_canvas_size();
+        let (Some(AppSceneSnapshot::Play(snapshot)), Some(plan)) =
+            (&self.last_scene, &self.last_plan)
+        else {
+            return [None; 4];
+        };
+        let mut sizes =
+            [snapshot.bga_base, snapshot.bga_layer, snapshot.bga_layer2, snapshot.bga_poor].map(
+                |frame| {
+                    frame
+                        .filter(|frame| frame.is_video)
+                        .map(|frame| (TextureId(frame.texture_id), [0; 2]))
+                },
+            );
+        if !canvas.contains(&0) && sizes.iter().any(Option::is_some) {
+            collect_video_sample_sizes(&plan.commands, canvas, &mut sizes);
+        }
+        sizes.map(|entry| entry.filter(|(_, size)| !size.contains(&0)))
     }
 
     pub fn render_scene(&mut self, scene: AppSceneSnapshot) -> Result<()> {

@@ -277,7 +277,10 @@ fn delayed_audio_image_and_video_decodes_keep_the_loaded_archive_generation() {
     let (old, old_chart) = load(&path);
     let new_frame = write(-8192, [0, 0, 255, 255], 235);
     let (new, new_chart) = load(&path);
-    assert_ne!(old_frame.rgba, new_frame.rgba, "video fixtures must distinguish the generations");
+    assert_ne!(
+        old_frame.pixels, new_frame.pixels,
+        "video fixtures must distinguish the generations"
+    );
     let worker = std::thread::spawn(move || {
         for (source, chart, sample, color, expected_frame) in [
             (old, old_chart, 0.25, [255, 0, 0, 255], old_frame),
@@ -303,7 +306,7 @@ fn delayed_audio_image_and_video_decodes_keep_the_loaded_archive_generation() {
                     (frame.width, frame.height),
                     (expected_frame.width, expected_frame.height)
                 );
-                assert_eq!(frame.rgba, expected_frame.rgba);
+                assert_eq!(frame.pixels, expected_frame.pixels);
             }
         }
     });

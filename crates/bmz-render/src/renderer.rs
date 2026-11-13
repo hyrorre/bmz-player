@@ -36,6 +36,7 @@ mod pipeline;
 mod screenshot;
 mod text;
 mod texture_upload;
+mod video_texture;
 use texture_upload::TextureUploads;
 #[path = "renderer/text/cached_builder.rs"]
 mod text_cached_builder;

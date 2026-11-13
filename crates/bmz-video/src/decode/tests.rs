@@ -38,7 +38,7 @@ fn scaler_rebuilds_when_frame_dimensions_or_pixel_format_change() {
         let frame =
             rgba_frame_from_video_with_scaler(&decoded, 0, &mut scaler, None, [0; 2]).unwrap();
         assert_eq!((frame.width, frame.height), (width, height));
-        assert_eq!(frame.rgba.len(), width as usize * height as usize * 4);
+        assert_eq!(frame.pixels.len(), width as usize * height as usize * 4);
         assert_eq!(scaler.as_ref().unwrap().input().format, format);
     }
 }
@@ -66,8 +66,30 @@ fn scaled_rgba_keeps_source_size_and_covers_the_canvas() {
         assert_eq!([frame.width, frame.height], expected);
         assert_eq!(frame.source_size, [16, 8]);
         assert_eq!(frame.pts_us, 17);
-        assert_eq!(frame.rgba.len(), (expected[0] * expected[1] * 4) as usize);
+        assert_eq!(frame.pixels.len(), (expected[0] * expected[1] * 4) as usize);
     }
+}
+
+#[test]
+fn yuv_fast_path_requires_native_size_and_supported_color_metadata() {
+    use ffmpeg_next::{color, format::Pixel};
+    bmz_ffmpeg::ensure_init().unwrap();
+    let mut decoded = ffmpeg_next::frame::Video::new(Pixel::YUV420P, 2048, 1088);
+    for (plane, value) in [16, 128, 240].into_iter().enumerate() {
+        decoded.data_mut(plane).fill(value);
+    }
+    let mut scaler = None;
+    let frame = playback_frame(&decoded, 10, &mut scaler, None, [2048, 1088], true).unwrap();
+    assert_eq!(frame.format, DecodedPixelFormat::Yuv420);
+    assert_eq!(frame.pixels.len(), 2048 * 1088 * 3 / 2);
+    assert_eq!(frame.pixels[0], 16);
+    assert_eq!(frame.pixels[2048 * 1088], 128);
+    assert_eq!(frame.pixels[2048 * 1088 * 5 / 4], 240);
+    let scaled = playback_frame(&decoded, 10, &mut scaler, None, [1280, 720], true).unwrap();
+    assert_eq!(scaled.format, DecodedPixelFormat::Rgba);
+    decoded.set_color_space(color::Space::BT709);
+    let tagged = playback_frame(&decoded, 10, &mut scaler, None, [2048, 1088], true).unwrap();
+    assert_eq!(tagged.format, DecodedPixelFormat::Rgba);
 }
 
 #[test]
@@ -85,7 +107,14 @@ fn oversized_y4m_stream_is_rejected_before_opening_its_decoder() {
 }
 
 fn frame(pts_us: i64) -> DecodedFrame {
-    DecodedFrame { pts_us, rgba: vec![pts_us as u8], width: 1, height: 1, source_size: [1, 1] }
+    DecodedFrame {
+        pts_us,
+        pixels: vec![pts_us as u8],
+        width: 1,
+        height: 1,
+        source_size: [1, 1],
+        format: DecodedPixelFormat::Rgba,
+    }
 }
 
 fn queued_frame(generation: u64, pts_us: i64) -> QueuedDecodedFrame {
@@ -171,14 +200,14 @@ fn profile_video_idle_queues() {
                 .pending
                 .iter()
                 .chain(decoder.current.iter())
-                .map(|frame| frame.rgba.len())
+                .map(|frame| frame.pixels.len())
                 .sum::<usize>();
             retained += decoder
                 .receiver
                 .as_ref()
                 .unwrap()
                 .try_iter()
-                .map(|frame| frame.frame.rgba.len())
+                .map(|frame| frame.frame.pixels.len())
                 .sum::<usize>();
         }
         eprintln!(
@@ -343,7 +372,7 @@ fn decode_first_frame_reads_data_song_video_fixture() {
     assert_eq!(frame.pts_us, 0);
     assert_eq!(frame.width, 2);
     assert_eq!(frame.height, 2);
-    assert_eq!(frame.rgba.len(), 2 * 2 * 4);
+    assert_eq!(frame.pixels.len(), 2 * 2 * 4);
 }
 
 #[test]

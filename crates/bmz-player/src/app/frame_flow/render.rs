@@ -65,6 +65,12 @@ impl WinitApp {
         self.submit_manual_screenshot(&scene);
         let plan_start = Instant::now();
         self.renderer.prepare_scene(scene);
+        if play_view && let Some(play) = &mut self.play.active_play {
+            crate::video_bga::update_video_bga_sample_sizes(
+                &self.renderer,
+                &mut play.running.video_bga_decoders,
+            );
+        }
         let plan_us = plan_start.elapsed().as_micros();
         self.apply_skin_lua_effects(scene_kind);
         self.update_meta_image_animations(scene_kind);

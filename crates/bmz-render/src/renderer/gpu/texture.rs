@@ -17,6 +17,7 @@ impl WgpuRenderer {
         if let Some(texture) = self.image_textures.get(&id)
             && texture.width == width
             && texture.height == height
+            && texture.yuv.is_none()
         {
             if self.texture_uploads.write(&self.device, &texture.texture, width, height, rgba) {
                 return Ok(());

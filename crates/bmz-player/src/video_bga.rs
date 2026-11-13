@@ -4,7 +4,7 @@ use bmz_chart::model::{BgaAssetId, BgaAssetKind, BgaEventKind};
 use bmz_core::judge::Judge;
 use bmz_core::time::TimeUs;
 use bmz_render::plan::TextureId;
-use bmz_video::{DecodedFrame, VideoBgaDecoder};
+use bmz_video::{DecodedFrame, DecodedPixelFormat, VideoBgaDecoder};
 
 use crate::audio::RunningPlaySession;
 use crate::screens::play_snapshot::{BgaFrameCatalog, bga_texture_id, display_video_bga_frame};
@@ -15,6 +15,27 @@ pub struct ActiveVideoBgaDecoder {
     pub last_pts: Option<i64>,
     last_used: std::time::Instant,
     canvas_size: [u32; 2],
+    sample_size: [u32; 2],
+}
+
+pub(crate) fn update_video_bga_sample_sizes(
+    renderer: &bmz_render::renderer::Renderer,
+    decoders: &mut VideoBgaDecoderMap,
+) {
+    if decoders.is_empty() {
+        return;
+    }
+    let canvas_size = renderer.play_canvas_size();
+    for (texture, size) in renderer.play_video_sample_sizes().into_iter().flatten() {
+        let id = BgaAssetId(texture.0 - bmz_render::plan::CHART_BGA_TEXTURE_BASE);
+        if let Some(active) = decoders.get_mut(&id)
+            && active.canvas_size == canvas_size
+            && active.sample_size != size
+        {
+            active.sample_size = size;
+            active.decoder.set_playback_canvas_size(size);
+        }
+    }
 }
 
 /// Resolve an immutable BGA timeline selection against renderer-owned assets.
@@ -204,6 +225,7 @@ fn update_single_video(
             if canvas_size != active.canvas_size && !canvas_size.contains(&0) {
                 active.decoder.set_playback_canvas_size(canvas_size);
                 active.canvas_size = canvas_size;
+                active.sample_size = canvas_size;
             }
             if active.event_start_time != event_start_time {
                 active.decoder.restart_at(video_seek_offset_us(video_offset_us));
@@ -223,6 +245,7 @@ fn update_single_video(
                         last_pts: None,
                         last_used: now,
                         canvas_size,
+                        sample_size: canvas_size,
                     })
                     .into_mut()
             }
@@ -252,7 +275,11 @@ fn open_video_decoder_at(
     video_offset_us: i64,
     canvas_size: [u32; 2],
 ) -> anyhow::Result<VideoBgaDecoder> {
-    let mut decoder = VideoBgaDecoder::open_for_playback(path, canvas_size)?;
+    let mut decoder = if canvas_size.contains(&0) {
+        VideoBgaDecoder::open_for_playback(path, canvas_size)?
+    } else {
+        VideoBgaDecoder::open_for_gpu_playback(path, canvas_size)?
+    };
     let seek_offset_us = video_seek_offset_us(video_offset_us);
     if seek_offset_us > 0 {
         decoder.restart_at(seek_offset_us);
@@ -267,7 +294,15 @@ fn upload_video_bga_frame(
     frame: &DecodedFrame,
 ) -> bool {
     let texture_id = TextureId(bga_texture_id(asset_id));
-    match renderer.upsert_rgba_texture_ref(texture_id, frame.width, frame.height, &frame.rgba) {
+    let upload = match frame.format {
+        DecodedPixelFormat::Yuv420 => {
+            renderer.upsert_yuv420_texture(texture_id, frame.width, frame.height, &frame.pixels)
+        }
+        DecodedPixelFormat::Rgba => {
+            renderer.upsert_rgba_texture_ref(texture_id, frame.width, frame.height, &frame.pixels)
+        }
+    };
+    match upload {
         Ok(()) => {
             let [width, height] = frame.source_size;
             bga_frames.insert(asset_id, display_video_bga_frame(asset_id, width, height));
@@ -345,10 +380,11 @@ mod tests {
         let id = BgaAssetId(7);
         let frame = DecodedFrame {
             pts_us: 0,
-            rgba: vec![0; 8],
+            pixels: vec![0; 8],
             width: 2,
             height: 1,
             source_size: [3840, 1920],
+            format: DecodedPixelFormat::Rgba,
         };
         assert!(upload_video_bga_frame(&mut renderer, &mut frames, id, &frame));
         assert_eq!(frames[&id], display_video_bga_frame(id, 3840, 1920));

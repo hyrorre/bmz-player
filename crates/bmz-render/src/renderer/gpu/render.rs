@@ -204,6 +204,7 @@ impl WgpuRenderer {
             label: Some("bmz-render clear encoder"),
         });
         self.texture_uploads.encode(&mut encoder);
+        self.encode_video_conversions(&mut encoder);
         self.encode_ambient(&mut encoder);
         let draw_resources = PlanGeometryDrawResources {
             rect_pipeline: &self.rect_pipeline,

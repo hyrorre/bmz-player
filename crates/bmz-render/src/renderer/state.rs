@@ -28,6 +28,7 @@ pub(super) struct WgpuRenderer {
     pub(super) internal_scene_target: Option<InternalSceneTarget>,
     pub(super) image_textures: HashMap<TextureId, PreparedTexture>,
     pub(super) texture_uploads: TextureUploads,
+    pub(super) video_conversion: Option<super::video_texture::VideoConversion>,
     pub(super) image_bind_group_cache: HashMap<(TextureId, bool), wgpu::BindGroup>,
     pub(super) image_bind_group_scratch: Vec<wgpu::BindGroup>,
     pub(super) geometry_scratch: PlanGeometry,
@@ -97,5 +98,6 @@ pub struct PreparedTexture {
     pub(super) view: wgpu::TextureView,
     pub(super) width: u32,
     pub(super) height: u32,
+    pub(super) yuv: Option<Box<super::video_texture::VideoPlanes>>,
 }
 use super::*;

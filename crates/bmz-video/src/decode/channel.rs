@@ -14,6 +14,8 @@ pub(crate) struct ChannelDecodeState {
     generation: AtomicU64,
     finished_generation: AtomicU64,
     canvas_size: AtomicU64,
+    recycled_pixels: Option<Mutex<Option<Vec<u8>>>>,
+    allow_yuv: bool,
 }
 
 impl Default for ChannelDecodeState {
@@ -23,11 +25,35 @@ impl Default for ChannelDecodeState {
             generation: AtomicU64::new(0),
             finished_generation: AtomicU64::new(u64::MAX),
             canvas_size: AtomicU64::new(0),
+            recycled_pixels: None,
+            allow_yuv: false,
         }
     }
 }
 
 impl ChannelDecodeState {
+    pub(crate) fn for_playback(canvas_size: [u32; 2], allow_yuv: bool) -> Self {
+        let state = Self { recycled_pixels: Some(Mutex::new(None)), allow_yuv, ..Self::default() };
+        state.set_canvas_size(canvas_size);
+        state
+    }
+
+    pub(crate) fn recycle(&self, frame: Option<DecodedFrame>) {
+        // The live consumer never waits for the decoder, and retains at most one
+        // spare frame per decoder, even when several frames are skipped at once.
+        if let Some(frame) = frame
+            && let Some(slot) = &self.recycled_pixels
+            && let Ok(mut slot) = slot.try_lock()
+            && slot.is_none()
+        {
+            *slot = Some(frame.pixels);
+        }
+    }
+
+    fn take_pixels(&self) -> Option<Vec<u8>> {
+        self.recycled_pixels.as_ref()?.lock().ok()?.take()
+    }
+
     pub(crate) fn set_canvas_size(&self, [width, height]: [u32; 2]) {
         self.canvas_size.store((u64::from(width) << 32) | u64::from(height), Ordering::Relaxed);
     }
@@ -222,12 +248,13 @@ pub(crate) fn decode_video_channel_pass(
                 catch_up.record_skipped((decoded.clone(), pts_us));
                 continue;
             }
-            let frame = rgba_frame_from_video_with_scaler(
+            let frame = playback_frame(
                 decoded,
                 pts_us,
                 scaler,
-                None,
+                channel.take_pixels(),
                 channel.canvas_size(),
+                channel.allow_yuv,
             )?;
             match send_decoded_frame(sender, frame, generation, stop_decode, channel)? {
                 ChannelDecodePassEnd::Stop => return Ok(ChannelDecodePassEnd::Stop),
@@ -263,12 +290,13 @@ pub(crate) fn decode_video_channel_pass(
             catch_up.record_skipped((decoded.clone(), pts_us));
             continue;
         }
-        let frame = rgba_frame_from_video_with_scaler(
+        let frame = playback_frame(
             decoded,
             pts_us,
             scaler,
-            None,
+            channel.take_pixels(),
             channel.canvas_size(),
+            channel.allow_yuv,
         )?;
         match send_decoded_frame(sender, frame, generation, stop_decode, channel)? {
             ChannelDecodePassEnd::Stop => return Ok(ChannelDecodePassEnd::Stop),
@@ -314,8 +342,14 @@ pub(crate) fn publish_last_skipped_channel_frame(
     let Some((decoded, pts_us)) = catch_up.take_last_skipped() else {
         return Ok(ChannelDecodePassEnd::Eof);
     };
-    let frame =
-        rgba_frame_from_video_with_scaler(&decoded, pts_us, scaler, None, channel.canvas_size())?;
+    let frame = playback_frame(
+        &decoded,
+        pts_us,
+        scaler,
+        channel.take_pixels(),
+        channel.canvas_size(),
+        channel.allow_yuv,
+    )?;
     send_decoded_frame(sender, frame, generation, stop_decode, channel)
 }
 
@@ -342,5 +376,33 @@ pub(crate) fn send_decoded_frame(
             }
             Err(TrySendError::Disconnected(_)) => return Ok(ChannelDecodePassEnd::Stop),
         }
+    }
+}
+
+#[cfg(test)]
+mod recycle_tests {
+    use super::*;
+
+    #[test]
+    fn playback_reuses_one_spare_and_offline_keeps_none() {
+        let frame = || DecodedFrame {
+            pts_us: 0,
+            width: 2,
+            height: 2,
+            source_size: [2, 2],
+            pixels: vec![0; 16],
+            format: DecodedPixelFormat::Rgba,
+        };
+        let playback = ChannelDecodeState::for_playback([2, 2], false);
+        let first = frame();
+        let first_ptr = first.pixels.as_ptr();
+        playback.recycle(Some(first));
+        playback.recycle(Some(frame()));
+        let returned = playback.take_pixels().unwrap();
+        assert_eq!(returned.as_ptr(), first_ptr);
+        assert!(playback.take_pixels().is_none());
+        let offline = ChannelDecodeState::default();
+        offline.recycle(Some(frame()));
+        assert!(offline.take_pixels().is_none());
     }
 }

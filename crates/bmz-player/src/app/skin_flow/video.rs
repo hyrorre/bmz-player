@@ -61,7 +61,7 @@ impl WinitApp {
                         texture,
                         frame.width,
                         frame.height,
-                        &frame.rgba,
+                        &frame.pixels,
                     )
                 },
             );

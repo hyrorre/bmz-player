@@ -214,7 +214,7 @@ impl Media {
                     source.texture,
                     frame.width,
                     frame.height,
-                    &frame.rgba,
+                    &frame.pixels,
                 )?;
             }
         }
@@ -287,7 +287,7 @@ impl Media {
                     TextureId(display.texture_id),
                     frame.width,
                     frame.height,
-                    &frame.rgba,
+                    &frame.pixels,
                 )?;
                 display.width = frame.width as f32;
                 display.height = frame.height as f32;

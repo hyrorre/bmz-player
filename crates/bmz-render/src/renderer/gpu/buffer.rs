@@ -121,7 +121,8 @@ impl WgpuRenderer {
             }
             self.queue.submit(std::iter::once(encoder.finish()));
         }
-        self.image_textures.insert(texture_id, PreparedTexture { texture, view, width, height });
+        self.image_textures
+            .insert(texture_id, PreparedTexture { texture, view, width, height, yuv: None });
         self.image_bind_group_cache
             .retain(|(cached_texture_id, _), _| *cached_texture_id != texture_id);
     }

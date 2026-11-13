@@ -41,7 +41,7 @@ fn clocked_decoder_holds_final_picture_until_the_next_full_loop() {
     let mut reference = VideoBgaDecoder::open(path).unwrap();
     let first = reference.frame_at_blocking(0).unwrap().unwrap().clone();
     let last = reference.frame_at_blocking(duration).unwrap().unwrap().clone();
-    assert_ne!(first.rgba, last.rgba, "the fixture must detect an early restart");
+    assert_ne!(first.pixels, last.pixels, "the fixture must detect an early restart");
     assert!(duration - last.pts_us > CLOCKED_FRAME_PUBLISH_LEAD_US);
     let mut decoder = VideoBgaDecoder::open_following_playback_time(path).unwrap();
     for pass in 0..3 {
@@ -51,14 +51,14 @@ fn clocked_decoder_holds_final_picture_until_the_next_full_loop() {
         std::thread::sleep(Duration::from_millis(30));
         let frame = decoder.poll_frame(target).unwrap();
         assert_eq!(frame.pts_us, target, "last frame must keep its display interval");
-        assert_eq!(frame.rgba, last.rgba);
+        assert_eq!(frame.pixels, last.pixels);
         let next = base + duration;
         wait_for_frame(&mut decoder, next, next);
-        assert_eq!(decoder.poll_frame(next).unwrap().rgba, first.rgba);
+        assert_eq!(decoder.poll_frame(next).unwrap().pixels, first.pixels);
     }
     decoder.restart();
     wait_for_frame(&mut decoder, 0, 0);
-    assert_eq!(decoder.poll_frame(0).unwrap().rgba, first.rgba);
+    assert_eq!(decoder.poll_frame(0).unwrap().pixels, first.pixels);
 }
 
 struct ThreeFrameMovie(PathBuf);
@@ -67,13 +67,13 @@ struct ThreeFrameMovie(PathBuf);
 fn channel_decoder_wakes_from_eof_for_repeated_restart() {
     let fixture = ThreeFrameMovie::new();
     let mut decoder = VideoBgaDecoder::open(&fixture.0).unwrap();
-    let first = decoder.frame_at_blocking(0).unwrap().unwrap().rgba.clone();
+    let first = decoder.frame_at_blocking(0).unwrap().unwrap().pixels.clone();
     for _ in 0..3 {
-        let last = decoder.frame_at_blocking(1_000_000).unwrap().unwrap().rgba.clone();
+        let last = decoder.frame_at_blocking(1_000_000).unwrap().unwrap().pixels.clone();
         assert_ne!(last, first);
         assert!(decoder.is_finished());
         decoder.restart();
-        assert_eq!(decoder.frame_at_blocking(0).unwrap().unwrap().rgba, first);
+        assert_eq!(decoder.frame_at_blocking(0).unwrap().unwrap().pixels, first);
     }
 }
 
