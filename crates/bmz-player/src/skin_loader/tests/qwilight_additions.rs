@@ -146,6 +146,9 @@ fn expanded_fixture() -> (tempfile::TempDir, DecodedSkin) {
             names.push(format!("Bin/C {digit} {frame}"));
         }
     }
+    // Distinct signed lane-timing frames (-50..=50), so each of the 101 frames
+    // keeps its own atlas cell; held frames would share one.
+    names.extend((-50..=50).filter(|frame| *frame != 0).map(|frame| format!("Main/JM 1 {frame}")));
     let file =
         fs::OpenOptions::new().read(true).write(true).open(root.path().join("skin.zip")).unwrap();
     let mut zip = zip::ZipWriter::new_append(file).unwrap();

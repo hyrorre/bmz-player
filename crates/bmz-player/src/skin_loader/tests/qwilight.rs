@@ -31,14 +31,56 @@ fn qwilight_unequal_frame_sizes_fill_each_atlas_cell() {
     let beam = decoded.document.image.iter().find(|image| image.id == "qw-lane-3-0").unwrap();
     let source = decoded.sources.iter().find(|source| source.source_id == beam.src).unwrap();
     let asset = source.asset.as_ref().unwrap();
-    assert_eq!((beam.divx, beam.divy), (2, 2));
-    assert_eq!((asset.width, asset.height), (8, 8));
-    for y in 0..8 {
+    // Three key frames (the released frame holds `M 1 1`) use two 4 x 4 cells.
+    assert_eq!(beam.qwilight_frame_cells, [0, 1, 1]);
+    assert_eq!((beam.divx, beam.divy), (2, 1));
+    assert_eq!((asset.width, asset.height), (8, 4));
+    for y in 0..4 {
         for x in 0..8 {
             let i = (y * 8 + x) * 4;
-            let expected = if x < 4 && y < 4 { red } else { blue };
+            let expected = if x < 4 { red } else { blue };
             assert_eq!(&asset.pixels[i..i + 4], &expected, "pixel ({x}, {y})");
         }
+    }
+}
+
+/// QMAX_Humanoid's judgments fade in over frames 0-5, hold frame 5 until 114
+/// and fade out over 115-119. Each distinct image takes one atlas cell.
+#[test]
+fn qwilight_held_judgment_frames_share_atlas_cells() {
+    use std::io::Write;
+    let root = unique_test_dir("qwilight-held-judgment-frames");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("skin.yaml");
+    fs::write(&path, "format: {zip: skin}\nframe: {judgment-paint-frame: 120, judgment-paint-framerate: 60}\nlambda:\n  drawing1: 1, 2, 3, 4, 5, 10\n  pipeline: 7, 15\npoint: {noteLength: 20, judgmentPaintLength: 34, judgmentPaintHeight: 10}\n").unwrap();
+    let frames: Vec<usize> = (0..6).chain(115..120).collect();
+    let color = |frame: usize| [frame as u8, 255 - frame as u8, 7, 255];
+    let mut zip = zip::ZipWriter::new(fs::File::create(root.join("skin.zip")).unwrap());
+    zip.start_file("Note/N 1 0 0.png", zip::write::SimpleFileOptions::default()).unwrap();
+    zip.write_all(&png_bytes(2, 2, [255; 4])).unwrap();
+    for &frame in &frames {
+        zip.start_file(format!("Paint/J 0 {frame}.png"), zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(&png_bytes(2, 2, color(frame))).unwrap();
+    }
+    zip.finish().unwrap();
+    let decoded = decode_qwilight(&path, &root, 7, BTreeMap::new());
+    let judge = decoded.document.image.iter().find(|image| image.id == "qw-judge-0").unwrap();
+    // 11 distinct images in a 4 x 3 grid instead of 120 frames in 11 x 11.
+    assert_eq!((judge.divx, judge.divy), (4, 3));
+    assert_eq!(judge.qwilight_animation.as_ref().unwrap().count, 120);
+    let cells = &judge.qwilight_frame_cells;
+    assert_eq!(cells.len(), 120);
+    assert_eq!(cells[..6], [0, 1, 2, 3, 4, 5]);
+    assert!(cells[6..115].iter().all(|&cell| cell == 5));
+    assert_eq!(cells[115..], [6, 7, 8, 9, 10]);
+    let source = decoded.sources.iter().find(|source| source.source_id == judge.src).unwrap();
+    let asset = source.asset.as_ref().unwrap();
+    assert_eq!((asset.width, asset.height), (8, 6));
+    for (cell, &frame) in frames.iter().enumerate() {
+        let (x, y) = (cell % 4 * 2, cell / 4 * 2);
+        let i = (y * 8 + x) * 4;
+        assert_eq!(asset.pixels[i..i + 4], color(frame), "cell {cell}");
     }
 }
 
@@ -640,9 +682,14 @@ fn qwilight_installed_play_skins_gpu() {
     fs::create_dir_all(&output).unwrap();
     let roots = [root.clone()];
     let (none, unadjusted) = (BTreeMap::new(), BTreeMap::new());
-    for (name, mode, number) in
-        [("Default", KeyMode::K7, 7), ("CR_DX", KeyMode::K7, 7), ("CR_simple", KeyMode::K14, 14)]
-    {
+    // QMAX_Humanoid's judgment frames exceeded the atlas limit before held
+    // frames shared cells; rendering requires every source to decode.
+    for (name, mode, number) in [
+        ("Default", KeyMode::K7, 7),
+        ("CR_DX", KeyMode::K7, 7),
+        ("CR_simple", KeyMode::K14, 14),
+        ("QMAX_Humanoid", KeyMode::K7, 7),
+    ] {
         let rgba =
             render_installed_qwilight(&root, &roots, name, mode, number, &none, &unadjusted, 0.0);
         save_preview(&output, &format!("{name}-{number}k.png"), &rgba);

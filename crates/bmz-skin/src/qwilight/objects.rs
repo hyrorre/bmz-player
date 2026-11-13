@@ -104,20 +104,38 @@ impl Builder {
         self.source_ids.insert((paths, columns), id.clone());
         id
     }
-    fn image(&mut self, id: &str, mut paths: Vec<String>, cycle: i32, timer: Option<i32>) -> bool {
+    fn image(&mut self, id: &str, paths: Vec<String>, cycle: i32, timer: Option<i32>) -> bool {
         if paths.is_empty() {
             return false;
         }
         let n = paths.len();
+        // Sparse frames hold the previous image, often for most of an effect
+        // (QMAX_Humanoid judgments: 11 images over 120 frames). Store each
+        // distinct image once and map logical frames to its cell.
+        let (mut cells, mut distinct) = (Vec::with_capacity(n), Vec::<String>::new());
+        for path in &paths {
+            let cell = distinct.iter().position(|seen| seen == path).unwrap_or_else(|| {
+                distinct.push(path.clone());
+                distinct.len() - 1
+            });
+            cells.push(cell);
+        }
+        let deduplicated = distinct.len() < n;
+        let mut paths = if deduplicated { distinct } else { paths };
         // Prime frame counts must not force tall effects into a single column.
         // Preserve logical timing when the final atlas row has unused cells.
-        let cols = (n as f64).sqrt().ceil() as usize;
-        let rows = n.div_ceil(cols);
+        let cols = (paths.len() as f64).sqrt().ceil() as usize;
+        let rows = paths.len().div_ceil(cols);
         paths.resize(cols * rows, paths.last().unwrap().clone());
         let src = self.source(paths, cols);
-        let animation =
-            (cols * rows != n).then(|| json!({"mode":"loop","count":n,"cycleMs":cycle}));
-        self.push("image",json!({"id":id,"src":src,"w":-1,"h":-1,"divx":cols,"divy":rows,"cycle":cycle,"timer":timer,"qwilightAnimation":animation}));
+        let animation = (deduplicated || cols * rows != n)
+            .then(|| json!({"mode":"loop","count":n,"cycleMs":cycle}));
+        let mut image = json!({"id":id,"src":src,"w":-1,"h":-1,"divx":cols,"divy":rows,
+            "cycle":cycle,"timer":timer,"qwilightAnimation":animation});
+        if deduplicated {
+            image["qwilightFrameCells"] = json!(cells);
+        }
+        self.push("image", image);
         true
     }
     fn point(&self, name: &str, default: f64) -> Result<f64> {

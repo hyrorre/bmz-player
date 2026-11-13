@@ -239,20 +239,29 @@ fn load_frame_sequence(paths: &[PathBuf], columns: u32) -> Result<RgbaImageAsset
         !paths.is_empty() && paths.len() <= 4096 && columns > 0 && columns as usize <= paths.len(),
         "invalid skin frame grid"
     );
+    // A repeated path (held or padding frame) is decoded once.
     let mut images = Vec::new();
+    let mut cell_images = Vec::with_capacity(paths.len());
+    let mut decoded = HashMap::new();
     let mut bytes = 0usize;
     for path in paths {
+        if let Some(&index) = decoded.get(path) {
+            cell_images.push(index);
+            continue;
+        }
         let image = match lr2_builtin_source_asset(&path.to_string_lossy()) {
             Some(image) => image,
             None => bmz_render::assets::load_static_rgba_image_with_color_key(path, None)?,
         };
         bytes = bytes.saturating_add(image.pixels.len());
         anyhow::ensure!(bytes <= 128 * 1024 * 1024, "skin frame input exceeds memory budget");
+        decoded.insert(path, images.len());
+        cell_images.push(images.len());
         images.push(image);
     }
     let cell_w = images.iter().map(|image| image.width).max().unwrap();
     let cell_h = images.iter().map(|image| image.height).max().unwrap();
-    let rows = (images.len() as u32).div_ceil(columns);
+    let rows = (paths.len() as u32).div_ceil(columns);
     let width = cell_w.checked_mul(columns).context("skin frame width overflow")?;
     let height = cell_h.checked_mul(rows).context("skin frame height overflow")?;
     let byte_count = u64::from(width) * u64::from(height) * 4;
@@ -261,10 +270,14 @@ fn load_frame_sequence(paths: &[PathBuf], columns: u32) -> Result<RgbaImageAsset
         "skin frame atlas exceeds size limit"
     );
     let mut pixels = vec![0; byte_count as usize];
-    for (i, image) in images.into_iter().enumerate() {
-        // Qwilight stretches each complete frame into the same destination.
-        // Uniform atlas UVs require smaller frames to fill their cell too.
-        let image = if image.width != cell_w || image.height != cell_h {
+    // Qwilight stretches each complete frame into the same destination.
+    // Uniform atlas UVs require smaller frames to fill their cell too.
+    let images = images
+        .into_iter()
+        .map(|image| {
+            if image.width == cell_w && image.height == cell_h {
+                return Ok(image);
+            }
             let rgba = image::RgbaImage::from_raw(image.width, image.height, image.pixels)
                 .context("invalid skin frame pixels")?;
             let resized = image::imageops::resize(
@@ -273,10 +286,11 @@ fn load_frame_sequence(paths: &[PathBuf], columns: u32) -> Result<RgbaImageAsset
                 cell_h,
                 image::imageops::FilterType::Triangle,
             );
-            RgbaImageAsset { width: cell_w, height: cell_h, pixels: resized.into_raw() }
-        } else {
-            image
-        };
+            Ok(RgbaImageAsset { width: cell_w, height: cell_h, pixels: resized.into_raw() })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for (i, &index) in cell_images.iter().enumerate() {
+        let image = &images[index];
         let x = (i as u32 % columns) * cell_w;
         let y = (i as u32 / columns) * cell_h;
         for row in 0..image.height {

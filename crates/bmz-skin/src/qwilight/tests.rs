@@ -254,6 +254,34 @@ fn qwilight_layout_vm_has_no_host_io_and_cannot_catch_budget_exhaustion() {
     assert!(lua.load("while true do pcall(function() while true do end end) end").exec().is_err());
 }
 
+/// QMAX_Humanoid's 120-frame judgments hold one image for most frames. Before
+/// held frames shared cells, each judgment atlas needed 121 cells (~141 MiB).
+#[test]
+#[ignore = "requires installed Qwilight play skins via BMZ_QWILIGHT_SKIN_ROOT"]
+fn installed_qmax_judgments_store_each_held_image_once() {
+    let root = std::path::PathBuf::from(
+        std::env::var_os("BMZ_QWILIGHT_SKIN_ROOT").expect("set BMZ_QWILIGHT_SKIN_ROOT"),
+    );
+    let path = root.join("QMAX_Humanoid").join("QMAX_Humanoid.yaml");
+    let context = SkinPathContext::new(&path, [root.clone()]).unwrap();
+    let state = LuaLoadRuntimeState {
+        number_values: BTreeMap::from([(SKIN_REF_BMZ_KEY_MODE, 7)]),
+        ..Default::default()
+    };
+    let loaded = load_qwilight_play_skin(&context, &BTreeMap::new(), &state).unwrap();
+    for index in 0..7 {
+        let judge =
+            loaded.document.image.iter().find(|image| image.id == format!("qw-judge-{index}"));
+        let judge = judge.unwrap();
+        let cells = (judge.divx * judge.divy) as usize;
+        let distinct = usize::from(*judge.qwilight_frame_cells.iter().max().unwrap()) + 1;
+        assert_eq!(judge.qwilight_frame_cells.len(), 120, "qw-judge-{index}");
+        assert!(matches!(distinct, 9 | 11), "qw-judge-{index}: {distinct} images");
+        // 1020 x 300 RGBA frames: at most 12 cells (about 14 MiB) per judgment.
+        assert!(cells <= 12, "qw-judge-{index}: {cells} cells");
+    }
+}
+
 #[test]
 #[ignore = "requires installed Qwilight play skins via BMZ_QWILIGHT_SKIN_ROOT"]
 fn installed_qwilight_hidden_turntables_preserve_note_lanes() {

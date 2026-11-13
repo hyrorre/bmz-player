@@ -493,6 +493,11 @@ where
 pub struct SkinImageDef {
     #[serde(default, rename = "qwilightAnimation")]
     pub qwilight_animation: Option<SkinQwilightAnimation>,
+    /// Qwilight conversion: atlas cell of each logical frame. Sparse frames hold
+    /// the previous image, so each distinct image is stored once. Empty means
+    /// frame `i` is cell `i`.
+    #[serde(default, rename = "qwilightFrameCells")]
+    pub qwilight_frame_cells: Vec<u16>,
     /// LR2 buttons select a flat cell, independent of atlas orientation.
     #[serde(default, rename = "lr2Button")]
     pub lr2_button: bool,

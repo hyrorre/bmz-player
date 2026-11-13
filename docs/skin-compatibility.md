@@ -37,7 +37,6 @@ AUTOPLAYとレーン別FAST/SLOW、キー画像の往復、コンボの画像・
 時間表示は経過／残りを選べ、追加表示もON/OFFできます。詳しいBMZ値との対応は[スキン仕様](skin.md#qwilightのプレイスキン)を参照してください。
 [タイミングとフェードの検証記録](../notes/2026/2026-11-13-qwilight-timing-and-fades.md)を参照してください。
 テーマ、選曲・リザルト、Qwilight固有のオンライン・ポーズ・カメラ・設定用UI、専用SE、独自のカバー高さ・開閉操作は対象外です。
-QMAX_Humanoidの判定画像列は128 MiBの画像列上限を超えるため、現時点では読み込めません。
 [仕様と制限](skin.md#qwilightのプレイスキン)、[実素材テスト](../crates/bmz-player/src/skin_loader/tests/qwilight.rs)、
 [実装記録](../notes/2026/2026-11-10-qwilight-play-skins.md)を参照してください。
 

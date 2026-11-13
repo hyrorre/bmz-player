@@ -118,3 +118,39 @@ QMAX_HumanoidはShow / Hideの定義読み込み、画像列の縮小問題は�
 追加検証のログはGit管理外の`.local/qwilight-followup-*.log`、
 `.local/qwilight-review-regressions-{before,after}.log`、`.local/qwilight-hidden-*.log`、
 画像は`.local/qwilight-review-followup-previews/`に保存した。
+
+## 同日の追加対応：保持フレームのatlasセル共有
+
+上記で残したQMAX_Humanoidの判定画像列の上限超過は、上限が小さいためではなく、重複した画像が原因だった。
+判定（`judgment-paint-frame: 120`）の実画像は各判定11枚（J 3は9枚）である。
+フェードイン0〜5とフェードアウト115〜119だけがあり、6〜114の欠番はフレーム5を保持する。
+変換は120フレーム分のパスを11×11のatlasへ並べていた。1セルは1020×300 RGBAなので、約141 MiBの大半がフレーム5の複製だった。
+
+- 変換（`Builder::image`）で重複するパスを除き、異なる画像だけでatlasを作る。
+  フレームからセルへの対応を画像の`qwilightFrameCells`に持たせる。
+  `qwilightAnimation`は後から各モードで上書きされるため、対応は画像側の独立した項目に置いた。
+- 描画（`state_values/image.rs`）は、論理フレーム数を対応表の長さとして扱う。
+  算出したフレーム番号を対応表でセルへ変換する。表が空の画像（既存JSON / Lua / LR2を含む）は従来どおり。
+- atlasの組み立て（`load_frame_sequence`）は、同じパスを1回だけデコードする。
+- QMAX_Humanoidの判定は各12セル以下（約14 MiB）になり、128 MiBの上限は変更していない。
+  見た目は欠番の保持と同じで、PNGのデコードも判定1種類あたり121回から11回に減る。
+
+上限を上げる案は採らなかった。判定だけでGPUに約850 MiBを使い、atlas幅11,220pxが一部GPUの8192px上限を超えるためである。
+終了演出の遅延転送を使う案も採らなかった。判定は常時表示され、6種類で同時表示の予算を取り合うためである。
+
+既存のテスト2件は、101個の符号付きレーン別FAST/SLOWフレームが1枚の画像を保持するfixtureだった。
+セル共有で1セルになり、意図していた「素数フレーム数の配置」と「フレームごとの選択」を検査できなくなった。
+fixtureへ-50〜50の異なる画像を追加し、元の意図のまま検査する。
+Hide Turntableの修正で追加した寸法の異なる画像列のテストも、保持フレームが共有セルになるため期待値を2セルへ更新した。
+
+検証（Windows）：
+
+- `cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`：成功。
+- `cargo test --workspace --locked --no-fail-fast -- --test-threads=4`：成功（失敗0件）。
+- 追加テスト：保持フレームのセル選択（bmz-render）、QMAX形式の判定fixtureのセル数・対応表・atlasのRGBA（bmz-player）。
+- 実素材：`installed_qmax_judgments_store_each_held_image_once`を追加し、7判定すべてが120フレーム・12セル以下で成功。
+  `qwilight_installed_play_skins_gpu`にQMAX_Humanoidの7Kを加え、全ソースのデコードと描画が成功した。出力画像で判定文字を目視確認した。
+- `cargo test -p bmz-player --lib qwilight --locked -- --include-ignored --test-threads=1`：fixture更新後に33件成功。
+- 実ウィンドウでのプレイ、GPUメモリ使用量の実測、macOS / Linuxは未確認。
+
+ログと画像はGit管理外の`.local/qwilight-dedup-*.log`と`.local/qwilight-dedup-previews/`に保存した。
