@@ -80,7 +80,8 @@ fn qwilight_offset_settings_update_installed_play_without_queuing_decodes() {
         generation,
         "an edit while loading must not invalidate the pending assets"
     );
-    assert_eq!(app.skin.last_play_skin_signature.as_ref().unwrap().5.offset_values["Qwilight Title offset"].x, 301);
+    let signature = app.skin.last_play_skin_signature.as_ref().unwrap();
+    assert_eq!(signature.5.offset_values["Qwilight Title offset"].x, 301);
 }
 
 #[test]
@@ -113,6 +114,27 @@ fn qwilight_catalog_registers_only_play_slots_without_running_lua() {
     }
     assert!(catalog.select.is_empty());
     assert!(catalog.result.is_empty());
+}
+
+/// Only Qwilight's own adjustments are Lua inputs that require a reload; the
+/// converter decides, not the look of the saved name.
+#[test]
+fn qwilight_layout_offsets_are_not_conversion_inputs() {
+    let state = |name: &str| {
+        let mut state = bmz_skin::LuaLoadRuntimeState::default();
+        let value = bmz_skin::LuaSkinOffsetValue { x: 10, ..Default::default() };
+        state.offset_values.insert(name.into(), value);
+        state
+    };
+    let base = bmz_skin::LuaLoadRuntimeState::default();
+    for layout_only in ["Qwilight Title offset", "Qwilight Decoration 3 offset", "Judge offset"] {
+        assert!(qwilight_native_offsets_equal(&base, &state(layout_only)), "{layout_only}");
+        assert!(!bmz_skin::is_qwilight_adjustment_offset(layout_only));
+    }
+    for adjustment in ["Qwilight lane position", "Qwilight judgment visualizer position"] {
+        assert!(!qwilight_native_offsets_equal(&base, &state(adjustment)), "{adjustment}");
+        assert!(bmz_skin::is_qwilight_adjustment_offset(adjustment));
+    }
 }
 
 #[test]

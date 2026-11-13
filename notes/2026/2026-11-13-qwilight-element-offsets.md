@@ -118,3 +118,20 @@ BMZ独自のx/y/w/h/a調整を追加する。判定線はyを除外しLIFTに統
   通常環境で再検証し、コードのwarning抑制や無関係な修正は行っていない。
   世代を固定値で渡していたテストはアプリと同じ世代登録を行い、GPUキャッシュのテストもハンドル登録後に検証するよう揃えた。
 - 実ウィンドウでのマウス操作、手動プレイ、実機入力・音声、macOS/Linuxは未確認。
+
+## 同日の追加対応：配置更新のレビュー指摘
+
+`2a550813`のレビューで挙がった3件を修正した。
+
+- 配置レシピの再適用で、text・slider・ビジュアライザーを直接添字で読んでいた。
+  矩形と同じく、文書に対象がなければ飛ばす。現在の変換は並びを保つため、通常の動作は変わらない。
+- 再読み込みが必要なネイティブ調整を、名前の形（`Qwilight `で始まり` offset`で終わらない）で判定していた。
+  変換がLuaへ渡す調整の一覧（`ADJUSTMENTS`）を`bmz_skin::is_qwilight_adjustment_offset`として公開し、それで判定する。
+  新しい調整の名前が` offset`で終わっても、Luaを再評価しないまま見た目だけが変わることはない。
+- 新しいWinitテストの長い`assert_eq!`がrustfmtに整形されず残っていた。式を分け、関数全体が整形されるようにした。
+
+追加テスト：対象の欠けた文書で再適用がpanicしないこと（bmz-skin-document）、
+要素別・装飾別・共通オフセットは再読み込みの対象外、Qwilight本来の調整は対象であること（bmz-player）。
+検証（Windows）：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、
+`cargo test --workspace --locked --no-fail-fast -- --test-threads=4`、Winitを使う設定経路のテスト、
+実素材（`SavesDir (beta)/UI`）のbmz-skin 3件とbmz-playerのQwilight関連44件が成功。実ウィンドウの操作は未確認。

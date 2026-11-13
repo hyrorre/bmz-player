@@ -113,13 +113,17 @@ pub(super) fn qwilight_native_offsets_equal(
     before: &bmz_skin::LuaLoadRuntimeState,
     after: &bmz_skin::LuaLoadRuntimeState,
 ) -> bool {
-    let native = |name: &str| name.starts_with("Qwilight ") && !name.ends_with(" offset");
-    before.offset_values.keys().chain(after.offset_values.keys()).filter(|name| native(name)).all(
-        |name| {
+    // Use the converter's own list: a new adjustment cannot be mistaken for a
+    // layout-only offset because of its name.
+    before
+        .offset_values
+        .keys()
+        .chain(after.offset_values.keys())
+        .filter(|name| bmz_skin::is_qwilight_adjustment_offset(name))
+        .all(|name| {
             before.offset_values.get(name).copied().unwrap_or_default()
                 == after.offset_values.get(name).copied().unwrap_or_default()
-        },
-    )
+        })
 }
 
 pub(super) fn apply_skin_offsets_to_lua_runtime_state(

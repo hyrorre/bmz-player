@@ -92,6 +92,14 @@ const ADJUSTMENTS: [Adjustment; 7] = [
     },
 ];
 
+/// Whether a saved offset is one of Qwilight's own adjustments. These are Lua
+/// inputs of the conversion (see `set_adjustment_globals`) and can change the
+/// layout or asset selection; every other Qwilight offset only moves converted
+/// elements.
+pub fn is_qwilight_adjustment_offset(name: &str) -> bool {
+    ADJUSTMENTS.iter().any(|adjustment| adjustment.name == name)
+}
+
 /// Only adjustments that the skin declares with its `set*` flag are shown.
 pub(super) fn adjustment_defs(definition: &Definition) -> Vec<Json> {
     ADJUSTMENTS

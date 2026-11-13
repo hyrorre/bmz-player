@@ -26,7 +26,8 @@ mod tests;
 mod visibility;
 
 pub use customize::{
-    QWILIGHT_LANE_COVER_DIR, QWILIGHT_LANE_COVER_PROPERTY, is_qwilight_lane_cover_image_path,
+    QWILIGHT_LANE_COVER_DIR, QWILIGHT_LANE_COVER_PROPERTY, is_qwilight_adjustment_offset,
+    is_qwilight_lane_cover_image_path,
 };
 
 /// Qwilight reads `configure-0` to `configure-15`.
