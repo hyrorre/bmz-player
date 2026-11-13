@@ -77,14 +77,48 @@ fn channel_decoder_wakes_from_eof_for_repeated_restart() {
     }
 }
 
+#[test]
+fn playback_decoder_applies_canvas_size_at_open_and_after_restart() {
+    let fixture = ThreeFrameMovie::new();
+    let mut decoder = VideoBgaDecoder::open_for_playback(&fixture.0, [1, 1]).unwrap();
+    let first = decoder.frame_at_blocking(0).unwrap().unwrap();
+    assert_eq!(first.source_size, [2, 2]);
+    assert_eq!([first.width, first.height], [1, 1]);
+    let last = decoder.frame_at_blocking(1_000_000).unwrap().unwrap();
+    assert_eq!([last.width, last.height], [1, 1]);
+    assert_eq!(last.pts_us, 200_000);
+
+    decoder.set_playback_canvas_size([4, 4]);
+    decoder.restart();
+    let first = decoder.frame_at_blocking(0).unwrap().unwrap();
+    assert_eq!(first.source_size, [2, 2]);
+    assert_eq!([first.width, first.height], [2, 2]);
+    assert_eq!(first.pts_us, 0);
+}
+
+#[test]
+fn playback_resize_uses_new_size_for_unqueued_frames_without_seeking() {
+    let fixture = ThreeFrameMovie::with_luma_levels(0..12);
+    let mut decoder = VideoBgaDecoder::open_for_playback(&fixture.0, [1, 1]).unwrap();
+    assert_eq!(decoder.frame_at_blocking(0).unwrap().unwrap().width, 1);
+    decoder.set_playback_canvas_size([2, 2]);
+    let last = decoder.frame_at_blocking(1_100_000).unwrap().unwrap();
+    assert_eq!(last.pts_us, 1_100_000);
+    assert_eq!([last.width, last.height], [2, 2]);
+}
+
 impl ThreeFrameMovie {
     fn new() -> Self {
+        Self::with_luma_levels([32, 128, 224])
+    }
+
+    fn with_luma_levels(levels: impl IntoIterator<Item = u8>) -> Self {
         let stamp =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
         let path =
             std::env::temp_dir().join(format!("bmz-video-loop-{}-{stamp}.y4m", std::process::id()));
         let mut bytes = b"YUV4MPEG2 W2 H2 F10:1 Ip A1:1 C420jpeg\n".to_vec();
-        for luma in [32, 128, 224] {
+        for luma in levels {
             bytes.extend_from_slice(b"FRAME\n");
             bytes.extend_from_slice(&[luma, luma, luma, luma, 128, 128]);
         }

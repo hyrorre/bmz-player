@@ -19,8 +19,11 @@ const CLOCKED_FRAME_WAIT_MAX_SLEEP_US: i64 = 4_000;
 pub struct DecodedFrame {
     pub pts_us: i64,
     pub rgba: Vec<u8>,
+    /// Dimensions of the RGBA pixels.
     pub width: u32,
     pub height: u32,
+    /// Dimensions before downscaling, used for display geometry.
+    pub source_size: [u32; 2],
 }
 
 /// Opens a video file, or a song archive entry already read into memory. Seeking and
@@ -166,7 +169,12 @@ enum ClockedFrameWait {
 
 impl VideoBgaDecoder {
     pub fn open(path: &Path) -> Result<Self> {
-        Self::open_inner(path, false)
+        Self::open_inner(path, false, [0; 2])
+    }
+
+    /// Open a chart video for live playback at the given canvas size.
+    pub fn open_for_playback(path: &Path, canvas_size: [u32; 2]) -> Result<Self> {
+        Self::open_inner(path, false, canvas_size)
     }
 
     /// Open a decoder that follows the playback clock reported by `poll_frame`.
@@ -175,10 +183,10 @@ impl VideoBgaDecoder {
     /// frames instead of queueing every decoded frame, closer to beatoraja's
     /// SkinSourceMovie behavior.
     pub fn open_following_playback_time(path: &Path) -> Result<Self> {
-        Self::open_inner(path, true)
+        Self::open_inner(path, true, [0; 2])
     }
 
-    fn open_inner(path: &Path, follow_playback_time: bool) -> Result<Self> {
+    fn open_inner(path: &Path, follow_playback_time: bool, canvas_size: [u32; 2]) -> Result<Self> {
         bmz_ffmpeg::ensure_init().map_err(|e| anyhow::anyhow!(e))?;
         let retirement = Some(retirement::Retirement::new()?);
 
@@ -187,6 +195,7 @@ impl VideoBgaDecoder {
         let restart_clocked_decode = Arc::new(AtomicBool::new(false));
         let playback_target_us = Arc::new(AtomicI64::new(0));
         let channel_decode = Arc::new(ChannelDecodeState::default());
+        channel_decode.set_canvas_size(canvas_size);
         if follow_playback_time {
             let clocked_frames = Arc::new(Mutex::new(ClockedFrameState::default()));
             let thread_playback_target_us = Arc::clone(&playback_target_us);
@@ -313,6 +322,12 @@ impl VideoBgaDecoder {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Apply a new canvas size to subsequent channel frames without seeking.
+    /// Previously queued frames remain usable during a resize.
+    pub fn set_playback_canvas_size(&mut self, size: [u32; 2]) {
+        self.channel_decode.set_canvas_size(size);
     }
 
     /// Offline selection waits for the first future PTS or EOF, so decode speed

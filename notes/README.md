@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-14 | [動画BGAの縮小とFast Vsyncの表示間隔](2026/2026-11-14-video-bga-playback-resolution.md) |
 | 2026-11-14 | [v0.5.2のリリースで失敗したBokutachiのPrimary設定テスト](2026/2026-11-14-release-bokutachi-primary-test.md) |
 | 2026-11-13 | [v0.5.2のLinux tarリリースで失敗した同梱スキンテスト](2026/2026-11-13-linux-tar-release-skin-tests.md) |
 | 2026-11-14 | [Bokutachiの登録確認と順位の再取得](2026/2026-11-14-bokutachi-result-confirmation.md) |

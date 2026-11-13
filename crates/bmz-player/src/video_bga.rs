@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 
 use bmz_chart::model::{BgaAssetId, BgaAssetKind, BgaEventKind};
 use bmz_core::judge::Judge;
@@ -14,6 +14,7 @@ pub struct ActiveVideoBgaDecoder {
     pub decoder: VideoBgaDecoder,
     pub last_pts: Option<i64>,
     last_used: std::time::Instant,
+    canvas_size: [u32; 2],
 }
 
 /// Resolve an immutable BGA timeline selection against renderer-owned assets.
@@ -122,6 +123,7 @@ pub fn update_video_bga_frames(
     } = running;
     let session = &gameplay.session;
     let chart = &session.chart;
+    let canvas_size = renderer.play_canvas_size();
     let mut active_video_assets = HashSet::new();
 
     for channel in active_bga_channels(session, chart_now, render_snapshot_cache) {
@@ -141,6 +143,7 @@ pub fn update_video_bga_frames(
             &asset.path,
             channel.origin,
             chart_now.0 - channel.origin.0,
+            canvas_size,
         );
     }
 
@@ -188,79 +191,52 @@ fn update_single_video(
     path: &std::path::Path,
     event_start_time: TimeUs,
     video_offset_us: i64,
+    canvas_size: [u32; 2],
 ) {
     if failed_video_bga.contains(&asset_id) {
         return;
     }
 
-    // デコーダが未作成またはイベント開始時刻が変わっていたら reuse/restart または新規作成
-    let needs_new = match video_bga_decoders.get(&asset_id) {
-        Some(active) => active.event_start_time != event_start_time,
-        None => true,
-    };
-
-    if needs_new {
-        if let Some(active) = video_bga_decoders.get_mut(&asset_id) {
-            if active.decoder.path() == path {
+    let now = std::time::Instant::now();
+    let active = match video_bga_decoders.entry(asset_id) {
+        Entry::Occupied(entry) if entry.get().decoder.path() == path => {
+            let active = entry.into_mut();
+            if canvas_size != active.canvas_size && !canvas_size.contains(&0) {
+                active.decoder.set_playback_canvas_size(canvas_size);
+                active.canvas_size = canvas_size;
+            }
+            if active.event_start_time != event_start_time {
                 active.decoder.restart_at(video_seek_offset_us(video_offset_us));
                 active.event_start_time = event_start_time;
                 active.last_pts = None;
-            } else {
-                match open_video_decoder_at(path, video_offset_us) {
-                    Ok(decoder) => {
-                        *active = ActiveVideoBgaDecoder {
-                            event_start_time,
-                            decoder,
-                            last_pts: None,
-                            last_used: std::time::Instant::now(),
-                        };
-                        tracing::info!(
-                            asset_id = asset_id.0,
-                            path = %path.display(),
-                            "opened video BGA decoder"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            asset_id = asset_id.0,
-                            %e,
-                            "failed to open video BGA; skipping"
-                        );
-                        failed_video_bga.insert(asset_id);
-                        video_bga_decoders.remove(&asset_id);
-                        return;
-                    }
-                }
             }
-        } else {
-            match open_video_decoder_at(path, video_offset_us) {
-                Ok(decoder) => {
-                    video_bga_decoders.insert(
-                        asset_id,
-                        ActiveVideoBgaDecoder {
-                            event_start_time,
-                            decoder,
-                            last_pts: None,
-                            last_used: std::time::Instant::now(),
-                        },
-                    );
-                    tracing::info!(
-                        asset_id = asset_id.0,
-                        path = %path.display(),
-                        "opened video BGA decoder"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(asset_id = asset_id.0, %e, "failed to open video BGA; skipping");
-                    failed_video_bga.insert(asset_id);
-                    return;
-                }
-            }
+            active
         }
-    }
-
-    let active = video_bga_decoders.get_mut(&asset_id).unwrap();
-    active.last_used = std::time::Instant::now();
+        entry => match open_video_decoder_at(path, video_offset_us, canvas_size) {
+            Ok(decoder) => {
+                tracing::info!(asset_id = asset_id.0, path = %path.display(), ?canvas_size,
+                    "opened video BGA decoder");
+                entry
+                    .insert_entry(ActiveVideoBgaDecoder {
+                        event_start_time,
+                        decoder,
+                        last_pts: None,
+                        last_used: now,
+                        canvas_size,
+                    })
+                    .into_mut()
+            }
+            Err(error) => {
+                tracing::warn!(asset_id = asset_id.0, %error, "failed to open video BGA; skipping");
+                failed_video_bga.insert(asset_id);
+                if let Entry::Occupied(entry) = entry {
+                    entry.remove();
+                }
+                return;
+            }
+        },
+    };
+    active.last_used = now;
     if let Some(frame) = active.decoder.poll_frame(video_offset_us)
         && active.last_pts != Some(frame.pts_us)
     {
@@ -274,8 +250,9 @@ fn update_single_video(
 fn open_video_decoder_at(
     path: &std::path::Path,
     video_offset_us: i64,
+    canvas_size: [u32; 2],
 ) -> anyhow::Result<VideoBgaDecoder> {
-    let mut decoder = VideoBgaDecoder::open(path)?;
+    let mut decoder = VideoBgaDecoder::open_for_playback(path, canvas_size)?;
     let seek_offset_us = video_seek_offset_us(video_offset_us);
     if seek_offset_us > 0 {
         decoder.restart_at(seek_offset_us);
@@ -292,8 +269,8 @@ fn upload_video_bga_frame(
     let texture_id = TextureId(bga_texture_id(asset_id));
     match renderer.upsert_rgba_texture_ref(texture_id, frame.width, frame.height, &frame.rgba) {
         Ok(()) => {
-            bga_frames
-                .insert(asset_id, display_video_bga_frame(asset_id, frame.width, frame.height));
+            let [width, height] = frame.source_size;
+            bga_frames.insert(asset_id, display_video_bga_frame(asset_id, width, height));
             true
         }
         Err(error) => {
@@ -359,5 +336,21 @@ mod tests {
         let frame = snapshot.bga_base.unwrap();
         assert_eq!((frame.width, frame.height, frame.tint_a), (1920.0, 1080.0, 0.5));
         assert!(frame.is_video);
+    }
+
+    #[test]
+    fn scaled_video_upload_keeps_original_geometry_in_the_catalog() {
+        let mut renderer = bmz_render::renderer::Renderer::default();
+        let mut frames = BgaFrameCatalog::new();
+        let id = BgaAssetId(7);
+        let frame = DecodedFrame {
+            pts_us: 0,
+            rgba: vec![0; 8],
+            width: 2,
+            height: 1,
+            source_size: [3840, 1920],
+        };
+        assert!(upload_video_bga_frame(&mut renderer, &mut frames, id, &frame));
+        assert_eq!(frames[&id], display_video_bga_frame(id, 3840, 1920));
     }
 }

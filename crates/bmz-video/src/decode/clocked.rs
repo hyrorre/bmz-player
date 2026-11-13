@@ -209,6 +209,7 @@ pub(crate) fn drain_clocked_decoder_frames(
             pts_us,
             &mut decode_context.scaler,
             take_clocked_recycled_rgba(clocked_frames),
+            [0; 2],
         )?;
         publish_clocked_frame(clocked_frames, frame)?;
     }

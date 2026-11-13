@@ -13,6 +13,7 @@ pub(crate) struct ChannelDecodeState {
     restart_target_us: Mutex<i64>,
     generation: AtomicU64,
     finished_generation: AtomicU64,
+    canvas_size: AtomicU64,
 }
 
 impl Default for ChannelDecodeState {
@@ -21,11 +22,21 @@ impl Default for ChannelDecodeState {
             restart_target_us: Mutex::new(0),
             generation: AtomicU64::new(0),
             finished_generation: AtomicU64::new(u64::MAX),
+            canvas_size: AtomicU64::new(0),
         }
     }
 }
 
 impl ChannelDecodeState {
+    pub(crate) fn set_canvas_size(&self, [width, height]: [u32; 2]) {
+        self.canvas_size.store((u64::from(width) << 32) | u64::from(height), Ordering::Relaxed);
+    }
+
+    fn canvas_size(&self) -> [u32; 2] {
+        let size = self.canvas_size.load(Ordering::Relaxed);
+        [(size >> 32) as u32, size as u32]
+    }
+
     pub(crate) fn restart_at(&self, target_us: i64) {
         let mut restart_target_us = self.restart_target_us.lock().unwrap();
         *restart_target_us = target_us;
@@ -211,7 +222,13 @@ pub(crate) fn decode_video_channel_pass(
                 catch_up.record_skipped((decoded.clone(), pts_us));
                 continue;
             }
-            let frame = rgba_frame_from_video_with_scaler(decoded, pts_us, scaler, None)?;
+            let frame = rgba_frame_from_video_with_scaler(
+                decoded,
+                pts_us,
+                scaler,
+                None,
+                channel.canvas_size(),
+            )?;
             match send_decoded_frame(sender, frame, generation, stop_decode, channel)? {
                 ChannelDecodePassEnd::Stop => return Ok(ChannelDecodePassEnd::Stop),
                 ChannelDecodePassEnd::Restart => return Ok(ChannelDecodePassEnd::Restart),
@@ -246,7 +263,13 @@ pub(crate) fn decode_video_channel_pass(
             catch_up.record_skipped((decoded.clone(), pts_us));
             continue;
         }
-        let frame = rgba_frame_from_video_with_scaler(decoded, pts_us, scaler, None)?;
+        let frame = rgba_frame_from_video_with_scaler(
+            decoded,
+            pts_us,
+            scaler,
+            None,
+            channel.canvas_size(),
+        )?;
         match send_decoded_frame(sender, frame, generation, stop_decode, channel)? {
             ChannelDecodePassEnd::Stop => return Ok(ChannelDecodePassEnd::Stop),
             ChannelDecodePassEnd::Restart => return Ok(ChannelDecodePassEnd::Restart),
@@ -291,7 +314,8 @@ pub(crate) fn publish_last_skipped_channel_frame(
     let Some((decoded, pts_us)) = catch_up.take_last_skipped() else {
         return Ok(ChannelDecodePassEnd::Eof);
     };
-    let frame = rgba_frame_from_video_with_scaler(&decoded, pts_us, scaler, None)?;
+    let frame =
+        rgba_frame_from_video_with_scaler(&decoded, pts_us, scaler, None, channel.canvas_size())?;
     send_decoded_frame(sender, frame, generation, stop_decode, channel)
 }
 

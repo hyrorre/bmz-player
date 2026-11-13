@@ -721,6 +721,19 @@ impl Renderer {
         })
     }
 
+    /// Pixel dimensions of the Play canvas after fitting and internal resolution.
+    pub fn play_canvas_size(&self) -> [u32; 2] {
+        self.gpu.as_ref().map_or([0, 0], |gpu| {
+            let surface = gpu.surface_size();
+            let policy = self.play_skin_canvas_render_policy();
+            let target = policy
+                .internal_render_size(surface, self.internal_resolution_mode)
+                .unwrap_or(surface);
+            let content = CanvasViewport::from_policy(target, policy).content_size();
+            [content.width, content.height]
+        })
+    }
+
     pub fn render_scene(&mut self, scene: AppSceneSnapshot) -> Result<()> {
         self.render_scene_status(scene).map(|_| ())
     }
