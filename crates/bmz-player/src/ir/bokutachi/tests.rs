@@ -423,6 +423,33 @@ async fn run(
 }
 use std::path::Path;
 
+async fn resend_selected(
+    db: &mut NetworkDatabase,
+    root: &Path,
+    config: &IrConfig,
+    now: i64,
+) -> crate::ir::sync::IrSyncReport {
+    crate::ir::sync::sync_pending_ir_jobs_filtered(
+        db,
+        &root.join("score.db"),
+        root,
+        &root.join("logs"),
+        config,
+        crate::ir::sync::IrSyncJobFilter {
+            provider_key: PROVIDER,
+            account_id: "42",
+            kind: IrJobKind::Score,
+            local_score_id: Some(1),
+        },
+        now,
+        1,
+        crate::storage::network_db::IrJobRetryFilter::ExplicitResend,
+        crate::ir::sync::IrSyncThrottle::none(),
+    )
+    .await
+    .unwrap()
+}
+
 pub(super) fn setup(root: &Path, origin: &str, game: Game) -> (NetworkDatabase, IrConfig, String) {
     let path = root.join("network.db");
     crate::storage::migration::migrate_network_db(&path).unwrap();
@@ -661,10 +688,51 @@ async fn chart_failures_stop_before_import_and_manual_retry_re_resolves() {
         assert_eq!(job(&db).status, "ineligible");
         assert_eq!(job(&db).next_attempt_at, crate::storage::network_db::IR_JOB_NO_AUTO_RETRY_AT);
         assert_eq!(run(&mut db, root.path(), &config, 200, false).await.failed, 0);
-        assert_eq!(run(&mut db, root.path(), &config, 201, true).await.failed, 0);
+        // Bulk manual sync must not repeatedly re-resolve terminal chart failures.
+        assert_eq!(run(&mut db, root.path(), &config, 201, true).await.processed, 0);
+        assert_eq!(job(&db).status, "ineligible");
+        assert_eq!(resend_selected(&mut db, root.path(), &config, 202).await.failed, 0);
         assert_eq!(job(&db).status, "pending");
         assert_eq!(job(&db).payload_json, original);
         server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn bulk_manual_sync_does_not_revisit_an_ineligible_chart() {
+    for scoped in [false, true] {
+        let (origin, server) =
+            server(vec![error("POST /api/v1/games/bms-7k/charts/resolve", 404, false, None)]).await;
+        let root = tempfile::tempdir().unwrap();
+        let (mut db, config, _) = setup(root.path(), &origin, Game::Bms7k);
+        let score_db = root.path().join("score.db");
+        let logs = root.path().join("logs");
+        let ctx = crate::ir::manual::IrSyncContext {
+            score_db: &score_db,
+            profile_root: root.path(),
+            logs_dir: &logs,
+            ir_config: &config,
+        };
+        let scope = if scoped {
+            crate::ir::manual::IrManualSyncScope::Kind {
+                provider_key: PROVIDER,
+                account_id: "42",
+                kind: IrJobKind::Score,
+            }
+        } else {
+            crate::ir::manual::IrManualSyncScope::Any
+        };
+        let (_sender, cancel) = tokio::sync::watch::channel(false);
+        for _ in 0..2 {
+            let outcome =
+                crate::ir::manual::sync_jobs(&ctx, &mut db, scope, 20, &mut |_| {}, &cancel)
+                    .await
+                    .unwrap();
+            assert_eq!(outcome.report.failed, 0);
+        }
+        assert_eq!(job(&db).status, "ineligible");
+        assert_eq!(job(&db).attempt_count, 1);
+        assert_eq!(server.await.unwrap().len(), 1);
     }
 }
 
@@ -729,6 +797,110 @@ async fn post_errors_classify_auth_content_and_retry_after_without_mutating_requ
         let requests = server.await.unwrap();
         assert_eq!(requests[1], requests[2]);
     }
+}
+
+#[tokio::test]
+async fn confirmed_failed_import_requires_individual_resend_and_preserves_request_after_restart() {
+    for (status, description) in [
+        (400, "Import tracker rejected the request."),
+        (404, "There is no ongoing import here."),
+        (500, "An internal service error has occurred with this import."),
+    ] {
+        let failure = || Reply {
+            path: "GET /api/v1/imports/import-1/poll-status",
+            status,
+            body: json!({"success": false, "description": description}),
+            auth: false,
+            retry: None,
+        };
+        let mut replies = vec![
+            ok("POST /api/v1/games/bms-7k/charts/resolve", json!({"chart":chart(Game::Bms7k)})),
+            accepted(),
+            failure(),
+        ];
+        if status == 404 {
+            replies.push(failure());
+        }
+        let mut accepted_again = accepted();
+        accepted_again.body["body"]["importID"] = json!("import-2");
+        replies.push(accepted_again);
+        replies.push(ok("GET /api/v1/imports/import-2/poll-status",
+            json!({"importStatus":"completed","import":{"userID":42,"scoreIDs":["score-2"],"errors":[]}})));
+        let (origin, server) = server(replies).await;
+        let root = tempfile::tempdir().unwrap();
+        let (mut db, config, original) = setup(root.path(), &origin, Game::Bms7k);
+        run(&mut db, root.path(), &config, 100, false).await;
+        let receipt = root.path().join("ir/bokutachi-receipts/1.json");
+        let stale_receipt = std::fs::read(&receipt).unwrap();
+        run(&mut db, root.path(), &config, 105, false).await;
+        if status == 404 {
+            assert_eq!(job(&db).status, "pending");
+            run(&mut db, root.path(), &config, 221, false).await;
+        }
+        assert_eq!(job(&db).status, "failed");
+        assert_eq!(job(&db).next_attempt_at, crate::storage::network_db::IR_JOB_NO_AUTO_RETRY_AT);
+        assert!(db.bokutachi_progress(1).unwrap().unwrap().contains("poll_failed"));
+        // Automatic processing and bulk manual retry never create another import.
+        assert_eq!(run(&mut db, root.path(), &config, 240, false).await.processed, 0);
+        assert_eq!(run(&mut db, root.path(), &config, 240, true).await.failed, 1);
+        let mut credentials =
+            crate::ir::credentials::load_credentials(root.path(), PROVIDER, &origin)
+                .unwrap()
+                .unwrap();
+        credentials.account_id = "43".into();
+        crate::ir::credentials::save_credentials(root.path(), &credentials).unwrap();
+        assert_eq!(resend_selected(&mut db, root.path(), &config, 250).await.failed, 1);
+        let progress: Value =
+            serde_json::from_str(&db.bokutachi_progress(1).unwrap().unwrap()).unwrap();
+        assert_eq!(progress["import_id"], "import-1");
+        credentials.account_id = "42".into();
+        crate::ir::credentials::save_credentials(root.path(), &credentials).unwrap();
+
+        // Persist the explicit restart before waiting for the origin's rate limit.
+        db.defer_bokutachi_origin(&origin, 400).unwrap();
+        assert_eq!(resend_selected(&mut db, root.path(), &config, 300).await.failed, 0);
+        let progress: Value =
+            serde_json::from_str(&db.bokutachi_progress(1).unwrap().unwrap()).unwrap();
+        assert_eq!(progress["retired_import_ids"], json!(["import-1"]));
+        assert!(progress["import_id"].is_null());
+        assert_eq!(job(&db).payload_json, original);
+        // Simulate an old receipt surviving removal. It cannot resurrect the failed import.
+        std::fs::write(&receipt, stale_receipt).unwrap();
+        drop(db);
+        let mut db = NetworkDatabase::open(&root.path().join("network.db")).unwrap();
+        assert_eq!(run(&mut db, root.path(), &config, 400, false).await.failed, 0);
+        assert_eq!(job(&db).payload_json, original);
+        assert_eq!(run(&mut db, root.path(), &config, 405, false).await.submitted, 1);
+        let progress: Value =
+            serde_json::from_str(&db.bokutachi_progress(1).unwrap().unwrap()).unwrap();
+        assert_eq!(progress["import_id"], "import-2");
+        assert_eq!(progress["retired_import_ids"], json!(["import-1"]));
+        let requests = server.await.unwrap();
+        assert_eq!(requests[1], requests[requests.len() - 2]);
+    }
+}
+
+#[tokio::test]
+async fn unconfirmed_server_error_retains_import_even_on_selected_resend() {
+    let path = "GET /api/v1/imports/import-1/poll-status";
+    let (origin, server) = server(vec![
+        ok("POST /api/v1/games/bms-7k/charts/resolve", json!({"chart":chart(Game::Bms7k)})),
+        accepted(),
+        error(path, 500, false, None),
+        ok(
+            path,
+            json!({"importStatus":"completed","import":{"userID":42,"scoreIDs":[],"errors":[]}}),
+        ),
+    ])
+    .await;
+    let root = tempfile::tempdir().unwrap();
+    let (mut db, config, original) = setup(root.path(), &origin, Game::Bms7k);
+    run(&mut db, root.path(), &config, 100, false).await;
+    assert_eq!(run(&mut db, root.path(), &config, 105, false).await.failed, 1);
+    assert_eq!(resend_selected(&mut db, root.path(), &config, 106).await.failed, 0);
+    assert_eq!(job(&db).status, "no_change");
+    assert_eq!(job(&db).payload_json, original);
+    server.await.unwrap();
 }
 
 #[tokio::test]

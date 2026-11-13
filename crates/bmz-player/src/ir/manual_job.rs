@@ -79,7 +79,11 @@ impl IrQueueStatusFilter {
             Self::Failed => &[IrScoreJobStatus::Failed],
             Self::Pending => &[IrScoreJobStatus::Pending],
             Self::Sending => &[IrScoreJobStatus::Sending],
-            Self::Completed => &[IrScoreJobStatus::Succeeded, IrScoreJobStatus::NoChange],
+            Self::Completed => &[
+                IrScoreJobStatus::Succeeded,
+                IrScoreJobStatus::NoChange,
+                IrScoreJobStatus::NotCleared,
+            ],
             Self::Ineligible => &[IrScoreJobStatus::Ineligible],
             Self::Unfinished => &[],
         }

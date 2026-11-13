@@ -64,7 +64,40 @@ pub(crate) struct ImportError {
 #[derive(Debug)]
 pub(crate) enum PollResult {
     Ongoing,
+    Failed { status: u16, description: String },
     Completed { score_id: Option<String>, errors: Vec<ImportError> },
+}
+
+#[derive(Debug)]
+struct ApiFailure {
+    status: StatusCode,
+    description: String,
+    source: anyhow::Error,
+}
+impl std::fmt::Display for ApiFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.source.fmt(f)
+    }
+}
+impl std::error::Error for ApiFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+fn failed_import(error: &anyhow::Error) -> Option<PollResult> {
+    let failure = error.downcast_ref::<ApiFailure>()?;
+    let status = failure.status.as_u16();
+    // A proxy/transport 5xx is not proof that the import failed. Only the
+    // documented job_queue failure response is unambiguous for HTTP 500.
+    let terminal = match status {
+        401 | 403 | 408 | 429 => false,
+        404 => failure.description == "There is no ongoing import here.",
+        400..=499 => true,
+        500 => failure.description == "An internal service error has occurred with this import.",
+        _ => false,
+    };
+    terminal.then(|| PollResult::Failed { status, description: failure.description.clone() })
 }
 
 pub(crate) fn valid_id(value: &str) -> bool {
@@ -113,16 +146,27 @@ impl BokutachiClient {
             None => body,
         };
         if !status.is_success() {
-            let description = serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|v| v.get("description").and_then(|v| v.as_str()).map(str::to_owned));
-            let safe = serde_json::json!({"message": description.unwrap_or_else(|| "Bokutachi request failed".into())}).to_string();
-            return Err(crate::ir::http_error::http_response_error(
+            let parsed = serde_json::from_str::<serde_json::Value>(&body).ok();
+            let description = parsed
+                .as_ref()
+                .and_then(|v| v.get("description").and_then(|v| v.as_str()))
+                .filter(|v| !v.is_empty());
+            let safe =
+                serde_json::json!({"message": description.unwrap_or("Bokutachi request failed")})
+                    .to_string();
+            let source = crate::ir::http_error::http_response_error(
                 "Bokutachi",
                 status,
                 &safe,
                 retry.as_deref(),
-            ));
+            );
+            if parsed.as_ref().and_then(|v| v.get("success")).and_then(|v| v.as_bool())
+                == Some(false)
+                && let Some(description) = description
+            {
+                return Err(ApiFailure { status, description: description.into(), source }.into());
+            }
+            return Err(source);
         }
         ensure!(expected.is_none_or(|s| s == status), "Bokutachi: unexpected HTTP success status");
         serde_json::from_str(&body).context("Bokutachi: invalid API response")
@@ -256,14 +300,17 @@ impl BokutachiClient {
 
     pub(crate) async fn poll(&self, id: &str, account: &str) -> Result<PollResult> {
         ensure!(valid_id(id), "Bokutachi: invalid saved import ID");
-        let value: serde_json::Value = self
+        let value: Result<serde_json::Value> = self
             .request(
                 self.http.get(format!("{}/api/v1/imports/{id}/poll-status", self.origin)),
                 None,
                 None,
             )
-            .await?;
-        parse_poll(value, account)
+            .await;
+        match value {
+            Ok(value) => parse_poll(value, account),
+            Err(error) => failed_import(&error).ok_or(error),
+        }
     }
 }
 

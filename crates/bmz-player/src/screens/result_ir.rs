@@ -39,7 +39,7 @@ pub enum RankingLoadState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IrSubmitState {
     Sending,
-    Done { submitted: u32, failed: u32, message: Option<String> },
+    Done { submitted: u32, failed: u32, message: Option<String>, status: Option<IrScoreJobStatus> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,8 +52,18 @@ pub struct ResultIrProviderSubmission {
 
 #[derive(Debug)]
 pub enum ResultIrEvent {
-    Submit { provider: String, submitted: u32, failed: u32, message: Option<String> },
-    Ranking { provider: String, scope: IrRankingScope, result: Result<ResultIrRanking, String> },
+    Submit {
+        provider: String,
+        submitted: u32,
+        failed: u32,
+        message: Option<String>,
+        status: Option<IrScoreJobStatus>,
+    },
+    Ranking {
+        provider: String,
+        scope: IrRankingScope,
+        result: Result<ResultIrRanking, String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -291,13 +301,13 @@ impl ResultIrState {
         let mut loaded_chart_rankings = Vec::new();
         while let Ok(event) = self.receiver.try_recv() {
             match event {
-                ResultIrEvent::Submit { provider, submitted, failed, message } => {
+                ResultIrEvent::Submit { provider, submitted, failed, message, status } => {
                     let restricted_chart = failed > 0
                         && message
                             .as_deref()
                             .and_then(crate::ir::IrModerationCode::from_error_message)
                             .is_some_and(|code| !code.is_account_level());
-                    let state = IrSubmitState::Done { submitted, failed, message };
+                    let state = IrSubmitState::Done { submitted, failed, message, status };
                     if let Some(provider_state) = self
                         .provider_submissions
                         .iter_mut()
@@ -365,7 +375,10 @@ impl ResultIrState {
         if crate::ir::bokutachi::is_provider(&self.query.provider) {
             return false;
         }
-        matches!(&self.submit, IrSubmitState::Done { submitted: 0, failed: 0, message: Some(_) })
+        matches!(
+            &self.submit,
+            IrSubmitState::Done { submitted: 0, failed: 0, message: Some(_), .. }
+        )
     }
 
     fn update_submit_timer(&mut self, submitted: u32, failed: u32, error: bool) {
@@ -855,6 +868,7 @@ mod tests {
             .send(ResultIrEvent::Submit {
                 provider: crate::ir::rian_ir::RIAN_IR_PROVIDER.to_string(),
                 submitted: 1,
+                status: None,
                 failed: 0,
                 message: None,
             })
@@ -865,7 +879,7 @@ mod tests {
         assert_eq!(state.submit, IrSubmitState::Sending);
         assert_eq!(
             state.provider_submissions[1].state,
-            IrSubmitState::Done { submitted: 1, failed: 0, message: None }
+            IrSubmitState::Done { submitted: 1, failed: 0, message: None, status: None }
         );
 
         event_sender
@@ -904,6 +918,7 @@ mod tests {
                 .send(ResultIrEvent::Submit {
                     provider: "bmz-official".to_string(),
                     submitted: 0,
+                    status: None,
                     failed: 1,
                     message: Some(format!("job 1: BMZ IR score submission failed: 403 [{code}]")),
                 })

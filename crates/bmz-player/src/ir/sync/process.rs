@@ -98,6 +98,8 @@ pub(super) async fn sync_pending_ir_jobs_with_filter(
                 provider,
                 &job,
                 job_now,
+                retry == IrJobRetryFilter::ExplicitResend
+                    && filter.is_some_and(|f| f.local_score_id.is_some()),
                 &mut report,
             )
             .await?;

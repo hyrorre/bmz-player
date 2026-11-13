@@ -390,10 +390,10 @@ fn job_status_label(status: &str, text: Localizer) -> String {
     }
 }
 
-pub(super) fn bokutachi_dan_status(status: &str, message: &str, text: Localizer) -> String {
+pub(super) fn bokutachi_dan_status(status: &str, text: Localizer) -> String {
     text.text(match status {
         "succeeded" => "ir-bokutachi-dan-updated",
-        "no_change" if message.contains("server did not accept") => "ir-bokutachi-dan-not-cleared",
+        "not_cleared" => "ir-bokutachi-dan-not-cleared",
         "no_change" => "ir-bokutachi-dan-unchanged",
         "ineligible" => "ir-bokutachi-ineligible",
         "failed" => "ir-bokutachi-dan-failed",
@@ -565,7 +565,7 @@ fn build_ir_queue(
                         });
                         ui.label(truncate_chars(&chart, 36)).on_hover_text(chart);
                         ui.label(if dan {
-                            bokutachi_dan_status(&job.status, &job.last_error, text)
+                            bokutachi_dan_status(&job.status, text)
                         } else if crate::ir::bokutachi::is_provider(&job.provider)
                             && job.status == "pending"
                             && job.last_error.contains("accepted")

@@ -309,28 +309,24 @@ impl DanJob {
         provider: &IrProviderConfig,
         course_score_id: i64,
         play: &Result<DanPlay>,
-    ) -> Result<Self> {
+    ) -> Result<Option<Self>> {
         let candidate = match play {
             Ok(play) => {
                 Candidate::Eligible { play: Box::new(play.clone()), request: play.request()? }
             }
-            Err(error) => Candidate::Ineligible { reason: format!("{error:#}") },
+            Err(error) => {
+                tracing::info!(%error, course_score_id, "Bokutachi class update is not eligible; no job created");
+                return Ok(None);
+            }
         };
-        Ok(Self {
+        Ok(Some(Self {
             version: 1,
             idempotency_key: format!("bmz-bokutachi-dan-{course_score_id}"),
             origin: crate::ir::credentials::credential_origin(&provider.base_url)?,
             account_id: provider.account_id.clone(),
             course_score_id,
             candidate,
-        })
-    }
-
-    pub(crate) fn ineligible_reason(&self) -> Option<&str> {
-        match &self.candidate {
-            Candidate::Ineligible { reason } => Some(reason),
-            _ => None,
-        }
+        }))
     }
 }
 
@@ -433,19 +429,22 @@ pub(crate) async fn step(
                 error
             }
         })?;
-    let (updated, message) = match &result {
+    use crate::storage::network_db::IrScoreJobStatus;
+    let (status, message) = match &result {
         DanOutcome::Updated { set, value } => {
-            (true, format!("Bokutachi: class updated ({set}: {value})"))
+            (IrScoreJobStatus::Succeeded, format!("Bokutachi: class updated ({set}: {value})"))
         }
-        DanOutcome::Unchanged { set, value } => {
-            (false, format!("Bokutachi: class update completed with no change ({set}: {value})"))
-        }
-        DanOutcome::NotCleared => {
-            (false, "Bokutachi: class not updated; server did not accept this as a clear".into())
-        }
+        DanOutcome::Unchanged { set, value } => (
+            IrScoreJobStatus::NoChange,
+            format!("Bokutachi: class update completed with no change ({set}: {value})"),
+        ),
+        DanOutcome::NotCleared => (
+            IrScoreJobStatus::NotCleared,
+            "Bokutachi: class not updated; server did not accept this as a clear".into(),
+        ),
     };
     // No score ID, score ledger, replay child, import ID, or poll is involved.
-    db.finish_bokutachi_dan(job.id, now, updated, &message)?;
+    db.finish_bokutachi_dan(job.id, now, status, &message)?;
     report.messages.push(message);
     Ok(())
 }

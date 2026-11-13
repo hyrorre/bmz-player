@@ -135,6 +135,57 @@ fn bokutachi_pms_device_best_aggregates_independent_metrics_before_current_histo
     }
 }
 
+#[test]
+fn bokutachi_pms_device_best_excludes_external_imports_and_downloads() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    configure_connection(&conn).unwrap();
+    run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+    let mut db = ScoreDatabase { conn };
+    let mut imported = record(200, ClearType::Max);
+    imported.rule_mode = "Beatoraja".into();
+    // Imported PMS scores may have the default Keyboard device even when no
+    // device information was available. They must not suppress a local play.
+    for source in [ScoreSourceKind::Beatoraja, ScoreSourceKind::Lr2, ScoreSourceKind::Lr2Oraja] {
+        imported.source_kind = source;
+        db.insert_score(&imported).unwrap();
+    }
+    let download = ScoreHistorySourceRecord {
+        key: ScoreHistorySourceKey {
+            source: "bmz_ir".into(),
+            provider: "bmz-official".into(),
+            account_id: "player".into(),
+            remote_score_id: "imported-pms".into(),
+        },
+        verification: String::new(),
+        server_received_at: 1,
+        imported_at: 2,
+    };
+    imported.source_kind = ScoreSourceKind::Beatoraja;
+    db.insert_score_with_source(&imported, &download).unwrap();
+    let result = PlayResult {
+        chart_sha256: [7; 32],
+        clear_type: ClearType::Normal,
+        gauge_type: GaugeType::Normal,
+        gauge_value: 80.0,
+        total_notes: 100,
+        score: score_with_ex_score(20),
+        autoplay: false,
+    };
+    for device in [InputDeviceKind::Keyboard, InputDeviceKind::Controller] {
+        assert!(db.improves_device_best(key([7; 32]), device, i64::MAX, &result).unwrap());
+        let mut local = record(20, ClearType::Normal);
+        local.rule_mode = "Beatoraja".into();
+        local.device_type = device;
+        let current = db.insert_score(&local).unwrap();
+        assert!(db.improves_device_best(key([7; 32]), device, current, &result).unwrap());
+        assert!(!db.improves_device_best(key([7; 32]), device, current + 1, &result).unwrap());
+    }
+    // This partition does not change local BEST or the other providers.
+    let best = db.best_scores_for_charts(&[key([7; 32])]).unwrap().remove(0);
+    assert_eq!(best.ex_score, 200);
+    assert_eq!(best.clear_type, "Max");
+}
+
 fn key(sha: [u8; 32]) -> ScoreKey {
     ScoreKey::new(sha, LnScorePolicy::ForceLn)
 }

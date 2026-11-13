@@ -36,7 +36,7 @@ impl ScoreDatabase {
                 WHEN 'Perfect' THEN 9 WHEN 'Max' THEN 10 END), MAX(max_combo), MIN(bp), MIN(cb)
              FROM score_history WHERE chart_sha256 = ?1 AND ln_policy = ?2
                 AND double_option = ?3 AND rule_mode = ?4 AND device_type = ?5
-                AND id < ?6 AND normal_best_eligible = 1",
+                AND id < ?6 AND normal_best_eligible = 1 AND source_kind = 'Local'",
             params![
                 hash_to_hex(&key.chart_sha256),
                 key.ln_policy.as_str(),

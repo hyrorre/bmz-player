@@ -158,6 +158,8 @@ PMS uses the input device division saved with the play: Controller or Keyboard. 
 
 Unregistered charts or scoring note-count mismatches stop submission with a reason. Accepted imports await registration confirmation, which resumes after restarting. “No new score confirmed” is a final outcome and does not prove a duplicate. Select Bokutachi in the send queue and use the Completed filter to see final outcomes. Ranking, rival and battle-data downloads and replay uploads are unsupported.
 
+To check an ineligible Bokutachi chart again, select its score in the send queue and resend it individually. An individual resend can also restart registration after a confirmed server-side import failure. Ordinary network failures resume confirmation of the accepted import. Bulk sync does not recheck ineligible charts or restart failed imports. PMS UPDATE SCORE excludes external scores imported from beatoraja and other players from its comparison.
+
 ### Uploading and downloading past scores
 
 Settings → **IR** → "Bulk score operations" offers two actions.

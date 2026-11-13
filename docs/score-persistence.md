@@ -3,7 +3,7 @@
 この文書は、通常プレイ・アシスト・譜面オプション・特殊モードについて、
 BMZがクリアランプ、数値ベスト、履歴、リプレイ、IRを更新する条件を整理します。
 beatoraja互換を判断するときはこの文書を入口とし、IR固有の詳細は
-`docs/ir.md`と`docs/rian-ir.md`、新規単曲送信専用の[Bokutachi](bokutachi.md)を参照します。
+`docs/ir.md`と`docs/rian-ir.md`、新規単曲・コース各曲送信と段位更新の[Bokutachi](bokutachi.md)を参照します。
 
 レビュー基準日は2026-08-27です。BMZの現行実装と、`.local/beatoraja/`の
 参照ソースを静的に比較した結果です。未解決の差は「互換差分」に明記します。
@@ -360,6 +360,8 @@ BMZのコースIRはproviderの単曲`send_policy`を参照せず、course defin
 
 Bokutachiのコース各曲は単曲の送信方針に従い、原則NO PLAY、フルコンボ系だけFULL COMBOとして送ります。
 COMPLETE SONGはその曲の実際の完奏状態を使います。9Kは各曲に保存された入力機器別に送信・BEST比較します。
+PMSのUPDATE SCOREは通常BEST更新対象の`source_kind=Local`履歴だけを比較し、外部プレイヤー由来の取り込み成績を除外します。
+今回保存した履歴を除き、EX・ランプ・コンボ・BP・CBを独立に集計します。全体BESTと他IRの比較元は変えません。
 Bokutachiのコース全体は合計スコアを登録せず、適格なBMS 7K／14K・4曲クリアだけ段位更新を行います。
 この段位更新には単曲・コース合計のBEST更新や各曲送信の成功を要求しません。
 条件・段位APIの配置制限・未対応範囲は[Bokutachi](bokutachi.md)を参照してください。

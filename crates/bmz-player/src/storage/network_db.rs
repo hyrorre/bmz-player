@@ -17,6 +17,7 @@ pub struct NetworkDatabase {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IrScoreJobStatus {
+    NotCleared,
     Ineligible,
     NoChange,
     Pending,

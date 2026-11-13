@@ -46,6 +46,24 @@ fn play(mode: KeyMode) -> DanPlay {
 }
 
 #[test]
+fn ineligible_captured_courses_do_not_create_outbox_payloads() {
+    let provider = IrProviderConfig::bokutachi();
+    let mut not_cleared = play(KeyMode::K7);
+    not_cleared.course_clear = false;
+    let mut private = play(KeyMode::K14);
+    private.release = false;
+    for bad in [play(KeyMode::K9), not_cleared, private] {
+        // capture validates the request before the enqueue boundary.
+        let capture = bad.request().map(|_| bad);
+        assert!(capture.is_err());
+        assert!(DanJob::new(&provider, 1, &capture).unwrap().is_none());
+    }
+    let missing_stages = Err(anyhow::anyhow!("four actually played stages are required"));
+    assert!(DanJob::new(&provider, 1, &missing_stages).unwrap().is_none());
+    assert!(DanJob::new(&provider, 1, &Ok(play(KeyMode::K7))).unwrap().is_some());
+}
+
+#[test]
 fn eligibility_checks_each_stage_and_actual_course_clear() {
     for mode in [KeyMode::K7, KeyMode::K14] {
         let good = play(mode);
@@ -236,7 +254,7 @@ fn reply(status: u16, body: Value) -> Reply {
 }
 
 fn enqueue(db: &mut NetworkDatabase, provider: &IrProviderConfig) -> (i64, String) {
-    let payload = DanJob::new(provider, 77, &Ok(play(KeyMode::K14))).unwrap();
+    let payload = DanJob::new(provider, 77, &Ok(play(KeyMode::K14))).unwrap().unwrap();
     let json = serde_json::to_string(&payload).unwrap();
     let id = db
         .enqueue_ir_score_job(&NewIrScoreJob {
@@ -300,7 +318,7 @@ async fn synchronous_http_results_do_not_create_scores_or_touch_stage_jobs() {
         (
             200,
             json!({"success":true,"description":"Class not updated, as you didn't clear this course."}),
-            "no_change",
+            "not_cleared",
             false,
         ),
         (404, json!({"success":false,"description":"Unsupported course."}), "ineligible", false),

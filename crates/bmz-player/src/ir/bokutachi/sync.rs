@@ -23,6 +23,10 @@ struct Progress {
     import_id: Option<String>,
     accepted_at: Option<i64>,
     phase: String,
+    #[serde(default)]
+    retired_import_ids: Vec<String>,
+    #[serde(default)]
+    import_failure: Option<String>,
 }
 
 pub(crate) async fn process(
@@ -31,9 +35,10 @@ pub(crate) async fn process(
     provider: &IrProviderConfig,
     job: &IrScoreJobRecord,
     now: i64,
+    explicit_resend: bool,
     report: &mut IrSyncReport,
 ) -> Result<()> {
-    let result = step(db, profile_root, provider, job, now, report).await;
+    let result = step(db, profile_root, provider, job, now, explicit_resend, report).await;
     if let Err(error) = result {
         if error.downcast_ref::<super::client::IneligibleChart>().is_some() {
             let message = format!("{error:#}");
@@ -83,6 +88,7 @@ async fn step(
     provider: &IrProviderConfig,
     job: &IrScoreJobRecord,
     now: i64,
+    explicit_resend: bool,
     report: &mut IrSyncReport,
 ) -> Result<()> {
     if job.kind == IrJobKind::Course {
@@ -125,8 +131,32 @@ async fn step(
                 && receipt.submission_key == payload.idempotency_key,
             "Bokutachi: invalid recovery receipt"
         );
-        progress = receipt;
+        if !progress.retired_import_ids.contains(receipt.import_id.as_ref().unwrap()) {
+            progress = receipt;
+            db.save_bokutachi_progress(job.id, &serde_json::to_string(&progress)?)?;
+        }
+    }
+    if progress.phase == "poll_failed" {
+        ensure!(
+            explicit_resend,
+            "Bokutachi: import failed; select this job and resend to restart registration: {}",
+            progress.import_failure.as_deref().unwrap_or("unknown import failure")
+        );
+        let credentials =
+            crate::ir::credentials::load_credentials(root, &job.provider, &ctx.origin)?
+                .context("Bokutachi: validate the API key before restarting registration")?;
+        ensure!(
+            credentials.account_id == job.account_id,
+            "Bokutachi: restore this account's API key"
+        );
+        let import_id = progress.import_id.take().context("Bokutachi: missing failed import ID")?;
+        progress.retired_import_ids.push(import_id);
+        progress.accepted_at = None;
+        progress.phase = "prepared".into();
+        // Commit the retired ID before removing its receipt or issuing a POST.
+        // A failed unlink must never recover that obsolete receipt on restart.
         db.save_bokutachi_progress(job.id, &serde_json::to_string(&progress)?)?;
+        let _ = std::fs::remove_file(&receipt_path);
     }
     let client = BokutachiClient::new(&ctx.origin)?;
     if let Some(import_id) = &progress.import_id {
@@ -149,6 +179,26 @@ async fn step(
             )?,
         };
         match poll {
+            PollResult::Failed { status: 404, .. }
+                if now.saturating_sub(progress.accepted_at.unwrap_or(0)) < 120 =>
+            {
+                db.defer_bokutachi_job(
+                    job.id,
+                    now,
+                    now.saturating_add(10),
+                    "Bokutachi: accepted; waiting for import status",
+                )?;
+            }
+            PollResult::Failed { status, description } => {
+                let message = format!(
+                    "Bokutachi: import failed ({status}): {description}; select this job and resend to restart registration"
+                );
+                progress.phase = "poll_failed".into();
+                progress.import_failure = Some(message.clone());
+                db.save_bokutachi_progress(job.id, &serde_json::to_string(&progress)?)?;
+                db.mark_ir_score_job_rejected(job.id, now, &message)?;
+                report.record_failure(job.id, IrSyncFailureClass::Job, message);
+            }
             PollResult::Ongoing => {
                 db.defer_bokutachi_job(
                     job.id,

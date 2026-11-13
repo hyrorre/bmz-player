@@ -5,19 +5,13 @@ impl NetworkDatabase {
         &self,
         job_id: i64,
         now: i64,
-        updated: bool,
+        status: IrScoreJobStatus,
         message: &str,
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE ir_score_jobs SET status = ?2, updated_at = ?3,
             next_attempt_at = ?4, last_error = ?5 WHERE id = ?1",
-            params![
-                job_id,
-                if updated { "succeeded" } else { "no_change" },
-                now,
-                IR_JOB_NO_AUTO_RETRY_AT,
-                message
-            ],
+            params![job_id, status.as_str(), now, IR_JOB_NO_AUTO_RETRY_AT, message],
         )?;
         Ok(())
     }

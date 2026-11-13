@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-13 | [Bokutachi PR #86のレビュー対応](2026/2026-11-13-bokutachi-review.md) |
 | 2026-11-13 | [デフォルト描画状態の暗黙アセット探索と起動診断](2026/2026-11-13-startup-default-and-diagnostics.md) |
 | 2026-11-13 | [Luxez-Flatの詳細オプションで波ダッシュの字形を検査する](2026/2026-11-13-luxez-detail-option-glyphs.md) |
 | 2026-11-12 | [F1で開くリザルトIRランキングのスクロール](2026/2026-11-12-result-ir-scroll.md) |

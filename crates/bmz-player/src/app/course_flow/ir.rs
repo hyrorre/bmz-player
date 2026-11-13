@@ -110,12 +110,15 @@ impl WinitApp {
             let outcome = (|| -> anyhow::Result<()> {
                 let provider_key = crate::ir::provider_key::configured_provider_key(provider)
                     .context("Bokutachi dan: missing configured provider key")?;
-                let payload = crate::ir::bokutachi::dan::DanJob::new(
+                let Some(payload) = crate::ir::bokutachi::dan::DanJob::new(
                     provider,
                     course_score_id,
                     bokutachi_dan,
-                )?;
-                let job_id = self.boot.network_db.enqueue_ir_score_job(
+                )?
+                else {
+                    return Ok(());
+                };
+                self.boot.network_db.enqueue_ir_score_job(
                     &crate::storage::network_db::NewIrScoreJob {
                         provider: provider_key.to_string(),
                         account_id: provider.account_id.clone(),
@@ -131,9 +134,6 @@ impl WinitApp {
                         now: played_at,
                     },
                 )?;
-                if let Some(reason) = payload.ineligible_reason() {
-                    self.boot.network_db.reject_bokutachi_chart(job_id, played_at, reason)?;
-                }
                 Ok(())
             })();
             if let Err(error) = outcome {
