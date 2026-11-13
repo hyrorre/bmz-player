@@ -93,17 +93,22 @@ impl SelectIrRanking {
         double_option: DoubleOptionScoreBucket,
         rule_mode: RuleMode,
         selected: Option<[u8; 32]>,
+        bokutachi_game: Option<crate::ir::bokutachi::Game>,
     ) {
+        let context = Self::cache_context(ir_config, context, bokutachi_game);
+        let context = context.as_ref();
         if self.context != context {
             self.context = context.to_string();
             self.clear();
         }
-        self.drain_chart_fetches();
+        self.drain_chart_fetches(ir_config);
 
         let Some(provider) = enabled_provider(ir_config) else {
             return;
         };
-        let Some(sha256) = selected else {
+        let Some(sha256) = selected.filter(|_| {
+            !crate::ir::bokutachi::is_provider(&provider.0) || bokutachi_game.is_some()
+        }) else {
             self.pending = None;
             return;
         };
@@ -124,6 +129,7 @@ impl SelectIrRanking {
                         double_option,
                         rule_mode,
                         sha256,
+                        bokutachi_game,
                     );
                 }
             }
@@ -148,14 +154,19 @@ impl SelectIrRanking {
         double_option: DoubleOptionScoreBucket,
         rule_mode: RuleMode,
         sha256: [u8; 32],
+        bokutachi_game: Option<crate::ir::bokutachi::Game>,
     ) -> SelectIrResultLookup {
-        self.drain_chart_fetches();
-        if self.context != context {
+        if self.context.as_str() != Self::cache_context(ir_config, context, bokutachi_game).as_ref()
+        {
             return SelectIrResultLookup::Unavailable;
         }
+        self.drain_chart_fetches(ir_config);
         let Some(provider) = enabled_provider(ir_config) else {
             return SelectIrResultLookup::Unavailable;
         };
+        if crate::ir::bokutachi::is_provider(&provider.0) && bokutachi_game.is_none() {
+            return SelectIrResultLookup::Unavailable;
+        }
         if let Some(entry) = self.cache.get(&sha256) {
             return match &entry.global_ranking {
                 Some(global) => SelectIrResultLookup::Loaded(Box::new(SelectIrResultRankings {
@@ -180,9 +191,28 @@ impl SelectIrRanking {
                 double_option,
                 rule_mode,
                 sha256,
+                bokutachi_game,
             );
         }
         SelectIrResultLookup::Loading
+    }
+
+    fn cache_context<'a>(
+        ir_config: &IrConfig,
+        context: &'a str,
+        bokutachi_game: Option<crate::ir::bokutachi::Game>,
+    ) -> std::borrow::Cow<'a, str> {
+        let provider = crate::ir::provider_key::primary_provider_config(ir_config);
+        match provider {
+            Some(provider) if crate::ir::bokutachi::is_config(provider) => format!(
+                "bokutachi:{}:{}:{}:{context}",
+                provider.base_url,
+                provider.account_id,
+                bokutachi_game.map_or("", crate::ir::bokutachi::Game::as_str)
+            )
+            .into(),
+            _ => context.into(),
+        }
     }
 
     fn start_chart_fetch(
@@ -193,6 +223,7 @@ impl SelectIrRanking {
         double_option: DoubleOptionScoreBucket,
         rule_mode: RuleMode,
         sha256: [u8; 32],
+        bokutachi_game: Option<crate::ir::bokutachi::Game>,
     ) {
         let requested_at = Instant::now();
         self.in_flight = Some((self.context.clone(), sha256, requested_at));
@@ -205,6 +236,7 @@ impl SelectIrRanking {
                 ln_policy,
                 double_option,
                 rule_mode,
+                bokutachi_game,
             },
             self.context.clone(),
             sha256,
@@ -214,18 +246,19 @@ impl SelectIrRanking {
     }
 
     /// 完了した譜面ランキングの取得結果をキャッシュへ取り込む。
-    fn drain_chart_fetches(&mut self) {
+    fn drain_chart_fetches(&mut self, ir_config: &IrConfig) {
         while let Ok((result_context, sha256, requested_at, result)) = self.receiver.try_recv() {
-            if self.in_flight.as_ref().is_some_and(
+            let is_current = self.in_flight.as_ref().is_some_and(
                 |(context, in_flight_sha, in_flight_requested_at)| {
                     context == &result_context
                         && *in_flight_sha == sha256
                         && *in_flight_requested_at == requested_at
                 },
-            ) {
+            );
+            if is_current {
                 self.in_flight = None;
             }
-            if result_context != self.context {
+            if !is_current || result_context != self.context {
                 tracing::debug!(
                     old_context = %result_context,
                     current_context = %self.context,
@@ -238,6 +271,8 @@ impl SelectIrRanking {
                 continue;
             }
             let completed_at = Instant::now();
+            let supports_battle = !crate::ir::provider_key::primary_provider_config(ir_config)
+                .is_some_and(crate::ir::bokutachi::is_config);
             let entry = match result {
                 Ok((global, self_and_rivals, rivals)) => {
                     let global_ranking = chart_ranking_to_result_ir_ranking(&global);
@@ -251,7 +286,11 @@ impl SelectIrRanking {
                         self_and_rivals_ranking,
                         self_and_rivals_scroll_offset: 0,
                         rival: rivals.as_ref().and_then(top_rival_snapshot),
-                        global_battle_entries: battle_entries(&global),
+                        global_battle_entries: if supports_battle {
+                            battle_entries(&global)
+                        } else {
+                            Vec::new()
+                        },
                         self_and_rivals_battle_entries: self_and_rivals
                             .as_ref()
                             .map(battle_entries)
@@ -340,6 +379,10 @@ impl SelectIrRanking {
         let Some(provider) = enabled_provider(ir_config) else {
             return;
         };
+        if crate::ir::bokutachi::is_provider(&provider.0) {
+            self.course_pending = None;
+            return;
+        }
         let Some(target) = selected else {
             self.course_pending = None;
             return;
@@ -432,6 +475,26 @@ impl SelectIrRanking {
         );
         // プレイした譜面は既に選曲カーソルが安定しているため、通常のカーソル移動用
         // debounce を待たず、Select に戻った最初の update で再取得する。
+        self.pending = Some((sha256, Instant::now() - FETCH_DEBOUNCE));
+    }
+
+    pub(crate) fn invalidate_bokutachi_chart(
+        &mut self,
+        ir_config: &IrConfig,
+        context: &str,
+        game: crate::ir::bokutachi::Game,
+        sha256: [u8; 32],
+    ) {
+        if !crate::ir::provider_key::primary_provider_config(ir_config)
+            .is_some_and(crate::ir::bokutachi::is_config)
+            || self.context.as_str() != Self::cache_context(ir_config, context, Some(game)).as_ref()
+        {
+            return;
+        }
+        self.cache.remove(&sha256);
+        if self.in_flight.as_ref().is_some_and(|(_, chart, _)| *chart == sha256) {
+            self.in_flight = None;
+        }
         self.pending = Some((sha256, Instant::now() - FETCH_DEBOUNCE));
     }
 }

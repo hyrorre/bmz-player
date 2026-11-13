@@ -40,6 +40,9 @@
 | 日付 | 記録 |
 |---|---|
 | 2026-11-13 | [v0.5.2のLinux tarリリースで失敗した同梱スキンテスト](2026/2026-11-13-linux-tar-release-skin-tests.md) |
+| 2026-11-14 | [Bokutachiの登録確認と順位の再取得](2026/2026-11-14-bokutachi-result-confirmation.md) |
+| 2026-11-13 | [Bokutachiの譜面別ランキングとPrimary設定](2026/2026-11-13-bokutachi-chart-ranking.md) |
+| 2026-11-13 | [Bokutachiの文字列曲IDによる送信失敗](2026/2026-11-13-bokutachi-song-id.md) |
 | 2026-11-13 | [Kaleidへのmain統合とBokutachi条件](2026/2026-11-13-kaleid-main-bokutachi.md) |
 | 2026-11-13 | [Qwilightプレイスキンの要素別オフセット](2026/2026-11-13-qwilight-element-offsets.md) |
 | 2026-11-13 | [不可視ノーツによる結果確定とCLEAR演出の遅れ](2026/2026-11-13-invisible-note-result-settlement.md) |

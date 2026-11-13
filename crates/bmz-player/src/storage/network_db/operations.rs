@@ -1,7 +1,5 @@
 use anyhow::Context;
 
-const IR_JOB_SENDING_STALE_AFTER_SECONDS: i64 = 300;
-
 // Payloads without a submission identifier are legacy/internal jobs.
 fn job_submission_key(job: &NewIrScoreJob) -> String {
     serde_json::from_str::<serde_json::Value>(&job.payload_json)
@@ -548,7 +546,6 @@ impl NetworkDatabase {
         now: i64,
         ignore_retry_backoff: bool,
     ) -> Result<Vec<IrScoreJobRecord>> {
-        const SENDING_STALE_AFTER_SECONDS: i64 = 300;
         let retry_filter = if ignore_retry_backoff {
             "status IN ('pending', 'failed', 'ineligible')"
         } else {
@@ -576,7 +573,7 @@ impl NetworkDatabase {
             stmt.query_map(
                 params![
                     now,
-                    SENDING_STALE_AFTER_SECONDS,
+                    IR_JOB_SENDING_STALE_AFTER_SECONDS,
                     provider,
                     account_id,
                     kind.as_str(),

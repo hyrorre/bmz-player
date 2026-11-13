@@ -29,6 +29,15 @@ struct Progress {
     import_failure: Option<String>,
 }
 
+pub(crate) fn has_accepted_import(db: &NetworkDatabase, job_id: i64) -> Result<bool> {
+    let Some(json) = db.bokutachi_progress(job_id)? else {
+        return Ok(false);
+    };
+    let progress: Progress =
+        serde_json::from_str(&json).context("Bokutachi: invalid saved import progress")?;
+    Ok(progress.import_id.is_some() && matches!(progress.phase.as_str(), "poll" | "completed"))
+}
+
 pub(crate) async fn process(
     db: &mut NetworkDatabase,
     profile_root: &Path,
@@ -91,6 +100,7 @@ async fn step(
     explicit_resend: bool,
     report: &mut IrSyncReport,
 ) -> Result<()> {
+    let started = std::time::Instant::now();
     if job.kind == IrJobKind::Course {
         return super::dan::step(db, root, provider, job, now, report).await;
     }
@@ -161,16 +171,23 @@ async fn step(
     }
     let client = BokutachiClient::new(&ctx.origin)?;
     if let Some(import_id) = &progress.import_id {
+        let accepted_at = progress.accepted_at.unwrap_or(0);
+        let delay = match now.saturating_sub(accepted_at) {
+            ..=5 => 2,
+            6..=19 => 4,
+            _ => 10,
+        };
         let poll = match client.poll(import_id, &job.account_id).await {
             Err(error)
                 if crate::ir::http_error::status_code_from_error(&error)
                     == Some(reqwest::StatusCode::NOT_FOUND)
-                    && now.saturating_sub(progress.accepted_at.unwrap_or(0)) < 120 =>
+                    && now.saturating_sub(accepted_at) < 120 =>
             {
+                let now = now.saturating_add(started.elapsed().as_secs() as i64);
                 db.defer_bokutachi_job(
                     job.id,
                     now,
-                    now.saturating_add(10),
+                    now.saturating_add(delay),
                     "Bokutachi: accepted; waiting for import status",
                 )?;
                 return Ok(());
@@ -179,14 +196,13 @@ async fn step(
                 "Bokutachi: import confirmation failed; the accepted import ID is retained",
             )?,
         };
+        let now = now.saturating_add(started.elapsed().as_secs() as i64);
         match poll {
-            PollResult::Failed { status: 404, .. }
-                if now.saturating_sub(progress.accepted_at.unwrap_or(0)) < 120 =>
-            {
+            PollResult::Failed { status: 404, .. } if now.saturating_sub(accepted_at) < 120 => {
                 db.defer_bokutachi_job(
                     job.id,
                     now,
-                    now.saturating_add(10),
+                    now.saturating_add(delay),
                     "Bokutachi: accepted; waiting for import status",
                 )?;
             }
@@ -204,7 +220,7 @@ async fn step(
                 db.defer_bokutachi_job(
                     job.id,
                     now,
-                    now.saturating_add(10),
+                    now.saturating_add(delay),
                     "Bokutachi: accepted; registration is still in progress",
                 )?;
                 report.messages.push("Bokutachi: registration pending".into());
@@ -304,6 +320,7 @@ async fn step(
         "Bokutachi: prepared request differs from the saved play; submission stopped"
     );
     let id = client.import(&credentials.access_token, request).await?;
+    let now = now.saturating_add(started.elapsed().as_secs() as i64);
     progress.import_id = Some(id);
     progress.accepted_at = Some(now);
     progress.phase = "poll".into();
@@ -327,7 +344,7 @@ async fn step(
     db.defer_bokutachi_job(
         job.id,
         now,
-        now.saturating_add(5),
+        now.saturating_add(2),
         "Bokutachi: accepted; awaiting registration confirmation",
     )?;
     report.messages.push("Bokutachi: registration pending".into());

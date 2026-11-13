@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use reqwest::{Client, RequestBuilder, StatusCode};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 
 use super::convert::{ChartMatch, Game, ImportRequest};
 use crate::ir::types::{IrAuthTokens, IrPlayerInfo};
@@ -45,7 +45,22 @@ pub(crate) struct ChartData {
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct Song {
-    pub id: u64,
+    #[serde(deserialize_with = "deserialize_song_id")]
+    pub id: String,
+}
+
+fn deserialize_song_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum SongId {
+        Text(String),
+        Legacy(u64),
+    }
+
+    match SongId::deserialize(deserializer)? {
+        SongId::Text(id) => Ok(id),
+        SongId::Legacy(id) => Ok(id.to_string()),
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -117,7 +132,7 @@ impl BokutachiClient {
         Ok(Self { http, origin })
     }
 
-    async fn request<T: DeserializeOwned>(
+    pub(super) async fn request<T: DeserializeOwned>(
         &self,
         request: RequestBuilder,
         key: Option<&str>,
@@ -231,6 +246,20 @@ impl BokutachiClient {
         hash: &str,
         notes: u32,
     ) -> Result<ResolvedChart> {
+        let (chart, matcher) = self.resolve_chart(game, hash, Some(notes)).await?;
+        Ok(ResolvedChart { chart_id: chart.chart_id, matcher })
+    }
+
+    pub(super) fn get(&self, path: &str) -> RequestBuilder {
+        self.http.get(format!("{}{path}", self.origin))
+    }
+
+    pub(super) async fn resolve_chart(
+        &self,
+        game: Game,
+        hash: &str,
+        notes: Option<u32>,
+    ) -> Result<(Chart, ChartMatch)> {
         let selected = if game.is_pms() {
             #[derive(Deserialize)]
             struct Search {
@@ -252,7 +281,7 @@ impl BokutachiClient {
         let matcher = match &selected {
             Some(chart) => ChartMatch {
                 match_type: "tachiSongID".into(),
-                identifier: chart.song.id.to_string(),
+                identifier: chart.song.id.clone(),
                 difficulty: Some("CHART".into()),
             },
             None => ChartMatch {
@@ -275,7 +304,7 @@ impl BokutachiClient {
             )
             .await?;
         validate_chart(&found.chart, game, hash, notes, selected.as_ref())?;
-        Ok(ResolvedChart { chart_id: found.chart.chart_id, matcher })
+        Ok((found.chart, matcher))
     }
 
     pub(crate) async fn import(&self, key: &str, request: &ImportRequest) -> Result<String> {
@@ -343,7 +372,7 @@ pub(crate) fn validate_chart(
     chart: &Chart,
     game: Game,
     hash: &str,
-    notes: u32,
+    notes: Option<u32>,
     selected: Option<&Chart>,
 ) -> Result<()> {
     ensure!(valid_id(&chart.chart_id), "Bokutachi: invalid chart ID");
@@ -355,13 +384,15 @@ pub(crate) fn validate_chart(
         chart.data.hash.eq_ignore_ascii_case(hash),
         IneligibleChart("Bokutachi: resolved chart SHA256 differs".into())
     );
-    ensure!(
-        chart.data.notecount == notes,
-        IneligibleChart(format!(
-            "Bokutachi: scoring note count differs (local {notes}, remote {})",
-            chart.data.notecount
-        ))
-    );
+    if let Some(notes) = notes {
+        ensure!(
+            chart.data.notecount == notes,
+            IneligibleChart(format!(
+                "Bokutachi: scoring note count differs (local {notes}, remote {})",
+                chart.data.notecount
+            ))
+        );
+    }
     if let Some(selected) = selected {
         ensure!(
             chart.chart_id == selected.chart_id

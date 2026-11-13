@@ -9,7 +9,7 @@ play_options.kaleidはdevice evidenceとは別の署名対象です。play_optio
 
 BMZ公式IRのAPIと、BMZ Player側のIRクライアントの現在の仕様をまとめた文書です。
 rianIRとの互換は[rianIR互換プロバイダー](rian-ir.md)、アシスト・特殊モードを含むスコアの保存・送信条件は[スコア保存・アシスト・IR送信条件](score-persistence.md)を参照してください。
-Bokutachiへの新規7K／14K／9K単曲・コース各曲の送信と、BMS 7K／14Kの段位更新は[Bokutachi](bokutachi.md)を参照してください。APIキーで接続する送信専用プロバイダーです。
+Bokutachiへの新規7K／14K／9K単曲・コース各曲の送信、譜面別ランキング、BMS 7K／14Kの段位更新は[Bokutachi](bokutachi.md)を参照してください。
 設計時の案・未決事項・実装タスクの経緯は[BMZ IRの設計記録](../notes/2026/2026-06-04-bmz-ir-design.md)にあります。
 
 ## 概要
@@ -185,8 +185,8 @@ send_policy = "always"
 role = "submit_only"
 ```
 
-- 先頭の3枠は、BMZ IR / rianIR / BMS-IRの固定枠です。無効にしてもプロファイルに残し、BMZ メニューでは削除・種別の変更ができません。
-- 4枠目以降は、BMZ / rianIR互換のプロトコルを選ぶカスタムURL用です。プロトコルと`base_url`はログイン前に設定します。
+- 先頭の4枠は、BMZ IR / rianIR / BMS-IR / Bokutachiの固定枠です。無効にしてもプロファイルに残し、BMZ メニューでは削除・種別の変更ができません。
+- 5枠目以降は、BMZ / rianIR互換のプロトコルを選ぶカスタムURL用です。プロトコルと`base_url`はログイン前に設定します。
 - 保存するのは、`provider`、`provider_key`、`base_url`、`enabled`、`account_display_name`、`account_id`、`send_policy`、`role`、`last_login_at`、`last_success_at`です。token・client secret・署名用の秘密鍵は保存しません。
 - `IrProviderConfig.provider`は表示名・実装の種別として残し、識別には`provider_key`を使います。
 
@@ -753,9 +753,9 @@ jobの状態は`pending` / `sending` / `succeeded` / `failed`です。
 
 ### primary providerとランキングの取得
 
-- `primary_provider`を明示している場合、ランキングの取得・表示はそのproviderだけを使い、無効・未設定でも別のproviderへ切り替えません。空の旧設定だけは、先頭の有効なproviderを使います。
+- `primary_provider`を明示している場合、ランキングの取得・表示はそのproviderだけを使います。空の旧設定では、Bokutachiを除く先頭の有効なproviderを使います。
 - submit-onlyのproviderにはスコアを送りますが、送信の応答へランキングを含めるよう要求しません。
-- リザルト画面でのランキングAPIの取得は、primaryの今回分の送信が終わってから始めます。secondary providerやbacklogの送信は待ちません。primaryのjobを別の同期taskがclaim済みの場合も、そのjobだけを待ちます。
+- リザルト画面でのランキングAPIの取得は、通常はprimaryの今回分の送信が終わってから始めます。secondary providerやbacklogの送信は待ちません。Bokutachiでは先に全体ランキングを取得し、リザルト中に今回分の登録結果を確認します。登録成功後の更新に失敗した場合は表示済みの順位を維持して再試行します。
 - リザルト画面のオーバーレイには、送信対象なし・成功・失敗をproviderごとに表示します。
 - オートプレイとリプレイ再生のリザルトでは、スコアを送らず、選曲画面で取得したランキングを表示します（beatorajaと同じ）。
   - 選曲画面での取得がプレイ中に終わった場合も、その結果を使います。取得中なら、終わるのを待って表示します。
@@ -833,7 +833,7 @@ payloadと署名は次のとおりです。
 
 「BMZ メニュー → IR」の「スコアの一括操作」と「IR送信キュー」は、CLIと共通の`ir::manual`（`upload_local_batch` / `upload_local_all` / `sync_jobs` / `download_scores` / `resend_job` / `resend_failed_jobs`）で処理します。CLIは進捗の通知を出力へ変換するだけです。
 
-- 対象はprimary providerだけです。ローカルスコアの一括送信はBMZ IRだけ（BMS-IR / rianIRは非対応）、スコアの取得はrianIR以外が対象です。未ログインやアカウントが決まっていない間は、ボタンを無効にします。
+- 対象はprimary providerだけです。ローカルスコアの一括送信はBMZ IR、スコアの取得はBMZ IRとBMS-IRに対応します。未ログインやアカウントが決まっていない間は、ボタンを無効にします。
 - 「ローカルスコアを一括送信」は`ir upload-local --all`と同じ完走モードで、`include_replay`と`include_course_stages`はCLIの既定値（どちらもfalse）です。
 - 確認画面を開くと、dry-runと同じ方法で候補の件数を数え（送信待ちの既存のjobも加えます）、`件数 × IR_CLI_SYNC_JOB_SPACING_MS`を最短時間の目安として表示します。
 - 失敗したjobの扱いと打ち切りの条件は`--all`と同じです。leaseの待ちから再開しても同じ実行開始時刻を使い、その実行で失敗したjobは再送しません。失敗が残った完了・連続の失敗・認証エラー・送信制限・アカウントの送信停止 / BANは、それぞれ別のトーストで通知します。アカウントの制限では即座に止め、譜面単位の拒否は連続の失敗に数えずに次のjobへ進みます。

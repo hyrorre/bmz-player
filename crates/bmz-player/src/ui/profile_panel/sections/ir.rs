@@ -26,7 +26,6 @@ pub(in crate::ui::profile_panel) fn build_profile_ir_section(
                 .ir
                 .providers
                 .iter()
-                .filter(|provider| !crate::ir::bokutachi::is_config(provider))
                 .filter_map(|provider| {
                     crate::ir::provider_key::configured_provider_key(provider).map(|provider_key| {
                         (
@@ -63,6 +62,7 @@ pub(in crate::ui::profile_panel) fn build_profile_ir_section(
             if selected_primary != profile.ir.primary_provider {
                 profile.ir.primary_provider = selected_primary;
                 sync_ir_provider_roles(&mut profile.ir);
+                section.save_clicked = true;
             }
             ui.checkbox(
                 &mut profile.ir.prefetch_global_ranking_on_score_submit,

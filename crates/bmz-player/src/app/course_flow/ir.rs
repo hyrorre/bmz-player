@@ -109,9 +109,7 @@ impl WinitApp {
             return;
         }
         self.result.result_ir = crate::screens::result_ir::spawn_result_ir_task(
-            self.boot.profile_paths.root_dir.clone(),
-            self.boot.profile_paths.score_db.clone(),
-            self.boot.profile_paths.network_db.clone(),
+            &self.boot.profile_paths,
             self.boot.app_paths.logs_dir.clone(),
             &self.boot.profile_config.ir,
             finished.stored.score_history_id,
@@ -119,6 +117,7 @@ impl WinitApp {
             finished.ln_policy,
             finished.double_option,
             finished.rule_mode,
+            self.bokutachi_result_ranking_game(finished),
         );
     }
 

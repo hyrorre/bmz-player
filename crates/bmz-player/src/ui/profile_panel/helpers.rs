@@ -278,11 +278,12 @@ pub(in crate::ui) fn ir_primary_provider_label(
     provider: &IrProviderConfig,
     provider_key: &str,
 ) -> String {
+    let label = if crate::ir::bokutachi::is_config(provider) { "Bokutachi" } else { provider_key };
     let account = provider.account_display_name.trim();
     if account.is_empty() {
-        format!("{provider_key} ({})", provider.base_url)
+        format!("{label} ({})", provider.base_url)
     } else {
-        format!("{provider_key} - {account} ({})", provider.base_url)
+        format!("{label} - {account} ({})", provider.base_url)
     }
 }
 
@@ -291,7 +292,6 @@ pub(in crate::ui) fn sync_ir_provider_roles(ir_config: &mut IrConfig) -> bool {
     let primary_provider = ir_config.primary_provider.trim();
     for provider in &mut ir_config.providers {
         let next_role = if !primary_provider.is_empty()
-            && !crate::ir::bokutachi::is_config(provider)
             && crate::ir::provider_key::configured_provider_key(provider)
                 .is_some_and(|provider_key| provider_key == primary_provider)
         {

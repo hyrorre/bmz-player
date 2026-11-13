@@ -461,6 +461,11 @@ impl WinitApp {
                     active.running.target_option,
                     active.running.best_ex_score,
                     active.running.gameplay.session.chart.metadata.kaleid.clone(),
+                    active
+                        .running
+                        .applied_arrange
+                        .source_key_mode
+                        .unwrap_or(active.running.gameplay.session.chart.metadata.key_mode),
                 )
             })
             .or_else(|| {
@@ -474,10 +479,15 @@ impl WinitApp {
                             .ok()
                             .flatten(),
                         preloaded.preloaded.chart.metadata.kaleid.clone(),
+                        preloaded
+                            .preloaded
+                            .applied_arrange
+                            .source_key_mode
+                            .unwrap_or(preloaded.preloaded.chart.metadata.key_mode),
                     )
                 })
             });
-        let Some((score_key, target, local_best_ex_score, provenance)) = source else {
+        let Some((score_key, target, local_best_ex_score, provenance, key_mode)) = source else {
             return;
         };
         if !target.uses_ir_ranking() {
@@ -485,7 +495,8 @@ impl WinitApp {
         }
         if crate::ir::provider_key::primary_provider_config(&self.boot.profile_config.ir)
             .is_some_and(|provider| {
-                crate::ir::kaleid::block_reason(provider, &provenance).is_some()
+                !crate::ir::bokutachi::is_config(provider)
+                    && crate::ir::kaleid::block_reason(provider, &provenance).is_some()
             })
         {
             return;
@@ -496,6 +507,7 @@ impl WinitApp {
             score_key.double_option,
             score_key.rule_mode,
         );
+        let bokutachi_game = self.bokutachi_select_ranking_game(key_mode);
         self.select.select_ir.update(
             &self.boot.profile_config.ir,
             &self.boot.profile_paths.root_dir,
@@ -504,6 +516,7 @@ impl WinitApp {
             score_key.double_option,
             score_key.rule_mode,
             Some(score_key.chart_sha256),
+            bokutachi_game,
         );
         let resolved = self.select.select_ir.resolved_target_for(
             &self.boot.profile_config.ir,

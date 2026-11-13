@@ -35,14 +35,14 @@ pub fn provider_config_for_key<'a>(
 
 pub fn primary_provider_config(ir_config: &IrConfig) -> Option<&IrProviderConfig> {
     let usable = |entry: &IrProviderConfig| {
-        entry.enabled
-            && !entry.base_url.is_empty()
-            && configured_provider_key(entry).is_some()
-            && !crate::ir::bokutachi::is_config(entry)
+        entry.enabled && !entry.base_url.is_empty() && configured_provider_key(entry).is_some()
     };
     let primary_provider = ir_config.primary_provider.trim();
     if primary_provider.is_empty() {
-        return ir_config.providers.iter().find(|entry| usable(entry));
+        return ir_config
+            .providers
+            .iter()
+            .find(|entry| usable(entry) && !crate::ir::bokutachi::is_config(entry));
     }
     ir_config
         .providers

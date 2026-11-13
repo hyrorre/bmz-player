@@ -962,6 +962,7 @@ mod tests {
                 DoubleOptionScoreBucket::Off,
                 RuleMode::Beatoraja,
                 sha,
+                None,
             )
         };
 
@@ -1018,6 +1019,7 @@ mod tests {
                 DoubleOptionScoreBucket::Off,
                 RuleMode::Beatoraja,
                 sha,
+                None,
             ),
             SelectIrResultLookup::Unavailable
         ));
@@ -1039,6 +1041,7 @@ mod tests {
                 DoubleOptionScoreBucket::Off,
                 RuleMode::Beatoraja,
                 sha,
+                None,
             )
         };
 
@@ -1076,6 +1079,7 @@ mod tests {
             DoubleOptionScoreBucket::Off,
             RuleMode::Beatoraja,
             Some(sha),
+            None,
         );
         assert!(select_ir.in_flight.is_none());
         assert!(select_ir.pending.is_some());
@@ -1093,6 +1097,7 @@ mod tests {
             LnScorePolicy::ForceLn,
             DoubleOptionScoreBucket::Off,
             RuleMode::Beatoraja,
+            None,
             None,
         );
         assert!(select_ir.pending.is_none());
@@ -1121,6 +1126,7 @@ mod tests {
             DoubleOptionScoreBucket::Off,
             RuleMode::Beatoraja,
             Some(sha),
+            None,
         );
         assert!(!select_ir.cache.contains_key(&sha));
         assert!(select_ir.in_flight.is_none());
@@ -1158,6 +1164,7 @@ mod tests {
             DoubleOptionScoreBucket::Off,
             RuleMode::Beatoraja,
             Some(sha),
+            None,
         );
 
         let snapshot = select_ir.snapshot_for(&ir_config(true), Some(sha));
@@ -1203,6 +1210,7 @@ mod tests {
             DoubleOptionScoreBucket::Off,
             RuleMode::Beatoraja,
             Some(sha),
+            None,
         );
 
         let entries = select_ir.battle_entries_for(Some(sha));

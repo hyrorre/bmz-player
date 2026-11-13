@@ -19,6 +19,17 @@ pub enum Game {
 }
 
 impl Game {
+    pub fn for_chart(mode: KeyMode, device: bmz_core::input::InputDeviceKind) -> Option<Self> {
+        use bmz_core::input::InputDeviceKind;
+        match (mode, device) {
+            (KeyMode::K7, _) => Some(Self::Bms7k),
+            (KeyMode::K14, _) => Some(Self::Bms14k),
+            (KeyMode::K9, InputDeviceKind::Controller) => Some(Self::PmsController),
+            (KeyMode::K9, InputDeviceKind::Keyboard) => Some(Self::PmsKeyboard),
+            _ => None,
+        }
+    }
+
     pub fn for_play(mode: KeyMode, rule: &str, device: &str) -> Result<Self> {
         match (mode, rule, device) {
             (KeyMode::K7, "Lr2Oraja", "keyboard" | "controller") => Ok(Self::Bms7k),

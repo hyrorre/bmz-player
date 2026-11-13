@@ -16,6 +16,7 @@ pub struct ChartRankingQuery {
     pub ln_policy: LnScorePolicy,
     pub double_option: DoubleOptionScoreBucket,
     pub rule_mode: RuleMode,
+    pub bokutachi_game: Option<super::bokutachi::Game>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -96,6 +97,8 @@ pub(crate) async fn fetch_ranking(
 pub(crate) fn result_ranking_limit(provider: &str) -> u32 {
     if crate::ir::rian_ir::is_rian_ir_provider(provider) {
         crate::ir::rian_ir::RIAN_IR_RANKING_LIMIT
+    } else if super::bokutachi::is_provider(provider) {
+        super::bokutachi::RANKING_LIMIT
     } else {
         crate::ir::types::default_ranking_limit()
     }
@@ -107,7 +110,21 @@ pub(crate) async fn fetch_ranking_with_limit(
     limit: u32,
 ) -> anyhow::Result<IrRankingResult> {
     if crate::ir::bokutachi::is_provider(&query.provider) {
-        return Err(crate::ir::bokutachi::unsupported());
+        anyhow::ensure!(scope == IrRankingScope::Global, "{}", super::bokutachi::unsupported());
+        let Some(game) = query.bokutachi_game else {
+            return Err(super::bokutachi::unsupported());
+        };
+        let account_id = super::credentials::load_credentials(
+            &query.profile_root,
+            &query.provider,
+            &query.base_url,
+        )
+        .ok()
+        .flatten()
+        .and_then(|credentials| credentials.account_id.parse().ok());
+        return super::bokutachi::BokutachiClient::new(&query.base_url)?
+            .fetch_chart_ranking(game, &query.chart_sha256_hex, limit, account_id)
+            .await;
     }
     let now = now_unix_seconds();
     if crate::ir::rian_ir::is_rian_ir_provider(&query.provider) {

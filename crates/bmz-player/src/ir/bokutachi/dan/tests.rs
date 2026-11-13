@@ -1,6 +1,6 @@
 use super::*;
 use crate::ir::bokutachi::Game;
-use crate::ir::bokutachi::tests::{Reply, server, setup};
+use crate::ir::bokutachi::tests::{Reply, SONG_ID, server, setup};
 use crate::storage::network_db::{IrJobKind, IrJobRetryFilter, NewIrScoreJob};
 use serde_json::{Value, json};
 
@@ -68,7 +68,7 @@ async fn dan_converted_hln_requires_original_hash_and_registered_note_count() {
     for matching in [true, false] {
         let mut p = play(KeyMode::K14);
         p.stages[2].kaleid.source.hln = true;
-        let chart = json!({"game":"bms-14k","chartID":"chart-hln","song":{"id":123},
+        let chart = json!({"game":"bms-14k","chartID":"chart-hln","song":{"id":SONG_ID},
             "difficulty":"CHART","isPrimary":true,"data":{
                 "hashSHA256":p.stages[2].chart_sha256,"notecount":if matching {100} else {101}}});
         let mut replies = vec![Reply {
