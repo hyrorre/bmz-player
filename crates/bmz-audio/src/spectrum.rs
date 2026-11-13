@@ -17,6 +17,8 @@ pub struct AudioSpectrum {
     rate: AtomicU32,
     pcm: [[AtomicU32; 2]; SIZE],
     analysis: Mutex<Analysis>,
+    /// The last analyzed bands, readable without `analysis` for a contended reader.
+    published: [AtomicU32; SPECTRUM_BANDS],
 }
 
 #[derive(Debug, Default)]
@@ -36,6 +38,7 @@ impl Default for AudioSpectrum {
             rate: AtomicU32::new(0),
             pcm: std::array::from_fn(|_| std::array::from_fn(|_| AtomicU32::new(0))),
             analysis: Mutex::new(Analysis::default()),
+            published: std::array::from_fn(|_| AtomicU32::new(0)),
         }
     }
 }
@@ -43,9 +46,24 @@ impl Default for AudioSpectrum {
 impl AudioSpectrum {
     pub fn set_enabled(&self, enabled: bool) {
         if enabled && !self.enabled.load(Ordering::Acquire) {
+            self.publish(&[0.0; SPECTRUM_BANDS]);
             self.reset_requested.store(true, Ordering::Release);
         }
         self.enabled.store(enabled, Ordering::Release);
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Acquire)
+    }
+
+    fn publish(&self, bands: &[f32; SPECTRUM_BANDS]) {
+        for (slot, value) in self.published.iter().zip(bands) {
+            slot.store(value.to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    fn published(&self) -> [f32; SPECTRUM_BANDS] {
+        std::array::from_fn(|band| f32::from_bits(self.published[band].load(Ordering::Relaxed)))
     }
 
     /// Single writer: called with exclusive access to the owning AudioEngine.
@@ -71,6 +89,8 @@ impl AudioSpectrum {
     }
 
     pub(crate) fn clear(&self) {
+        // Contended readers must not show audio from before the reset.
+        self.publish(&[0.0; SPECTRUM_BANDS]);
         self.reset_requested.store(true, Ordering::Release);
     }
 
@@ -81,7 +101,7 @@ impl AudioSpectrum {
             return [0.0; SPECTRUM_BANDS];
         }
         let Ok(mut cache) = self.analysis.try_lock() else {
-            return [0.0; SPECTRUM_BANDS];
+            return self.published();
         };
         let version = self.version.load(Ordering::Acquire);
         if !version.is_multiple_of(2) || version == cache.version {
@@ -116,6 +136,7 @@ impl AudioSpectrum {
         cache.bands = analyze(pcm, rate);
         cache.frames = frames;
         cache.version = version;
+        self.publish(&cache.bands);
         cache.bands
     }
 }
@@ -221,5 +242,22 @@ mod tests {
         assert_eq!(tap.bands(), [0.0; 32]);
         tap.set_enabled(false);
         assert_eq!(tap.bands(), [0.0; 32]);
+    }
+    #[test]
+    fn contended_reader_reuses_the_last_analysis_without_pre_reset_audio() {
+        let tap = AudioSpectrum::default();
+        tap.set_enabled(true);
+        tap.record(&tone(1000.0, false), 48_000);
+        let analyzed = tap.bands();
+        assert!(analyzed.iter().any(|v| *v > 0.5));
+        {
+            // Another reader (window frame or export snapshot) holds the analysis.
+            let _held = tap.analysis.lock().unwrap();
+            assert_eq!(tap.bands(), analyzed);
+            tap.clear();
+            tap.record(&tone(1000.0, false), 48_000);
+            assert_eq!(tap.bands(), [0.0; 32]);
+        }
+        assert!(tap.bands().iter().any(|v| *v > 0.5));
     }
 }

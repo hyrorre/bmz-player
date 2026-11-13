@@ -129,7 +129,7 @@ pub(super) fn scan_skin_catalog_dir(
     }
 }
 
-fn collect_skin_candidate_files(
+pub(super) fn collect_skin_candidate_files(
     dir: &Path,
     paths: &mut Vec<PathBuf>,
     scan: &mut crate::directory_scan::DirectoryScan,
@@ -138,10 +138,18 @@ fn collect_skin_candidate_files(
     let Some(entries) = scan.read_dir_once(dir, depth) else {
         return;
     };
+    // A Qwilight play skin reads its images from a ZIP next to the YAML. Other
+    // YAML (CI workflows, compose files) is not parsed without one.
+    let has_zip = entries.iter().any(|path| {
+        path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("zip")) && path.is_file()
+    });
     for path in entries {
         if path.is_dir() {
             collect_skin_candidate_files(&path, paths, scan, depth + 1);
-        } else if is_skin_candidate_file(&path) && scan.accept_file(&path) {
+        } else if is_skin_candidate_file(&path)
+            && (has_zip || !bmz_skin::is_qwilight_play_skin_path(&path))
+            && scan.accept_file(&path)
+        {
             paths.push(path);
         }
     }

@@ -14,7 +14,7 @@ impl Renderer {
             gpu.upsert_rgba_texture(texture.id, texture.width, texture.height, &texture.rgba)?;
         }
         self.gpu = Some(gpu);
-        self.deferred_resident.clear();
+        self.deferred.forget_gpu();
         self.install_pending_sprite_sheets();
         Ok(())
     }
@@ -60,7 +60,7 @@ impl Renderer {
             }
         }
         self.gpu = Some(gpu);
-        self.deferred_resident.clear();
+        self.deferred.forget_gpu();
         self.install_pending_sprite_sheets();
         Ok(())
     }
@@ -135,7 +135,7 @@ impl Renderer {
     /// Drop GPU resources that depend on the window surface while the app still
     /// owns the native window.
     pub fn detach_surface(&mut self) {
-        self.deferred_resident.clear();
+        self.deferred.forget_gpu();
         self.pending_egui = None;
         let Some(gpu) = self.gpu.take() else {
             return;
@@ -412,26 +412,31 @@ impl Renderer {
             self.play_dynamic_timer_runtime.reset();
         }
         self.play_skin_context = skin_context;
+        self.deferred.forget_sequences();
     }
 
     pub fn set_select_skin_context(&mut self, skin_context: SkinContext) {
         self.select_dynamic_timer_runtime.reset();
         self.select_skin_context = skin_context;
+        self.deferred.forget_sequences();
     }
 
     pub fn set_decide_skin_context(&mut self, skin_context: SkinContext) {
         self.decide_dynamic_timer_runtime.reset();
         self.decide_skin_context = skin_context;
+        self.deferred.forget_sequences();
     }
 
     pub fn set_result_skin_context(&mut self, skin_context: SkinContext) {
         self.result_skin_context = skin_context;
         self.result_dynamic_timer_runtime.reset_for_document(self.result_skin_context.document());
+        self.deferred.forget_sequences();
     }
 
     /// Refresh load-time values without restarting Result timers or event state.
     pub fn refresh_result_skin_context(&mut self, skin_context: SkinContext) {
         self.result_skin_context = skin_context;
+        self.deferred.forget_sequences();
     }
 
     /// リザルトスキンが定義する内部 runtime event を dispatch する。
@@ -634,6 +639,17 @@ impl Renderer {
 
     pub fn play_skin_timer_animation_duration_ms(&self, timer: i32) -> i32 {
         self.play_skin_context.timer_animation_duration_ms(timer)
+    }
+
+    /// MUSIC END (timer 908) animation a cleared finish without a full combo
+    /// waits for. Zero unless the skin opts in with `bmzPlayClearCompletion`,
+    /// so other skins keep beatoraja's `finishmargin`.
+    pub fn play_skin_clear_completion_ms(&self) -> i32 {
+        if self.play_skin_document().is_some_and(|document| document.bmz_play_clear_completion) {
+            self.play_skin_timer_animation_duration_ms(908)
+        } else {
+            0
+        }
     }
 
     /// 決定スキンの document。
@@ -863,7 +879,7 @@ impl Renderer {
         &mut self,
         notify: impl FnOnce(),
     ) -> Result<RenderSurfaceStatus> {
-        self.prepare_deferred_images()?;
+        self.prepare_deferred_images();
         let Some(gpu) = &mut self.gpu else {
             return Ok(RenderSurfaceStatus::SkippedNoSurface);
         };

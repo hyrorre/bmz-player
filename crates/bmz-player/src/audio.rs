@@ -239,6 +239,9 @@ impl AppAudioOutput {
 
     pub fn mark_draining(&mut self) {
         self.source.set_kind(CpalOutputSourceKind::Draining);
+        // Only Play enables the visualizer tap, once per frame while it exists.
+        // A draining output is never drawn, so stop copying PCM in the callback.
+        self.engine.spectrum().set_enabled(false);
     }
 }
 
@@ -722,6 +725,17 @@ mod tests {
             assert_eq!(AppConfig::default().audio.backend, AudioBackend::Auto);
             assert_eq!(AppConfig::default().audio.buffer_size, 256);
         }
+    }
+
+    #[test]
+    #[ignore = "opens the default audio output device"]
+    fn draining_play_audio_stops_the_spectrum_tap() {
+        let runtime = AudioRuntime::open(&AppConfig::default().audio).unwrap();
+        let mut audio = open_app_audio_output(&runtime, AudioEngine::new(runtime.sample_rate()));
+        // Play enables the tap only while it exists; nothing disables it after Play.
+        audio.engine.spectrum().set_enabled(true);
+        audio.mark_draining();
+        assert!(!audio.engine.spectrum().is_enabled());
     }
 
     #[test]

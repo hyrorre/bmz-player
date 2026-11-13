@@ -222,13 +222,10 @@ pub(super) fn create_image_pipeline(
         | BlendMode::Premultiplied
         | BlendMode::Composite(_) => IMAGE_SHADER,
     };
-    let composite_shader;
-    let shader_source = if matches!(blend_mode, BlendMode::Composite(_)) {
-        composite_shader=shader_source.replace("return textureSample(image_texture, image_sampler, input.uv) * input.tint;", "let color = textureSample(image_texture, image_sampler, input.uv) * input.tint; return vec4<f32>(color.rgb * color.a, color.a);");
-        composite_shader.as_str()
-    } else {
-        shader_source
-    };
+    // Porter-Duff factors expect premultiplied color; straight-alpha skins are
+    // converted in the fragment shader rather than by the blend state.
+    let fragment_entry =
+        if matches!(blend_mode, BlendMode::Composite(_)) { "fs_composite" } else { "fs_main" };
     let label = match blend_mode {
         BlendMode::Normal => "bmz-render image pipeline",
         BlendMode::Add => "bmz-render additive image pipeline",
@@ -243,6 +240,7 @@ pub(super) fn create_image_pipeline(
         format,
         bind_group_layout,
         shader_source,
+        fragment_entry,
         label,
         Some(image_blend_state(blend_mode)),
     )
@@ -258,6 +256,7 @@ pub(super) fn create_upscale_pipeline(
         format,
         bind_group_layout,
         IMAGE_SHADER,
+        "fs_main",
         "bmz-render internal upscale pipeline",
         None,
     )
@@ -268,6 +267,7 @@ pub(super) fn create_image_quad_pipeline(
     format: wgpu::TextureFormat,
     bind_group_layout: &wgpu::BindGroupLayout,
     shader_source: &str,
+    fragment_entry: &'static str,
     label: &'static str,
     blend: Option<wgpu::BlendState>,
 ) -> wgpu::RenderPipeline {
@@ -322,7 +322,7 @@ pub(super) fn create_image_quad_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_main"),
+            entry_point: Some(fragment_entry),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
@@ -621,6 +621,13 @@ fn vs_main(
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     return textureSample(image_texture, image_sampler, input.uv) * input.tint;
+}
+
+// CanvasComposite pipelines blend premultiplied color.
+@fragment
+fn fs_composite(input: VertexOutput) -> @location(0) vec4<f32> {
+    let color = textureSample(image_texture, image_sampler, input.uv) * input.tint;
+    return vec4<f32>(color.rgb * color.a, color.a);
 }
 "#;
 

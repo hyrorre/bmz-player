@@ -315,6 +315,7 @@ impl WgpuRenderer {
                 self.config.format,
                 &bind_group_layout,
                 include_str!("ambient.wgsl"),
+                "fs_main",
                 "bmz-render ambient blur",
                 None,
             );

@@ -5,6 +5,7 @@ fn qwilight_catalog_registers_only_play_slots_without_running_lua() {
     let temp = tempfile::tempdir().unwrap();
     let yaml = "format: {title: Qwilight fixture}\nframe: {}\nlambda: {}\npoint: {}";
     std::fs::write(temp.path().join("play.yaml"), yaml).unwrap();
+    std::fs::write(temp.path().join("play.zip"), b"").unwrap();
     std::fs::write(temp.path().join("@theme.yaml"), yaml).unwrap();
     std::fs::write(temp.path().join("play.lua"), "while true do end").unwrap();
     let mut catalog = SkinCatalog::default();
@@ -29,6 +30,23 @@ fn qwilight_catalog_registers_only_play_slots_without_running_lua() {
     }
     assert!(catalog.select.is_empty());
     assert!(catalog.result.is_empty());
+}
+
+#[test]
+fn skin_catalog_does_not_parse_yaml_without_a_qwilight_zip_beside_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let workflows = temp.path().join(".github/workflows");
+    std::fs::create_dir_all(&workflows).unwrap();
+    std::fs::write(workflows.join("ci.yml"), "on: push").unwrap();
+    std::fs::write(temp.path().join("docker-compose.yaml"), "services: {}").unwrap();
+    let skin = temp.path().join("Q");
+    std::fs::create_dir(&skin).unwrap();
+    std::fs::write(skin.join("play.yaml"), "format: {}").unwrap();
+    std::fs::write(skin.join("PLAY.ZIP"), b"").unwrap();
+    let mut scan = crate::directory_scan::DirectoryScan::new([temp.path().to_path_buf()]).unwrap();
+    let mut paths = Vec::new();
+    collect_skin_candidate_files(temp.path(), &mut paths, &mut scan, 0);
+    assert_eq!(paths, [skin.join("play.yaml")]);
 }
 
 /// A Qwilight skin declaring two adjustments, with an option hidden by another.
@@ -180,6 +198,53 @@ fn qwilight_settings_defs_follow_slot_options_and_keep_only_effective_offsets() 
     // Declared Qwilight adjustments plus All / Notes / Judge offset. Judge Detail
     // and Bar Line offset have no converted element, so they are not shown.
     assert_eq!(offsets, [1001, 10, 30, 32]);
+}
+
+#[test]
+fn qwilight_lane_cover_items_follow_added_images_after_returning_to_a_cached_selection() {
+    use super::skin_flow_profile::{SkinDefsCache, cached_skin_defs, forget_qwilight_skin_defs};
+    let temp = tempfile::tempdir().unwrap();
+    let path = write_qwilight_customize_fixture(&temp.path().join("skins/Q"));
+    let paths = crate::paths::AppPaths::from_dirs(
+        temp.path().to_path_buf(),
+        temp.path().to_path_buf(),
+        temp.path().join("cache"),
+        temp.path().join("logs"),
+    );
+    let covers = temp.path().join("skins").join(bmz_skin::QWILIGHT_LANE_COVER_DIR);
+    std::fs::create_dir_all(&covers).unwrap();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 255]))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let path = path.to_string_lossy();
+    let mut cache = SkinDefsCache::new();
+    let items = |cache: &mut SkinDefsCache, options: &BTreeMap<String, String>| {
+        let defs = cached_skin_defs(cache, &paths, &SkinConfig::default(), &path, true, options);
+        let property = defs
+            .property
+            .iter()
+            .find(|property| property.name == bmz_skin::QWILIGHT_LANE_COVER_PROPERTY)
+            .unwrap();
+        property.item.iter().map(|item| item.name.clone()).collect::<Vec<_>>()
+    };
+    let unset = BTreeMap::new();
+    let selected = |name: &str| {
+        BTreeMap::from([(bmz_skin::QWILIGHT_LANE_COVER_PROPERTY.to_string(), name.to_string())])
+    };
+    assert_eq!(items(&mut cache, &unset), ["Skin"]);
+    std::fs::write(covers.join("x.png"), png.get_ref()).unwrap();
+    // The key covers the options only, so the entry cached before X is stale.
+    assert_eq!(items(&mut cache, &unset), ["Skin"]);
+    forget_qwilight_skin_defs(&mut cache);
+    assert_eq!(items(&mut cache, &unset), ["Skin", "Random", "x.png"]);
+    // Add Y (selected), then remove Y: the option returns to unset.
+    std::fs::write(covers.join("y.png"), png.get_ref()).unwrap();
+    forget_qwilight_skin_defs(&mut cache);
+    assert_eq!(items(&mut cache, &selected("y.png")), ["Skin", "Random", "x.png", "y.png"]);
+    std::fs::remove_file(covers.join("y.png")).unwrap();
+    forget_qwilight_skin_defs(&mut cache);
+    assert_eq!(items(&mut cache, &unset), ["Skin", "Random", "x.png"]);
 }
 
 #[test]

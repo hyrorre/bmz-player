@@ -8,6 +8,10 @@ use super::*;
 /// Larger files are rejected before copying; the decoder applies its own limits.
 const LANE_COVER_MAX_BYTES: u64 = 32 * 1024 * 1024;
 
+/// Set when BMZ adds or removes a lane cover. The app then drops the evaluated
+/// Qwilight definitions, whose lane cover items list the images on disk.
+pub(in crate::ui) const QWILIGHT_LANE_COVERS_CHANGED_ID: &str = "qwilight_lane_covers_changed";
+
 pub(in crate::ui) fn qwilight_lane_cover_dir(app_paths: &AppPaths) -> PathBuf {
     app_paths.data_dir.join("skins").join(bmz_skin::QWILIGHT_LANE_COVER_DIR)
 }
@@ -126,6 +130,11 @@ pub(in crate::ui) fn build_qwilight_lane_cover_tools(
                 .err();
         }
     });
+    if changed {
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(egui::Id::new(QWILIGHT_LANE_COVERS_CHANGED_ID), true)
+        });
+    }
     if changed || error.is_some() {
         ui.ctx().data_mut(|data| data.insert_temp(error_id, error));
     }

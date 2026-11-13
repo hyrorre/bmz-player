@@ -359,6 +359,9 @@ impl WinitApp {
             self.skin.skin_defs_cache.clear();
             self.skin.skin_header_checks.clear();
         }
+        if self.ui.egui.as_ref().is_some_and(|egui| egui.take_qwilight_lane_covers_changed()) {
+            self.forget_qwilight_skin_defs();
+        }
         let skin = &self.boot.profile_config.skin;
         let requested =
             self.ui.egui.as_ref().and_then(|egui| egui.skin_settings_path(skin)).map(str::to_owned);

@@ -11,7 +11,7 @@ pub struct Renderer {
     pub(super) pending_sprite_sheets: Vec<PendingSpriteSheet>,
     pub(super) deferred_images:
         HashMap<TextureId, std::sync::Arc<crate::assets::deferred::DeferredImage>>,
-    pub(super) deferred_resident: std::collections::HashSet<TextureId>,
+    pub(super) deferred: super::deferred::DeferredState,
     pub(super) fonts: HashMap<String, TextFace>,
     pub(super) bitmap_fonts: HashMap<String, BitmapFont>,
     /// スキンフォント ID ごとの beatoraja `font.fallback`（登録済みフォント ID）。

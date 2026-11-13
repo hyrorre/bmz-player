@@ -19,8 +19,9 @@ impl Resources {
                 // A stem such as `.` is a material name, not a filesystem
                 // component. Path::with_extension changes `Bin/..png` to
                 // `Bin/..`, losing the common decimal-point material.
+                // Entry names already use `/` (see `zip_entry_names`).
                 let stem = name.rsplit_once('.').expect("image extension checked").0;
-                names.entry(stem.replace('\\', "/").to_ascii_lowercase()).or_insert(name);
+                names.entry(stem.to_ascii_lowercase()).or_insert(name);
             }
         }
         Ok(Self { archive: archive.to_string_lossy().to_string(), names })

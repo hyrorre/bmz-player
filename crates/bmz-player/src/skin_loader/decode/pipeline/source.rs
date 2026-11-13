@@ -43,7 +43,10 @@ pub(super) fn decode_skin_sources(
                     )
                     .is_err()
             {
-                tracing::warn!(source_id=%decoded.source_id,"deferred skin images exceed 512 MiB");
+                tracing::warn!(
+                    source_id = %decoded.source_id,
+                    "deferred skin images exceed 512 MiB"
+                );
                 return None;
             }
             Some(decoded)

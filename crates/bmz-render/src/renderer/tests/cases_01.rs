@@ -291,3 +291,31 @@ fn result_skin_timer_animation_duration_reads_document_or_defaults_to_zero() {
 
     assert_eq!(renderer.result_skin_timer_animation_duration_ms(2), 500);
 }
+
+#[test]
+fn play_clear_completion_waits_only_for_skins_that_opt_in() {
+    use crate::skin::{SkinContext, SkinDocument, SkinManifest};
+
+    let document = |opt_in: bool| -> SkinDocument {
+        serde_json::from_value(serde_json::json!({
+            "type": 0, "w": 100, "h": 100, "bmzPlayClearCompletion": opt_in,
+            "destination": [{"id": "music-end", "timer": 908,
+                "dst": [{"time": 0}, {"time": 5000}]}]
+        }))
+        .unwrap()
+    };
+    let mut renderer = Renderer::default();
+    assert_eq!(renderer.play_skin_clear_completion_ms(), 0);
+    // A beatoraja / LR2 skin may animate MUSIC END; the finish still uses finishmargin.
+    renderer.set_play_skin_context(
+        SkinContext::from_manifest_and_document(SkinManifest::default(), document(false), []),
+        false,
+    );
+    assert_eq!(renderer.play_skin_timer_animation_duration_ms(908), 5000);
+    assert_eq!(renderer.play_skin_clear_completion_ms(), 0);
+    renderer.set_play_skin_context(
+        SkinContext::from_manifest_and_document(SkinManifest::default(), document(true), []),
+        false,
+    );
+    assert_eq!(renderer.play_skin_clear_completion_ms(), 5000);
+}

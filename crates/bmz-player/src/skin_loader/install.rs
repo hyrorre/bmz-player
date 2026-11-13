@@ -547,7 +547,12 @@ pub fn upload_decoded_skin_with_texture_cache(
                             (Some(sheet), size)
                         }
                         Err(error) => {
-                            tracing::warn!(%source_id, path = %path.display(), error = %format!("{error:#}"), "skipping animated skin texture that does not fit the GPU");
+                            tracing::warn!(
+                                %source_id,
+                                path = %path.display(),
+                                error = %format!("{error:#}"),
+                                "skipping animated skin texture that does not fit the GPU"
+                            );
                             return None;
                         }
                     }
@@ -556,14 +561,18 @@ pub fn upload_decoded_skin_with_texture_cache(
             };
             let Some(asset) = asset else {
                 let (texture, texture_lease) = if deferred.is_some() {
-                    texture_cache.and_then(|cache| cache.lock().ok().map(|mut cache| {
-                        let texture=cache.allocate_texture_id(kind);
-                        let lease=cache.lease_texture(texture);
-                        (texture,Some(lease))
-                    })).unwrap_or((texture,texture_lease))
+                    texture_cache
+                        .and_then(|cache| {
+                            cache.lock().ok().map(|mut cache| {
+                                let texture = cache.allocate_texture_id(kind);
+                                let lease = cache.lease_texture(texture);
+                                (texture, Some(lease))
+                            })
+                        })
+                        .unwrap_or((texture, texture_lease))
                 } else {
                     upload_stats.texture_cache_hits += 1;
-                    (texture,texture_lease)
+                    (texture, texture_lease)
                 };
                 if is_video {
                     upload_stats.video_texture_cache_hits += 1;

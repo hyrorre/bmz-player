@@ -36,6 +36,11 @@ fn archive(path: &Path) -> Result<Archive> {
     Ok(zip)
 }
 
+/// Some Windows archivers store `Note\N 1.png`; BMZ names entries with `/`.
+fn normalized_entry(name: &str) -> String {
+    name.replace('\\', "/")
+}
+
 fn validate_entry(name: &str) -> Result<()> {
     ensure!(
         !name.is_empty()
@@ -57,25 +62,28 @@ pub(super) fn split_path(path: &Path) -> Result<Option<(PathBuf, String)>> {
 }
 
 /// Callers must authorize the archive's canonical backing path before listing it.
+/// Names use `/`. Entries that cannot be addressed safely (traversal, absolute or
+/// drive paths) are left out instead of making the whole archive unusable.
 pub fn zip_entry_names(path: &Path) -> Result<Vec<String>> {
     let archive = archive(path)?;
     let zip = archive.lock().unwrap_or_else(|e| e.into_inner());
-    let mut names = Vec::new();
-    for name in zip.file_names().filter(|name| !name.ends_with('/')) {
-        validate_entry(name)?;
-        names.push(name.to_string());
-    }
+    let mut names: Vec<_> = zip
+        .file_names()
+        .map(normalized_entry)
+        .filter(|name| !name.ends_with('/') && validate_entry(name).is_ok())
+        .collect();
     names.sort();
+    names.dedup();
     Ok(names)
 }
 
 pub(super) fn find_entry(path: &Path, requested: &str) -> Result<String> {
     let archive = archive(path)?;
     let zip = archive.lock().unwrap_or_else(|e| e.into_inner());
-    let found = zip
-        .file_names()
-        .find(|name| *name == requested)
-        .or_else(|| zip.file_names().filter(|name| name.eq_ignore_ascii_case(requested)).min());
+    // `requested` is validated, so a traversal entry never matches it.
+    let found = zip.file_names().find(|name| normalized_entry(name) == requested).or_else(|| {
+        zip.file_names().filter(|name| normalized_entry(name).eq_ignore_ascii_case(requested)).min()
+    });
     found.map(str::to_string).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -85,8 +93,9 @@ pub(super) fn find_entry(path: &Path, requested: &str) -> Result<String> {
     })
 }
 
+/// `name` is the stored name returned by [`find_entry`].
 pub(super) fn read_entry(path: &Path, name: &str) -> Result<Vec<u8>> {
-    validate_entry(name)?;
+    validate_entry(&normalized_entry(name))?;
     let archive = archive(path)?;
     let mut zip = archive.lock().unwrap_or_else(|e| e.into_inner());
     let mut entry = zip.by_name(name)?;
@@ -148,7 +157,27 @@ mod tests {
         for name in ["../escape.png", "/absolute.png", "a/../../x", "a\\x", "C:/x", ""] {
             assert!(validate_entry(name).is_err(), "{name}");
         }
-        write_zip(&root.path().join("bad.zip"), "../escape.png", b"bad");
-        assert!(zip_entry_names(&root.path().join("bad.zip")).is_err());
+        // An unsafe entry is unusable, but does not hide the archive's other images.
+        let mut zip = zip::ZipWriter::new(File::create(root.path().join("bad.zip")).unwrap());
+        for name in ["../escape.png", "..\\up.png", "C:/drive.png", "ok.png"] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(b"x").unwrap();
+        }
+        zip.finish().unwrap();
+        assert_eq!(zip_entry_names(&root.path().join("bad.zip")).unwrap(), ["ok.png"]);
+        let context = SkinPathContext::for_directory(root.path()).unwrap();
+        assert!(context.resolve_asset("bad.zip!skin/../escape.png").is_err());
+        assert!(context.resolve_asset("bad.zip!skin/..\\up.png").is_err());
+    }
+
+    #[test]
+    fn zip_assets_read_backslash_separated_entries() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("skin.zip");
+        write_zip(&path, "Note\\N 1.png", b"note");
+        assert_eq!(zip_entry_names(&path).unwrap(), ["Note/N 1.png"]);
+        let context = SkinPathContext::for_directory(root.path()).unwrap();
+        let name = context.resolve_asset("skin.zip!skin/note/n 1.png").unwrap();
+        assert_eq!(SkinAsset::resolve(&name).unwrap().read().unwrap(), b"note");
     }
 }

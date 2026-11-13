@@ -327,6 +327,10 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     self.clear_result_ir_scroll_input();
                     self.clear_play_control_holds();
                 }
+                if !previous_effective_focused && focus_update.effective_focused {
+                    // Lane covers may have been added from the opened folder.
+                    self.forget_qwilight_skin_defs();
+                }
             }
             WindowEvent::RedrawRequested => {
                 // Windows' move/resize modal loop delivers redraws without

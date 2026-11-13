@@ -67,8 +67,7 @@ impl WinitApp {
                     .as_ref()
                     .is_some_and(|snapshot| snapshot.gauge >= snapshot.gauge_border);
             return if show_completion {
-                finishmargin
-                    .max(skin_duration_ms(self.renderer.play_skin_timer_animation_duration_ms(908)))
+                finishmargin.max(skin_duration_ms(self.renderer.play_skin_clear_completion_ms()))
             } else {
                 finishmargin
             };

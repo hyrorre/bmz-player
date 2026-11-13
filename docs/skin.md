@@ -11,6 +11,7 @@ JSON / Lua / LR2 / Qwilight skinの対応範囲と残課題は[skin-compatibilit
 試験対応として、`.yaml` / `.yml`を入口に同じパッケージのLuaとZIPを読み込みます。
 `@`で始まるテーマは対象外です。対象は4K / 5K / 6K / 7K / 8K / 9K / 10K / 14KのPlayで、
 Select・Decide・Result・G-BATTLE専用表示には対応しません。スキン一覧には各Play枠へ登録します。
+一覧の候補にするのは、同じフォルダにZIPがあるYAMLだけです。CIの設定などのYAMLは読みません。
 
 元のYAML・Lua・ZIPを揃えて`skins`配下へ置き、一覧を更新して選択してください。
 外部のインストール先を直接指定する場合は、通常の[外部スキンの許可](#スキンのファイル参照と外部スキンの許可)を使います。
@@ -75,6 +76,8 @@ Select・Decide・Result・G-BATTLE専用表示には対応しません。スキ
   BMZのフルコンボ検出（timer 48）でJ 9、全PGREATならJ 11を表示します。J 11がない部分はJ 9を使います。
   `yell!`の配置・FPS・フレーム数・DP指定は、省略時に`band!`の値を引き継ぎます。
   フルコンボ以外のクリアは曲終了（timer 908）でJ 10を表示し、途中終了・FAILEDでは表示しません。
+  J 10の終了まで黒フェードを待つのは、変換結果が`bmzPlayClearCompletion: true`（BMZ拡張、既定false）を持つためです。
+  この指定がないbeatoraja / LR2スキンは、timer 908の演出があっても従来どおり`finishmargin`後にフェードします。
   画像列・FPS・配置・左右中央寄せ・DP配置を読み、欠番は直前の画像を保持します。演出の終了後に黒フェードへ進み、動画出力にも同じ待機を適用します。
 - ゲージ残量（`hitPointsVisualizer`）、再生倍率（`audioMultiplier`）、目標スコア差（`hunter`）、
   判定内訳の帯（`judgmentPoints`）、進行バー（`status`）とつまみ（`statusSlider`）を表示します。
@@ -97,11 +100,16 @@ Select・Decide・Result・G-BATTLE専用表示には対応しません。スキ
 
 内部ではZIPの仮想パスを`archive.zip!skin/entry`として扱い、曲アーカイブの`!/`名前空間と分けます。
 アーカイブ実体を許可rootで確認し、entryの親移動・絶対パスを拒否します。
+Windowsのツールが`\`区切りで保存したentryは`/`に正規化して読みます。
+親移動・絶対パス・ドライブ指定のentryは一覧から除き、同じZIPの他のentryは使えます。
 YAML / Luaは各2 MiB、ZIPは32,768 entry・各64 MiBまでです。
 通常の分割画像は`sourceFrames`へ変換し、最大4096セル、各系列の入力RGBA合計とatlasをそれぞれ128 MiB以内に制限します。
 終了演出は最大4096フレームで、同じ画像を重複保持せず、可逆圧縮してメモリ上に保持します（`deferredSources`）。
 1画像のRGBAは16 MiB、圧縮後の合計は512 MiB、同時にGPUへ置く画像は128 MiBまでです。
-使用中のフレームだけ展開・転送し、使い終わったGPU画像は解放します。展開済みの全画像を一括でGPUへ載せません。
+描画するフレームを転送し、直近に使ったフレームは128 MiBまでGPUに残して、保持中・ループ中の再転送を省きます。
+演出の次の数フレームは別スレッドで先に展開します（待機中の展開済み画像は64 MiBまで）。演出が表示されなくなるとGPU画像を解放します。
+展開・転送できないフレームや同時表示の上限を超えたフレームは、その画像だけを描かずに画面の他の部分は描画します。
+展開済みの全画像を一括でGPUへ載せません。
 `qwilightAnimation`は変換後の画像・数字に付く内部メタデータです。既存JSON / Lua / LR2の通常のアニメーションは変更しません。
 `note.qwilightGeometry`は変換専用のLN配置情報で、既存JSON / Lua / LR2のLN配置には影響しません。
 
