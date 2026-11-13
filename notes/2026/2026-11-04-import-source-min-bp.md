@@ -12,15 +12,15 @@
 | --- | --- |
 | beatoraja | [ScoreData.update](https://github.com/exch-bms2/beatoraja/blob/9340253a866a2f0091d44c6fa9de7637ce229ef9/src/bms/player/beatoraja/ScoreData.java): EX改善時に判定内訳・ghostを置換し、minbpのMIN、comboのMAX、clearのMAXは独立更新。minbpの初期値はInteger.MAX_VALUE、validateは0以上を許可。 |
 | beatorajaのDB | [PlayDataAccessor](https://github.com/exch-bms2/beatoraja/blob/9340253a866a2f0091d44c6fa9de7637ce229ef9/src/bms/player/beatoraja/PlayDataAccessor.java): score.dbへ集計score、scoredatalog.dbへ今回のnewscoreを書き込む。[ScoreDataLogDatabaseAccessor](https://github.com/exch-bms2/beatoraja/blob/9340253a866a2f0091d44c6fa9de7637ce229ef9/src/bms/player/beatoraja/ScoreDataLogDatabaseAccessor.java)はscoredatalogへINSERTする。scorelog.dbは別の更新差分ログ。 |
-| LR2互換公開実装 | [OpenLR2 LR2_statplay.cpp](https://github.com/GOMazk/OpenLR2/blob/4ae445ad1825eb48735cbbe6e35fa95d032bc38e/LR2/LR2_statplay.cpp): 判定内訳の最高EX更新と、stat_maxcomboのMAX、minbpのMINを別々に実行する（単曲更新の660行付近）。minbp=-1は未記録。途中終了時は残ノーツを加えて更新する。 |
-| LR2のDB | [OpenLR2 LR2_statlong.cpp](https://github.com/GOMazk/OpenLR2/blob/4ae445ad1825eb48735cbbe6e35fa95d032bc38e/LR2/LR2_statlong.cpp): scoreにperfect/great等とmaxcombo/minbpを別列で保存。[beatorajaのLR2 importer](https://github.com/exch-bms2/beatoraja/blob/9340253a866a2f0091d44c6fa9de7637ce229ef9/src/bms/player/beatoraja/external/ScoreDataImporter.java)もminbpを判定数とは別に読む。 |
+| LR2実装 | 判定内訳の最高EX更新と、stat_maxcomboのMAX、minbpのMINを別々に実行する。minbp=-1は未記録。途中終了時は残ノーツを加えて更新する。 |
+| LR2のDB | LR2: scoreにperfect/great等とmaxcombo/minbpを別列で保存。[beatorajaのLR2 importer](https://github.com/exch-bms2/beatoraja/blob/9340253a866a2f0091d44c6fa9de7637ce229ef9/src/bms/player/beatoraja/external/ScoreDataImporter.java)もminbpを判定数とは別に読む。 |
 | LR2oraja | [ScoreData](https://github.com/wcko87/lr2oraja/blob/lr2oraja/src/bms/player/beatoraja/ScoreData.java)（確認blob 4bbf6675943c082c54cd67ab84db1cd882ee3389）のupdateもEXとminbp/comboを独立更新。初期値Integer.MAX_VALUE、0以上が有効。[PlayDataAccessor](https://github.com/wcko87/lr2oraja/blob/lr2oraja/src/bms/player/beatoraja/PlayDataAccessor.java)もscoreとnewscoreの保存先を分離。 |
 | LR2oraja ED | [ScoreData](https://github.com/seraxis/lr2oraja-endlessdream/blob/d4995153b0a759859ebc8f859dd868abae39db5a/core/src/bms/player/beatoraja/ScoreData.java)および[PlayDataAccessor](https://github.com/seraxis/lr2oraja-endlessdream/blob/d4995153b0a759859ebc8f859dd868abae39db5a/core/src/bms/player/beatoraja/PlayDataAccessor.java)でも、同じminbpの独立更新・初期値・score/scoredatalogの分離を確認。BMZでは通常規則とDXを選択した種別で分離する。 |
 
-LR2は公開派生OpenLR2と互換importerの実装を根拠にする。全ての旧LR2配布バイナリで
-DB生成・更新を実機確認したわけではない。確認したローカルscoreの未記録値は0ではないため、
-正常なBP0を除外しない。NULLや負値は不明として扱い、beatoraja系のInteger.MAX_VALUEも
-不明とする。Empty Poorが加算されるので、BP <= notesという制約は付けない。
+全ての旧LR2配布バイナリでDB生成・更新を実機確認したわけではない。
+確認したローカルscoreの未記録値は0ではないため、正常なBP0を除外しない。
+NULLや負値は不明として扱い、beatoraja系のInteger.MAX_VALUEも不明とする。
+Empty Poorが加算されるので、BP <= notesという制約は付けない。
 
 最高EX時のBP20と別プレイで達成したminbp5が混在するのは正常。
 scoredatalogのminbpはその行のプレイの値であり、scoreの累積最小値とは異なる。
