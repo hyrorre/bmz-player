@@ -60,6 +60,18 @@ impl WinitApp {
         self.play_finishmargin_duration().max(skin_duration_ms(ending.completion_remaining_ms))
     }
 
+    /// Effect time still outstanding when a natural finish starts. Normal play and
+    /// Practice share it, so neither cuts a full combo or clear effect short.
+    pub(super) fn natural_finish_completion_remaining_ms(&self, snapshot: &RenderSnapshot) -> i32 {
+        crate::screens::play_snapshot::play_completion_remaining_ms(
+            snapshot,
+            self.renderer
+                .play_skin_timer_animation_duration_ms(48)
+                .max(self.renderer.play_skin_timer_animation_duration_ms(49)),
+            self.renderer.play_skin_clear_completion_ms(),
+        )
+    }
+
     pub(super) fn play_fadeout_duration(&self, completion: PlayEndingCompletion) -> Duration {
         let declared_ms =
             self.renderer.play_skin_document().map(|document| document.fadeout).unwrap_or(0).max(0);

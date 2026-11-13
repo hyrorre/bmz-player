@@ -45,3 +45,10 @@ Windowsで以下を確認した。ログはGit管理外の`.local/qwilight-clear
 最初の制限付きテスト実行では、既存ダウンロードテストのローカル接続がWindowsエラー10013で失敗した。
 通常環境での全体実行と再実行では成功した。ビルドキャッシュのhard link警告は環境由来で、コードの警告抑制は行っていない。
 実ウィンドウでのプレイ、decide BGMの聴感、コントローラー、macOS/Linuxは未確認。
+
+## 同日の追加対応：Practiceのフルコンボ演出
+
+レビューで、Practiceの区間完走だけフルコンボ演出（timer 48 / 49）の長さを0として残り時間を計算していることを確認した。
+CLEAR演出は最後まで待つ一方、フルコンボ演出は`finishmargin`で打ち切られていた。
+通常プレイとPracticeの両方で同じ`natural_finish_completion_remaining_ms`を使い、
+timer 48 / 49とCLEAR演出の長さを同じ規則で渡す。残り時間の計算は既存のテストで検査している。

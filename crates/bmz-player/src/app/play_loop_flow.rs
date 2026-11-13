@@ -122,11 +122,7 @@ impl WinitApp {
                     }
                     let result_settled_elapsed_at_finish_ms = snapshot.result_settled_elapsed_ms;
                     let completion_remaining_ms =
-                        crate::screens::play_snapshot::play_completion_remaining_ms(
-                            &snapshot,
-                            0,
-                            self.renderer.play_skin_clear_completion_ms(),
-                        );
+                        self.natural_finish_completion_remaining_ms(&snapshot);
                     self.apply_profile_fast_slow_filter(&mut snapshot);
                     self.apply_play_table_text(&mut snapshot);
                     self.play.last_play_snapshot = Some(snapshot);
@@ -207,13 +203,7 @@ impl WinitApp {
                 snapshot.course_stage = course_stage;
                 snapshot.course_titles = course_titles.clone();
                 let completion_remaining_ms =
-                    crate::screens::play_snapshot::play_completion_remaining_ms(
-                        &snapshot,
-                        self.renderer
-                            .play_skin_timer_animation_duration_ms(48)
-                            .max(self.renderer.play_skin_timer_animation_duration_ms(49)),
-                        self.renderer.play_skin_clear_completion_ms(),
-                    );
+                    self.natural_finish_completion_remaining_ms(&snapshot);
                 let result_settled_elapsed_at_finish_ms = snapshot.result_settled_elapsed_ms;
                 self.apply_profile_fast_slow_filter(&mut snapshot);
                 self.apply_play_table_text(&mut snapshot);
