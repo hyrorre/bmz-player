@@ -629,6 +629,7 @@ fn transform_chart_import(
         options.h_random_threshold_ms,
         options.arrange_pattern.as_deref(),
     );
+    applied_arrange.source_key_mode = Some(source_key_mode);
     if duplicate_primary_for_battle {
         // Arrange the 1P chart first, then clone that resolved placement to
         // 2P. Applying arrange_2p independently made G-BATTLE's opponent fall

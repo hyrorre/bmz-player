@@ -198,6 +198,7 @@ impl WinitApp {
             .map(|entry| entry.finished.arrange.to_persistent_str().to_string())
             .unwrap_or_else(|| "Normal".to_string());
 
+        let bokutachi_dan = crate::ir::bokutachi::dan::capture(&course);
         let mut course_result = course.into_result();
         tracing::info!(
             title = %course_result.title,
@@ -297,6 +298,7 @@ impl WinitApp {
 
                         if !any_assist {
                             self.enqueue_ir_course_job(EnqueueIrCourseJobRequest {
+                                bokutachi_dan: &bokutachi_dan,
                                 course_id,
                                 course_score_id,
                                 course_result: &course_result,

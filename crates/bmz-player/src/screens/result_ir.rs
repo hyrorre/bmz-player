@@ -39,7 +39,7 @@ pub enum RankingLoadState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IrSubmitState {
     Sending,
-    Done { submitted: u32, failed: u32, message: Option<String> },
+    Done { submitted: u32, failed: u32, message: Option<String>, status: Option<IrScoreJobStatus> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,8 +52,18 @@ pub struct ResultIrProviderSubmission {
 
 #[derive(Debug)]
 pub enum ResultIrEvent {
-    Submit { provider: String, submitted: u32, failed: u32, message: Option<String> },
-    Ranking { provider: String, scope: IrRankingScope, result: Result<ResultIrRanking, String> },
+    Submit {
+        provider: String,
+        submitted: u32,
+        failed: u32,
+        message: Option<String>,
+        status: Option<IrScoreJobStatus>,
+    },
+    Ranking {
+        provider: String,
+        scope: IrRankingScope,
+        result: Result<ResultIrRanking, String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +171,7 @@ impl ResultIrTarget {
 impl ResultIrTaskQuery {
     fn supports_scope(&self, scope: IrRankingScope) -> bool {
         self.target.supports_scope(scope)
+            && !crate::ir::bokutachi::is_provider(&self.provider)
             && (!crate::ir::rian_ir::is_rian_ir_provider(&self.provider)
                 || scope == IrRankingScope::Global)
     }
@@ -193,6 +204,7 @@ enum ResultIrSource {
 }
 
 pub struct ResultIrState {
+    pub local_submission_notice: Option<String>,
     pub submit: IrSubmitState,
     pub provider_submissions: Vec<ResultIrProviderSubmission>,
     pub global: RankingLoadState,
@@ -289,13 +301,13 @@ impl ResultIrState {
         let mut loaded_chart_rankings = Vec::new();
         while let Ok(event) = self.receiver.try_recv() {
             match event {
-                ResultIrEvent::Submit { provider, submitted, failed, message } => {
+                ResultIrEvent::Submit { provider, submitted, failed, message, status } => {
                     let restricted_chart = failed > 0
                         && message
                             .as_deref()
                             .and_then(crate::ir::IrModerationCode::from_error_message)
                             .is_some_and(|code| !code.is_account_level());
-                    let state = IrSubmitState::Done { submitted, failed, message };
+                    let state = IrSubmitState::Done { submitted, failed, message, status };
                     if let Some(provider_state) = self
                         .provider_submissions
                         .iter_mut()
@@ -304,11 +316,26 @@ impl ResultIrState {
                         provider_state.state = state.clone();
                     }
                     if provider == self.query.provider {
+                        if self.submit == state {
+                            continue;
+                        }
                         // 譜面の非公開・ブロックで拒否された場合、ランキングは取得できない。
                         // スキンには取得失敗ではなく制限中 (LR2 IRstatus 605) として渡す。
                         self.chart_restricted = restricted_chart;
                         self.submit = state;
-                        self.update_submit_timer(submitted, failed, self.submit_message_is_error());
+                        if crate::ir::bokutachi::is_provider(&provider)
+                            && submitted == 0
+                            && failed == 0
+                        {
+                            self.ir_connect_success_at = None;
+                            self.ir_connect_fail_at = None;
+                        } else {
+                            self.update_submit_timer(
+                                submitted,
+                                failed,
+                                self.submit_message_is_error(),
+                            );
+                        }
                     }
                 }
                 ResultIrEvent::Ranking { provider, scope, result } => {
@@ -345,7 +372,13 @@ impl ResultIrState {
     }
 
     fn submit_message_is_error(&self) -> bool {
-        matches!(&self.submit, IrSubmitState::Done { submitted: 0, failed: 0, message: Some(_) })
+        if crate::ir::bokutachi::is_provider(&self.query.provider) {
+            return false;
+        }
+        matches!(
+            &self.submit,
+            IrSubmitState::Done { submitted: 0, failed: 0, message: Some(_), .. }
+        )
     }
 
     fn update_submit_timer(&mut self, submitted: u32, failed: u32, error: bool) {
@@ -416,6 +449,9 @@ impl ResultIrState {
             bmz_render::skin::ResultIrScopeBinding::Global => ResultRankingTab::Global,
             bmz_render::skin::ResultIrScopeBinding::Active => self.active_tab,
         };
+        if !self.supports_tab(tab) {
+            return self.with_connect_timers(ResultIrSnapshot::default(), tab);
+        }
         let snapshot = match self.state_for_tab(tab) {
             RankingLoadState::NotRequested | RankingLoadState::Loading => {
                 ResultIrSnapshot { state: SkinIrState::Loading, ..Default::default() }
@@ -740,6 +776,7 @@ mod tests {
         let (sender, receiver) = channel::<ResultIrEvent>();
         let event_sender = sender.clone();
         let mut state = ResultIrState {
+            local_submission_notice: None,
             submit: IrSubmitState::Sending,
             provider_submissions: vec![
                 ResultIrProviderSubmission {
@@ -831,6 +868,7 @@ mod tests {
             .send(ResultIrEvent::Submit {
                 provider: crate::ir::rian_ir::RIAN_IR_PROVIDER.to_string(),
                 submitted: 1,
+                status: None,
                 failed: 0,
                 message: None,
             })
@@ -841,7 +879,7 @@ mod tests {
         assert_eq!(state.submit, IrSubmitState::Sending);
         assert_eq!(
             state.provider_submissions[1].state,
-            IrSubmitState::Done { submitted: 1, failed: 0, message: None }
+            IrSubmitState::Done { submitted: 1, failed: 0, message: None, status: None }
         );
 
         event_sender
@@ -880,6 +918,7 @@ mod tests {
                 .send(ResultIrEvent::Submit {
                     provider: "bmz-official".to_string(),
                     submitted: 0,
+                    status: None,
                     failed: 1,
                     message: Some(format!("job 1: BMZ IR score submission failed: 403 [{code}]")),
                 })
@@ -1027,6 +1066,7 @@ mod tests {
             },
         };
         let report = IrSyncReport {
+            processed: 1,
             submitted: 1,
             failed: 0,
             messages: Vec::new(),

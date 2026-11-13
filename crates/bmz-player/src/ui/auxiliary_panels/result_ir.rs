@@ -29,13 +29,48 @@ pub(super) fn build_result_ir_panel(
 }
 
 fn build_result_ir_content(ui: &mut egui::Ui, state: &mut ResultIrState, text: Localizer) {
+    if let Some(notice) = &state.local_submission_notice {
+        ui.small(notice);
+        ui.separator();
+    }
     for submission in &state.provider_submissions {
+        let dan = state.is_course() && crate::ir::bokutachi::is_provider(&submission.provider_key);
         ui.horizontal(|ui| {
             ui.strong(&submission.display_name);
+            if dan {
+                ui.small(text.text("ir-bokutachi-dan"));
+            }
             if submission.primary {
                 ui.small(tr!(text, "result-ir-primary"));
             }
         });
+        if dan {
+            match &submission.state {
+                IrSubmitState::Sending => {
+                    ui.spinner();
+                    ui.label(text.text("ir-bokutachi-dan-pending"));
+                }
+                IrSubmitState::Done { failed, message, status, .. } => {
+                    if status.is_some() || message.is_some() {
+                        ui.label(crate::ui::ir_manual_ui::bokutachi_dan_status(
+                            status.map(|s| s.as_str()).unwrap_or(if *failed > 0 {
+                                "failed"
+                            } else {
+                                "pending"
+                            }),
+                            text,
+                        ));
+                        if let Some(message) = message {
+                            ui.small(message);
+                        }
+                    } else {
+                        ui.label(text.text("result-ir-nothing-to-submit"));
+                    }
+                }
+            }
+            ui.add_space(4.0);
+            continue;
+        }
         match &submission.state {
             IrSubmitState::Sending => {
                 ui.horizontal(|ui| {
@@ -43,7 +78,7 @@ fn build_result_ir_content(ui: &mut egui::Ui, state: &mut ResultIrState, text: L
                     ui.label(tr!(text, "result-ir-submitting"));
                 });
             }
-            IrSubmitState::Done { submitted, failed, message } => {
+            IrSubmitState::Done { submitted, failed, message, status } => {
                 if *failed > 0 {
                     ui.colored_label(
                         egui::Color32::LIGHT_RED,
@@ -66,8 +101,31 @@ fn build_result_ir_content(ui: &mut egui::Ui, state: &mut ResultIrState, text: L
                             "submitted" => *submitted
                         ),
                     );
+                } else if let Some(message) = message {
+                    if crate::ir::bokutachi::is_provider(&submission.provider_key) {
+                        ui.label(
+                            if *status
+                                == Some(crate::storage::network_db::IrScoreJobStatus::NoChange)
+                            {
+                                tr!(text, "ir-bokutachi-no-change")
+                            } else if *status
+                                == Some(crate::storage::network_db::IrScoreJobStatus::Ineligible)
+                            {
+                                tr!(text, "ir-bokutachi-ineligible")
+                            } else {
+                                tr!(text, "ir-bokutachi-pending")
+                            },
+                        );
+                    }
+                    ui.small(message);
                 } else {
                     ui.label(tr!(text, "result-ir-nothing-to-submit"));
+                }
+                if *submitted > 0
+                    && *failed == 0
+                    && let Some(message) = message
+                {
+                    ui.small(message);
                 }
             }
         }
@@ -75,6 +133,10 @@ fn build_result_ir_content(ui: &mut egui::Ui, state: &mut ResultIrState, text: L
     }
 
     ui.separator();
+    if !state.supports_tab(ResultRankingTab::Global) {
+        ui.label(tr!(text, "ir-bokutachi-no-ranking"));
+        return;
+    }
     let mut selected_tab = None;
     ui.horizontal(|ui| {
         let global = state.active_tab == ResultRankingTab::Global;

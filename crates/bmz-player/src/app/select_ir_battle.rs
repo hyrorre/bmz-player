@@ -660,6 +660,9 @@ async fn download_ir_battle_target(
     replay_dir: &Path,
     entry: crate::screens::select_ir::SelectIrBattleEntry,
 ) -> Result<crate::screens::play_start::BattleTarget> {
+    if crate::ir::bokutachi::is_provider(provider) {
+        return Err(crate::ir::bokutachi::unsupported());
+    }
     let client = crate::ir::bmz_official::BmzOfficialIrClient::anonymous(base_url)?;
     let (bytes, metadata) = client.download_replay_with_metadata(score_id).await?;
     if metadata.status.as_deref() != Some("verified") {

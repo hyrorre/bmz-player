@@ -7,7 +7,9 @@ pub fn configured_provider_key(entry: &IrProviderConfig) -> Option<&str> {
 
 pub fn configured_provider_display_name(entry: &IrProviderConfig) -> Option<&str> {
     let provider_key = configured_provider_key(entry)?;
-    if crate::ir::bms_ir::is_bms_ir_config(entry) {
+    if crate::ir::bokutachi::is_config(entry) {
+        Some("Bokutachi")
+    } else if crate::ir::bms_ir::is_bms_ir_config(entry) {
         Some("BMS-IR")
     } else if crate::ir::rian_ir::is_rian_ir_config(entry) {
         Some("rianIR")
@@ -33,7 +35,10 @@ pub fn provider_config_for_key<'a>(
 
 pub fn primary_provider_config(ir_config: &IrConfig) -> Option<&IrProviderConfig> {
     let usable = |entry: &IrProviderConfig| {
-        entry.enabled && !entry.base_url.is_empty() && configured_provider_key(entry).is_some()
+        entry.enabled
+            && !entry.base_url.is_empty()
+            && configured_provider_key(entry).is_some()
+            && !crate::ir::bokutachi::is_config(entry)
     };
     let primary_provider = ir_config.primary_provider.trim();
     if primary_provider.is_empty() {

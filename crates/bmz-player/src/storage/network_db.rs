@@ -17,6 +17,9 @@ pub struct NetworkDatabase {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IrScoreJobStatus {
+    NotCleared,
+    Ineligible,
+    NoChange,
     Pending,
     Sending,
     Succeeded,
@@ -32,6 +35,7 @@ pub enum IrBackfillResendOutcome {
     NeedsPayload,
 }
 
+mod bokutachi;
 mod model;
 mod operations;
 mod rows;

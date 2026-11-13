@@ -731,6 +731,7 @@ mod tests {
 
         let mut options = PlayStartOptions::default();
         let arrange = AppliedArrange {
+            source_key_mode: None,
             arrange: ArrangeOption::Random,
             arrange_2p: ArrangeOption::Mirror,
             double_option: crate::select_options::DoubleOption::Flip,

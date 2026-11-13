@@ -1268,4 +1268,13 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
         statements: &["ALTER TABLE score_history ADD COLUMN source_min_bp INTEGER
             CHECK (source_min_bp IS NULL OR source_min_bp >= 0);"],
     },
+    Migration {
+        version: 35,
+        statements: &[
+            "ALTER TABLE score_history ADD COLUMN normal_best_eligible INTEGER NOT NULL DEFAULT 1;",
+            "CREATE INDEX idx_score_history_device_best ON score_history
+                (chart_sha256, ln_policy, double_option, rule_mode, device_type, id)
+                WHERE normal_best_eligible = 1;",
+        ],
+    },
 ];

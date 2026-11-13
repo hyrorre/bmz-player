@@ -227,7 +227,7 @@ mod tests {
 
         let loaded = parse_profile_config(&text).unwrap();
 
-        assert_eq!(loaded.ir.providers.len(), 3);
+        assert_eq!(loaded.ir.providers.len(), 4);
         assert_eq!(
             loaded.ir.providers[0],
             crate::config::profile_config::IrProviderConfig::bmz_ir()

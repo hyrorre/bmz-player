@@ -23,6 +23,280 @@ use super::*;
 use crate::config::profile_config::{SevenToNinePattern, SevenToNineRuleMode, SevenToNineType};
 
 #[test]
+fn bokutachi_course_stage_device_policy_and_later_failure_are_independent() {
+    use crate::config::profile_config::IrSendPolicyConfig;
+    use crate::ir::types::IrScoreSubmission;
+    for (first, second) in [
+        (InputDeviceKind::Keyboard, InputDeviceKind::Controller),
+        (InputDeviceKind::Controller, InputDeviceKind::Keyboard),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let paths = profile_paths(root.path());
+        let mut provider = IrProviderConfig::bokutachi();
+        provider.enabled = true;
+        provider.provider_key = "bokutachi".into();
+        provider.account_id = "42".into();
+        provider.send_policy = IrSendPolicyConfig::UpdateScore;
+        let config = IrConfig { providers: vec![provider], ..Default::default() };
+        let mut scores = open_score_db();
+        let mut network = open_network_db();
+        for (index, (device, completed, expected)) in
+            [(first, true, 1), (second, false, 1), (second, false, 0), (first, true, 0)]
+                .into_iter()
+                .enumerate()
+        {
+            let mut s = session();
+            s.rule_mode = bmz_gameplay::rule::RuleMode::Beatoraja;
+            s.primary_key_mode = KeyMode::K9;
+            Arc::get_mut(&mut s.chart).unwrap().metadata.key_mode = KeyMode::K9;
+            s.state = if completed { PlayState::Finished } else { PlayState::Failed };
+            if completed {
+                s.score.judges.fast_pgreat = 1;
+                s.score.past_notes = 1;
+                s.score.combo = 1;
+                s.score.max_combo = 1;
+            }
+            s.replay_recorder.events.push(ReplayEvent {
+                lane: Lane::Key1,
+                kind: InputKind::Press,
+                time: TimeUs(0),
+                device_kind: device,
+                scratch_direction: None,
+            });
+            let arrange =
+                AppliedArrange { source_key_mode: Some(KeyMode::K9), ..Default::default() };
+            let finished = finish_session_result(
+                &mut scores,
+                &mut network,
+                FinishSessionResultRequest {
+                    profile_paths: &paths,
+                    replay_config: &ReplayConfig {
+                        auto_save: false,
+                        compress: false,
+                        slot_rules: crate::config::profile_config::default_slot_rules(),
+                    },
+                    ir_config: &config,
+                    session: &s,
+                    played_at: 100 + index as i64,
+                    applied_arrange: &arrange,
+                    source_ln_profile: ChartLnProfile::from_chart(&s.chart),
+                    chart_length_ms: None,
+                    play_duration_ms: None,
+                    target_ex_score: None,
+                    score_key: score_key(&s),
+                    practice_mode: false,
+                    finish_mode: FinishResultMode::CourseStage,
+                },
+            )
+            .unwrap();
+            assert_eq!(finished.stored.device_type, device);
+            assert_eq!(finished.summary.ir_queued_jobs, expected);
+            let evidence = finished.bokutachi_dan_stage.unwrap();
+            assert_eq!(evidence.completed, completed);
+        }
+        let jobs = network.pending_ir_score_jobs(200, 10).unwrap();
+        assert_eq!(jobs.len(), 2, "later stages never cancel earlier jobs");
+        for (job, device) in jobs.iter().zip([first, second]) {
+            let payload: IrScoreSubmission = serde_json::from_str(&job.payload_json).unwrap();
+            let context = crate::ir::bokutachi::context(&payload).unwrap();
+            assert_eq!(
+                context.game.as_str(),
+                if device == InputDeviceKind::Controller {
+                    "pms-controller"
+                } else {
+                    "pms-keyboard"
+                }
+            );
+            assert_eq!(payload.result.notes, 1);
+            if device == second {
+                assert_eq!(payload.result.min_bp, 1);
+                assert_eq!(payload.result.clear, "NoPlay");
+            }
+        }
+    }
+}
+
+#[test]
+fn bokutachi_stage_complete_song_uses_completion_and_update_uses_real_metrics() {
+    use crate::config::profile_config::IrSendPolicyConfig::*;
+    let mut result = play_result_from_session(&session());
+    result.clear_type = ClearType::Normal;
+    result.gauge_value = 80.0;
+    assert!(should_send_bokutachi_stage(CompleteSong, &result, ClearType::NoPlay, true, None));
+    assert!(!should_send_bokutachi_stage(CompleteSong, &result, ClearType::FullCombo, false, None));
+    assert!(should_send_bokutachi_stage(Always, &result, ClearType::NoPlay, false, None));
+    let mut best = crate::storage::score_db::BestScoreSummary {
+        play_options: None,
+        chart_sha256: [7; 32],
+        ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
+        double_option: crate::select_options::DoubleOptionScoreBucket::Off,
+        rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
+        clear_type: "NoPlay".into(),
+        gauge_type: "Class".into(),
+        gauge_value: Some(80.0),
+        ex_score: 0,
+        bp: 0,
+        cb: 0,
+        max_combo: 0,
+        judge_counts: Default::default(),
+        fast_slow_counts: Default::default(),
+        play_count: 1,
+        clear_count: 0,
+        device_type: InputDeviceKind::Keyboard,
+        played_at: 1,
+        replay_path: String::new(),
+    };
+    best.ex_score = result.score.ex_score();
+    best.clear_type = "NoPlay".into();
+    best.max_combo = result.score.max_combo;
+    best.bp = result.record_bp();
+    best.cb = result.record_cb();
+    assert!(!should_send_bokutachi_stage(
+        UpdateScore,
+        &result,
+        ClearType::NoPlay,
+        true,
+        Some(&best)
+    ));
+    for metric in 0..5 {
+        let mut previous = best.clone();
+        let mut current = result.clone();
+        let mut lamp = ClearType::NoPlay;
+        match metric {
+            0 => current.score.judges.fast_great += 1,
+            1 => lamp = ClearType::FullCombo,
+            2 => current.score.max_combo += 1,
+            3 => previous.bp += 1,
+            _ => previous.cb += 1,
+        }
+        assert!(should_send_bokutachi_stage(UpdateScore, &current, lamp, true, Some(&previous)));
+    }
+}
+
+#[test]
+fn bokutachi_enqueues_only_verified_new_native_scores_and_display_battles() {
+    use crate::ir::bokutachi::{Game, ScoringScope};
+    use crate::ln_policy::{LnPolicySetting, score_ln_policy};
+    let root = tempfile::tempdir().unwrap();
+    let paths = profile_paths(root.path());
+    let mut provider = IrProviderConfig::bokutachi();
+    provider.enabled = true;
+    provider.provider_key = "bokutachi".into();
+    provider.account_id = "42".into();
+    let config = IrConfig { providers: vec![provider], ..Default::default() };
+    let profile =
+        ChartLnProfile { has_undefined_ln: true, has_defined_ln: true, ..Default::default() };
+    let normalized = score_ln_policy(LnPolicySetting::AutoLn, profile);
+    assert_eq!(normalized, crate::ln_policy::LnScorePolicy::ForceLn);
+    for (mode, battle) in
+        [(KeyMode::K7, false), (KeyMode::K14, false), (KeyMode::K9, false), (KeyMode::K7, true)]
+    {
+        for rejected in
+            ["", "course", "conversion", "branch", "assist", "source-missing", "bad-lanes"]
+        {
+            if rejected == "bad-lanes" && !battle {
+                continue;
+            }
+            let mut score_db = open_score_db();
+            let mut network_db = open_network_db();
+            let mut s = session();
+            s.rule_mode = if mode == KeyMode::K9 {
+                bmz_gameplay::rule::RuleMode::Beatoraja
+            } else {
+                bmz_gameplay::rule::RuleMode::Lr2Oraja
+            };
+            s.primary_key_mode = mode;
+            let chart = Arc::get_mut(&mut s.chart).unwrap();
+            chart.metadata.key_mode = if battle { KeyMode::K14 } else { mode };
+            chart.metadata.has_bms_random = rejected == "branch";
+            if battle {
+                let mut opponent = chart.lane_notes[Lane::Key1.index()][0].clone();
+                opponent.lane = Lane::Key8;
+                opponent.id = NoteId(999);
+                chart.lane_notes[Lane::Key8.index()].push(opponent);
+                chart.total_notes = 2;
+                s.display_only_lane_mask = crate::screens::play_session::second_player_lane_mask();
+                s.replay_lane_mask = Some(s.display_only_lane_mask);
+                s.replay_player = Some(bmz_gameplay::replay::ReplayPlayer::default());
+                if rejected == "bad-lanes" {
+                    s.display_only_lane_mask[Lane::Key1.index()] = true;
+                }
+            }
+            if rejected == "assist" {
+                s.assist.level = AssistLevel::Assist;
+            }
+            let arrange = AppliedArrange {
+                source_key_mode: (rejected != "source-missing").then_some(mode),
+                key_mode_conversion: if rejected == "conversion" {
+                    KeyModeConversionConfig::SevenToNine
+                } else {
+                    KeyModeConversionConfig::Off
+                },
+                seven_to_nine_rule_mode: SevenToNineRuleMode::Keys7,
+                arrange: crate::select_options::ArrangeOption::FRandom,
+                arrange_2p: crate::select_options::ArrangeOption::Mirror,
+                ..Default::default()
+            };
+            let key = score_key(&s);
+            let finished = finish_session_result(
+                &mut score_db,
+                &mut network_db,
+                FinishSessionResultRequest {
+                    profile_paths: &paths,
+                    replay_config: &ReplayConfig {
+                        auto_save: false,
+                        compress: false,
+                        slot_rules: crate::config::profile_config::default_slot_rules(),
+                    },
+                    ir_config: &config,
+                    session: &s,
+                    source_ln_profile: profile,
+                    chart_length_ms: None,
+                    play_duration_ms: None,
+                    played_at: 100,
+                    applied_arrange: &arrange,
+                    target_ex_score: None,
+                    score_key: key,
+                    practice_mode: false,
+                    finish_mode: if rejected == "course" {
+                        FinishResultMode::CourseStage
+                    } else {
+                        FinishResultMode::Normal
+                    },
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                finished.summary.ir_queued_jobs,
+                u32::from(rejected.is_empty() || rejected == "course"),
+                "{mode:?}/{battle}/{rejected}"
+            );
+            if rejected.is_empty() || rejected == "course" {
+                let jobs = network_db.pending_ir_score_jobs(100, 10).unwrap();
+                let p: crate::ir::types::IrScoreSubmission =
+                    serde_json::from_str(&jobs[0].payload_json).unwrap();
+                let ctx = crate::ir::bokutachi::context(&p).unwrap();
+                assert_eq!(
+                    ctx.game,
+                    match mode {
+                        KeyMode::K14 => Game::Bms14k,
+                        KeyMode::K9 => Game::PmsKeyboard,
+                        _ => Game::Bms7k,
+                    }
+                );
+                assert_eq!(
+                    ctx.scoring_scope,
+                    if battle { ScoringScope::DisplayBattle7k } else { ScoringScope::Native }
+                );
+                assert_eq!(p.result.notes, 1);
+                assert_eq!(p.play_options["arrange_1p"], "f-random");
+                assert_eq!(p.rule.ln_policy, normalized);
+            }
+        }
+    }
+}
+
+#[test]
 fn pending_finished_play_waits_for_worker_completion() {
     let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let worker_completed = Arc::clone(&completed);
@@ -424,6 +698,7 @@ fn finish_session_result_returns_summary() {
     session.judge.set_window_set(windows);
     let lane_shuffle_pattern = (0..bmz_core::lane::LANE_COUNT as u8).rev().collect::<Vec<_>>();
     let applied_arrange = AppliedArrange {
+        source_key_mode: None,
         arrange: crate::select_options::ArrangeOption::Random,
         arrange_2p: crate::select_options::ArrangeOption::Mirror,
         double_option: crate::select_options::DoubleOption::Off,
@@ -1060,6 +1335,31 @@ fn finish_settled_session_result_accepts_playing_session_after_judgement() {
     );
     let settled_at = TimeUs(i64::MAX);
     assert!(bmz_gameplay::session::result_is_settled(&session, settled_at));
+    let arrange = AppliedArrange::default();
+    assert!(
+        FinishSessionSnapshot::from_session(
+            &session,
+            ChartLnProfile::default(),
+            &arrange,
+            Some(settled_at)
+        )
+        .completed
+    );
+    assert!(
+        !FinishSessionSnapshot::from_session(&session, ChartLnProfile::default(), &arrange, None)
+            .completed
+    );
+    session.manually_stopped = true;
+    assert!(
+        !FinishSessionSnapshot::from_session(
+            &session,
+            ChartLnProfile::default(),
+            &arrange,
+            Some(settled_at)
+        )
+        .completed
+    );
+    session.manually_stopped = false;
 
     let mut cached = None;
     let finished = finish_settled_session_result_once(
@@ -1281,6 +1581,7 @@ fn finish_snapshot_preserves_the_started_session_mode() {
         &session,
         ChartLnProfile::default(),
         &AppliedArrange::default(),
+        None,
     );
 
     assert_eq!(snapshot.skin_attempt.session_mode_index, Some(1));
@@ -1292,6 +1593,7 @@ fn battle_result_keeps_the_opponent_final_score_for_lr2_2p() {
         &session(),
         ChartLnProfile::default(),
         &AppliedArrange::default(),
+        None,
     );
     assert_eq!(single.battle_opponent, None);
 
@@ -1308,6 +1610,7 @@ fn battle_result_keeps_the_opponent_final_score_for_lr2_2p() {
         &session,
         ChartLnProfile::default(),
         &AppliedArrange::default(),
+        None,
     );
     let opponent = snapshot.battle_opponent.expect("battle opponent");
     assert_eq!((opponent.ex_score, opponent.max_combo), (12, 7));
@@ -1331,6 +1634,7 @@ fn battle_result_keeps_the_primary_key_mode_for_skin_state() {
             &session,
             ChartLnProfile::default(),
             &AppliedArrange::default(),
+            None,
         );
 
         assert_eq!(snapshot.chart.metadata.key_mode, bmz_core::lane::KeyMode::K14);
@@ -1352,7 +1656,7 @@ fn seven_to_nine_7k_rule_keeps_source_mode_for_result_and_ir() {
     };
 
     let snapshot =
-        FinishSessionSnapshot::from_session(&session, ChartLnProfile::default(), &applied);
+        FinishSessionSnapshot::from_session(&session, ChartLnProfile::default(), &applied, None);
 
     assert_eq!(snapshot.primary_key_mode, bmz_core::lane::KeyMode::K7);
     assert_eq!(snapshot.chart.metadata.key_mode, bmz_core::lane::KeyMode::K7);

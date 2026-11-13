@@ -1090,6 +1090,61 @@ fn manual_ir_sync_can_ignore_retry_backoff() {
 }
 
 #[test]
+fn ineligible_jobs_require_a_selected_retry_and_do_not_starve_bulk_sync() {
+    let mut db = open_network_db();
+    let rejected = enqueue_test_job(&mut db, 1, 100);
+    let pending = enqueue_test_job(&mut db, 2, 100);
+    db.reject_bokutachi_chart(rejected, 101, "chart not registered").unwrap();
+    assert_eq!(
+        db.unfinished_ir_score_job_count_for_kind("bmz-official", "account-1", IrJobKind::Score)
+            .unwrap(),
+        1
+    );
+    let listed = db.pending_ir_score_jobs_ignoring_backoff(102, 20).unwrap();
+    assert_eq!(listed.iter().map(|j| j.id).collect::<Vec<_>>(), vec![pending]);
+    let claimed = db.claim_pending_ir_score_jobs(102, 20, true).unwrap();
+    assert_eq!(claimed.iter().map(|j| j.id).collect::<Vec<_>>(), vec![pending]);
+    assert!(db.claim_pending_ir_score_jobs(103, 20, true).unwrap().is_empty());
+    for retry in [IrJobRetryFilter::IgnoreBackoff, IrJobRetryFilter::FailedBefore(103)] {
+        let backlog = db
+            .ir_score_job_backlog_for_kind(
+                "bmz-official",
+                "account-1",
+                IrJobKind::Score,
+                103,
+                retry,
+            )
+            .unwrap();
+        assert_eq!(backlog, IrScoreJobBacklog { claimable: 0, leased: 1, deferred: 0 });
+        assert!(
+            db.claim_pending_ir_score_jobs_for_kind(
+                "bmz-official",
+                "account-1",
+                IrJobKind::Score,
+                103,
+                20,
+                retry,
+            )
+            .unwrap()
+            .is_empty()
+        );
+    }
+    let selected = db
+        .claim_pending_ir_score_job_for_local_score(
+            "bmz-official",
+            "account-1",
+            IrJobKind::Score,
+            1,
+            104,
+            true,
+        )
+        .unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].id, rejected);
+    assert_eq!(selected[0].payload_json, "{}");
+}
+
+#[test]
 fn stale_sending_ir_score_jobs_are_retried() {
     let mut db = open_network_db();
     let job_id = db

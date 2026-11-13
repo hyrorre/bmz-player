@@ -469,6 +469,7 @@ fn run(
                     &runtime.session,
                     config.source_ln_profile,
                     &config.applied_arrange,
+                    Some(last_time),
                 ),
                 graph: result_graph,
                 settled_at,
