@@ -88,6 +88,14 @@ impl Fixture {
         loading_us: i64,
         ready_us: i64,
     ) -> simulation::Simulation {
+        self.simulation_with_completion(loading_us, ready_us, 0)
+    }
+    fn simulation_with_completion(
+        &self,
+        loading_us: i64,
+        ready_us: i64,
+        completion_us: i64,
+    ) -> simulation::Simulation {
         let prepared = prepare::prepare(&self.options, &self.paths, Some("default")).unwrap();
         let engine =
             bmz_audio::command::AudioEngineHandle::new(bmz_audio::engine::AudioEngine::new(48000));
@@ -104,7 +112,7 @@ impl Fixture {
                 countdown_us: 200_000,
                 finishmargin_us: 100_000,
                 close_us: 200_000,
-                completion_us: 0,
+                completion_us,
             }
             .with_presentation(loading_us, ready_us),
             300,
@@ -364,6 +372,42 @@ fn scene_timing_includes_entry_and_exit_animation() {
     let end = simulation.exit_us.expect("must finish");
     let fading = simulation.snapshot(end - 100000, &Default::default());
     assert_eq!(fading.fadeout_elapsed_ms, Some(200));
+}
+
+#[test]
+fn clear_completion_starts_at_settlement_and_waits_only_for_remaining_frames() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.options.chart.clone(),
+        "#TITLE Clear timing\n#BPM 120\n#TOTAL 1000\n#WAV01 click.wav\n#00111:0101010101010101\n",
+    )
+    .unwrap();
+    for duration_ms in [2000, 8000] {
+        let mut simulation = fixture.simulation_with_completion(0, 0, duration_ms * 1000);
+        // Miss the first note, then autoplay the rest to obtain a non-FC clear.
+        let autoplay = simulation.prepared.play.session.autoplay.take();
+        simulation.advance_to(48_000 * 27 / 10, |_| Ok(())).unwrap();
+        simulation.prepared.play.session.autoplay = autoplay;
+        simulation.advance_to(48_000 * 5, |_| Ok(())).unwrap();
+        let snapshot = simulation.snapshot(5_000_000, &Default::default());
+        assert!(snapshot.gauge >= snapshot.gauge_border);
+        assert_eq!(snapshot.full_combo_elapsed_ms, None);
+        assert_eq!(snapshot.music_end_elapsed_ms, None);
+        assert!(snapshot.result_settled_elapsed_ms.is_some_and(|elapsed| elapsed > 0));
+        let settled = simulation.prepared.play.session.natural_result_settled_at.unwrap();
+
+        simulation.advance_to(48_000 * 10, |_| Ok(())).unwrap();
+        let snapshot = simulation.snapshot(10_000_000, &Default::default());
+        let music_elapsed = snapshot.music_end_elapsed_ms.unwrap();
+        let settled_elapsed = snapshot.result_settled_elapsed_ms.unwrap();
+        assert!(settled_elapsed > music_elapsed);
+        assert_eq!(simulation.prepared.play.session.natural_result_settled_at, Some(settled));
+        let remaining_ms = (duration_ms - i64::from(settled_elapsed - music_elapsed)).max(0);
+        let finish_us = 10_000_000 - i64::from(music_elapsed) * 1000;
+        let expected_exit_us = finish_us + remaining_ms.max(100) * 1000 + 300_000;
+        // Snapshot timer values truncate sub-millisecond audio-frame times.
+        assert!((simulation.exit_us.unwrap() - expected_exit_us).abs() < 2000);
+    }
 }
 
 #[test]

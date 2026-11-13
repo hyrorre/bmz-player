@@ -363,9 +363,10 @@ fn qwilight_play_only_import_waits_for_the_entry_fade() {
     let (_root, decoded) = fixture();
     assert_eq!(decoded.document.bmz_play_fadein, 500);
     assert_eq!(decoded.document.bmz_play_fadeout, 500);
-    // J 10 (MUSIC END) holds the exit fade only for Qwilight conversions.
+    // J 10 (result settlement) holds the exit fade only for Qwilight conversions.
     assert!(decoded.document.bmz_play_clear_completion);
     assert_eq!(decoded.document.loadstart, 500);
+    assert_eq!(decoded.document.playstart, 1000);
     assert_eq!(decoded.document.loadend, 0);
     assert_eq!(decoded.document.fadeout, 500);
     assert_eq!(decoded.document.close, 500);

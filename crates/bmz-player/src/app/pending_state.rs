@@ -69,7 +69,9 @@ pub(super) struct PlayEndingTransition {
     pub(super) finished: Option<FinishedPlaySession>,
     pub(super) failed: bool,
     pub(super) completion: PlayEndingCompletion,
-    pub(super) full_combo_elapsed_at_finish_ms: Option<i32>,
+    /// Effect time still outstanding when this transition started.
+    pub(super) completion_remaining_ms: i32,
+    pub(super) result_settled_elapsed_at_finish_ms: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,7 +93,8 @@ pub(super) fn viewer_exit_ending(started_at: Instant) -> PlayEndingTransition {
         finished: None,
         failed: false,
         completion: PlayEndingCompletion::ViewerExit,
-        full_combo_elapsed_at_finish_ms: None,
+        completion_remaining_ms: 0,
+        result_settled_elapsed_at_finish_ms: None,
     }
 }
 
@@ -110,7 +113,8 @@ pub(super) fn pre_play_abort_ending(
         } else {
             PlayEndingCompletion::Select
         },
-        full_combo_elapsed_at_finish_ms: None,
+        completion_remaining_ms: 0,
+        result_settled_elapsed_at_finish_ms: None,
     }
 }
 
@@ -122,7 +126,8 @@ pub(super) fn practice_natural_finish_ending(started_at: Instant) -> PlayEndingT
         finished: None,
         failed: false,
         completion: PlayEndingCompletion::PracticeConfig,
-        full_combo_elapsed_at_finish_ms: None,
+        completion_remaining_ms: 0,
+        result_settled_elapsed_at_finish_ms: None,
     }
 }
 
@@ -134,7 +139,8 @@ pub(super) fn practice_requested_finish_ending(started_at: Instant) -> PlayEndin
         finished: None,
         failed: false,
         completion: PlayEndingCompletion::PracticeConfig,
-        full_combo_elapsed_at_finish_ms: None,
+        completion_remaining_ms: 0,
+        result_settled_elapsed_at_finish_ms: None,
     }
 }
 
@@ -146,7 +152,8 @@ pub(super) fn practice_failed_ending(started_at: Instant) -> PlayEndingTransitio
         finished: None,
         failed: true,
         completion: PlayEndingCompletion::PracticeConfig,
-        full_combo_elapsed_at_finish_ms: None,
+        completion_remaining_ms: 0,
+        result_settled_elapsed_at_finish_ms: None,
     }
 }
 
@@ -158,7 +165,8 @@ pub(super) fn practice_leave_ending(started_at: Instant) -> PlayEndingTransition
         finished: None,
         failed: false,
         completion: PlayEndingCompletion::PracticeLeave,
-        full_combo_elapsed_at_finish_ms: None,
+        completion_remaining_ms: 0,
+        result_settled_elapsed_at_finish_ms: None,
     }
 }
 

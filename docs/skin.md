@@ -73,14 +73,19 @@ Select・Decide・Result・G-BATTLE専用表示には対応しません。スキ
   変換後の`bmzPlayFadein`はPlay画面へ入ってからの経過時間で黒から透明へ変えるBMZ拡張（ms、既定0）です。
   `bmzPlayFadeout`は終了時の黒フェード（ms、既定0）で、timer 2/3の演出がある場合はそちらを優先します。
   Qwilight変換では両拡張と`loadstart` / `fadeout` / `close`を500に設定し、途中終了・FAILEDにも適用します。
+  READYはRmz-skinと同じ1秒（`playstart: 1000`）を既定値とし、ロード完了後に曲開始まで待ちます。
+  decide BGMは既存のREADY処理により、この1秒間でフェードアウトします。
 
 - 終了演出は`band!` / `Paint/J 9 …`、`last` / `J 10 …`、`yell!` / `J 11 …`を使います。
   BMZのフルコンボ検出（timer 48）でJ 9、全PGREATならJ 11を表示します。J 11がない部分はJ 9を使います。
   `yell!`の配置・FPS・フレーム数・DP指定は、省略時に`band!`の値を引き継ぎます。
-  フルコンボ以外のクリアは曲終了（timer 908）でJ 10を表示し、途中終了・FAILEDでは表示しません。
-  J 10の終了まで黒フェードを待つのは、変換結果が`bmzPlayClearCompletion: true`（BMZ拡張、既定false）を持つためです。
-  この指定がないbeatoraja / LR2スキンは、timer 908の演出があっても従来どおり`finishmargin`後にフェードします。
-  画像列・FPS・配置・左右中央寄せ・DP配置を読み、欠番は直前の画像を保持します。演出の終了後に黒フェードへ進み、動画出力にも同じ待機を適用します。
+  フルコンボ以外のクリアは結果の自然確定（BMZ timer 19075）でJ 10を表示し、途中終了・FAILEDでは表示しません。
+  全ノーツの処理と、空POOR等を含むSLOW側の判定受付が終わった時点です。入力オフセットとリプレイの処理時刻も考慮します。
+  スコア保存開始と同じ確定を使い、保存完了・IR通信・曲終了の5秒待機には依存しません。
+  Qwilight本体は全ノーツ処理直後ですが、BMZではクリア結果が変わらなくなるまで待ちます。
+  変換結果の`bmzPlayClearCompletion: true`（BMZ拡張、既定false）により、退場時はJ 10の残り時間と`finishmargin`の長い方を待ちます。
+  既に終わった演出を再開したり、演出全体の長さを再度待ったりしません。曲終了のtimer 908と、他形式のスキンの終了待機は変更しません。
+  画像列・FPS・配置・左右中央寄せ・DP配置を読み、欠番は直前の画像を保持します。動画出力にも同じ開始条件と残り時間の計算を適用します。
 - ゲージ残量（`hitPointsVisualizer`）、再生倍率（`audioMultiplier`）、目標スコア差（`hunter`）、
   判定内訳の帯（`judgmentPoints`）、進行バー（`status`）とつまみ（`statusSlider`）を表示します。
   ゲージはBMZの値、再生倍率はFREQの倍率を小数2桁に四捨五入した値（参照19263 / 19264）、目標差は処理済みノーツ位置までの目標EXとの差（153）です。
@@ -2621,6 +2626,12 @@ select snapshotへ予定配置を設定します。
 | 1918 | number / event_index / text | HS設定です。`0=NORMAL`, `1=CLASSIC`, `2=FLOATING`, `3=NORMAL+FLOATING`, `4=CLASSIC+FLOATING`, `5=LR2` |
 
 `op: [1901]`または`draw: "number(1901)==1"`でFloating時だけdestinationを表示できます。
+
+### BMZ Result Settlement Timer
+
+`timer 19075`（`SKIN_TIMER_BMZ_RESULT_SETTLED`）はPlayの結果が自然確定した時点からの実時間の経過msです。
+全ノーツ処理後、空POOR等のSLOW側受付が終わるまでOFFです。手動退出・FAILEDでの結果確定では起動しません。
+保存の有無とは独立しており、AUTO・リプレイ・動画出力でも使用できます。ゲージによるクリア可否は表示側で判定します。
 
 ### BMZ Key Mode Refs
 

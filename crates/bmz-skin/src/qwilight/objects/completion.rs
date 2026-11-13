@@ -1,4 +1,5 @@
 use super::*;
+use bmz_skin_document::SKIN_TIMER_BMZ_RESULT_SETTLED;
 
 impl Builder {
     pub(super) fn completion(&mut self) -> Result<()> {
@@ -7,7 +8,7 @@ impl Builder {
         }
         for (name, category, timer, condition) in [
             ("band!", 9, 48, "number(110) < number(74)"),
-            ("last", 10, 908, "timer(48) < 0"),
+            ("last", 10, SKIN_TIMER_BMZ_RESULT_SETTLED, "timer(48) < 0"),
             ("yell!", 11, 48, "number(74) > 0 and number(110) == number(74)"),
         ] {
             let count = self.eval.number("frame", &format!("{name}-frame"), 1.0)? as usize;

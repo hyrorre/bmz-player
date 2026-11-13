@@ -1471,6 +1471,7 @@ fn session() -> GameSession {
         state: PlayState::Finished,
         manually_stopped: false,
         scoring_closed_at: None,
+        natural_result_settled_at: None,
         last_hcn_gauge_at: None,
     }
 }

@@ -52,12 +52,12 @@ fn qwilight_cr_minimal_completion_gpu() {
     }
     snapshot.full_combo_elapsed_ms = None;
     snapshot.combo = 0;
-    snapshot.music_end_elapsed_ms = Some(1500);
+    snapshot.result_settled_elapsed_ms = Some(1500);
     snapshot.gauge = 100.0;
     let cleared = render_qwilight_snapshot(&mut renderer, snapshot.clone());
     save_preview(&output, "CR_minimal-clear.png", &cleared);
     assert!(changed_pixels(&baseline, &cleared, (0, 1280), (0, 530)) > 500);
-    snapshot.music_end_elapsed_ms = Some(6000);
+    snapshot.result_settled_elapsed_ms = Some(6000);
     let after = render_qwilight_snapshot(&mut renderer, snapshot);
     assert_ne!(cleared, after);
 }
@@ -304,8 +304,20 @@ fn qwilight_completion_uses_sparse_lossless_frames_and_bmz_outcomes() {
     state.full_combo_ms = Some(5001);
     assert!(items(&decoded, "qw-completion-", &state).is_empty());
     state.full_combo_ms = None;
+    assert!(items(&decoded, "qw-completion-10", &state).is_empty());
+    // MUSIC END alone must not start CLEAR; natural settlement can start it while still Playing.
     state.music_end_ms = Some(0);
+    assert!(items(&decoded, "qw-completion-10", &state).is_empty());
+    state.music_end_ms = None;
+    state.result_settled_ms = Some(0);
     assert_eq!(items(&decoded, "qw-completion-10", &state).len(), 1);
+    state.result_settled_ms = Some(5001);
+    state.music_end_ms = Some(0);
+    assert!(items(&decoded, "qw-completion-10", &state).is_empty());
+    state.result_settled_ms = Some(0);
+    state.failed_ms = Some(0);
+    assert!(items(&decoded, "qw-completion-10", &state).is_empty());
+    state.failed_ms = None;
     state.gauge = 0.0;
     state.gauge_border = 80.0;
     assert!(items(&decoded, "qw-completion-10", &state).is_empty());

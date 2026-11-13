@@ -40,7 +40,7 @@ pub struct SkinDocument {
     #[serde(default, rename = "bmzPlayFadeout")]
     pub bmz_play_fadeout: i32,
     /// BMZ play extension: a cleared finish without a full combo keeps Play until
-    /// the timer 908 (MUSIC END) animation ends, then starts the exit fade.
+    /// the BMZ result-settled timer animation ends, then starts the exit fade.
     /// Other skins start the fade after `finishmargin`, as in beatoraja.
     #[serde(default, rename = "bmzPlayClearCompletion")]
     pub bmz_play_clear_completion: bool,

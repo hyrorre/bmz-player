@@ -119,9 +119,16 @@ fn dx_negative_input_offset_scores_late_empty_poor_before_settling() {
     // 境界 E+W-O では、同時刻に取得した入力がまだ境界上の空POORになり得る。
     advance_at(&mut session, &mut audio, end + 220_000);
     assert_eq!(session.scoring_closed_at, None);
+    assert_eq!(session.natural_result_settled_at, None);
     advance_at(&mut session, &mut audio, end + 220_001);
     assert_eq!(session.scoring_closed_at, Some(TimeUs(end + 220_001)));
+    assert_eq!(session.natural_result_settled_at, session.scoring_closed_at);
     assert_eq!(session.state, PlayState::Playing);
+    // Later offset changes and the terminal transition must not restart the effect.
+    session.offsets.input_offset_us = -300_000;
+    advance_at(&mut session, &mut audio, end + SESSION_END_MARGIN_US + 1);
+    assert_eq!(session.state, PlayState::Finished);
+    assert_eq!(session.natural_result_settled_at, Some(TimeUs(end + 220_001)));
 }
 
 #[test]
@@ -153,11 +160,13 @@ fn full_replay_settles_only_after_the_processed_tick_passes_the_window() {
     assert_eq!(empty_poor_count(&session), 0);
     // 外側の時計は E+W を超えているが、処理済み tick はまだ超えていない。
     assert_eq!(session.scoring_closed_at, None);
+    assert_eq!(session.natural_result_settled_at, None);
 
     advance_at(&mut session, &mut audio, 1_301_000);
     assert_eq!(empty_poor_count(&session), 1);
     // 記録済み入力に現在の -20ms を再適用しないため、負オフセット分は待たない。
     assert_eq!(session.scoring_closed_at, Some(TimeUs(1_301_000)));
+    assert_eq!(session.natural_result_settled_at, session.scoring_closed_at);
 }
 
 #[test]
@@ -412,6 +421,8 @@ fn practice_round_end_finishes_a_run_whose_notes_were_all_processed() {
     assert!(!session.manually_stopped);
     // Practice は直後に時計を止めるため、更新を経ずに停止境界で結果を取得できる。
     assert_eq!(session.result_settled_at(), Some(TimeUs(50_000)));
+    advance_at(&mut session, &mut audio, 50_000);
+    assert_eq!(session.natural_result_settled_at, None);
 
     // ノーツが残る間は従来どおり途中中断になる。
     let (mut session, _keys) = dx_human_session(tap_chart(TimeUs(1_000_000)), 0);
@@ -419,4 +430,6 @@ fn practice_round_end_finishes_a_run_whose_notes_were_all_processed() {
     assert!(session.request_practice_round_end());
     assert_eq!(session.state, PlayState::Failed);
     assert!(session.manually_stopped);
+    advance_at(&mut session, &mut audio, 300_000);
+    assert_eq!(session.natural_result_settled_at, None);
 }

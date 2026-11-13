@@ -100,6 +100,8 @@ pub const SKIN_REF_BMZ_EXIT_HOLD_DURATION_MS: i32 = 19_072;
 pub const SKIN_OPTION_BMZ_EXIT_HOLD_ACTIVE: i32 = 19_073;
 /// BMZ extension: elapsed milliseconds since the ESC hold started. OFF while not held.
 pub const SKIN_TIMER_BMZ_EXIT_HOLD: i32 = 19_074;
+/// BMZ extension: elapsed real milliseconds since natural result settlement; OFF on abort/failure.
+pub const SKIN_TIMER_BMZ_RESULT_SETTLED: i32 = 19_075;
 /// BMZ extension: generic daily statistics number refs.
 pub const SKIN_REF_BMZ_DAILY_BASE: i32 = 1930;
 pub const SKIN_REF_BMZ_DAILY_LAST: i32 = 1946;

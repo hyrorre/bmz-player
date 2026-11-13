@@ -108,6 +108,7 @@ pub(in crate::plan) fn build_play_skin_state(
         fadeout_ms: snapshot.fadeout_elapsed_ms,
         failed_ms: snapshot.failed_elapsed_ms,
         music_end_ms: snapshot.music_end_elapsed_ms,
+        result_settled_ms: snapshot.result_settled_elapsed_ms,
         gauge_increase_ms: snapshot.gauge_increase_elapsed_ms,
         gauge_increase_2p_ms: snapshot
             .opponent

@@ -59,6 +59,7 @@ fn cached_projection_recomputes_all_skin_timers_across_ready_beats_and_event_bou
     session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(-1_000_999));
     session.lane_keyoff_started_at[Lane::Key2.index()] = Some(TimeUs(-500_999));
     session.full_combo_started_at = Some(TimeUs(150_999));
+    session.natural_result_settled_at = Some(TimeUs(-1_000_000));
     session.gauge_increase_started_at = Some(TimeUs(-200_999));
     session.gauge_max_started_at = Some(TimeUs(50_999));
     session.opponent.score = Some(session.score.clone());
@@ -103,6 +104,7 @@ fn cached_projection_recomputes_all_skin_timers_across_ready_beats_and_event_bou
     session.lane_hcn_timer.fill(None);
     session.judge.lanes[Lane::Key3.index()].active_long = None;
     session.full_combo_started_at = None;
+    session.natural_result_settled_at = None;
     session.gauge_increase_started_at = None;
     session.gauge_max_started_at = None;
     session.opponent.full_combo_started_at = None;
@@ -123,12 +125,33 @@ fn assert_skin_timers_eq(actual: &RenderSnapshot, expected: &RenderSnapshot) {
     assert_eq!(actual.hcn_active_ms, expected.hcn_active_ms);
     assert_eq!(actual.hcn_damage_ms, expected.hcn_damage_ms);
     assert_eq!(actual.full_combo_elapsed_ms, expected.full_combo_elapsed_ms);
+    assert_eq!(actual.result_settled_elapsed_ms, expected.result_settled_elapsed_ms);
     assert_eq!(actual.gauge_increase_elapsed_ms, expected.gauge_increase_elapsed_ms);
     assert_eq!(actual.gauge_max_elapsed_ms, expected.gauge_max_elapsed_ms);
     assert_eq!(actual.rhythm_timer_elapsed_ms, expected.rhythm_timer_elapsed_ms);
     assert_eq!(actual.quarter_note_elapsed_ms, expected.quarter_note_elapsed_ms);
     assert_eq!(actual.end_of_note_elapsed_ms, expected.end_of_note_elapsed_ms);
     assert_eq!(actual.opponent, expected.opponent);
+}
+
+#[test]
+fn settled_timer_projection_uses_real_time_and_ignores_visual_offset() {
+    for rate in [50, 100, 200] {
+        let mut session = session(chart());
+        session.audio_clock.set_playback_rate_percent(rate);
+        session.audio_clock.pause_at(TimeUs(1_000_000));
+        session.offsets.visual_offset_us = -300_000;
+        session.natural_result_settled_at = Some(TimeUs(1_000_000));
+        let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+        let pool = PlayfieldProjection::pool(&session, &cache);
+        let mut snapshot = base(&session, TimeUs(1_000_000), &cache);
+        assert_eq!(snapshot.result_settled_elapsed_ms, Some(0));
+        let later = TimeUs(1_000_000 + 10_000 * i64::from(rate));
+        pool[0].project(&mut snapshot, later, &mut ProjectionClock::default());
+        assert_eq!(snapshot.result_settled_elapsed_ms, Some(1000));
+        assert_eq!(base(&session, later, &cache).result_settled_elapsed_ms, Some(1000));
+        assert_eq!(snapshot.music_end_elapsed_ms, None);
+    }
 }
 
 #[test]

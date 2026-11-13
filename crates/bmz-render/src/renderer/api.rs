@@ -641,12 +641,12 @@ impl Renderer {
         self.play_skin_context.timer_animation_duration_ms(timer)
     }
 
-    /// MUSIC END (timer 908) animation a cleared finish without a full combo
+    /// Result-settled animation a cleared finish without a full combo
     /// waits for. Zero unless the skin opts in with `bmzPlayClearCompletion`,
     /// so other skins keep beatoraja's `finishmargin`.
     pub fn play_skin_clear_completion_ms(&self) -> i32 {
         if self.play_skin_document().is_some_and(|document| document.bmz_play_clear_completion) {
-            self.play_skin_timer_animation_duration_ms(908)
+            self.play_skin_timer_animation_duration_ms(crate::skin::SKIN_TIMER_BMZ_RESULT_SETTLED)
         } else {
             0
         }

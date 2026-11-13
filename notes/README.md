@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-13 | [Qwilight CLEAR演出を結果確定時に開始する](2026/2026-11-13-qwilight-clear-settlement.md) |
 | 2026-11-13 | [Qwilightプレイスキン対応（PR #97）のレビュー指摘への対応](2026/2026-11-13-qwilight-review-fixes.md) |
 | 2026-11-13 | [ECFN・Qwilightの判定線とノーツの描画順](2026/2026-11-13-play-judge-line-order.md) |
 | 2026-11-13 | [Qwilightのレーン別FAST/SLOWと表示フィルター](2026/2026-11-13-qwilight-lane-timing-filter.md) |

@@ -145,6 +145,7 @@ pub fn advance_session_frame(
             && natural_result_settled(session, times.audio_now)
         {
             session.scoring_closed_at = Some(times.audio_now);
+            session.natural_result_settled_at = Some(times.audio_now);
         }
         if should_finish(session, times.audio_now) {
             session.state = PlayState::Finished;

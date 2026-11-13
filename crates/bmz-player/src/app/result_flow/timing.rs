@@ -57,27 +57,7 @@ impl WinitApp {
     }
 
     pub(super) fn play_pre_fadeout_duration(&self, ending: &PlayEndingTransition) -> Duration {
-        let finishmargin = self.play_finishmargin_duration();
-        let Some(elapsed_ms) = ending.full_combo_elapsed_at_finish_ms else {
-            let show_completion = ending.music_end_started_at.is_some()
-                && !ending.failed
-                && self
-                    .play
-                    .last_play_snapshot
-                    .as_ref()
-                    .is_some_and(|snapshot| snapshot.gauge >= snapshot.gauge_border);
-            return if show_completion {
-                finishmargin.max(skin_duration_ms(self.renderer.play_skin_clear_completion_ms()))
-            } else {
-                finishmargin
-            };
-        };
-        let full_combo_ms = self
-            .renderer
-            .play_skin_timer_animation_duration_ms(48)
-            .max(self.renderer.play_skin_timer_animation_duration_ms(49));
-        let remaining_ms = full_combo_ms.saturating_sub(elapsed_ms.max(0));
-        finishmargin.max(skin_duration_ms(remaining_ms))
+        self.play_finishmargin_duration().max(skin_duration_ms(ending.completion_remaining_ms))
     }
 
     pub(super) fn play_fadeout_duration(&self, completion: PlayEndingCompletion) -> Duration {

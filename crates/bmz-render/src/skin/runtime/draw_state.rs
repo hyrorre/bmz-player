@@ -161,6 +161,7 @@ pub struct SkinDrawState {
     pub full_combo_ms: Option<i32>,
     pub full_combo_2p_ms: Option<i32>,
     pub music_end_ms: Option<i32>,
+    pub result_settled_ms: Option<i32>,
     /// Gauge increase timer elapsed ms (TIMER_GAUGE_INCLEASE_1P/2P=42/43)。
     pub gauge_increase_ms: Option<i32>,
     pub gauge_increase_2p_ms: Option<i32>,
@@ -630,6 +631,7 @@ impl Default for SkinDrawState {
             full_combo_ms: None,
             full_combo_2p_ms: None,
             music_end_ms: None,
+            result_settled_ms: None,
             gauge_increase_ms: None,
             gauge_increase_2p_ms: None,
             gauge_max_ms: None,

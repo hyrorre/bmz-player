@@ -265,14 +265,11 @@ impl Simulation {
                 self.skin_audio.trigger_timer(3, self.system_bgm_volume(), self.system_volume());
             } else {
                 let snapshot = self.snapshot(scene_us, &BgaFrameCatalog::new());
-                let remaining = snapshot.full_combo_elapsed_ms.map_or(
-                    if snapshot.gauge >= snapshot.gauge_border {
-                        self.timing.completion_us
-                    } else {
-                        0
-                    },
-                    |elapsed| (self.fc_duration_us - i64::from(elapsed) * 1000).max(0),
-                );
+                let remaining = i64::from(play_completion_remaining_ms(
+                    &snapshot,
+                    (self.fc_duration_us / 1000).clamp(0, i64::from(i32::MAX)) as i32,
+                    (self.timing.completion_us / 1000).clamp(0, i64::from(i32::MAX)) as i32,
+                )) * 1000;
                 self.fadeout_us = Some(scene_us + self.timing.finishmargin_us.max(remaining));
                 self.exit_us = self.fadeout_us.map(|start| start + self.fadeout_duration_us);
             }

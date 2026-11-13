@@ -146,7 +146,7 @@ impl Definition {
             // Qwilight's transitions belong to the separate @theme. Use BMZ's
             // default fade for play-only imports; don't start notes under black.
             "bmzPlayFadein": 500, "bmzPlayFadeout": 500, "bmzPlayClearCompletion": true,
-            "loadstart": 500, "fadeout": 500, "close": 500,
+            "loadstart": 500, "playstart": 1000, "fadeout": 500, "close": 500,
             "name": self.text("format", "title-1041").or_else(|| self.text("format", "title")).unwrap_or_else(|| "Qwilight play skin".into()),
             "property": properties, "propertyLabels": labels,
             "offset": customize::adjustment_defs(self),

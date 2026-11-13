@@ -299,8 +299,12 @@ fn play_clear_completion_waits_only_for_skins_that_opt_in() {
     let document = |opt_in: bool| -> SkinDocument {
         serde_json::from_value(serde_json::json!({
             "type": 0, "w": 100, "h": 100, "bmzPlayClearCompletion": opt_in,
-            "destination": [{"id": "music-end", "timer": 908,
-                "dst": [{"time": 0}, {"time": 5000}]}]
+            "destination": [
+                {"id": "music-end", "timer": 908,
+                    "dst": [{"time": 0}, {"time": 9000}]},
+                {"id": "result-settled", "timer": crate::skin::SKIN_TIMER_BMZ_RESULT_SETTLED,
+                    "dst": [{"time": 0}, {"time": 5000}]}
+            ]
         }))
         .unwrap()
     };
@@ -311,7 +315,7 @@ fn play_clear_completion_waits_only_for_skins_that_opt_in() {
         SkinContext::from_manifest_and_document(SkinManifest::default(), document(false), []),
         false,
     );
-    assert_eq!(renderer.play_skin_timer_animation_duration_ms(908), 5000);
+    assert_eq!(renderer.play_skin_timer_animation_duration_ms(908), 9000);
     assert_eq!(renderer.play_skin_clear_completion_ms(), 0);
     renderer.set_play_skin_context(
         SkinContext::from_manifest_and_document(SkinManifest::default(), document(true), []),
