@@ -30,6 +30,9 @@ pub(super) struct Builder {
     destinations: BTreeMap<i32, Vec<Json>>,
     source_ids: BTreeMap<(Vec<String>, usize), String>,
     element_offsets: BTreeMap<String, LuaSkinOffsetValue>,
+    /// Unadjusted areas of each element, per DP copy or lane, for decorations
+    /// that the skin associates with that element.
+    element_bounds: std::cell::RefCell<BTreeMap<i32, Vec<[f64; 4]>>>,
 }
 impl Builder {
     pub fn new(
@@ -57,6 +60,7 @@ impl Builder {
             destinations: BTreeMap::new(),
             source_ids: BTreeMap::new(),
             element_offsets: element_offsets.clone(),
+            element_bounds: Default::default(),
         })
     }
     fn push(&mut self, field: &str, value: Json) {
@@ -172,6 +176,8 @@ impl Builder {
         self.hud()?;
         self.information()?;
         self.extras()?;
+        // Decorations can follow an associated element, so convert them last.
+        self.paint_properties()?;
         self.completion()?;
         self.lane_cover()?;
         self.destinations.retain(|id, _| !self.eval.hidden_pipelines.contains(id));
@@ -378,20 +384,18 @@ impl Builder {
         }
         Ok(())
     }
-    fn decorations(&mut self) -> Result<()> {
-        let [x, y, w, h] = self.area("media")?;
-        self.document["bga"] = json!({"id":"qw-bga"});
-        for dx in self.alt_offsets("alt-media", 0)? {
-            self.destination(0, "qw-bga", self.element_rect(0, [x + dx, y, w, h]), None, None);
-        }
+    /// `paintProperty0..255`: skin decorations, drawn in their pipeline order.
+    fn paint_properties(&mut self) -> Result<()> {
         for index in 0..256 {
             let values = self.eval.list("point", &format!("paintProperty{index}"))?;
             if values.len() < 5 {
                 continue;
             }
-            if let Some(hint) = values.get(8)
-                && self.eval.hidden_pipelines.contains(&(self.eval.numeric(hint)? as i32))
-            {
+            // `I`: the element this decoration belongs to. Hiding the element
+            // hides it, and its element offset moves it as well.
+            let hint =
+                values.get(8).map(|hint| self.eval.numeric(hint)).transpose()?.map(|v| v as i32);
+            if hint.is_some_and(|hint| self.eval.hidden_pipelines.contains(&hint)) {
                 continue;
             }
             let mut v =
@@ -460,13 +464,8 @@ impl Builder {
                 for dx in offsets {
                     let follows_line = values.get(8).is_some_and(|v| v.trim() == "31")
                         || (v[1] - self.layout.judge_y).abs() < f64::EPSILON;
-                    let destination = self.destination(
-                        100 + index as i32,
-                        &id,
-                        self.rect(v[0] + dx, v[1], v[2], v[3]),
-                        None,
-                        None,
-                    );
+                    let rect = self.decoration_rect(index, hint, [v[0] + dx, v[1], v[2], v[3]]);
+                    let destination = self.destination(100 + index as i32, &id, rect, None, None);
                     destination["draw"] = json!(draw);
                     destination["blend"] = json!(100 + composite);
                     // Decorations anchored on the judgement line (including
@@ -477,6 +476,14 @@ impl Builder {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+    fn decorations(&mut self) -> Result<()> {
+        let [x, y, w, h] = self.area("media")?;
+        self.document["bga"] = json!({"id":"qw-bga"});
+        for dx in self.alt_offsets("alt-media", 0)? {
+            self.destination(0, "qw-bga", self.element_rect(0, [x + dx, y, w, h]), None, None);
         }
         for side in 0..2 {
             let name = format!("mainWall{side}");

@@ -10,7 +10,7 @@ format: {zip: skin}
 frame: {}
 lambda:
   drawing1: 1, 2, 3, 4, 5, 10
-  pipeline: 0, 1, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 28, 29, 30, 31, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 100
+  pipeline: 0, 1, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 28, 29, 30, 31, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 100, 101
   alt-multiplier: 2
   alt-hit-points: 0
   alt-status: 0
@@ -117,6 +117,7 @@ point:
   band!Length: 80
   band!Height: 40
   paintProperty0: 0, 0, 1280, 720, 0, 1, 60
+  paintProperty1: 300, 400, 40, 20, 0, 1, 60, 0, 44
 font: {titleLevel: 20}
 "#).unwrap();
     let mut names = vec!["Note/N 1 0 0.png".into()];
@@ -145,6 +146,7 @@ font: {titleLevel: 20}
             "Drawing/AM.png",
             "Level/L 0 0.png",
             "Drawing/P 0 0.png",
+            "Drawing/P 1 0.png",
             "Bin/..png",
             "Bin/X.png",
             "Bin/%.png",
@@ -192,7 +194,7 @@ fn qwilight_element_offsets_bind_requested_controls_and_preserve_exclusions() {
         .document
         .offset
         .iter()
-        .filter(|o| o.id >= 1100)
+        .filter(|o| (1100..1200).contains(&o.id))
         .map(|o| {
             assert!(o.x && o.w && o.h && o.a && !o.r);
             assert_eq!(o.y, o.name != "Qwilight Judgment line offset");
@@ -287,6 +289,64 @@ fn qwilight_element_offsets_bind_requested_controls_and_preserve_exclusions() {
         base.document.offset, hidden.offset,
         "hiding a display must retain its saved controls"
     );
+}
+
+/// `paintProperty1` names NPS (44) as its element (field `I`). It moves and scales
+/// with the NPS group; `paintProperty0` has no element and only its own control moves it.
+#[test]
+fn qwilight_decorations_follow_their_element_and_their_own_offsets() {
+    let root = fixture();
+    let base = decode(root.path(), BTreeMap::new());
+    let decorations: Vec<_> = base
+        .document
+        .offset
+        .iter()
+        .filter(|o| o.id >= 1200)
+        .map(|o| (o.id, o.name.as_str(), o.category.as_str()))
+        .collect();
+    assert_eq!(
+        decorations,
+        [
+            (1200, "Qwilight Decoration 0 offset", "Qwilight decorations"),
+            (1201, "Qwilight Decoration 1 offset", "Qwilight decorations"),
+        ]
+    );
+    let offset = |x, y, w, h, a| LuaSkinOffsetValue { x, y, w, h, a, r: 0 };
+    let at = |decoded: &DecodedSkin, id: &str| *frame(destination(decoded, id), 0);
+    let (paint, nps, background) =
+        (at(&base, "qw-paint-1"), at(&base, "qw-nps"), at(&base, "qw-paint-0"));
+
+    // NPS twice as wide (4 digits of 10 px + 40) and moved: the label keeps its
+    // place in the group, as each digit does.
+    let moved = decode(
+        root.path(),
+        BTreeMap::from([("Qwilight NPS offset".into(), offset(30, 20, 40, 0, -55))]),
+    );
+    let (paint2, nps2) = (at(&moved, "qw-paint-1"), at(&moved, "qw-nps"));
+    assert_eq!((nps2.w, paint2.w, paint2.h), (Some(20), Some(80), Some(20)));
+    assert_eq!(paint2.y.unwrap() - paint.y.unwrap(), nps2.y.unwrap() - nps.y.unwrap());
+    let gap = |p: SkinAnimationDef, n: SkinAnimationDef| p.x.unwrap() - n.x.unwrap();
+    assert!((gap(paint2, nps2) - 2 * gap(paint, nps)).abs() <= 1);
+    assert_eq!(paint2.a, Some(200));
+    assert_eq!(at(&moved, "qw-paint-0"), background, "unassociated decorations stay");
+
+    // Each decoration's own control scales it about its centre.
+    let own = decode(
+        root.path(),
+        BTreeMap::from([
+            ("Qwilight Decoration 1 offset".into(), offset(5, -10, 20, 10, -55)),
+            ("Qwilight Decoration 0 offset".into(), offset(7, 0, 0, 0, 0)),
+        ]),
+    );
+    let paint3 = at(&own, "qw-paint-1");
+    assert_eq!(
+        (paint3.x, paint3.w, paint3.h, paint3.a),
+        (Some(295), Some(60), Some(30), Some(200))
+    );
+    // Qwilight y grows downward: y -10 and +10 px of height lower the top 15 px.
+    assert_eq!(paint3.y.unwrap() - paint.y.unwrap(), -15);
+    assert_eq!(at(&own, "qw-paint-0").x, Some(background.x.unwrap() + 7));
+    assert_eq!(at(&own, "qw-nps"), nps);
 }
 
 #[test]
@@ -484,4 +544,51 @@ fn qwilight_element_offsets_keep_slider_travel_fade_and_text_size_consistent() {
         assert_eq!(alphas.len(), 32);
         assert!(alphas.iter().all(|a| (a - expected).abs() < 0.001));
     }
+}
+
+/// CR_minimal draws the FAST / SLOW / RATE and judgment count labels in one
+/// decoration (`Drawing/P 3`). Moving it with those four elements keeps every
+/// label beside its number.
+#[test]
+#[ignore = "requires installed Qwilight skins and GPU; set BMZ_QWILIGHT_SKIN_ROOT and BMZ_QWILIGHT_PREVIEW_DIR"]
+fn qwilight_installed_decoration_offsets_move_shared_labels_gpu() {
+    let root = PathBuf::from(
+        std::env::var_os("BMZ_QWILIGHT_SKIN_ROOT").expect("set BMZ_QWILIGHT_SKIN_ROOT"),
+    );
+    let output = PathBuf::from(
+        std::env::var_os("BMZ_QWILIGHT_PREVIEW_DIR").expect("set BMZ_QWILIGHT_PREVIEW_DIR"),
+    );
+    fs::create_dir_all(&output).unwrap();
+    let shift = LuaSkinOffsetValue { x: 20, y: 10, w: 0, h: 0, a: 0, r: 0 };
+    let moved_offsets = ["Decoration 3", "Judgment counts", "FAST", "SLOW", "RATE"]
+        .map(|name| (format!("Qwilight {name} offset"), shift))
+        .into();
+    let render = |offsets: &BTreeMap<String, LuaSkinOffsetValue>| {
+        render_installed_qwilight(
+            &root,
+            std::slice::from_ref(&root),
+            "CR_minimal",
+            KeyMode::K6,
+            6,
+            &BTreeMap::new(),
+            offsets,
+            0.0,
+        )
+    };
+    let base = render(&BTreeMap::new());
+    let moved = render(&moved_offsets);
+    save_preview(&output, "CR_minimal-6k-labels-moved.png", &moved);
+    // Offset y is upward: the label area appears 20 px right and 10 px higher.
+    let (mut same, mut total) = (0, 0);
+    for y in 520..700 {
+        for x in 436..540 {
+            let (a, b) = ((y * 1280 + x) * 4, ((y - 10) * 1280 + x + 20) * 4);
+            total += 1;
+            same += usize::from(
+                base[a..a + 3].iter().zip(&moved[b..b + 3]).all(|(p, q)| p.abs_diff(*q) <= 24),
+            );
+        }
+    }
+    assert!(same * 100 >= total * 95, "labels and numbers moved apart: {same}/{total}");
+    assert!(changed_pixels(&base, &moved, (436, 560), (500, 720)) > 1000);
 }

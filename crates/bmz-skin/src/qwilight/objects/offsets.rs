@@ -51,6 +51,37 @@ const ELEMENTS: &[Element] = &[
     (61, "Judgment graph", &["judgmentInputVisualizerPosition"]),
 ];
 
+/// Per-decoration controls: `paintProperty{n}` (`Drawing/P {n}`) uses ID 1200 + n.
+const DECORATION_ID_BASE: i32 = 1200;
+
+fn decoration_name(index: usize) -> String {
+    format!("Qwilight Decoration {index} offset")
+}
+
+/// Scale `area` with its group `bounds` about their centre, then move it.
+/// Qwilight uses downward-positive y; `keep_top` holds the judgment line's hit
+/// position, which only LIFT moves.
+fn adjust_area(
+    offset: LuaSkinOffsetValue,
+    bounds: [f64; 4],
+    area: [f64; 4],
+    keep_top: bool,
+) -> [f64; 4] {
+    let [bx, by, bw, bh] = bounds;
+    let [x, y, w, h] = area;
+    let width = (bw + f64::from(offset.w)).max(1.0);
+    let height = (bh + f64::from(offset.h)).max(1.0);
+    let sx = if bw > 0.0 { width / bw } else { 1.0 };
+    let sy = if bh > 0.0 { height / bh } else { 1.0 };
+    let dy = if keep_top { 0.0 } else { -f64::from(offset.y) - (height - bh) / 2.0 };
+    [
+        bx + f64::from(offset.x) - (width - bw) / 2.0 + (x - bx) * sx,
+        by + dy + (y - by) * sy,
+        w * sx,
+        h * sy,
+    ]
+}
+
 fn element(pipeline: i32) -> Option<&'static Element> {
     let pipeline = match pipeline {
         35..=40 => 35,
@@ -61,6 +92,23 @@ fn element(pipeline: i32) -> Option<&'static Element> {
 }
 
 pub(in crate::qwilight) fn definitions(definition: &Definition) -> Vec<Json> {
+    let points = definition.yaml["point"].as_mapping();
+    let mut decorations: Vec<usize> = points
+        .into_iter()
+        .flat_map(|points| points.keys())
+        .filter_map(Yaml::as_str)
+        .filter_map(|key| key.strip_prefix("paintProperty")?.parse().ok())
+        .filter(|index| *index < 256)
+        .collect();
+    decorations.sort_unstable();
+    decorations.dedup();
+    let decorations = decorations.into_iter().map(|index| {
+        json!({
+            "category":"Qwilight decorations", "name":decoration_name(index),
+            "id":DECORATION_ID_BASE + index as i32,
+            "x":true, "y":true, "w":true, "h":true, "r":false, "a":true
+        })
+    });
     ELEMENTS
         .iter()
         .filter(|(_, _, prefixes)| {
@@ -77,6 +125,7 @@ pub(in crate::qwilight) fn definitions(definition: &Definition) -> Vec<Json> {
                 "id":1100+id, "x":true, "y":*id != 31, "w":true, "h":true, "r":false, "a":true
             })
         })
+        .chain(decorations)
         .collect()
 }
 
@@ -106,28 +155,81 @@ impl Builder {
     /// Resize one logical display, not each digit/label independently. Bounds
     /// are supplied per conditional layout and per DP copy (or per lane).
     pub(super) fn group_rect(&self, pipeline: i32, bounds: [f64; 4], area: [f64; 4]) -> Json {
-        let [bx, by, bw, bh] = bounds;
+        if let Some((id, _, _)) = element(pipeline) {
+            let mut recorded = self.element_bounds.borrow_mut();
+            let list = recorded.entry(*id).or_default();
+            if !list.contains(&bounds) {
+                list.push(bounds);
+            }
+        }
         let [x, y, w, h] = area;
         let offset = self.element_offset(pipeline);
         if offset == LuaSkinOffsetValue::default() {
             return self.rect(x, y, w, h);
         }
-        let width = (bw + f64::from(offset.w)).max(1.0);
-        let height = (bh + f64::from(offset.h)).max(1.0);
-        let sx = if bw > 0.0 { width / bw } else { 1.0 };
-        let sy = if bh > 0.0 { height / bh } else { 1.0 };
-        // Qwilight uses downward-positive y. Keep the judgment line's top
-        // fixed when changing thickness: only LIFT may move its hit position.
-        let dy = if pipeline == 31 { 0.0 } else { -f64::from(offset.y) - (height - bh) / 2.0 };
-        let mut rect = self.rect(
-            bx + f64::from(offset.x) - (width - bw) / 2.0 + (x - bx) * sx,
-            by + dy + (y - by) * sy,
-            w * sx,
-            h * sy,
-        );
+        let [x, y, w, h] = adjust_area(offset, bounds, area, pipeline == 31);
+        let mut rect = self.rect(x, y, w, h);
         // Spectrum has its own 10% base opacity; its alpha is adjusted there.
         if pipeline != 1 && offset.a != 0 {
             rect["a"] = json!(self.element_alpha(pipeline, 255));
+        }
+        rect
+    }
+
+    /// The associated element's unadjusted bounds for a decoration: those it
+    /// overlaps horizontally (its DP side, or the lanes it spans), else the nearest.
+    fn associated_bounds(&self, pipeline: i32, area: [f64; 4]) -> Option<[f64; 4]> {
+        let (id, _, _) = element(pipeline)?;
+        let recorded = self.element_bounds.borrow();
+        let list = recorded.get(id)?;
+        let (left, right) = (area[0], area[0] + area[2]);
+        let overlapping: Vec<_> =
+            list.iter().filter(|b| b[0] < right && b[0] + b[2] > left).copied().collect();
+        let chosen =
+            if overlapping.is_empty() {
+                let centre = |b: &[f64; 4]| b[0] + b[2] / 2.0;
+                let target = (left + right) / 2.0;
+                vec![*list.iter().min_by(|a, b| {
+                    (centre(a) - target).abs().total_cmp(&(centre(b) - target).abs())
+                })?]
+            } else {
+                overlapping
+            };
+        let [l, t, r, b] = chosen.iter().fold(
+            [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY],
+            |[l, t, r, b], [x, y, w, h]| [l.min(*x), t.min(*y), r.max(x + w), b.max(y + h)],
+        );
+        Some([l, t, r - l, b - t])
+    }
+
+    /// A decoration follows its associated element (`paintProperty` field `I`)
+    /// as part of that element's group, then its own decoration offset.
+    pub(super) fn decoration_rect(
+        &self,
+        index: usize,
+        element_hint: Option<i32>,
+        area: [f64; 4],
+    ) -> Json {
+        let mut area = area;
+        let mut alpha = 255;
+        if let Some(pipeline) = element_hint {
+            let offset = self.element_offset(pipeline);
+            if offset != LuaSkinOffsetValue::default()
+                && let Some(bounds) = self.associated_bounds(pipeline, area)
+            {
+                area = adjust_area(offset, bounds, area, pipeline == 31);
+                alpha += offset.a;
+            }
+        }
+        let own = self.element_offsets.get(&decoration_name(index)).copied().unwrap_or_default();
+        if own != LuaSkinOffsetValue::default() {
+            area = adjust_area(own, area, area, false);
+            alpha += own.a;
+        }
+        let [x, y, w, h] = area;
+        let mut rect = self.rect(x, y, w, h);
+        if alpha != 255 {
+            rect["a"] = json!(alpha.clamp(0, 255));
         }
         rect
     }
