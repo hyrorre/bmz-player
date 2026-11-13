@@ -52,7 +52,7 @@ use bmz_core::time::ChartTick;
 use crate::hash::compute_chart_identity;
 
 use super::BmsRandomSource;
-use super::decode::decode_bms_text;
+use super::decode::decode_bms_text_cow;
 use super::error::{ImportError, ImportWarning};
 use super::intermediate::{
     BmpDef, BpmDef, IntermediateBgaKind, IntermediateChart, IntermediateMetadata,
@@ -153,9 +153,11 @@ pub(super) fn import_bms_bytes_to_intermediate(
     bms_switch_choices: &mut Vec<u64>,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
+    let identity = compute_chart_identity(bytes);
+    let text = decode_bms_text_cow(bytes, warnings);
     import_with_layout::<KeyLayoutBeat>(
         source_path,
-        bytes,
+        (&text, identity),
         ChartKeyLayout::beat(),
         random_source,
         bms_random_choices,
@@ -205,7 +207,9 @@ pub(super) fn import_pms_bytes_to_intermediate(
     bms_switch_choices: &mut Vec<u64>,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
-    let text = decode_bms_text(bytes, warnings);
+    let decode_start = warnings.len();
+    let text = decode_bms_text_cow(bytes, warnings);
+    let decode_end = warnings.len();
     let (variant, conflict) = detect_pms_variant(&text);
     if conflict {
         warnings.push(ImportWarning::ParserDiagnostic {
@@ -215,10 +219,14 @@ pub(super) fn import_pms_bytes_to_intermediate(
                 .to_string(),
         });
     }
+    // PMS previously decoded once before layout detection and again after it.
+    // Keep the existing diagnostic order while reusing the decoded text.
+    warnings.extend_from_within(decode_start..decode_end);
+    let source = (&*text, compute_chart_identity(bytes));
     match variant {
         PmsKeyLayout::Standard => import_with_layout::<KeyLayoutPms>(
             source_path,
-            bytes,
+            source,
             ChartKeyLayout::pms(PmsKeyLayout::Standard),
             random_source,
             bms_random_choices,
@@ -227,7 +235,7 @@ pub(super) fn import_pms_bytes_to_intermediate(
         ),
         PmsKeyLayout::BmeType => import_with_layout::<KeyLayoutPmsBmeType>(
             source_path,
-            bytes,
+            source,
             ChartKeyLayout::pms(PmsKeyLayout::BmeType),
             random_source,
             bms_random_choices,
@@ -239,20 +247,18 @@ pub(super) fn import_pms_bytes_to_intermediate(
 
 fn import_with_layout<T: KeyLayoutMapper>(
     source_path: &Path,
-    bytes: &[u8],
+    (raw_text, identity): (&str, ChartIdentity),
     layout: ChartKeyLayout,
     random_source: &BmsRandomSource,
     bms_random_choices: &mut Vec<i32>,
     bms_switch_choices: &mut Vec<u64>,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
-    let identity = compute_chart_identity(bytes);
-    let raw_text = decode_bms_text(bytes, warnings);
     let pms_standard = layout == ChartKeyLayout::pms(PmsKeyLayout::Standard);
-    if !kaleid::needs_interpretation(&raw_text, layout) {
+    if !kaleid::needs_interpretation(raw_text, layout) {
         // Keep main's single-pass preparation for ordinary charts.
         let source = prepare_bms_source(
-            &raw_text,
+            raw_text,
             pms_standard,
             random_source,
             bms_random_choices,
@@ -271,7 +277,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
         .map(|(chart, _)| chart);
     }
     let text = resolve_kaleid_source(
-        &raw_text,
+        raw_text,
         pms_standard,
         random_source,
         bms_random_choices,

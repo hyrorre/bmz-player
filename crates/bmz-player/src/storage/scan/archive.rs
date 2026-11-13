@@ -12,7 +12,7 @@ pub(super) fn import_archive(
     scanned_at: i64,
     force: bool,
     fingerprints: &HashMap<String, super::super::library_db::ChartFileFingerprint>,
-    entries: &[&ChartFileEntry],
+    entries: &[&str],
     expected: &song_archive::ArchiveGeneration,
 ) -> Result<ScanReport> {
     let control = ArchiveControl::default();
@@ -37,17 +37,13 @@ pub(super) fn import_archive(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    let allowed = entries
-        .iter()
-        .map(|entry| crate::storage::library_db::library_path_key(&entry.path))
-        .collect::<std::collections::HashSet<_>>();
     // Failed charts report their failed_import_version (0 for older rows). They are
     // recorded for this generation, so an unchanged archive is not decoded again just to
     // fail once more.
     let registered = entries.iter().all(|entry| {
-        fingerprints.get(&crate::storage::library_db::library_path_key(&entry.path)).is_some_and(
-            |fingerprint| matches!(fingerprint.import_version, 0 | CHART_IMPORT_VERSION),
-        )
+        fingerprints.get(*entry).is_some_and(|fingerprint| {
+            matches!(fingerprint.import_version, 0 | CHART_IMPORT_VERSION)
+        })
     });
     let mut report = ScanReport::default();
     if !force
@@ -59,6 +55,7 @@ pub(super) fn import_archive(
         report.summary.skipped = usize_to_u32(entries.len());
         return Ok(report);
     }
+    let allowed: HashSet<&str> = entries.iter().copied().collect();
     // Importing needs the entry list for preview lookup; it also rechecks the generation.
     let index = song_archive::inspect(container, &control)?;
     anyhow::ensure!(index.generation == *expected, "archive changed after discovery");
@@ -73,7 +70,7 @@ pub(super) fn import_archive(
         let path =
             ChartLocator::Archive { container: container.to_path_buf(), entry: entry.name.clone() }
                 .to_path_buf();
-        if !allowed.contains(&crate::storage::library_db::library_path_key(&path)) {
+        if !allowed.contains(crate::storage::library_db::library_path_key(&path).as_str()) {
             return Ok(());
         }
         let parsed = catch_unwind(AssertUnwindSafe(|| {

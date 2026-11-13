@@ -213,15 +213,30 @@ pub fn resolve_chart_asset_path(folder_path: &str, relative: &str) -> Option<Pat
 }
 
 pub fn normalize_preview_file(chart_path: &Path, preview_file: &str) -> String {
+    normalize_preview_file_with_fallback(chart_path, preview_file, &Default::default())
+}
+
+pub(crate) fn normalize_preview_file_with_fallback(
+    chart_path: &Path,
+    preview_file: &str,
+    fallback: &std::sync::OnceLock<Option<PathBuf>>,
+) -> String {
     let Some(folder) = chart_path.parent() else {
         return preview_file.trim().to_string();
     };
-    resolve_preview_file(folder, preview_file)
-        .and_then(|path| relative_to_folder(folder, &path))
+    resolve_declared_preview_file(folder, preview_file)
+        .as_ref()
+        .or_else(|| fallback.get_or_init(|| find_preview_prefix_audio_file(folder)).as_ref())
+        .and_then(|path| relative_to_folder(folder, path))
         .unwrap_or_else(|| preview_file.trim().to_string())
 }
 
 pub fn resolve_preview_file(folder: &Path, preview_file: &str) -> Option<PathBuf> {
+    resolve_declared_preview_file(folder, preview_file)
+        .or_else(|| find_preview_prefix_audio_file(folder))
+}
+
+fn resolve_declared_preview_file(folder: &Path, preview_file: &str) -> Option<PathBuf> {
     let preview_file = preview_file.trim();
     if !preview_file.is_empty() {
         let path = Path::new(preview_file);
@@ -233,7 +248,7 @@ pub fn resolve_preview_file(folder: &Path, preview_file: &str) -> Option<PathBuf
             return Some(path);
         }
     }
-    find_preview_prefix_audio_file(folder)
+    None
 }
 
 fn resolve_same_stem_audio_file(folder: &Path, relative: &Path) -> Option<PathBuf> {
@@ -418,6 +433,23 @@ mod tests {
         let got = normalize_preview_file(&dir.join("song.bms"), "");
 
         assert_eq!(got, "");
+    }
+
+    #[test]
+    fn scan_preview_caches_absence_and_still_resolves_a_declared_file() {
+        let temp = temp_dir("scan-preview");
+        let dir = temp.path();
+        let fallback = Default::default();
+        assert_eq!(normalize_preview_file_with_fallback(&dir.join("a.bms"), "", &fallback), "");
+
+        fs::write(dir.join("preview.ogg"), b"ogg").unwrap();
+        fs::write(dir.join("custom.ogg"), b"ogg").unwrap();
+        assert_eq!(normalize_preview_file_with_fallback(&dir.join("b.bms"), "", &fallback), "");
+        assert_eq!(
+            normalize_preview_file_with_fallback(&dir.join("b.bms"), "custom.wav", &fallback),
+            "custom.ogg"
+        );
+        assert_eq!(normalize_preview_file(&dir.join("b.bms"), ""), "preview.ogg");
     }
 
     fn temp_dir(label: &str) -> tempfile::TempDir {

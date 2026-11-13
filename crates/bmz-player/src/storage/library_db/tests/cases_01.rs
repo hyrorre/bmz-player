@@ -64,6 +64,21 @@ fn chart_speed_changes_resume_bpm_reflects_change_during_stop() {
 }
 
 #[test]
+fn main_bpm_uses_last_change_at_note_time_and_keeps_lane_order_for_ties() {
+    use bmz_chart::model::TimingEventKind;
+
+    let mut chart = chart("main bpm");
+    chart.timing_events = vec![
+        timing_event(1_000_000, TimingEventKind::BpmChange { bpm: 180.0 }),
+        timing_event(1_000_000, TimingEventKind::Stop { duration_us: 500_000 }),
+        timing_event(1_000_000, TimingEventKind::BpmChange { bpm: 200.0 }),
+    ];
+    chart.lane_notes[Lane::Key1.index()].push(note(0, Lane::Key1, NoteKind::Tap, 500_000));
+    chart.lane_notes[Lane::Key2.index()].push(note(1, Lane::Key2, NoteKind::Tap, 1_000_000));
+    assert_eq!(ChartAnalysis::from_chart(&chart).main_bpm, 200.0);
+}
+
+#[test]
 fn upsert_chart_import_persists_file_chart_and_link() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();

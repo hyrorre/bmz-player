@@ -269,7 +269,8 @@ fn load_songs(
     let t = &report.timing;
     println!(
         "Timing: total={}ms discovery={}ms fingerprint={}ms skip={}ms parse={}ms write={}ms \
-         archive={}ms folder_flags={}ms prune={}ms scope={scope_ms}ms",
+         archive={}ms folder_flags={}ms prune={}ms scope={scope_ms}ms \
+         analysis_worker={}ms encode_worker={}ms commit={}ms",
         t.total_ms,
         t.discovery_ms,
         t.fingerprint_ms,
@@ -278,7 +279,10 @@ fn load_songs(
         t.write_ms,
         t.archive_ms,
         t.folder_flags_ms,
-        t.prune_ms
+        t.prune_ms,
+        t.analysis_worker_ms,
+        t.encode_worker_ms,
+        t.commit_ms,
     );
     println!(
         "Discovery backends: everything={} native={} fallback={}",

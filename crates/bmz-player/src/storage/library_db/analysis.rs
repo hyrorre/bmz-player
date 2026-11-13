@@ -4,6 +4,10 @@ impl ChartAnalysis {
     pub fn from_chart(chart: &PlayableChart) -> Self {
         let canonical_total_notes =
             ChartLnCounts::from_chart(chart).canonical_total_notes(chart.total_notes);
+        Self::from_chart_with_total(chart, canonical_total_notes)
+    }
+
+    pub(super) fn from_chart_with_total(chart: &PlayableChart, canonical_total_notes: u32) -> Self {
         let seconds = analysis_distribution_seconds(chart);
         let mut distribution = vec![ChartDistributionSecond::default(); seconds.max(1)];
         let mut lane_notes = Lane::ALL
@@ -28,6 +32,19 @@ impl ChartAnalysis {
             .map(|pair| (pair.end_note_id, pair.mode.unwrap_or(chart.metadata.long_note_mode)))
             .collect::<std::collections::HashMap<_, _>>();
         let mut bpm_note_counts: Vec<(f64, u32)> = Vec::new();
+        // The events are sorted by time, including the original order of simultaneous changes.
+        let bpm_changes: Vec<_> = chart
+            .timing_events
+            .iter()
+            .filter_map(|event| match event.kind {
+                TimingEventKind::BpmChange { bpm } => Some((event.time.0, bpm)),
+                TimingEventKind::Stop { .. } => None,
+            })
+            .collect();
+        let bpm_at = |time| {
+            let count = bpm_changes.partition_point(|&(event_time, _)| event_time <= time);
+            bpm_changes[..count].last().map_or(chart.metadata.initial_bpm, |&(_, bpm)| bpm)
+        };
 
         for notes in &chart.lane_notes {
             for note in notes {
@@ -49,13 +66,13 @@ impl ChartAnalysis {
                             slot.key_taps = slot.key_taps.saturating_add(1);
                             lane_slot.normal_notes = lane_slot.normal_notes.saturating_add(1);
                         }
-                        add_bpm_note_count(&mut bpm_note_counts, bpm_at(chart, note.time.0), 1);
+                        add_bpm_note_count(&mut bpm_note_counts, bpm_at(note.time.0), 1);
                     }
                     NoteKind::LongStart => {
                         add_long_head(slot, lane);
                         add_long_body(slot, lane, -1);
                         lane_slot.long_notes = lane_slot.long_notes.saturating_add(1);
-                        add_bpm_note_count(&mut bpm_note_counts, bpm_at(chart, note.time.0), 1);
+                        add_bpm_note_count(&mut bpm_note_counts, bpm_at(note.time.0), 1);
                     }
                     NoteKind::LongEnd
                         if long_end_modes.get(&note.id).is_some_and(|mode| {
@@ -64,7 +81,7 @@ impl ChartAnalysis {
                     {
                         add_long_head(slot, lane);
                         lane_slot.long_notes = lane_slot.long_notes.saturating_add(1);
-                        add_bpm_note_count(&mut bpm_note_counts, bpm_at(chart, note.time.0), 1);
+                        add_bpm_note_count(&mut bpm_note_counts, bpm_at(note.time.0), 1);
                     }
                     NoteKind::LongEnd => {}
                     NoteKind::Invisible => {}

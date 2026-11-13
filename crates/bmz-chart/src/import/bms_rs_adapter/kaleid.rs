@@ -16,11 +16,13 @@ pub(super) fn needs_interpretation(text: &str, layout: ChartKeyLayout) -> bool {
     text.lines().any(|line| {
         let Some(body) = line.trim_start().strip_prefix('#') else { return false };
         if let Some((head, _)) = split_bms_channel_command(body) {
-            let ch = head[head.len() - 2..].to_ascii_uppercase();
-            return ch == "ST"
+            let bytes = head.as_bytes();
+            let first = bytes[bytes.len() - 2].to_ascii_uppercase();
+            let second = bytes[bytes.len() - 1].to_ascii_uppercase();
+            return (first, second) == (b'S', b'T')
                 || (!layout.is_pms()
-                    && matches!(ch.as_str(), "SF" | "SG" | "SH" | "SI" | "17" | "27"))
-                || matches!(ch.as_bytes(), [b'F'..=b'O', b'1'..=b'9']);
+                    && matches!((first, second), (b'S', b'F'..=b'I') | (b'1' | b'2', b'7')))
+                || matches!((first, second), (b'F'..=b'O', b'1'..=b'9'));
         }
         let command = body.split_whitespace().next().unwrap_or("");
         [

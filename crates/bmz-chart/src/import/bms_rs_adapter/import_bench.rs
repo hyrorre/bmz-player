@@ -48,6 +48,10 @@ fn chart_files_with(dir: &Path, extensions: &[&str], out: &mut Vec<std::path::Pa
 #[test]
 #[ignore = "needs real charts in BMZ_IMPORT_BENCH_DIR"]
 fn import_stage_timing() {
+    use bms_rs::bms::lex::{LexOutput, TokenStream};
+    use bms_rs::bms::parse::ParseOutput;
+    use bms_rs::bms::parse::token_processor::{DefaultTokenRelaxer, TokenModifier};
+
     let Some(dir) = std::env::var_os("BMZ_IMPORT_BENCH_DIR") else {
         eprintln!("skipping: BMZ_IMPORT_BENCH_DIR is not set");
         return;
@@ -95,7 +99,11 @@ fn import_stage_timing() {
         let mut random_choices = Vec::new();
         let mut switch_choices = Vec::new();
         let identity = timed!("hash md5+sha256", compute_chart_identity(&bytes));
-        let raw_text = timed!("decode text", decode_bms_text(&bytes, &mut warnings));
+        let raw_text = timed!("decode text", decode_bms_text_cow(&bytes, &mut warnings));
+        let _ = timed!(
+            "detect Kaleid",
+            kaleid::needs_interpretation(&raw_text, ChartKeyLayout::beat())
+        );
         let source = timed!(
             "prepare source text",
             prepare_bms_source(
@@ -108,14 +116,20 @@ fn import_stage_timing() {
             )
         );
         timed!("drop decoded text", drop(raw_text));
-        let BmsOutput { bms, warnings: bms_warnings } = timed!(
-            "bms-rs parse_bms",
-            parse_bms::<KeyLayoutBeat, _, _, _>(
-                &source.parse_text,
-                default_config_with_rng(JavaRandom::new(random_source_seed(&random_source) as i64))
-                    .key_mapper::<KeyLayoutBeat>(),
-            )
-        );
+        let LexOutput { mut tokens, lex_warnings } =
+            timed!("bms-rs lex", TokenStream::parse_lex(&source.parse_text));
+        timed!("bms-rs relax tokens", DefaultTokenRelaxer.modify(&mut tokens));
+        let config =
+            default_config_with_rng(JavaRandom::new(random_source_seed(&random_source) as i64));
+        let ParseOutput { bms, parse_warnings } =
+            timed!("bms-rs parse tokens", Bms::from_token_stream(&tokens, config));
+        let mut bms_warnings: Vec<_> = lex_warnings.into_iter().map(BmsWarning::Lex).collect();
+        bms_warnings.extend(parse_warnings.into_iter().map(BmsWarning::Parse));
+        if let Ok(bms) = &bms {
+            let check = timed!("bms-rs check playing", bms.check_playing::<KeyLayoutBeat>());
+            bms_warnings.extend(check.playing_warnings.into_iter().map(BmsWarning::PlayingWarning));
+            bms_warnings.extend(check.playing_errors.into_iter().map(BmsWarning::PlayingError));
+        }
         timed!("map bms-rs warnings", {
             for warning in bms_warnings {
                 if let Some(warning) = map_bms_warning(&warning) {

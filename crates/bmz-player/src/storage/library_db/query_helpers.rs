@@ -220,9 +220,12 @@ pub(super) fn upsert_chart_file(conn: &Connection, record: &ChartImportRecord<'_
     .map_err(Into::into)
 }
 
-pub(super) fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64> {
+pub(super) fn insert_chart(
+    conn: &Connection,
+    record: &ChartImportRecord<'_>,
+    stats: &ChartStats,
+) -> Result<i64> {
     let chart = record.chart;
-    let stats = ChartStats::from_chart(chart);
     conn.prepare_cached(
         "INSERT INTO charts (
             sha256, md5, title, subtitle, artist, subartist, genre,
@@ -311,9 +314,9 @@ pub(super) fn update_chart(
     conn: &Connection,
     chart_id: i64,
     record: &ChartImportRecord<'_>,
+    stats: &ChartStats,
 ) -> Result<()> {
     let chart = record.chart;
-    let stats = ChartStats::from_chart(chart);
     conn.prepare_cached(
         "UPDATE charts SET
             sha256 = ?1, md5 = ?2, title = ?3, subtitle = ?4, artist = ?5,
@@ -382,12 +385,55 @@ pub(super) fn update_chart(
     Ok(())
 }
 
+pub(in crate::storage) struct ChartImportAnalysis {
+    stats: ChartStats,
+    analysis: ChartAnalysis,
+}
+
+impl ChartImportAnalysis {
+    pub(in crate::storage) fn new(chart: &PlayableChart) -> Self {
+        let stats = ChartStats::from_chart(chart);
+        let total = stats.ln_counts.canonical_total_notes(chart.total_notes);
+        Self { stats, analysis: ChartAnalysis::from_chart_with_total(chart, total) }
+    }
+
+    pub(in crate::storage) fn encode(self) -> Result<PreparedChartImport> {
+        let Self { stats, analysis } = self;
+        Ok(PreparedChartImport {
+            stats,
+            summary: ChartAnalysisSummary {
+                normal_notes: analysis.normal_notes,
+                long_notes: analysis.long_notes,
+                scratch_notes: analysis.scratch_notes,
+                long_scratch_notes: analysis.long_scratch_notes,
+                density: analysis.density,
+                peak_density: analysis.peak_density,
+                end_density: analysis.end_density,
+                main_bpm: analysis.main_bpm,
+            },
+            total_gauge: analysis.total_gauge,
+            distribution_json: encode_distribution_compact(&analysis.distribution),
+            speed_changes_json: serde_json::to_string(&analysis.speed_changes)?,
+            lane_notes_json: serde_json::to_string(&analysis.lane_notes)?,
+        })
+    }
+}
+
+pub(in crate::storage) struct PreparedChartImport {
+    pub(super) stats: ChartStats,
+    summary: ChartAnalysisSummary,
+    total_gauge: f64,
+    distribution_json: String,
+    speed_changes_json: String,
+    lane_notes_json: String,
+}
+
 pub(super) fn write_chart_analysis(
     conn: &Connection,
     chart_id: i64,
-    chart: &PlayableChart,
+    prepared: &PreparedChartImport,
 ) -> Result<()> {
-    let analysis = ChartAnalysis::from_chart(chart);
+    let analysis = &prepared.summary;
     conn.prepare_cached(
         "INSERT INTO chart_analysis (
             chart_id, normal_notes, long_notes, scratch_notes, long_scratch_notes,
@@ -422,11 +468,11 @@ pub(super) fn write_chart_analysis(
         analysis.density,
         analysis.peak_density,
         analysis.end_density,
-        analysis.total_gauge,
+        prepared.total_gauge,
         analysis.main_bpm,
-        encode_distribution_compact(&analysis.distribution),
-        serde_json::to_string(&analysis.speed_changes)?,
-        serde_json::to_string(&analysis.lane_notes)?,
+        &prepared.distribution_json,
+        &prepared.speed_changes_json,
+        &prepared.lane_notes_json,
         CHART_IMPORT_VERSION,
     ])?;
     Ok(())

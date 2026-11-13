@@ -109,7 +109,12 @@ pub struct ScanTiming {
     pub fingerprint_ms: u128,
     pub skip_check_ms: u128,
     pub parse_ms: u128,
+    /// Worker time summed across files, so this can exceed the scan's wall time.
+    pub analysis_worker_ms: u128,
+    pub encode_worker_ms: u128,
     pub write_ms: u128,
+    /// Commit time for regular-file batches, included in write_ms.
+    pub commit_ms: u128,
     /// Archive listing checks and imports, including their own parsing.
     pub archive_ms: u128,
     pub folder_flags_ms: u128,

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -37,6 +37,7 @@ pub(crate) use sources::{available_chart_id_for_hash, prime_archive_generations}
 use analysis_helpers::*;
 use path_helpers::*;
 use query_helpers::*;
+pub(super) use query_helpers::{ChartImportAnalysis, PreparedChartImport};
 
 pub(crate) fn library_path_key(path: &Path) -> String {
     path_helpers::path_key(path)
@@ -232,7 +233,7 @@ pub struct ChartFileFingerprint {
     pub import_version: i64,
 }
 
-/// Registered chart paths for pruning, from [`LibraryDatabase::chart_path_index`].
+/// Undiscovered chart paths for pruning, from [`LibraryDatabase::chart_paths_not_discovered`].
 /// Pruning removes the rows it deletes, so one index serves every root of a scan.
 pub(crate) struct ChartPathIndex {
     rows: Vec<IndexedChartPath>,
@@ -251,8 +252,6 @@ pub(crate) struct PruneRequest<'a> {
     /// Whether the discovery listed everything in the root's scope, so that a
     /// registration it lacks is gone or outside the scope. Everything may lag.
     pub(crate) omission_proves_absence: bool,
-    /// [`library_path_key`]s that any root of this scan discovered.
-    pub(crate) discovered_any: &'a std::collections::HashSet<String>,
     pub(crate) protected_roots: &'a [crate::config::app_config::PathEntry],
 }
 

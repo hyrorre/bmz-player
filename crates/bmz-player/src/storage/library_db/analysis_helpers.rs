@@ -182,19 +182,6 @@ pub(super) fn add_bpm_note_count(counts: &mut Vec<(f64, u32)>, bpm: f64, notes: 
     }
 }
 
-pub(super) fn bpm_at(chart: &PlayableChart, time_us: i64) -> f64 {
-    let mut bpm = chart.metadata.initial_bpm;
-    for event in &chart.timing_events {
-        if event.time.0 > time_us {
-            break;
-        }
-        if let TimingEventKind::BpmChange { bpm: event_bpm } = event.kind {
-            bpm = event_bpm;
-        }
-    }
-    bpm
-}
-
 pub(super) fn chart_speed_changes(chart: &PlayableChart) -> Vec<ChartSpeedChange> {
     let mut out = vec![ChartSpeedChange { speed: chart.metadata.initial_bpm, time_ms: 0 }];
     let mut current = chart.metadata.initial_bpm;

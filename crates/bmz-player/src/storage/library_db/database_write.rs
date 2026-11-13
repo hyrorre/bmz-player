@@ -1,19 +1,25 @@
 use super::*;
 
 impl LibraryDatabase {
-    /// Every registered chart path with its [`scope_key`], loaded once per scan so that
-    /// pruning many roots neither re-reads nor re-normalizes the whole table per root.
-    pub(crate) fn chart_path_index(&self) -> Result<ChartPathIndex> {
+    /// The paths omitted by all roots. Check the stored path against discovery
+    /// before allocating it or normalizing it for the lexical scope checks.
+    pub(crate) fn chart_paths_not_discovered(
+        &self,
+        discovered: &HashSet<&str>,
+    ) -> Result<ChartPathIndex> {
         let mut stmt = self.conn.prepare("SELECT id, path FROM chart_files")?;
-        let rows = stmt
-            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
-            .map(|row| {
-                row.map(|(id, path)| {
-                    let key = scope_key(&path);
-                    IndexedChartPath { id, path, key }
-                })
-            })
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut query = stmt.query([])?;
+        let mut rows = Vec::new();
+        while let Some(row) = query.next()? {
+            let path = row.get_ref(1)?.as_str()?;
+            if !discovered.contains(path) {
+                rows.push(IndexedChartPath {
+                    id: row.get(0)?,
+                    path: path.to_owned(),
+                    key: scope_key(path),
+                });
+            }
+        }
         Ok(ChartPathIndex { rows })
     }
 
@@ -62,7 +68,7 @@ impl LibraryDatabase {
             }
         }
         for IndexedChartPath { id, path, key } in &index.rows {
-            if !root.contains_key(key) || request.discovered_any.contains(path) {
+            if !root.contains_key(key) {
                 continue;
             }
             let locator = crate::chart_source::ChartLocator::parse(Path::new(path));
@@ -174,6 +180,15 @@ impl LibraryDatabase {
         conn: &Connection,
         record: &ChartImportRecord<'_>,
     ) -> Result<(i64, i64)> {
+        let prepared = ChartImportAnalysis::new(record.chart).encode()?;
+        Self::write_prepared_chart_import(conn, record, &prepared)
+    }
+
+    pub(in crate::storage) fn write_prepared_chart_import(
+        conn: &Connection,
+        record: &ChartImportRecord<'_>,
+        prepared: &PreparedChartImport,
+    ) -> Result<(i64, i64)> {
         let chart_file_id = upsert_chart_file(conn, record)?;
 
         let existing_chart_id: Option<i64> = conn
@@ -185,10 +200,10 @@ impl LibraryDatabase {
             .optional()?;
 
         let chart_id = if let Some(existing_id) = existing_chart_id {
-            update_chart(conn, existing_id, record)?;
+            update_chart(conn, existing_id, record, &prepared.stats)?;
             existing_id
         } else {
-            let new_id = insert_chart(conn, record)?;
+            let new_id = insert_chart(conn, record, &prepared.stats)?;
             conn.execute(
                 "INSERT INTO chart_file_links (chart_id, chart_file_id) VALUES (?1, ?2)",
                 params![new_id, chart_file_id],
@@ -196,7 +211,7 @@ impl LibraryDatabase {
             new_id
         };
 
-        write_chart_analysis(conn, chart_id, record.chart)?;
+        write_chart_analysis(conn, chart_id, prepared)?;
         super::super::course_db::refresh_course_entries_for_chart(
             conn,
             &hash_to_hex(&record.chart.identity.file_sha256),
