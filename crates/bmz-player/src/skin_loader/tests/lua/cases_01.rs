@@ -377,7 +377,13 @@ fn ecfn_play7_1p_json_skin_can_be_applied_when_available() {
     }
     let mut renderer = Renderer::default();
 
-    apply_beatoraja_json_skin(&mut renderer, &skin_path).unwrap();
+    apply_beatoraja_json_skin_for_kind(
+        &mut renderer,
+        &test_app_paths(),
+        &skin_path,
+        SkinKind::Play,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -389,7 +395,13 @@ fn ecfn_result_json_skin_can_be_applied_when_available() {
     }
     let mut renderer = Renderer::default();
 
-    apply_beatoraja_result_json_skin(&mut renderer, &skin_path).unwrap();
+    apply_beatoraja_json_skin_for_kind(
+        &mut renderer,
+        &test_app_paths(),
+        &skin_path,
+        SkinKind::Result,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -401,7 +413,13 @@ fn ecfn_select_json_skin_can_be_applied_when_available() {
     }
     let mut renderer = Renderer::default();
 
-    apply_beatoraja_select_json_skin(&mut renderer, &skin_path).unwrap();
+    apply_beatoraja_json_skin_for_kind(
+        &mut renderer,
+        &test_app_paths(),
+        &skin_path,
+        SkinKind::Select,
+    )
+    .unwrap();
 }
 
 #[test]

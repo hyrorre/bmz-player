@@ -1,3 +1,4 @@
+use super::decode::apply_beatoraja_json_skin_for_kind;
 use super::*;
 use std::collections::BTreeSet;
 use std::hint::black_box;

@@ -197,7 +197,8 @@ fn enabled_options_rejects_stale_numeric_selection() {
 fn default_skin_can_be_applied_to_renderer() {
     let mut renderer = Renderer::default();
 
-    apply_default_skin(&mut renderer).unwrap();
+    apply_default_skin_from_paths(&mut renderer, &test_app_paths()).unwrap();
+    assert!(renderer.play_skin_document().is_some());
 }
 
 #[test]
@@ -209,7 +210,13 @@ fn beatoraja_default_json_skin_can_be_applied_when_available() {
     }
     let mut renderer = Renderer::default();
 
-    apply_beatoraja_json_skin(&mut renderer, &skin_path).unwrap();
+    apply_beatoraja_json_skin_for_kind(
+        &mut renderer,
+        &test_app_paths(),
+        &skin_path,
+        SkinKind::Play,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -221,7 +228,13 @@ fn beatoraja_default_select_json_skin_can_be_applied_when_available() {
     }
     let mut renderer = Renderer::default();
 
-    apply_beatoraja_select_json_skin(&mut renderer, &skin_path).unwrap();
+    apply_beatoraja_json_skin_for_kind(
+        &mut renderer,
+        &test_app_paths(),
+        &skin_path,
+        SkinKind::Select,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -233,7 +246,13 @@ fn beatoraja_default_result_json_skin_can_be_applied_when_available() {
     }
     let mut renderer = Renderer::default();
 
-    apply_beatoraja_result_json_skin(&mut renderer, &skin_path).unwrap();
+    apply_beatoraja_json_skin_for_kind(
+        &mut renderer,
+        &test_app_paths(),
+        &skin_path,
+        SkinKind::Result,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -363,7 +382,7 @@ fn play_skin_selection_for_returns_per_mode_fields() {
 fn apply_skin_from_config_rejects_toml_skin_directory() {
     let mut renderer = Renderer::default();
     let app_paths = test_app_paths();
-    let path = default_skin_root();
+    let path = app_paths.default_skin_root();
 
     let error = apply_skin_from_config(&mut renderer, &app_paths, path.to_str().unwrap())
         .unwrap_err()

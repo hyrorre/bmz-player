@@ -766,17 +766,22 @@ fn skin_video_difficulty_code_matches_numeric_and_case_insensitive_names() {
 
 #[test]
 fn default_skin_note_texture_exists() {
-    assert!(default_skin_root().join("note.png").is_file());
-    assert!(default_skin_root().join("note-blue.png").is_file());
-    assert!(default_skin_root().join("note-red.png").is_file());
-    assert!(default_skin_root().join("receptor.png").is_file());
-    assert!(default_skin_root().join("receptor-blue.png").is_file());
-    assert!(default_skin_root().join("receptor-red.png").is_file());
-    assert!(default_skin_root().join("judge-line.png").is_file());
-    assert!(default_skin_root().join("gauge-frame.png").is_file());
-    assert!(default_skin_root().join("gauge-fill.png").is_file());
-    assert!(default_skin_root().join("combo-panel.png").is_file());
-    assert!(default_skin_root().join("combo-panel-inactive.png").is_file());
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/default");
+    for file_name in [
+        "note.png",
+        "note-blue.png",
+        "note-red.png",
+        "receptor.png",
+        "receptor-blue.png",
+        "receptor-red.png",
+        "judge-line.png",
+        "gauge-frame.png",
+        "gauge-fill.png",
+        "combo-panel.png",
+        "combo-panel-inactive.png",
+    ] {
+        assert!(root.join(file_name).is_file(), "missing bundled default {file_name}");
+    }
 }
 
 #[test]
