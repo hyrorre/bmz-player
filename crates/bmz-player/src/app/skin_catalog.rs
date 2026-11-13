@@ -110,11 +110,26 @@ pub(super) fn scan_skin_catalog_dir(
         })
         .collect();
     for (skin_type, candidate) in candidates.into_iter().flatten() {
-        push_skin_candidate(catalog, skin_type, candidate);
+        if bmz_skin::is_qwilight_play_skin_path(Path::new(&candidate.path)) {
+            for mode in [
+                0,
+                1,
+                2,
+                3,
+                4,
+                BMZ_SKIN_TYPE_PLAY_4KEYS,
+                BMZ_SKIN_TYPE_PLAY_6KEYS,
+                BMZ_SKIN_TYPE_PLAY_8KEYS,
+            ] {
+                push_skin_candidate(catalog, mode, candidate.clone());
+            }
+        } else {
+            push_skin_candidate(catalog, skin_type, candidate);
+        }
     }
 }
 
-fn collect_skin_candidate_files(
+pub(super) fn collect_skin_candidate_files(
     dir: &Path,
     paths: &mut Vec<PathBuf>,
     scan: &mut crate::directory_scan::DirectoryScan,
@@ -123,30 +138,58 @@ fn collect_skin_candidate_files(
     let Some(entries) = scan.read_dir_once(dir, depth) else {
         return;
     };
+    // A Qwilight play skin reads its images from a ZIP next to the YAML. Other
+    // YAML (CI workflows, compose files) is not parsed without one.
+    let has_zip = entries.iter().any(|path| {
+        path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("zip")) && path.is_file()
+    });
     for path in entries {
         if path.is_dir() {
             collect_skin_candidate_files(&path, paths, scan, depth + 1);
-        } else if is_skin_candidate_file(&path) && scan.accept_file(&path) {
+        } else if is_skin_candidate_file(&path)
+            && (has_zip || !bmz_skin::is_qwilight_play_skin_path(&path))
+            && scan.accept_file(&path)
+        {
             paths.push(path);
         }
     }
 }
 
+/// `options` are the slot's selections. Qwilight play skins evaluate their
+/// `configure-available-*` with them; other formats list a static header.
 pub(super) fn skin_defs_from_path(
     app_paths: &crate::paths::AppPaths,
     skin: &SkinConfig,
     path: &str,
     play: bool,
+    options: Option<&BTreeMap<String, String>>,
 ) -> SceneSkinDefs {
     let trimmed = path.trim();
+    let qwilight = play && bmz_skin::is_qwilight_play_skin_path(Path::new(trimmed));
     let document = (!trimmed.is_empty())
         .then(|| app_paths.resolve_path_ref(trimmed).ok())
         .flatten()
         .and_then(|path| {
             let context = app_paths.skin_path_context(skin, &path).ok()?;
-            read_skin_header_document_with_context(&context).ok()
+            match options.filter(|_| qwilight) {
+                Some(options) => {
+                    bmz_skin::load_qwilight_play_header_with_options(&context, options)
+                        .inspect_err(|error| {
+                            tracing::warn!(
+                                path = %path.display(),
+                                error = %format!("{error:#}"),
+                                "Qwilight skin options could not be evaluated"
+                            );
+                        })
+                        .or_else(|_| bmz_skin::load_qwilight_play_header(&context))
+                        .ok()
+                }
+                None => read_skin_header_document_with_context(&context).ok(),
+            }
         });
-    if play {
+    if qwilight {
+        SceneSkinDefs::from_qwilight_play_document(document.as_ref())
+    } else if play {
         SceneSkinDefs::from_play_document(document.as_ref())
     } else {
         SceneSkinDefs::from_document(document.as_ref())
@@ -154,6 +197,9 @@ pub(super) fn skin_defs_from_path(
 }
 
 pub(super) fn is_skin_candidate_file(path: &Path) -> bool {
+    if bmz_skin::is_qwilight_play_skin_path(path) {
+        return true;
+    }
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "json" | "luaskin" | "lr2skin"))
@@ -185,7 +231,9 @@ pub(super) fn read_skin_header_document_with_context(
     path_context: &bmz_skin::SkinPathContext,
 ) -> Result<SkinDocument> {
     let path = path_context.entry_file();
-    if path
+    if bmz_skin::is_qwilight_play_skin_path(path) {
+        bmz_skin::load_qwilight_play_header(path_context)
+    } else if path
         .extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("luaskin") || ext.eq_ignore_ascii_case("lua"))

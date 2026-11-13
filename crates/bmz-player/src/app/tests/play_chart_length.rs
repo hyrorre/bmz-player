@@ -61,7 +61,17 @@ fn skin_file(root: &Path) -> PathBuf {
     path
 }
 
-fn queue(pipeline: &SkinPipelineRuntime, path: &Path, generation: u64, chart: PlaySkinChartState) {
+fn queue(
+    pipeline: &mut SkinPipelineRuntime,
+    path: &Path,
+    generation: u64,
+    chart: PlaySkinChartState,
+) {
+    // Match the app's generation registration before starting a worker.
+    while pipeline.generation(SkinKind::Play) < generation {
+        pipeline.bump_generation(SkinKind::Play);
+    }
+    assert_eq!(pipeline.generation(SkinKind::Play), generation);
     let mut runtime = bmz_skin::LuaLoadRuntimeState {
         runtime_mode: bmz_skin::LuaSkinRuntimeMode::Compat,
         ..Default::default()
@@ -229,9 +239,9 @@ fn transformed_length_reaches_lua_before_audio_completion() {
         "#TITLE Margin\n#BPM 120\n#WAV01 absent.wav\n#00011:01\n#09011:01\n",
     );
     assert_eq!(boot.library_db.list_charts_by_ids(&[id]).unwrap()[0].length_ms, 180_000);
-    let pipeline = SkinPipelineRuntime::new();
+    let mut pipeline = SkinPipelineRuntime::new();
     let state = PlaySkinChartState::default();
-    queue(&pipeline, &skin_file(&data.paths.data_dir), 7, state.clone());
+    queue(&mut pipeline, &skin_file(&data.paths.data_dir), 7, state.clone());
     assert!(pipeline.decode_rx.as_ref().unwrap().recv_timeout(Duration::from_millis(20)).is_err());
     let (release_tx, release_rx) = mpsc::channel();
     let db_path = boot.app_paths.library_db.clone();
@@ -295,7 +305,7 @@ fn play_skin_reads_chart_facts_while_loading() {
     "#,
     )
     .unwrap();
-    let pipeline = SkinPipelineRuntime::new();
+    let mut pipeline = SkinPipelineRuntime::new();
     let state = PlaySkinChartState::default();
     state.finish(Ok(Arc::new(crate::screens::play_snapshot::PlaySkinChartFacts {
         length_ms: 60_000,
@@ -312,7 +322,7 @@ fn play_skin_reads_chart_facts_while_loading() {
         max_bpm: 240.0,
         main_bpm: 150.0,
     })));
-    queue(&pipeline, &path, 3, state);
+    queue(&mut pipeline, &path, 3, state);
     let decoded = receive(&pipeline).result.unwrap();
     assert_eq!(
         decoded.document.text[0].constant_text,
@@ -332,7 +342,7 @@ fn random_branch_decide_retry_replay_and_course_keep_attempt_lengths_separate() 
     );
     assert_eq!(boot.library_db.list_charts_by_ids(&[first]).unwrap()[0].length_ms, 180_000);
     let path = skin_file(&data.paths.data_dir);
-    let pipeline = SkinPipelineRuntime::new();
+    let mut pipeline = SkinPipelineRuntime::new();
     let options = PlaySessionOptions { bms_random_choices: Some(vec![2]), ..Default::default() };
     // The same worker is used by Decide's lookahead and a direct start.
     let pending = PendingPlayPreload::spawn(
@@ -344,7 +354,7 @@ fn random_branch_decide_retry_replay_and_course_keep_attempt_lengths_separate() 
             normalization_output_gain: 1.0,
         },
     );
-    queue(&pipeline, &path, 41, pending.skin_chart_state.clone());
+    queue(&mut pipeline, &path, 41, pending.skin_chart_state.clone());
     let prepared = pending.rx.recv_timeout(Duration::from_secs(15)).unwrap().result.unwrap();
     assert_eq!(prepared.preloaded.applied_arrange.bms_random_choices, [2]);
     let cached = prepared.preloaded.prepared_chart();
@@ -369,7 +379,7 @@ fn random_branch_decide_retry_replay_and_course_keep_attempt_lengths_separate() 
         options.clone(),
         PlayPreloadSource::Cached { chart: Box::new(cached), normalization_gain: 1.0 },
     );
-    queue(&pipeline, &path, 42, retry.skin_chart_state.clone());
+    queue(&mut pipeline, &path, 42, retry.skin_chart_state.clone());
     let retried = retry.rx.recv_timeout(Duration::from_secs(15)).unwrap().result.unwrap();
     let play = build_prepared_play_session_from_preloaded(
         retried.preloaded,
@@ -394,7 +404,7 @@ fn random_branch_decide_retry_replay_and_course_keep_attempt_lengths_separate() 
             normalization_output_gain: 1.0,
         },
     );
-    queue(&pipeline, &path, 43, replay.skin_chart_state.clone());
+    queue(&mut pipeline, &path, 43, replay.skin_chart_state.clone());
     let replayed = replay.rx.recv_timeout(Duration::from_secs(15)).unwrap().result.unwrap();
     let play = build_prepared_play_session_from_preloaded(
         replayed.preloaded,
@@ -414,7 +424,7 @@ fn random_branch_decide_retry_replay_and_course_keep_attempt_lengths_separate() 
             normalization_output_gain: 1.0,
         },
     );
-    queue(&pipeline, &path, 44, course.skin_chart_state.clone());
+    queue(&mut pipeline, &path, 44, course.skin_chart_state.clone());
     pending.skin_chart_state.finish(Ok(facts(999_000))); // Late old publication cannot replace either value.
     assert_eq!(pending.skin_chart_state.wait().unwrap().length_ms, 241_000);
     let next = course.rx.recv_timeout(Duration::from_secs(15)).unwrap().result.unwrap();
@@ -547,10 +557,10 @@ fn absent_chart_returns_lua_sentinel_and_hides_numeric_objects() {
 fn cancelled_and_failed_chart_preloads_release_skin_decode() {
     let data = ProfileTestDir::new();
     let boot = data.boot();
-    let pipeline = SkinPipelineRuntime::new();
+    let mut pipeline = SkinPipelineRuntime::new();
     let path = skin_file(&data.paths.data_dir);
     let cancelled = PlaySkinChartState::default();
-    queue(&pipeline, &path, 1, cancelled.clone());
+    queue(&mut pipeline, &path, 1, cancelled.clone());
     cancelled.finish(Err("cancelled".into()));
     cancelled.finish(Ok(facts(60_000)));
     assert!(receive(&pipeline).result.is_err());
@@ -563,7 +573,7 @@ fn cancelled_and_failed_chart_preloads_release_skin_decode() {
             normalization_output_gain: 1.0,
         },
     );
-    queue(&pipeline, &path, 2, failed.skin_chart_state.clone());
+    queue(&mut pipeline, &path, 2, failed.skin_chart_state.clone());
     assert!(receive(&pipeline).result.is_err());
     assert!(failed.rx.recv_timeout(Duration::from_secs(15)).unwrap().result.is_err());
 }
@@ -655,7 +665,7 @@ fn stopping_skin_workers_releases_pending_chart_property_waits() {
     let data = ProfileTestDir::new();
     let mut pipeline = SkinPipelineRuntime::new();
     let state = PlaySkinChartState::default();
-    queue(&pipeline, &skin_file(&data.paths.data_dir), 1, state.clone());
+    queue(&mut pipeline, &skin_file(&data.paths.data_dir), 1, state.clone());
     pipeline.shutdown_workers();
     assert_eq!(state.wait().unwrap_err(), "skin decode cancelled");
 }

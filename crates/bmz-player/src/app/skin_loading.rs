@@ -260,7 +260,7 @@ pub(super) fn reload_skin_textures(
         if !enabled {
             continue;
         }
-        let generation = pipeline.generations.bump(kind);
+        let generation = pipeline.bump_generation(kind);
         let Some(load) = frontend_skin_load(
             app_paths,
             kind,

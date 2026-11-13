@@ -315,6 +315,7 @@ impl WgpuRenderer {
                 self.config.format,
                 &bind_group_layout,
                 include_str!("ambient.wgsl"),
+                "fs_main",
                 "bmz-render ambient blur",
                 None,
             );
@@ -408,6 +409,7 @@ impl WgpuRenderer {
                         image_pipeline: &self.image_pipeline,
                         image_add_pipeline: &self.image_add_pipeline,
                         image_multiply_pipeline: &self.image_multiply_pipeline,
+                        image_composite_pipelines: &self.image_composite_pipelines,
                         image_subtract_pipeline: &self.image_subtract_pipeline,
                         image_premultiplied_pipeline: &self.image_premultiplied_pipeline,
                         image_layer_pipeline: &self.image_layer_pipeline,

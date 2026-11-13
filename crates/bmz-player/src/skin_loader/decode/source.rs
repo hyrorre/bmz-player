@@ -89,10 +89,37 @@ pub(in crate::skin_loader) fn skin_source_asset_cache_key(
     let metadata = fs::metadata(asset.backing_path()).ok()?;
     let path = asset.logical_path().to_path_buf();
     Some(SkinSourceAssetCacheKey {
+        frames: None,
         color_key: None,
         path,
         modified: metadata.modified().ok(),
         len: metadata.len(),
         is_video,
     })
+}
+
+pub(in crate::skin_loader) fn skin_frame_sequence_cache_key(
+    paths: &[PathBuf],
+    columns: u32,
+) -> Option<SkinSourceAssetCacheKey> {
+    let frames = paths
+        .iter()
+        .map(|path| {
+            if path == Path::new("bmz://lr2/empty") {
+                Some(SkinSourceAssetCacheKey {
+                    frames: None,
+                    color_key: None,
+                    path: path.clone(),
+                    modified: None,
+                    len: 0,
+                    is_video: false,
+                })
+            } else {
+                skin_source_asset_cache_key(path, false)
+            }
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let mut key = frames.first()?.clone();
+    key.frames = Some((columns, frames));
+    Some(key)
 }

@@ -1,5 +1,357 @@
 use super::*;
 
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "creates a Winit event loop; run alone with --ignored"]
+fn qwilight_offset_settings_update_installed_play_without_queuing_decodes() {
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    let event_loop =
+        EventLoop::<AppUserEvent>::with_user_event().with_any_thread(true).build().unwrap();
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    let (maintenance_tx, _) = tokio::sync::watch::channel(false);
+    let mut app = WinitApp::new(
+        data.boot(),
+        AppOptions { viewer_play: true, ..Default::default() },
+        Instant::now(),
+        None,
+        None,
+        Arc::new(AtomicBool::new(false)),
+        event_loop.create_proxy(),
+        LogBuffer::default(),
+        maintenance_tx,
+        None,
+    )
+    .unwrap();
+    app.skin.skin_pipeline.shutdown_workers();
+    *app.skin.skin_pipeline = SkinPipelineRuntime::new();
+    let temp = tempfile::tempdir().unwrap();
+    let path = write_qwilight_customize_fixture(temp.path());
+    let yaml = std::fs::read_to_string(&path).unwrap().replace("pipeline: 7", "pipeline: 7, 47");
+    std::fs::write(&path, format!("{yaml}  titlePosition0: 20\n  titlePosition1: 20\n")).unwrap();
+    let state = bmz_skin::LuaLoadRuntimeState::default();
+    let decoded = crate::skin_loader::decode_beatoraja_skin_with_options_and_runtime_state(
+        &path,
+        SkinKind::Play,
+        &Default::default(),
+        &Default::default(),
+        &state,
+    )
+    .unwrap();
+    install_decoded_skin(&mut app.renderer, decoded, bmz_render::skin::default_skin_manifest())
+        .unwrap();
+    let base = app.renderer.play_skin_document().unwrap().destination.clone();
+    let path_label = path.to_string_lossy().to_string();
+    app.boot.profile_config.skin.play7 = path_label.clone();
+    app.skin.last_play_skin_signature = Some(play_skin_signature(
+        KeyMode::K7,
+        SessionMode::Normal,
+        &path_label,
+        &Default::default(),
+        &Default::default(),
+        &state,
+        app.play.play_preload_generation,
+    ));
+    let generation = app.skin.skin_pipeline.bump_generation(SkinKind::Play);
+    app.skin.skin_pipeline.record_screen_dependencies(SkinKind::Play, Default::default());
+    // Even the YAML is unavailable after installation: updates must not reload it.
+    std::fs::rename(&path, path.with_extension("unavailable")).unwrap();
+    for x in (1..=200).chain([0]) {
+        app.boot.profile_config.skin.play7_offsets = vec![SkinOffsetConfig {
+            name: Some("Qwilight Title offset".into()),
+            id: if x == 50 { 0 } else { 1147 },
+            x,
+            ..Default::default()
+        }];
+        app.reload_skins(SkinReloadRequest { play7: true, offsets: true, ..Default::default() });
+        assert_eq!(app.skin.skin_pipeline.generation(SkinKind::Play), generation);
+        assert!(!app.is_kind_pending_decode(SkinKind::Play));
+        let current = &app.renderer.play_skin_document().unwrap().destination;
+        if x == 0 {
+            assert_eq!(current, &base);
+        } else {
+            assert_ne!(current, &base);
+        }
+    }
+    app.skin.skin_pipeline.set_pending(SkinKind::Play, true);
+    app.boot.profile_config.skin.play7_offsets[0].x = 301;
+    app.reload_skins(SkinReloadRequest { play7: true, offsets: true, ..Default::default() });
+    assert_eq!(
+        app.skin.skin_pipeline.generation(SkinKind::Play),
+        generation,
+        "an edit while loading must not invalidate the pending assets"
+    );
+    let signature = app.skin.last_play_skin_signature.as_ref().unwrap();
+    assert_eq!(signature.5.offset_values["Qwilight Title offset"].x, 301);
+}
+
+#[test]
+fn qwilight_catalog_registers_only_play_slots_without_running_lua() {
+    let temp = tempfile::tempdir().unwrap();
+    let yaml = "format: {title: Qwilight fixture}\nframe: {}\nlambda: {}\npoint: {}";
+    std::fs::write(temp.path().join("play.yaml"), yaml).unwrap();
+    std::fs::write(temp.path().join("play.zip"), b"").unwrap();
+    std::fs::write(temp.path().join("@theme.yaml"), yaml).unwrap();
+    std::fs::write(temp.path().join("play.lua"), "while true do end").unwrap();
+    let mut catalog = SkinCatalog::default();
+    scan_skin_catalog_dir(
+        temp.path(),
+        temp.path(),
+        &[temp.path().to_path_buf()],
+        SkinCandidateOrigin::User,
+        &mut catalog,
+    );
+    for candidates in [
+        &catalog.play4,
+        &catalog.play5,
+        &catalog.play6,
+        &catalog.play7,
+        &catalog.play8,
+        &catalog.play9,
+        &catalog.play10,
+        &catalog.play14,
+    ] {
+        assert_eq!(candidates.len(), 1);
+    }
+    assert!(catalog.select.is_empty());
+    assert!(catalog.result.is_empty());
+}
+
+/// Only Qwilight's own adjustments are Lua inputs that require a reload; the
+/// converter decides, not the look of the saved name.
+#[test]
+fn qwilight_layout_offsets_are_not_conversion_inputs() {
+    let state = |name: &str| {
+        let mut state = bmz_skin::LuaLoadRuntimeState::default();
+        let value = bmz_skin::LuaSkinOffsetValue { x: 10, ..Default::default() };
+        state.offset_values.insert(name.into(), value);
+        state
+    };
+    let base = bmz_skin::LuaLoadRuntimeState::default();
+    for layout_only in ["Qwilight Title offset", "Qwilight Decoration 3 offset", "Judge offset"] {
+        assert!(qwilight_native_offsets_equal(&base, &state(layout_only)), "{layout_only}");
+        assert!(!bmz_skin::is_qwilight_adjustment_offset(layout_only));
+    }
+    for adjustment in ["Qwilight lane position", "Qwilight judgment visualizer position"] {
+        assert!(!qwilight_native_offsets_equal(&base, &state(adjustment)), "{adjustment}");
+        assert!(bmz_skin::is_qwilight_adjustment_offset(adjustment));
+    }
+}
+
+#[test]
+fn skin_catalog_does_not_parse_yaml_without_a_qwilight_zip_beside_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let workflows = temp.path().join(".github/workflows");
+    std::fs::create_dir_all(&workflows).unwrap();
+    std::fs::write(workflows.join("ci.yml"), "on: push").unwrap();
+    std::fs::write(temp.path().join("docker-compose.yaml"), "services: {}").unwrap();
+    let skin = temp.path().join("Q");
+    std::fs::create_dir(&skin).unwrap();
+    std::fs::write(skin.join("play.yaml"), "format: {}").unwrap();
+    std::fs::write(skin.join("PLAY.ZIP"), b"").unwrap();
+    let mut scan = crate::directory_scan::DirectoryScan::new([temp.path().to_path_buf()]).unwrap();
+    let mut paths = Vec::new();
+    collect_skin_candidate_files(temp.path(), &mut paths, &mut scan, 0);
+    assert_eq!(paths, [skin.join("play.yaml")]);
+}
+
+/// A Qwilight skin declaring two adjustments, with an option hidden by another.
+fn write_qwilight_customize_fixture(dir: &Path) -> PathBuf {
+    use std::io::Write;
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join("skin.yaml");
+    std::fs::write(&path, "format: {zip: skin}\nframe: {}\nlambda:\n  setMainPosition: true\n  setJudgmentMainPosition: true\n  configure-comment-0: Colors\n  configure-0: Hide, Show\n  configure-comment-1: Color\n  configure-comment-1-1042: 색\n  configure-1: Red, Blue\n  configure-1-1042: 빨강, 파랑\n  configure-available-1: Toggle()\n  drawing1: 1, 2, 3, 4, 5, 10\n  pipeline: 7\npoint:\n  mainPosition: Main()\n  noteLength: 20\n  judgmentMainPosition: Judge()\n").unwrap();
+    std::fs::write(
+        dir.join("skin.lua"),
+        "function Main() return 10 + mainPosition end\nfunction Judge() return judgmentMainPosition - 100 end\nfunction Toggle() return configures[1] == 1 end",
+    )
+    .unwrap();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([255; 4]))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(dir.join("skin.zip")).unwrap());
+    zip.start_file("Note/N 1 0 0.png", zip::write::SimpleFileOptions::default()).unwrap();
+    zip.write_all(png.get_ref()).unwrap();
+    zip.finish().unwrap();
+    path
+}
+
+#[test]
+fn qwilight_saved_adjustments_reload_and_move_layout_for_each_key_mode() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("skins");
+    let path = write_qwilight_customize_fixture(&root.join("Q"));
+    let offset = |name: &str, x, y| SkinOffsetConfig {
+        name: Some(name.into()),
+        id: 0,
+        x,
+        y,
+        ..Default::default()
+    };
+    let mut skin = SkinConfig {
+        play7: path.to_string_lossy().into_owned(),
+        play14: path.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    skin.play7_offsets = vec![
+        offset("Qwilight lane position", 40, 0),
+        // Legacy saved line adjustment is ignored; the live BMZ LIFT now owns it.
+        offset("Qwilight judgment line position", 0, 50),
+    ];
+    // Saved per key mode, as Qwilight keeps the lane position per input mode.
+    skin.play14_offsets = vec![offset("Qwilight lane position", -5, 0)];
+    let saved: SkinConfig = toml::from_str(&toml::to_string(&skin).unwrap()).unwrap();
+    let state_for = |mode: i32, offsets: &[SkinOffsetConfig]| {
+        let mut state = bmz_skin::LuaLoadRuntimeState {
+            number_values: BTreeMap::from([(bmz_render::skin::SKIN_REF_BMZ_KEY_MODE, mode)]),
+            ..Default::default()
+        };
+        apply_skin_offsets_to_lua_runtime_state(&mut state, offsets);
+        state
+    };
+    let defaults = state_for(7, &[]);
+    let adjusted = state_for(7, &saved.play7_offsets);
+    let signature = |state| {
+        play_skin_signature(
+            KeyMode::K7,
+            SessionMode::Normal,
+            &saved.play7,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            state,
+            0,
+        )
+    };
+    assert_ne!(signature(&defaults), signature(&adjusted), "an offset edit re-decodes Play");
+    let lane_area = |state: &bmz_skin::LuaLoadRuntimeState| {
+        let decoded =
+            crate::skin_loader::decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+                pinned_sources: None,
+                skin_path: &path,
+                kind: SkinKind::Play,
+                options: &BTreeMap::new(),
+                files: &BTreeMap::new(),
+                runtime_state: state,
+                library_roots: std::slice::from_ref(&root),
+                document_cache: None,
+                source_cache: None,
+                texture_cache: None,
+                font_cache: None,
+                installed_fonts: None,
+            })
+            .unwrap();
+        let note = decoded.document.note.unwrap();
+        // beatoraja note order puts the 1P scratch after the seven keys (7K and 14K).
+        let bmz_render::skin::SkinDstEntry::Frame(frame) = &note.dst[7] else {
+            panic!("scratch frame")
+        };
+        (frame.x.unwrap(), frame.h.unwrap())
+    };
+    assert_eq!(lane_area(&defaults), (10, 500));
+    assert_eq!(lane_area(&adjusted), (50, 500));
+    assert_eq!(lane_area(&state_for(14, &saved.play14_offsets)), (5, 500));
+}
+
+#[test]
+fn qwilight_settings_defs_follow_slot_options_and_keep_only_effective_offsets() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = write_qwilight_customize_fixture(&temp.path().join("skins/Q"));
+    let paths = crate::paths::AppPaths::from_dirs(
+        temp.path().to_path_buf(),
+        temp.path().to_path_buf(),
+        temp.path().join("cache"),
+        temp.path().join("logs"),
+    );
+    let path = path.to_string_lossy();
+    let defs = |options: Option<&BTreeMap<String, String>>| {
+        skin_defs_from_path(&paths, &SkinConfig::default(), &path, true, options)
+    };
+    let names = |defs: &SceneSkinDefs| {
+        defs.property
+            .iter()
+            .filter(|property| !property.name.starts_with("Qwilight show "))
+            .map(|property| property.name.clone())
+            .collect::<Vec<_>>()
+    };
+    let hidden = BTreeMap::from([("Colors".to_string(), "Hide".to_string())]);
+    let shown = BTreeMap::from([("Colors".to_string(), "Show".to_string())]);
+    assert_eq!(
+        names(&defs(Some(&hidden))),
+        ["Colors", "Qwilight time display", "Lane cover image"]
+    );
+    let visible = defs(Some(&shown));
+    assert_eq!(
+        visible.property.iter().filter(|p| p.name.starts_with("Qwilight show ")).count(),
+        34
+    );
+    assert_eq!(
+        visible.property_label("Qwilight show Spectrum", crate::i18n::AppLocale::Ja),
+        "表示: スペクトラムアナライザ"
+    );
+    assert_eq!(names(&visible), ["Colors", "Color", "Qwilight time display", "Lane cover image"]);
+    // The catalog header lists every option without running Lua.
+    assert_eq!(
+        names(&defs(None)),
+        ["Colors", "Color", "Qwilight time display", "Lane cover image"]
+    );
+    assert!(visible.qwilight);
+    assert_eq!(visible.property_label("Color", crate::i18n::AppLocale::Ko), "색");
+    assert_eq!(visible.property_label("Color", crate::i18n::AppLocale::Ja), "Color");
+    assert_eq!(visible.item_label("Color", "Blue", crate::i18n::AppLocale::Ko), "파랑");
+    assert_eq!(visible.item_label("Color", "Blue", crate::i18n::AppLocale::ZhCn), "Blue");
+    let offsets: Vec<_> = visible.offset.iter().map(|offset| offset.id).collect();
+    // Declared Qwilight adjustments plus All / Notes / Judge offset. Judge Detail
+    // and Bar Line offset have no converted element, so they are not shown.
+    assert_eq!(offsets, [1001, 10, 30, 32]);
+}
+
+#[test]
+fn qwilight_lane_cover_items_follow_added_images_after_returning_to_a_cached_selection() {
+    use super::skin_flow_profile::{SkinDefsCache, cached_skin_defs, forget_qwilight_skin_defs};
+    let temp = tempfile::tempdir().unwrap();
+    let path = write_qwilight_customize_fixture(&temp.path().join("skins/Q"));
+    let paths = crate::paths::AppPaths::from_dirs(
+        temp.path().to_path_buf(),
+        temp.path().to_path_buf(),
+        temp.path().join("cache"),
+        temp.path().join("logs"),
+    );
+    let covers = temp.path().join("skins").join(bmz_skin::QWILIGHT_LANE_COVER_DIR);
+    std::fs::create_dir_all(&covers).unwrap();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 255]))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let path = path.to_string_lossy();
+    let mut cache = SkinDefsCache::new();
+    let items = |cache: &mut SkinDefsCache, options: &BTreeMap<String, String>| {
+        let defs = cached_skin_defs(cache, &paths, &SkinConfig::default(), &path, true, options);
+        let property = defs
+            .property
+            .iter()
+            .find(|property| property.name == bmz_skin::QWILIGHT_LANE_COVER_PROPERTY)
+            .unwrap();
+        property.item.iter().map(|item| item.name.clone()).collect::<Vec<_>>()
+    };
+    let unset = BTreeMap::new();
+    let selected = |name: &str| {
+        BTreeMap::from([(bmz_skin::QWILIGHT_LANE_COVER_PROPERTY.to_string(), name.to_string())])
+    };
+    assert_eq!(items(&mut cache, &unset), ["Skin"]);
+    std::fs::write(covers.join("x.png"), png.get_ref()).unwrap();
+    // The key covers the options only, so the entry cached before X is stale.
+    assert_eq!(items(&mut cache, &unset), ["Skin"]);
+    forget_qwilight_skin_defs(&mut cache);
+    assert_eq!(items(&mut cache, &unset), ["Skin", "Random", "x.png"]);
+    // Add Y (selected), then remove Y: the option returns to unset.
+    std::fs::write(covers.join("y.png"), png.get_ref()).unwrap();
+    forget_qwilight_skin_defs(&mut cache);
+    assert_eq!(items(&mut cache, &selected("y.png")), ["Skin", "Random", "x.png", "y.png"]);
+    std::fs::remove_file(covers.join("y.png")).unwrap();
+    forget_qwilight_skin_defs(&mut cache);
+    assert_eq!(items(&mut cache, &unset), ["Skin", "Random", "x.png"]);
+}
+
 #[test]
 fn invalid_continue_fallback_does_not_abort_result_skin_decode() {
     let temp = tempfile::tempdir().unwrap();

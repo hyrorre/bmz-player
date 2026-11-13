@@ -113,8 +113,26 @@ pub(super) fn plan_play(
         push_start_overlay(&text, &mut commands, snapshot);
         push_default_failed_overlay(&text, &mut commands, snapshot);
     }
-    if !skin.has_timer_destination(2) {
-        push_default_play_fadeout_overlay(&mut commands, snapshot);
+    push_play_entry_fade(
+        &mut commands,
+        snapshot,
+        skin.document().map_or(0, |document| document.bmz_play_fadein),
+    );
+    let exit_fade_ms = skin.document().map_or(0, |document| document.bmz_play_fadeout);
+    if let Some(elapsed_ms) = snapshot.failed_elapsed_ms
+        && exit_fade_ms > 0
+        && !skin.has_timer_destination(3)
+    {
+        push_play_fadeout_overlay(&mut commands, elapsed_ms, exit_fade_ms);
+    } else if let Some(elapsed_ms) = snapshot.fadeout_elapsed_ms
+        && !skin.has_timer_destination(2)
+    {
+        let duration_ms = if exit_fade_ms > 0 {
+            exit_fade_ms
+        } else {
+            crate::snapshot::DEFAULT_PLAY_FADEOUT_DURATION_MS
+        };
+        push_play_fadeout_overlay(&mut commands, elapsed_ms, duration_ms);
     }
     // Decided after the skin items above so a Lua callback that read the chart
     // text in this frame already counts.

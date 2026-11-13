@@ -139,6 +139,20 @@ macro_rules! skin_document_render_core_resolve_methods {
                     ));
                 }
                 if let Some(visualizer) = indexed_destination_object(
+                    &self.qwilight_visualizer,
+                    objects.map(|o| o.qwilight_visualizer),
+                    |item| item.id == destination.id,
+                ) {
+                    return Some(graph::qwilight_visualizer_items(
+                        self,
+                        visualizer,
+                        destination,
+                        frame,
+                        state,
+                        runtime_graphs.play_note_graphs,
+                    ));
+                }
+                if let Some(visualizer) = indexed_destination_object(
                     &self.timingvisualizer,
                     objects.map(|o| o.timingvisualizer),
                     |item| item.id == destination.id,
@@ -264,7 +278,9 @@ macro_rules! skin_document_render_core_resolve_methods {
                 }
 
                 if let Some(value) = value_for_destination {
-                    let elapsed = if destination.lr2_timing {
+                    let elapsed = if value.qwilight_animation.is_some() {
+                        crate::skin::qwilight_animation::value_elapsed(value, state)
+                    } else if destination.lr2_timing {
                         skin_timer_elapsed_ms(value.timer, state).unwrap_or(0).max(0)
                     } else {
                         elapsed
@@ -390,7 +406,15 @@ macro_rules! skin_document_render_core_resolve_methods {
                 frame.g = g;
                 frame.b = b;
             }
-            let Some(source) = resolve_document_source(sources, &image.src) else {
+            let animation_source = image.qwilight_animation.as_ref().and_then(|animation| {
+                let elapsed = skin_timer_elapsed_ms(image.timer, state).unwrap_or(0);
+                animation
+                    .sources
+                    .get(crate::skin::qwilight_animation::frame_index(animation, elapsed))
+            });
+            let Some(source) =
+                resolve_document_source(sources, animation_source.unwrap_or(&image.src))
+            else {
                 return Some(None);
             };
             let pixel_rect = skin_image_pixel_rect(image);
@@ -401,6 +425,13 @@ macro_rules! skin_document_render_core_resolve_methods {
                 state,
                 pixel_rect,
             );
+            if let Some(animation) = &image.qwilight_animation
+                && !crate::skin::qwilight_animation::transform(
+                    animation, state, &mut frame, &mut uv,
+                )
+            {
+                return Some(None);
+            }
             if self.should_clip_image_at_disappear_line(destination, image)
                 && let Some((disappear_line, link_lift)) = self.disappear_line_for_lane_cover_clip()
             {
@@ -423,7 +454,36 @@ macro_rules! skin_document_render_core_resolve_methods {
                 self.w,
                 self.h,
             );
-            Some(Some(vec![skin_image_item_for_frame(
+            let mut items = Vec::new();
+            // Unbounded Porter-Duff modes replace the destination outside the
+            // source bounds too. BoundedCopy (111) deliberately preserves it.
+            if matches!(destination.blend, 102 | 103 | 104 | 107 | 110) {
+                let x = rect.x.clamp(0.0, 1.0);
+                let y = rect.y.clamp(0.0, 1.0);
+                let right = (rect.x + rect.width).clamp(0.0, 1.0);
+                let bottom = (rect.y + rect.height).clamp(0.0, 1.0);
+                for outside in [
+                    Rect { x: 0.0, y: 0.0, width: 1.0, height: y },
+                    Rect { x: 0.0, y: bottom, width: 1.0, height: 1.0 - bottom },
+                    Rect { x: 0.0, y, width: x, height: bottom - y },
+                    Rect { x: right, y, width: 1.0 - right, height: bottom - y },
+                ] {
+                    if outside.width > 0.0 && outside.height > 0.0 {
+                        items.push(SkinRenderItem::Image {
+                            texture: source.texture,
+                            rect: outside,
+                            uv,
+                            tint: Color::rgba(0.0, 0.0, 0.0, 0.0),
+                            blend: BlendMode::Composite(10),
+                            scale: SkinImageScale::Stretch,
+                            border: None,
+                            source_size: Some(source.source_size),
+                            linear_filter: false,
+                        });
+                    }
+                }
+            }
+            items.push(skin_image_item_for_frame(
                 source.texture,
                 rect,
                 uv,
@@ -432,7 +492,8 @@ macro_rules! skin_document_render_core_resolve_methods {
                 skin_blend_mode(destination.blend),
                 Some(source.source_size),
                 destination.filter != 0,
-            )]))
+            ));
+            Some(Some(items))
         }
 
         fn resolve_bga_destination_items(
@@ -661,7 +722,9 @@ macro_rules! skin_document_render_core_resolve_methods {
             }
 
             if let Some(value) = self.value.iter().find(|value| value.id == destination.id) {
-                let elapsed = if destination.lr2_timing {
+                let elapsed = if value.qwilight_animation.is_some() {
+                    crate::skin::qwilight_animation::value_elapsed(value, state)
+                } else if destination.lr2_timing {
                     skin_timer_elapsed_ms(value.timer, state).unwrap_or(0).max(0)
                 } else {
                     elapsed

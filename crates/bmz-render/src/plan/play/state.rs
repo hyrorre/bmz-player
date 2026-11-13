@@ -108,6 +108,7 @@ pub(in crate::plan) fn build_play_skin_state(
         fadeout_ms: snapshot.fadeout_elapsed_ms,
         failed_ms: snapshot.failed_elapsed_ms,
         music_end_ms: snapshot.music_end_elapsed_ms,
+        result_settled_ms: snapshot.result_settled_elapsed_ms,
         gauge_increase_ms: snapshot.gauge_increase_elapsed_ms,
         gauge_increase_2p_ms: snapshot
             .opponent
@@ -225,6 +226,35 @@ pub(in crate::plan) fn build_play_skin_state(
         course_stage: snapshot.course_stage,
         hit_error_ring: snapshot.hit_error_ring.values,
         hit_error_ring_index: snapshot.hit_error_ring.index,
+        audio_spectrum: snapshot.audio_spectrum,
+        qwilight_timing: if skin.document().is_some_and(|d| {
+            d.qwilight_visualizer
+                .iter()
+                .any(|v| v.kind == crate::skin::QwilightVisualizerKind::Timing)
+        }) {
+            snapshot
+                .recent_judgements
+                .iter()
+                .filter(|j| !j.is_miss)
+                .map(|j| {
+                    let index = match j.judge {
+                        bmz_core::judge::Judge::PGreat => 0,
+                        bmz_core::judge::Judge::Great => 1,
+                        bmz_core::judge::Judge::Good => 2,
+                        bmz_core::judge::Judge::Bad => 3,
+                        bmz_core::judge::Judge::Poor => 4,
+                        bmz_core::judge::Judge::EmptyPoor => 5,
+                    };
+                    (
+                        j.delta_us as f32 / 1000.0,
+                        ((snapshot.time.0 - j.time.0) / 1000).clamp(0, i64::from(i32::MAX)) as i32,
+                        index,
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
         // op 80/81 はリソースロード状態ではなく PRELOAD state を表す。
         skin_loaded: snapshot.seamless_play_entry || snapshot.ready_elapsed_time.is_some(),
         resource_load_progress: snapshot.resource_load_progress,

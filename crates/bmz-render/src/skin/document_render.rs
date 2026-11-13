@@ -199,15 +199,6 @@ pub(super) trait SkinDocumentRenderInternal {
         clip: &mut Option<Rect>,
     ) -> Option<SkinRenderItem>;
 
-    fn destination_looks_like_pre_notes_judge_line(
-        &self,
-        destination: &SkinDestinationDef,
-        images: &SkinImageLookup<'_>,
-        enabled_options: &[i32],
-        state: &SkinDrawState,
-        next_destination: Option<&SkinDestinationDef>,
-    ) -> bool;
-
     fn disappear_line_for_lane_cover_clip(&self) -> Option<(i32, bool)>;
 
     fn should_clip_image_at_disappear_line(

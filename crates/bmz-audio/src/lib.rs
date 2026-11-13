@@ -10,3 +10,4 @@ pub mod mixer;
 pub mod queue;
 pub mod sample;
 pub mod sample_cache;
+pub mod spectrum;

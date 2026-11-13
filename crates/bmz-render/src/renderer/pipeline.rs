@@ -227,8 +227,13 @@ pub(super) fn create_image_pipeline(
         | BlendMode::Add
         | BlendMode::Subtract
         | BlendMode::Multiply
-        | BlendMode::Premultiplied => IMAGE_SHADER,
+        | BlendMode::Premultiplied
+        | BlendMode::Composite(_) => IMAGE_SHADER,
     };
+    // Porter-Duff factors expect premultiplied color; straight-alpha skins are
+    // converted in the fragment shader rather than by the blend state.
+    let fragment_entry =
+        if matches!(blend_mode, BlendMode::Composite(_)) { "fs_composite" } else { "fs_main" };
     let label = match blend_mode {
         BlendMode::Normal => "bmz-render image pipeline",
         BlendMode::InvertRgb => "bmz-render inverted RGB image pipeline",
@@ -237,12 +242,14 @@ pub(super) fn create_image_pipeline(
         BlendMode::Multiply => "bmz-render multiply image pipeline",
         BlendMode::Premultiplied => "bmz-render premultiplied image pipeline",
         BlendMode::LayerMask => "bmz-render layer-mask image pipeline",
+        BlendMode::Composite(_) => "bmz-render composite image pipeline",
     };
     create_image_quad_pipeline(
         device,
         format,
         bind_group_layout,
         shader_source,
+        fragment_entry,
         label,
         Some(image_blend_state(blend_mode)),
     )
@@ -258,6 +265,7 @@ pub(super) fn create_upscale_pipeline(
         format,
         bind_group_layout,
         IMAGE_SHADER,
+        "fs_main",
         "bmz-render internal upscale pipeline",
         None,
     )
@@ -268,6 +276,7 @@ pub(super) fn create_image_quad_pipeline(
     format: wgpu::TextureFormat,
     bind_group_layout: &wgpu::BindGroupLayout,
     shader_source: &str,
+    fragment_entry: &'static str,
     label: &'static str,
     blend: Option<wgpu::BlendState>,
 ) -> wgpu::RenderPipeline {
@@ -322,7 +331,7 @@ pub(super) fn create_image_quad_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_main"),
+            entry_point: Some(fragment_entry),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
@@ -340,6 +349,38 @@ pub(super) fn create_image_quad_pipeline(
 
 pub(super) fn image_blend_state(blend_mode: BlendMode) -> wgpu::BlendState {
     match blend_mode {
+        BlendMode::Composite(mode) => {
+            use wgpu::BlendFactor::*;
+            let (src_factor, dst_factor) = match mode {
+                1 => (OneMinusDstAlpha, One),
+                2 => (DstAlpha, Zero),
+                3 => (Zero, SrcAlpha),
+                4 => (OneMinusDstAlpha, Zero),
+                5 => (Zero, OneMinusSrcAlpha),
+                6 => (DstAlpha, OneMinusSrcAlpha),
+                7 => (OneMinusDstAlpha, SrcAlpha),
+                8 => (OneMinusDstAlpha, OneMinusSrcAlpha),
+                9 => (One, One),
+                10 | 11 => (One, Zero),
+                12 => (OneMinusDst, OneMinusSrcAlpha),
+                _ => (One, OneMinusSrcAlpha),
+            };
+            let color = wgpu::BlendComponent {
+                src_factor,
+                dst_factor,
+                operation: wgpu::BlendOperation::Add,
+            };
+            let alpha = if mode == 12 {
+                wgpu::BlendComponent {
+                    src_factor: Zero,
+                    dst_factor: One,
+                    operation: wgpu::BlendOperation::Add,
+                }
+            } else {
+                color
+            };
+            wgpu::BlendState { color, alpha }
+        }
         BlendMode::Normal | BlendMode::InvertRgb | BlendMode::LayerMask => {
             wgpu::BlendState::ALPHA_BLENDING
         }
@@ -591,6 +632,13 @@ fn vs_main(
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     return textureSample(image_texture, image_sampler, input.uv) * input.tint;
+}
+
+// CanvasComposite pipelines blend premultiplied color.
+@fragment
+fn fs_composite(input: VertexOutput) -> @location(0) vec4<f32> {
+    let color = textureSample(image_texture, image_sampler, input.uv) * input.tint;
+    return vec4<f32>(color.rgb * color.a, color.a);
 }
 "#;
 

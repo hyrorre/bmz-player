@@ -40,6 +40,16 @@
 | 日付 | 記録 |
 |---|---|
 | 2026-11-13 | [Kaleidへのmain統合とBokutachi条件](2026/2026-11-13-kaleid-main-bokutachi.md) |
+| 2026-11-13 | [Qwilightプレイスキンの要素別オフセット](2026/2026-11-13-qwilight-element-offsets.md) |
+| 2026-11-13 | [不可視ノーツによる結果確定とCLEAR演出の遅れ](2026/2026-11-13-invisible-note-result-settlement.md) |
+| 2026-11-13 | [Qwilight CLEAR演出を結果確定時に開始する](2026/2026-11-13-qwilight-clear-settlement.md) |
+| 2026-11-13 | [Qwilightプレイスキン対応（PR #97）のレビュー指摘への対応](2026/2026-11-13-qwilight-review-fixes.md) |
+| 2026-11-13 | [ECFN・Qwilightの判定線とノーツの描画順](2026/2026-11-13-play-judge-line-order.md) |
+| 2026-11-13 | [Qwilightのレーン別FAST/SLOWと表示フィルター](2026/2026-11-13-qwilight-lane-timing-filter.md) |
+| 2026-11-13 | [Qwilightの終了演出とプレイ表示の補完](2026/2026-11-13-qwilight-play-completion.md) |
+| 2026-11-13 | [Qwilight CR_minimalの表示欠落とLIFT連動](2026/2026-11-13-qwilight-play-visuals.md) |
+| 2026-11-13 | [Qwilightの情報表示とビジュアライザー](2026/2026-11-13-qwilight-play-information.md) |
+| 2026-11-13 | [Qwilightの打鍵タイミングと画面フェード](2026/2026-11-13-qwilight-timing-and-fades.md) |
 | 2026-11-13 | [Bokutachi PR #86のレビュー対応](2026/2026-11-13-bokutachi-review.md) |
 | 2026-11-13 | [デフォルト描画状態の暗黙アセット探索と起動診断](2026/2026-11-13-startup-default-and-diagnostics.md) |
 | 2026-11-13 | [Luxez-Flatの詳細オプションで波ダッシュの字形を検査する](2026/2026-11-13-luxez-detail-option-glyphs.md) |
@@ -56,6 +66,7 @@
 | 2026-11-10 | [譜面取得の保存先をIPFS / HTTPで別々に指定する](2026/2026-11-10-download-save-dirs.md) |
 | 2026-11-10 | [再スキャンで書庫を開き直さないための譜面一覧の保持](2026/2026-11-10-archive-listing-cache.md) |
 | 2026-11-10 | [曲更新がbeatorajaより遅い問題の調査と改善](2026/2026-11-10-song-update-performance.md) |
+| 2026-11-10 | [Qwilightプレイスキンの試験対応とカスタマイズ](2026/2026-11-10-qwilight-play-skins.md) |
 | 2026-11-09 | [Rust実行経路の停止・負荷候補の計測と修正](2026/2026-11-09-rust-frame-stalls.md) |
 | 2026-11-09 | [Surface再設定失敗後のクラッシュ経路](2026/2026-11-09-surface-reconfiguration-recovery.md) |
 | 2026-11-09 | [Bokutachiの新規単曲送信](2026/2026-11-09-bokutachi-submission.md) |

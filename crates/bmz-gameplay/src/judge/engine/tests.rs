@@ -200,6 +200,35 @@ fn chart_with_mine(time: TimeUs, damage: f64) -> PlayableChart {
 mod hln_tests;
 #[path = "tests/judgement.rs"]
 mod judgement;
+
+#[test]
+fn result_end_time_tracks_scoring_events_and_invalidates_with_the_chart() {
+    for kind in [NoteKind::Tap, NoteKind::LongStart, NoteKind::LongEnd, NoteKind::Mine] {
+        let mut chart = chart_with_tap(TimeUs(1_000_000));
+        chart.lane_notes[Lane::Key1.index()][0].kind = kind;
+        let mut invisible = chart.lane_notes[Lane::Key1.index()][0].clone();
+        invisible.id = NoteId(2);
+        invisible.kind = NoteKind::Invisible;
+        invisible.time = TimeUs(5_000_000);
+        chart.lane_notes[Lane::Key1.index()].push(invisible);
+        chart.end_time = TimeUs(5_000_000);
+        let mut chart = std::sync::Arc::new(chart);
+        let engine = JudgeEngine::new(windows());
+        assert_eq!(engine.result_end_time(&chart), TimeUs(1_000_000));
+        let engine = engine.with_chart_index(chart.clone());
+        assert_eq!(engine.result_end_time(&chart), TimeUs(1_000_000));
+        // A transformed chart cannot reuse the old chart's cached end.
+        std::sync::Arc::make_mut(&mut chart).lane_notes[Lane::Key1.index()][0].time =
+            TimeUs(2_000_000);
+        assert_eq!(engine.result_end_time(&chart), TimeUs(2_000_000));
+    }
+    let mut chart = chart_with_tap(TimeUs(5_000_000));
+    chart.lane_notes[Lane::Key1.index()][0].kind = NoteKind::Invisible;
+    let engine = JudgeEngine::new(windows());
+    assert_eq!(engine.result_end_time(&chart), chart.end_time);
+    chart.lane_notes[Lane::Key1.index()].clear();
+    assert_eq!(engine.result_end_time(&chart), chart.end_time);
+}
 #[path = "tests/mine.rs"]
 mod mine;
 #[path = "tests/miss_keysound.rs"]

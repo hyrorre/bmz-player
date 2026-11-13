@@ -130,6 +130,9 @@ pub struct SkinDrawState {
     pub bomb_ms: [Option<i32>; LANE_COUNT],
     /// 各レーンのkeyon(押下中ビーム)タイマー経過ms。Noneなら非アクティブ。
     pub keyon_ms: [Option<i32>; LANE_COUNT],
+    pub qwilight_key_frames: HashMap<String, usize>,
+    /// Raw judged delta sign and age per physical lane, independent of keylogger filters.
+    pub qwilight_lane_timing: [Option<(i32, i8)>; LANE_COUNT],
     /// 各レーンのkeyoff(離した直後の演出)タイマー経過ms。Noneなら非アクティブ。
     /// beatoraja の TIMER_KEYOFF_1P_KEY1..7 (121..127) / SCRATCH (120) に対応。
     pub keyoff_ms: [Option<i32>; LANE_COUNT],
@@ -158,6 +161,7 @@ pub struct SkinDrawState {
     pub full_combo_ms: Option<i32>,
     pub full_combo_2p_ms: Option<i32>,
     pub music_end_ms: Option<i32>,
+    pub result_settled_ms: Option<i32>,
     /// Gauge increase timer elapsed ms (TIMER_GAUGE_INCLEASE_1P/2P=42/43)。
     pub gauge_increase_ms: Option<i32>,
     pub gauge_increase_2p_ms: Option<i32>,
@@ -495,6 +499,9 @@ pub struct SkinDrawState {
     /// HitErrorVisualizer 用の直近判定タイミング (ms)。
     pub hit_error_ring: [i64; bmz_gameplay::hit_error::HIT_ERROR_RING_LEN],
     pub hit_error_ring_index: usize,
+    pub audio_spectrum: [f32; 32],
+    /// (input-minus-note milliseconds, age milliseconds, BMZ judgment index).
+    pub qwilight_timing: Vec<(f32, i32, usize)>,
     /// シーン内で保持する HitErrorVisualizer ごとの EMA (ms)。
     pub hit_error_ema: HashMap<String, i64>,
     /// `dynamicTimer` で定義された observe タイマーの経過 ms。None は timer_off。
@@ -609,6 +616,8 @@ impl Default for SkinDrawState {
             end_of_note_ms: None,
             bomb_ms: [None; LANE_COUNT],
             keyon_ms: [None; LANE_COUNT],
+            qwilight_key_frames: HashMap::new(),
+            qwilight_lane_timing: [None; LANE_COUNT],
             keyoff_ms: [None; LANE_COUNT],
             keyon_started_us: [None; LANE_COUNT],
             keyoff_started_us: [None; LANE_COUNT],
@@ -622,6 +631,7 @@ impl Default for SkinDrawState {
             full_combo_ms: None,
             full_combo_2p_ms: None,
             music_end_ms: None,
+            result_settled_ms: None,
             gauge_increase_ms: None,
             gauge_increase_2p_ms: None,
             gauge_max_ms: None,
@@ -798,6 +808,8 @@ impl Default for SkinDrawState {
             hit_error_ring: [bmz_gameplay::hit_error::HIT_ERROR_EMPTY;
                 bmz_gameplay::hit_error::HIT_ERROR_RING_LEN],
             hit_error_ring_index: 0,
+            audio_spectrum: [0.0; 32],
+            qwilight_timing: Vec::new(),
             hit_error_ema: HashMap::new(),
             dynamic_timer_ms: [None; SKIN_DYNAMIC_TIMER_COUNT],
             fixed_delay_timer_ms: HashMap::new(),

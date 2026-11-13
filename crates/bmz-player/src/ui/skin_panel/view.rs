@@ -32,6 +32,14 @@ impl EguiLayer {
             .unwrap_or(false)
     }
 
+    pub(crate) fn take_qwilight_lane_covers_changed(&self) -> bool {
+        self.ctx
+            .data_mut(|data| {
+                data.remove_temp::<bool>(egui::Id::new(super::QWILIGHT_LANE_COVERS_CHANGED_ID))
+            })
+            .unwrap_or(false)
+    }
+
     pub(crate) fn skin_settings_path<'a>(&self, skin: &'a SkinConfig) -> Option<&'a str> {
         if !self.visible || SettingsNavigation::load(&self.ctx).page != SettingsPage::Skin {
             return None;

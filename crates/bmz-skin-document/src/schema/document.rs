@@ -9,6 +9,9 @@ pub struct SkinTextureId(pub u32);
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SkinDocument {
+    /// Adapter-only, immutable layout recipe. Live edits reuse installed assets.
+    #[serde(skip)]
+    pub qwilight_layout: Option<std::sync::Arc<QwilightLayout>>,
     /// LR2 CSV origin. Keeps compatibility behavior separate from JSON/Lua skins.
     #[serde(default)]
     pub lr2: bool,
@@ -31,6 +34,19 @@ pub struct SkinDocument {
     /// Opt in to a read-only 300 ms E2 exit snapshot, animated with timer 32.
     #[serde(default, rename = "bmzDetailOptionsClose")]
     pub bmz_detail_options_close: bool,
+    /// BMZ play extension: screen-space black-to-clear entry fade in milliseconds.
+    /// Scene elapsed time is used; seamless retries skip the fade.
+    #[serde(default, rename = "bmzPlayFadein")]
+    pub bmz_play_fadein: i32,
+    /// Screen-space exit fade when the skin has no timer 2/3 animation.
+    /// The host still uses `fadeout` / `close` for the transition wait.
+    #[serde(default, rename = "bmzPlayFadeout")]
+    pub bmz_play_fadeout: i32,
+    /// BMZ play extension: a cleared finish without a full combo keeps Play until
+    /// the BMZ result-settled timer animation ends, then starts the exit fade.
+    /// Other skins start the fade after `finishmargin`, as in beatoraja.
+    #[serde(default, rename = "bmzPlayClearCompletion")]
+    pub bmz_play_clear_completion: bool,
     /// BMZ play extension: preview window for upcoming BPM changes.
     #[serde(default, rename = "bmzBpmChangePreview")]
     pub bmz_bpm_change_preview: Option<SkinBpmChangePreviewDef>,
@@ -65,12 +81,22 @@ pub struct SkinDocument {
     pub category: Vec<SkinCategoryDef>,
     #[serde(default)]
     pub property: Vec<SkinPropertyDef>,
+    /// BMZ extension: display text by UI locale code, keyed by property name.
+    /// Saved selections keep using the language-independent names.
+    #[serde(default, rename = "propertyLabels")]
+    pub property_labels: HashMap<String, SkinPropertyLabels>,
     #[serde(default)]
     pub filepath: Vec<SkinFilepathDef>,
     #[serde(default)]
     pub offset: Vec<SkinOffsetDef>,
     #[serde(default)]
     pub source: Vec<SkinSourceDef>,
+    /// Image sequences assembled by format adapters, keyed by source ID.
+    #[serde(default, rename = "sourceFrames")]
+    pub source_frames: HashMap<String, SkinSourceFramesDef>,
+    /// Format-adapter frames kept compressed on the CPU and uploaded on demand.
+    #[serde(default, rename = "deferredSources")]
+    pub deferred_sources: Vec<String>,
     #[serde(default)]
     pub font: Vec<SkinFontDef>,
     #[serde(default, rename = "lr2SystemFonts")]
@@ -96,6 +122,9 @@ pub struct SkinDocument {
     pub lift_cover: Vec<SkinHiddenCoverDef>,
     #[serde(default, rename = "hiterrorvisualizer")]
     pub hiterror_visualizer: Vec<SkinHitErrorVisualizerDef>,
+    /// Qwilight play overlays driven by BMZ timing, judgment history and output PCM.
+    #[serde(default, rename = "qwilightVisualizer")]
+    pub qwilight_visualizer: Vec<SkinQwilightVisualizerDef>,
     #[serde(default)]
     pub timingvisualizer: Vec<SkinTimingVisualizerDef>,
     #[serde(default)]
@@ -309,6 +338,16 @@ pub struct SkinPropertyItemDef {
     pub op: i32,
 }
 
+/// Locale code (`ja`, `en`, ...) to display text for one property and its items.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct SkinPropertyLabels {
+    #[serde(default)]
+    pub name: HashMap<String, String>,
+    /// Item name to its localized display text.
+    #[serde(default)]
+    pub items: HashMap<String, HashMap<String, String>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SkinFilepathDef {
     #[serde(default)]
@@ -351,6 +390,39 @@ pub struct SkinSourceDef {
     pub id: String,
     #[serde(default)]
     pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinSourceFramesDef {
+    pub paths: Vec<String>,
+    pub columns: u32,
+}
+
+/// Qwilight animation timing; sources may repeat to hold sparse frames.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+pub struct SkinQwilightAnimation {
+    #[serde(default)]
+    pub sources: Vec<String>,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub count: usize,
+    #[serde(default)]
+    pub fps: u32,
+    #[serde(default, rename = "cycleMs")]
+    pub cycle_ms: i32,
+    #[serde(default)]
+    pub lane: usize,
+    #[serde(default)]
+    pub looping: i32,
+    #[serde(default, rename = "loopFrame")]
+    pub loop_frame: usize,
+    #[serde(default)]
+    pub enlarge: i32,
+    #[serde(default)]
+    pub system: i32,
+    #[serde(default)]
+    pub index: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -422,6 +494,13 @@ where
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SkinImageDef {
+    #[serde(default, rename = "qwilightAnimation")]
+    pub qwilight_animation: Option<SkinQwilightAnimation>,
+    /// Qwilight conversion: atlas cell of each logical frame. Sparse frames hold
+    /// the previous image, so each distinct image is stored once. Empty means
+    /// frame `i` is cell `i`.
+    #[serde(default, rename = "qwilightFrameCells")]
+    pub qwilight_frame_cells: Vec<u16>,
     /// LR2 buttons select a flat cell, independent of atlas orientation.
     #[serde(default, rename = "lr2Button")]
     pub lr2_button: bool,
@@ -487,6 +566,8 @@ pub struct SkinImageSetDef {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 pub struct SkinValueDef {
+    #[serde(default, rename = "qwilightAnimation")]
+    pub qwilight_animation: Option<SkinQwilightAnimation>,
     /// LR2 CSV numbers use consecutive 10/11/24-cell frames rather than rows.
     #[serde(default, rename = "lr2Number")]
     pub lr2_number: bool,

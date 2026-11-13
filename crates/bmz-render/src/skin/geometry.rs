@@ -102,6 +102,7 @@ pub(super) fn skin_blend_mode(blend: i32) -> BlendMode {
         2 => BlendMode::Add,
         3 => BlendMode::Subtract,
         4 => BlendMode::Multiply,
+        100..=112 => BlendMode::Composite((blend - 100) as u8),
         _ => BlendMode::Normal,
     }
 }

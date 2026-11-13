@@ -272,6 +272,7 @@ pub(super) struct PlanGeometryDrawResources<'pass> {
     pub(super) image_premultiplied_pipeline: &'pass wgpu::RenderPipeline,
     pub(super) image_layer_pipeline: &'pass wgpu::RenderPipeline,
     pub(super) image_invert_pipeline: &'pass wgpu::RenderPipeline,
+    pub(super) image_composite_pipelines: &'pass [wgpu::RenderPipeline],
     pub(super) image_bind_groups: &'pass [wgpu::BindGroup],
     pub(super) image_buffer: Option<&'pass wgpu::Buffer>,
     pub(super) text_pipeline: &'pass wgpu::RenderPipeline,
@@ -330,6 +331,9 @@ pub(super) fn draw_plan_geometry<'pass>(
                     BlendMode::Premultiplied => resources.image_premultiplied_pipeline,
                     BlendMode::LayerMask => resources.image_layer_pipeline,
                     BlendMode::InvertRgb => resources.image_invert_pipeline,
+                    BlendMode::Composite(mode) => {
+                        &resources.image_composite_pipelines[usize::from((*mode).min(12))]
+                    }
                 });
                 pass.set_bind_group(0, bind_group, &[]);
                 pass.set_vertex_buffer(0, buffer.slice(range.start as u64..range.end as u64));

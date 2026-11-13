@@ -1,5 +1,55 @@
 use super::*;
 
+#[test]
+fn qwilight_static_image_cache_tracks_live_progress_and_judgment_ratios() {
+    let document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "w":100,"h":100,
+        "image":[
+            {"id":"progress","src":"src","w":-1,"h":-1,
+             "qwilightAnimation":{"mode":"progress","system":3}},
+            {"id":"ratio","src":"src","w":-1,"h":-1,
+             "qwilightAnimation":{"mode":"ratio","system":3,"index":0}}
+        ],
+        "destination":[
+            {"id":"progress","dst":[{"x":0,"y":0,"w":100,"h":10}]},
+            {"id":"ratio","dst":[{"x":0,"y":20,"w":100,"h":10}]}
+        ]
+    }))
+    .unwrap();
+    let context = SkinContext::from_manifest_and_document(
+        default_skin_manifest(),
+        document,
+        mock_source("src", 100.0, 10.0).into_values(),
+    );
+    let render = |state: &SkinDrawState| {
+        context.begin_frame();
+        let (behind, front, failed) = context.static_document_play_items_split_for_state_and_text(
+            state,
+            &SkinTextState::default(),
+            &[],
+            &[],
+            &Default::default(),
+        );
+        assert!(front.is_empty() && failed.is_empty());
+        behind
+            .iter()
+            .map(|item| match item {
+                SkinRenderItem::Image { rect, uv, .. } => (rect.width, uv.width),
+                _ => panic!("expected image"),
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut state = SkinDrawState::default();
+    assert!(render(&state).is_empty());
+    state.play_progress = 0.5;
+    state.judge_counts.pgreat = 10;
+    assert_eq!(render(&state), [(0.5, 0.5), (1.0, 1.0)]);
+    state.play_progress = 0.75;
+    state.judge_counts.great = 10;
+    assert_eq!(render(&state), [(0.75, 0.75), (0.5, 0.5)]);
+    assert!(render(&SkinDrawState::default()).is_empty());
+}
+
 #[derive(Debug, Default)]
 struct OrderedRuntime(Mutex<Vec<usize>>);
 

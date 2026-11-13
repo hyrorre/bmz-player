@@ -19,6 +19,7 @@ pub struct SceneTiming {
     pub countdown_us: i64,
     pub finishmargin_us: i64,
     pub close_us: i64,
+    pub completion_us: i64,
 }
 impl SceneTiming {
     pub fn from_document(d: &bmz_render::skin::SkinDocument) -> Self {
@@ -29,6 +30,7 @@ impl SceneTiming {
             countdown_us: i64::from(d.playstart.max(0)) * 1000,
             finishmargin_us: i64::from(d.finishmargin.max(0)) * 1000,
             close_us: i64::from(d.close.max(0)) * 1000,
+            completion_us: 0,
         }
     }
 
@@ -268,9 +270,11 @@ impl Simulation {
                 self.skin_audio.trigger_timer(3, self.system_bgm_volume(), self.system_volume());
             } else {
                 let snapshot = self.snapshot(scene_us, &BgaFrameCatalog::new());
-                let remaining = snapshot
-                    .full_combo_elapsed_ms
-                    .map_or(0, |elapsed| (self.fc_duration_us - i64::from(elapsed) * 1000).max(0));
+                let remaining = i64::from(play_completion_remaining_ms(
+                    &snapshot,
+                    (self.fc_duration_us / 1000).clamp(0, i64::from(i32::MAX)) as i32,
+                    (self.timing.completion_us / 1000).clamp(0, i64::from(i32::MAX)) as i32,
+                )) * 1000;
                 self.fadeout_us = Some(scene_us + self.timing.finishmargin_us.max(remaining));
                 self.exit_us = self.fadeout_us.map(|start| start + self.fadeout_duration_us);
             }
@@ -366,6 +370,7 @@ impl Simulation {
             &play.render_snapshot_cache,
         );
         snapshot.play_elapsed_time = TimeUs(scene_us);
+        snapshot.audio_spectrum = play.audio.spectrum().bands();
         snapshot.play_note_graphs.clone_from(&self.note_graphs);
         refresh_play_skin_visuals(&mut snapshot, session);
         snapshot.operating_time_ms = (scene_us / 1000).min(i64::from(i32::MAX)) as i32;

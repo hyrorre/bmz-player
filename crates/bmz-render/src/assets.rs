@@ -7,6 +7,7 @@ use flate2::read::ZlibDecoder;
 use image::ImageReader;
 
 pub mod animated;
+pub mod deferred;
 pub mod sprite_sheet;
 
 pub use animated::{

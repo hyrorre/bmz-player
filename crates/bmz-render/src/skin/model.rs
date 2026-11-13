@@ -385,6 +385,8 @@ pub enum BlendMode {
     /// BGA Layer/Layer2 の黒クロマキー描画。
     /// beatoraja の `layer.frag` 相当: RGB(0,0,0) ピクセルを α=0 として描画する。
     LayerMask,
+    /// Win2D CanvasComposite (0..=12), using premultiplied source colors.
+    Composite(u8),
 }
 
 #[derive(Debug, Clone, PartialEq)]

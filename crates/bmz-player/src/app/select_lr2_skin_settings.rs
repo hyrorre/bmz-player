@@ -58,7 +58,8 @@ impl WinitApp {
         if cache.as_ref().is_some_and(|(cached, ..)| *cached == key) {
             return;
         }
-        let defs = skin_defs_from_path(&self.boot.app_paths, skin, &key.1, target.is_play());
+        let defs =
+            skin_defs_from_path(&self.boot.app_paths, skin, &key.1, target.is_play(), Some(&key.2));
         let items = lr2_skin_items(target, &defs, skin, &self.boot.app_paths)
             .into_iter()
             .map(|item| (item.name, item.value))

@@ -87,6 +87,45 @@ pub(super) fn skin_offset_values_from_config(offsets: &[SkinOffsetConfig]) -> Sk
     values
 }
 
+pub(super) fn qwilight_offset_values_from_config(
+    offsets: &[SkinOffsetConfig],
+    document: &SkinDocument,
+) -> BTreeMap<i32, bmz_render::skin::QwilightOffsetValue> {
+    document
+        .offset
+        .iter()
+        .filter_map(|def| {
+            let v = offsets
+                .iter()
+                .find(|v| v.name.as_deref() == Some(def.name.as_str()))
+                .or_else(|| offsets.iter().find(|v| v.name.is_none() && v.id == def.id))?;
+            Some((
+                def.id,
+                bmz_render::skin::QwilightOffsetValue { x: v.x, y: v.y, w: v.w, h: v.h, a: v.a },
+            ))
+        })
+        .collect()
+}
+
+/// The original Qwilight adjustments are Lua inputs and can change asset selection.
+/// Element/decoration offsets and standard BMZ offsets are layout-only.
+pub(super) fn qwilight_native_offsets_equal(
+    before: &bmz_skin::LuaLoadRuntimeState,
+    after: &bmz_skin::LuaLoadRuntimeState,
+) -> bool {
+    // Use the converter's own list: a new adjustment cannot be mistaken for a
+    // layout-only offset because of its name.
+    before
+        .offset_values
+        .keys()
+        .chain(after.offset_values.keys())
+        .filter(|name| bmz_skin::is_qwilight_adjustment_offset(name))
+        .all(|name| {
+            before.offset_values.get(name).copied().unwrap_or_default()
+                == after.offset_values.get(name).copied().unwrap_or_default()
+        })
+}
+
 pub(super) fn apply_skin_offsets_to_lua_runtime_state(
     runtime_state: &mut bmz_skin::LuaLoadRuntimeState,
     offsets: &[SkinOffsetConfig],

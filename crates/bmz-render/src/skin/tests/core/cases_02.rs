@@ -1240,6 +1240,8 @@ fn src_zero_with_explicit_crop_keeps_pixel_rect() {
 #[test]
 fn image_negative_crop_size_uses_remaining_source_extent() {
     let image = SkinImageDef {
+        qwilight_animation: None,
+        qwilight_frame_cells: Vec::new(),
         lr2_button: false,
         lr2_panel: None,
         lr2_clip: false,
@@ -1287,6 +1289,35 @@ fn image_past_the_source_keeps_its_rectangle_except_lr2_clipping() {
     let uv = skin_image_texture_region(&lr2, size, 0);
     assert!(approx_eq(uv.y, 2964.0 / 3000.0));
     assert!(approx_eq(uv.height, 36.0 / 3000.0));
+}
+
+/// Qwilight atlases keep each distinct image once. A held frame reuses its cell,
+/// with or without the converter's Qwilight loop timing.
+#[test]
+fn qwilight_frame_cells_map_held_frames_to_shared_atlas_cells() {
+    for animation in
+        [serde_json::Value::Null, serde_json::json!({"mode": "loop", "count": 6, "cycleMs": 1200})]
+    {
+        // Six frames over 1200 ms; frames 1-4 hold one image. Three cells are used.
+        let image: SkinImageDef = serde_json::from_value(serde_json::json!({
+            "id": "judge", "src": "src", "w": -1, "h": -1, "divx": 2, "divy": 2,
+            "cycle": 1200, "qwilightAnimation": animation,
+            "qwilightFrameCells": [0, 1, 1, 1, 1, 2]
+        }))
+        .unwrap();
+        let cell = |elapsed| {
+            let uv = skin_image_texture_region(
+                &image,
+                SkinImageSize { width: 20.0, height: 20.0 },
+                elapsed,
+            );
+            ((uv.x / uv.width).round() as i32, (uv.y / uv.height).round() as i32)
+        };
+        assert_eq!(cell(0), (0, 0));
+        assert_eq!(cell(200), (1, 0));
+        assert_eq!(cell(999), (1, 0));
+        assert_eq!(cell(1000), (0, 1));
+    }
 }
 
 #[test]

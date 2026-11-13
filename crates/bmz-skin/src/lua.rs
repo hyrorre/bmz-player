@@ -76,6 +76,21 @@ const LUA_MAX_TABLE_ENTRIES: usize = 200_000;
 const LUA_IO_MAX_READ_BYTES: usize = 8 * 1024 * 1024;
 const LUA_MEMORY_LIMIT_BYTES: usize = 256 * 1024 * 1024;
 const TIMER_OFF_VALUE: i32 = i32::MIN;
+
+/// Restricted VM for declarative format adapters. Shares the native-operation and
+/// protected-call budgets with Lua skins, without any filesystem or host API.
+pub(crate) fn new_layout_lua() -> Result<Lua> {
+    let lua = Lua::new_with(
+        mlua::StdLib::TABLE | mlua::StdLib::STRING | mlua::StdLib::MATH | mlua::StdLib::UTF8,
+        mlua::LuaOptions::default(),
+    )?;
+    lua.set_memory_limit(LUA_MEMORY_LIMIT_BYTES)?;
+    for name in ["dofile", "loadfile", "load", "collectgarbage", "print"] {
+        lua.globals().set(name, Value::Nil)?;
+    }
+    install_instruction_limit(&lua)?;
+    Ok(lua)
+}
 pub const LUA_DRAW_CALLBACK_PREFIX: &str = "bmz:lua_draw_callback:";
 pub const LUA_VALUE_CALLBACK_PREFIX: &str = "bmz:lua_value_callback:";
 

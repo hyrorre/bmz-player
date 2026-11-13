@@ -4,7 +4,7 @@
 //! UI を構築して描画プリミティブ (`EguiFrame`) を生成する。bmz-render はその
 //! プリミティブをゲーム / スキン描画の上にペイントするだけにする。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "windows")]
@@ -13,7 +13,9 @@ use std::process::Command;
 use bmz_core::input::InputDeviceKind;
 use bmz_core::lane::KeyMode;
 use bmz_gameplay::rule::RuleMode;
-use bmz_render::skin::{SkinDocument, SkinFilepathDef, SkinOffsetDef, SkinPropertyDef};
+use bmz_render::skin::{
+    SkinDocument, SkinFilepathDef, SkinOffsetDef, SkinPropertyDef, SkinPropertyLabels,
+};
 use bmz_render::skin_offset::SKIN_OFFSET_BAR_LINE;
 use bmz_render::ui::EguiFrame;
 use egui::{NumExt, ViewportId};

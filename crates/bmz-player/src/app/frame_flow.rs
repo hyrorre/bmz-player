@@ -359,24 +359,36 @@ impl WinitApp {
             self.skin.skin_defs_cache.clear();
             self.skin.skin_header_checks.clear();
         }
+        if self.ui.egui.as_ref().is_some_and(|egui| egui.take_qwilight_lane_covers_changed()) {
+            self.forget_qwilight_skin_defs();
+        }
         let skin = &self.boot.profile_config.skin;
         let requested =
             self.ui.egui.as_ref().and_then(|egui| egui.skin_settings_path(skin)).map(str::to_owned);
+        // Only the requested path needs its slot options (Qwilight option visibility).
+        let slot = |path: &String, play: bool, options: &BTreeMap<String, String>| {
+            let options = if requested.as_deref() == Some(path.as_str()) {
+                options.clone()
+            } else {
+                BTreeMap::new()
+            };
+            (path.clone(), play, options)
+        };
         let paths = [
-            (skin.select.clone(), false),
-            (skin.decide.clone(), false),
-            (skin.result.clone(), false),
-            (skin.play4.clone(), true),
-            (skin.play5.clone(), true),
-            (skin.play6.clone(), true),
-            (skin.play7.clone(), true),
-            (skin.play8.clone(), true),
-            (skin.play9.clone(), true),
-            (skin.play10.clone(), true),
-            (skin.play14.clone(), true),
-            (skin.battle5.clone(), true),
-            (skin.battle7.clone(), true),
-            (skin.course_result.clone(), true),
+            slot(&skin.select, false, &skin.select_options),
+            slot(&skin.decide, false, &skin.decide_options),
+            slot(&skin.result, false, &skin.result_options),
+            slot(&skin.play4, true, &skin.play4_options),
+            slot(&skin.play5, true, &skin.play5_options),
+            slot(&skin.play6, true, &skin.play6_options),
+            slot(&skin.play7, true, &skin.play7_options),
+            slot(&skin.play8, true, &skin.play8_options),
+            slot(&skin.play9, true, &skin.play9_options),
+            slot(&skin.play10, true, &skin.play10_options),
+            slot(&skin.play14, true, &skin.play14_options),
+            slot(&skin.battle5, true, &skin.battle5_options),
+            slot(&skin.battle7, true, &skin.battle7_options),
+            slot(&skin.course_result, true, &skin.course_result_options),
         ];
         let [
             select,
@@ -393,11 +405,11 @@ impl WinitApp {
             battle5,
             battle7,
             course_result,
-        ] = paths.map(|(path, play)| {
+        ] = paths.map(|(path, play, options)| {
             if requested.as_deref() == Some(path.as_str()) {
                 // Settings definitions belong to the selected path, independently of
                 // the renderer's currently installed skin and background reloads.
-                self.skin_defs_for_path(&path, play)
+                self.skin_defs_for_path(&path, play, &options)
             } else {
                 SceneSkinDefs::default()
             }

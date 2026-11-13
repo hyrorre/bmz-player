@@ -111,12 +111,40 @@ impl PreparedNoteLayout<'_> {
     pub(crate) fn cap_item(
         &self,
         lane: Lane,
-        rect: Rect,
+        mut rect: Rect,
         mode: LongNoteMode,
         end: bool,
     ) -> Option<SkinRenderItem> {
+        if let Some(geometry) = self.qwilight_geometry(lane) {
+            let anchor = rect.y + rect.height;
+            let (height, offset) = if end {
+                (geometry.tail_height, -geometry.tail_height.max(0.0) - geometry.tail_offset)
+            } else {
+                (geometry.front_height, -(-geometry.front_height).max(0.0) + geometry.front_offset)
+            };
+            rect.y = anchor + offset / self.canvas_h;
+            rect.height = height.abs() / self.canvas_h;
+        }
         self.part_sprite(lane, if end { NotePart::End(mode) } else { NotePart::Start(mode) })
             .map(|sprite| sprite.render_item(rect))
+    }
+
+    fn qwilight_geometry(&self, lane: Lane) -> Option<&bmz_skin_document::QwilightNoteGeometry> {
+        self.skin
+            .document
+            .as_ref()?
+            .note
+            .as_ref()?
+            .qwilight_geometry
+            .get(beatoraja_note_index(lane, self.key_mode))
+    }
+
+    pub(crate) fn show_front_cap(&self, lane: Lane, processing: bool) -> bool {
+        self.qwilight_geometry(lane).is_none_or(|g| !processing || g.maintain_front)
+    }
+
+    pub(crate) fn has_independent_tail_cap(&self, lane: Lane) -> bool {
+        self.qwilight_geometry(lane).is_some()
     }
 
     pub(crate) fn body_item(
@@ -217,7 +245,7 @@ impl PreparedNoteLayout<'_> {
             let inactive_cap = matches!(part, NotePart::Start(_) | NotePart::End(_))
                 && self.state.hold_ms[lane.index()].is_none();
             if inactive_cap { 0 } else { lr2_source_elapsed(image.timer, destination, self.state) }
-        } else if matches!(part, NotePart::Body(..)) {
+        } else if matches!(part, NotePart::Body(..)) || !note.qwilight_geometry.is_empty() {
             skin_timer_elapsed_ms(image.timer, self.state).unwrap_or(0)
         } else {
             0
@@ -321,6 +349,16 @@ impl PreparedNoteLayout<'_> {
         }
         let head = note_progress_to_y(area, head, self.state, self.canvas_h);
         let tail = note_progress_to_y(area, tail, self.state, self.canvas_h);
+        if let Some(geometry) = self.qwilight_geometry(lane) {
+            let top = tail - geometry.tail_body_extension / self.canvas_h;
+            let bottom = head + geometry.front_body_extension / self.canvas_h;
+            return (bottom > top).then_some(Rect {
+                x: area.x + self.offset.x as f32 / self.canvas_w,
+                y: top - self.offset.y as f32 / self.canvas_h,
+                width: area.width + self.offset.w as f32 / self.canvas_w,
+                height: bottom - top,
+            });
+        }
         let top = head.min(tail);
         let bottom = head.max(tail) - height;
         Some(Rect {

@@ -82,3 +82,13 @@ Linux、Rust 1.99.1、`LANG=ja_JP.UTF-8`、`CARGO_INCREMENTAL=0`で確認した�
 HTTPモックはローカル待受が必要なため、sandboxの待受制限外で実行した。
 本番IR送信・管理人への問い合わせ・実データDBの変更・サーバーデプロイ、
 実機GPU／音声プレイ、ED本体との同一入力実測は実施していない。
+
+## 同日の追加main統合
+
+main `e96fb2b6`の更新で生じた6ファイルの競合を解消した。
+KaleidのRGB反転pipelineとmainのComposite pipelineを併存させ、
+HLNの終端描画条件にmainの独立tail cap対応を統合した。記録索引は両方を保持した。
+mainで追加されたBATTLEテストにはKaleidの分岐状態の初期化を補った。
+IR送信条件は変更していない。検証ログは`/tmp/bmz-conflict-*.log`。
+fmt、workspace check、all-targets Clippy、workspace全テストが成功した。
+player 3,222件、gameplay 329件、render 1,040件が成功。既存ignoreは維持した。

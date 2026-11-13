@@ -100,6 +100,8 @@ pub const SKIN_REF_BMZ_EXIT_HOLD_DURATION_MS: i32 = 19_072;
 pub const SKIN_OPTION_BMZ_EXIT_HOLD_ACTIVE: i32 = 19_073;
 /// BMZ extension: elapsed milliseconds since the ESC hold started. OFF while not held.
 pub const SKIN_TIMER_BMZ_EXIT_HOLD: i32 = 19_074;
+/// BMZ extension: elapsed real milliseconds since natural result settlement; OFF on abort/failure.
+pub const SKIN_TIMER_BMZ_RESULT_SETTLED: i32 = 19_075;
 /// BMZ extension: generic daily statistics number refs.
 pub const SKIN_REF_BMZ_DAILY_BASE: i32 = 1930;
 pub const SKIN_REF_BMZ_DAILY_LAST: i32 = 1946;
@@ -255,6 +257,15 @@ pub const SKIN_REF_BMZ_BEST_SCORE_DOUBLE_OPTION: i32 = 19_203;
 /// `ModeFilter.getSkinNumber()` (8/9 stay reserved for SINGLE / DOUBLE), and BMZ adds
 /// `10=4K`, `11=6K`, `12=8K`. The legacy `ref=11` keeps mapping 4K/6K/8K to ALL (0).
 pub const SKIN_REF_BMZ_SELECT_MODE_INDEX: i32 = 19_250;
+/// PGREAT / (all other judgements, including empty POOR), truncated to two
+/// decimals. Integer is -1 for infinity and both parts are zero before a judge.
+pub const SKIN_REF_BMZ_JUDGMENT_RATIO_INTEGER: i32 = 19_260;
+pub const SKIN_REF_BMZ_JUDGMENT_RATIO_FRACTION: i32 = 19_261;
+/// Full chart duration in minutes, without beatoraja 1163's modulo 60.
+pub const SKIN_REF_BMZ_CHART_TOTAL_MINUTES: i32 = 19_262;
+/// Current BMZ FREQ playback multiplier, integer and hundredths.
+pub const SKIN_REF_BMZ_PLAYBACK_INTEGER: i32 = 19_263;
+pub const SKIN_REF_BMZ_PLAYBACK_FRACTION: i32 = 19_264;
 /// DETAIL OPTIONS v1. Number/text/option are independent namespaces.
 pub const SKIN_REF_DETAIL_OPTIONS_BASE: i32 = 19_300;
 pub const SKIN_REF_DETAIL_OPTIONS_LAST: i32 = 19_312;

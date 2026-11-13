@@ -513,7 +513,7 @@ fn pre_play_abort_starts_fadeout_and_returns_to_select_without_result() {
     assert!(ending.music_end_started_at.is_none());
     assert!(ending.finished.is_none());
     assert_eq!(ending.fadeout_started_at, Some(started_at));
-    assert!(ending.full_combo_elapsed_at_finish_ms.is_none());
+    assert_eq!(ending.completion_remaining_ms, 0);
 }
 
 #[test]

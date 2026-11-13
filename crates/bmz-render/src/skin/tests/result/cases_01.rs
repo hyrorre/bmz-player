@@ -175,6 +175,7 @@ fn grade_diff_destinations_use_the_fixed_next_rank_in_select_and_result() {
     }
     fn grade_diff_value() -> SkinValueDef {
         SkinValueDef {
+            qwilight_animation: None,
             lr2_number: false,
             id: "RANK_Diff_Exscore".to_string(),
             src: "num".to_string(),

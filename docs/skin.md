@@ -7,9 +7,241 @@ HLNは専用→HCN→LN画像、ポーションは通常ノーツのRGB反転（
 BMZはbeatoraja JSON / Lua skinの互換を基本にします。既存beatoraja skin typeは
 そのまま扱い、BMZ独自のkey modeだけ拡張skin typeを予約します。
 
-JSON / Lua / LR2 skinの対応範囲と残課題は[skin-compatibility.md](skin-compatibility.md)を参照してください。
+JSON / Lua / LR2 / Qwilight skinの対応範囲と残課題は[skin-compatibility.md](skin-compatibility.md)を参照してください。
 この文書ではIDや各機能の動作契約を管理します。
 
+## Qwilightのプレイスキン
+
+試験対応として、`.yaml` / `.yml`を入口に同じパッケージのLuaとZIPを読み込みます。
+`@`で始まるテーマは対象外です。対象は4K / 5K / 6K / 7K / 8K / 9K / 10K / 14KのPlayで、
+Select・Decide・Result・G-BATTLE専用表示には対応しません。スキン一覧には各Play枠へ登録します。
+一覧の候補にするのは、同じフォルダにZIPがあるYAMLだけです。CIの設定などのYAMLは読みません。
+
+元のYAML・Lua・ZIPを揃えて`skins`配下へ置き、一覧を更新して選択してください。
+外部のインストール先を直接指定する場合は、通常の[外部スキンの許可](#スキンのファイル参照と外部スキンの許可)を使います。
+スキンのファイルは変更・展開しません。音声やテーマ素材の再配布も行いません。
+
+- YAMLの`format`・`frame`・`lambda`・`point`を読み、`configure-0`〜`15`を既存のスキンオプションへ表示します。
+  選択変更とキー数変更では配置を再計算します。カタログ走査ではLuaを実行しません。
+  条件付き表示・言語別の表示名・位置の調整・レーンカバーは[Qwilightのカスタマイズ](#qwilightのカスタマイズ)を参照してください。
+- Luaは配置・素材名の計算だけに使用します。`configures`、キー数、`P1Length` / `P1BuiltLength` / `P2BuiltLength` / `Wall` / `Contents`、
+  位置・サイズの調整値等を供給します。ファイル・OS・module APIを公開せず、既存のLua命令数・メモリ制限を適用します。
+  スキン自身が同名の配置関数を定義した場合は、その定義を優先します。
+- lane map、DPの展開、floating / slashの横配置、通常ノーツ・LN・地雷、レーン背景・判定線・キー押下素材、ボム、判定画像、基本装飾、BGA領域、タイトル・アーティスト・ジャンル、整数HUD・ゲージをBMZの描画へ変換します。
+  LNは上下キャップの高さ・位置と胴体の重なりを個別に保持します。保持中のヘッド表示は`maintainLongNoteFrontEdge`に従います。
+  `Hide Turntable`等が指定する幅0のレーンも、入力・ノーツ・timerの対応を保持したまま非表示にします。
+  画像列のフレーム寸法が異なる場合も、各画像全体を同じ描画矩形へ合わせます。
+- 描画順は`lambda.pipeline`に従います。判定線（31）と判定線に重なる`paintProperty`も、
+  ノーツ（7）より前なら背後、後なら手前へ描きます。判定線らしい寸法を理由に順序を変更しません。
+- スコア・コンボ・判定回数・ゲージはBMZの値です。スコア欄はEXスコアです。
+  判定画像の文字や固定ラベルは元の素材のままであり、Qwilightの判定・採点ルールを再現しません。
+- 判定画像と回数欄は、PGREAT → YELL!、GREAT → YELL、GOOD → COOL、BAD → GOOD、
+  POOR → POOR、空POOR → failedに割り当てます。ゲージMAX時のPGREATもYELL!です。
+- HS欄（`multiplier`）はBMZの表示HS値（310 / 311）、達成率欄（`point`）はプレイ中のEXスコアレート（102 / 103）を小数点以下2桁で表示します。
+  EXスコアレートは`EXスコア / (処理済みノーツ数 × 2) × 100`で、譜面開始前は100.00%です。
+  HSは0.01単位へ四捨五入し、EXスコアレートは既存参照と同じく小数点以下3桁目以降を切り捨てます。
+  数字・小数点・単位は元の素材を使い、桁数変化、左・中央・右寄せ、DPの`alt-multiplier` / `alt-point`に追従します。
+- FAST/SLOW回数（`earlyValue` / `lateValue`）はBMZの合計回数（423 / 424）を使います。
+  `judgmentMeter`は直近の判定誤差をmsで表示し、BMZのFAST/SLOW表示条件に従います。
+  `JM -`をFAST、`JM +`をSLOWとして描き、1秒で消えます。数値・ラベル・単位は元の素材を優先します。
+- CR_minimal等のRATE欄（`judgmentVSVisualizer`）はPGREAT数 / その他の判定数（空POORを含む）です。
+  小数点以下2桁で切り捨て、判定前は0.00、PGREATだけの場合は∞を表示します。EXスコアレートとは別の値です。
+  数値参照19260 / 19261はこの比率の整数部・小数部です。整数部が−1なら∞を意味します。
+- 判定画像の表示時間は`judgment-paint-frame` × 判定別の`*-judgment-paint-frame-loop` / FPSです。
+  元の画像列を反復し、BMZの短い判定履歴が消えても既存の描画用判定保持で指定時間まで表示します。
+- `paintProperty`は5〜7項目の省略形、mode 0の反復、mode 1の拍ごとの終端→先頭再生、mode 2の一度再生して終端を保持する画像に対応します。
+  10番目の合成指定はWin2DのCanvasComposite 0〜12に対応します。Copyは画像外も置き換え、BoundedCopyは画像外を残します。
+  左右の枠は`Main/W …`と`mainWall*`の配置定義を使います。
+- 曲名・アーティストは副題・副アーティストも表示します。幅・高さの省略を非表示とせず、
+  `*System0/1`の配置、`font.*Level`の文字サイズ、`paint`の色に対応します。
+  色は`#RRGGBB` / `#AARRGGBB`とWindowsの色名（Transparentを含む）です。未知の色名は白になります。
+  フォントの書体はBMZのフォント解決を使います。Qwilightでも書体はプレイスキンの宣言ではなくアプリ共通設定です。
+- NPS（`inputVisualizer`）はBMZの直近1秒の入力回数を1秒ごとに更新します。
+  経過時間・総時間（`hms`）はBMZの譜面時刻・譜面長を`m:ss/m:ss`で表示します。「時間の表示」で経過時間を残り時間へ切り替えられます。
+  総分数には数値参照19262を使い、60分で折り返すbeatoraja互換参照1163とは分けます。
+- 譜面レベル（`levelText`）、BMZに登録された難易度表の表示（`wantLevel`）、
+  難易度別の`Level/L …`画像（`level`）を描画します。難易度表が未登録なら表レベルは空欄です。
+- 打鍵タイミング（`judgmentVisualizer`）は0msを中央とした固定の−250〜＋250msでFAST/SLOWを配置し、直近800msの入力判定を徐々に消します。
+  判定幅・表示オフセットは座標計算に使わず、同じ絶対値の±msは中央から同じ距離です。範囲外は端へ制限します。
+  見逃し判定は含めず、0〜3の方向指定とLIFTに対応します。
+  判定推移（`judgmentInputVisualizer`）はBMZのノーツ判定履歴を100列の積み上げ棒で描きます。
+  未処理ノーツは表示せず、POOR/見逃しはBMZの履歴と同じ分類です。専用のグラフ画像は使いません。
+- スペクトラム（`audioVisualizer`）はプレイ音源の出力PCMを2048フレームの窓で解析し、
+  40Hz〜20kHz（出力レートのNyquist周波数まで）を32帯域・−60〜0dBで描画します。
+  左右チャンネルを別々に解析して合成するため、逆相でも相殺しません。
+  音声callbackは固定長のatomicバッファへ記録するだけで、FFT・ロック・動的確保を行いません。
+  解析は描画・動画出力側で音声時間あたり最大60回/秒です。表示OFFでは採取を停止します。
+- 入場・退場はそれぞれ500msの黒フェードを使います。Qwilightの遷移は別の`@`テーマに定義されるため、
+  プレイスキンだけの読み込みではBMZ側の標準値を使います。入場フェードが終わるまで譜面開始を待ちます。
+  画面全体を覆い、All / LIFTのオフセットでは動きません。シームレスなクイックリトライでは入場フェードを省略します。
+  変換後の`bmzPlayFadein`はPlay画面へ入ってからの経過時間で黒から透明へ変えるBMZ拡張（ms、既定0）です。
+  `bmzPlayFadeout`は終了時の黒フェード（ms、既定0）で、timer 2/3の演出がある場合はそちらを優先します。
+  Qwilight変換では両拡張と`loadstart` / `fadeout` / `close`を500に設定し、途中終了・FAILEDにも適用します。
+  READYはRmz-skinと同じ1秒（`playstart: 1000`）を既定値とし、ロード完了後に曲開始まで待ちます。
+  decide BGMは既存のREADY処理により、この1秒間でフェードアウトします。
+
+- 終了演出は`band!` / `Paint/J 9 …`、`last` / `J 10 …`、`yell!` / `J 11 …`を使います。
+  BMZのフルコンボ検出（timer 48）でJ 9、全PGREATならJ 11を表示します。J 11がない部分はJ 9を使います。
+  `yell!`の配置・FPS・フレーム数・DP指定は、省略時に`band!`の値を引き継ぎます。
+  フルコンボ以外のクリアは結果の自然確定（BMZ timer 19075）でJ 10を表示し、途中終了・FAILEDでは表示しません。
+  全ノーツの処理と、空POOR等を含むSLOW側の判定受付が終わった時点です。入力オフセットとリプレイの処理時刻も考慮します。
+  最後の判定対象より後の不可視ノーツは結果確定を遅らせません。地雷とLN/CN/HCN終端は待機対象に含みます。
+  スコア保存開始と同じ確定を使い、保存完了・IR通信・曲終了の5秒待機には依存しません。
+  Qwilight本体は全ノーツ処理直後ですが、BMZではクリア結果が変わらなくなるまで待ちます。
+  変換結果の`bmzPlayClearCompletion: true`（BMZ拡張、既定false）により、退場時はJ 10の残り時間と`finishmargin`の長い方を待ちます。
+  既に終わった演出を再開したり、演出全体の長さを再度待ったりしません。曲終了のtimer 908と、他形式のスキンの終了待機は変更しません。
+  画像列・FPS・配置・左右中央寄せ・DP配置を読み、欠番は直前の画像を保持します。動画出力にも同じ開始条件と残り時間の計算を適用します。
+- ゲージ残量（`hitPointsVisualizer`）、再生倍率（`audioMultiplier`）、目標スコア差（`hunter`）、
+  判定内訳の帯（`judgmentPoints`）、進行バー（`status`）とつまみ（`statusSlider`）を表示します。
+  ゲージはBMZの値、再生倍率はFREQの倍率を小数2桁に四捨五入した値（参照19263 / 19264）、目標差は処理済みノーツ位置までの目標EXとの差（153）です。
+  判定内訳は空POORを含み、帯とゲージは各定義の4方向の充填・画像切り取りを使います。
+- `autoMain`はBMZのAUTOPLAY、`autoInput`は自動処理するレーンを表示します。
+  `mainJudgmentMeter`は各レーンのFAST/SLOWに対応する正負のフレームから0へ戻る画像です。見逃し・空POORを除いた実判定の符号を使います。
+  表示開始の条件はBMZのFAST/SLOWモードに従い、AutoではPGREATを除外し、閾値モードではPGREATの誤差が閾値以上のときに表示します。GREAT／GOOD／BADは閾値にかかわらず表示します。
+  表示対象外の判定では直前の演出を解除・再開せず、元の開始時刻からスキンのフレーム数・FPSに従って0へ戻ります。
+- キー背景とキー画像は`loopingMain` / `loopingInput`の0〜3に従い、押下・解放でフレームを進めたり戻したりします。
+  判定線とmode 1のゲージ画像・装飾は拍に連動します。コンボは`band-frame` / FPSの逆再生と`enlargeBand`を使います。
+  LNボムは`hit-long-note-loop-frame`ごとに再開し、コンボのLN中の再拡大は`last-enlarged-band-loop-frame`に従います。
+  素材名の`_Get*`はフレームごとに評価します。Qwilightには判定文字用の独立した拡大指定はなく、判定画像列の見た目を使います。
+- ゲージの素材番号は、BMZのASSIST EASY / EASY / NORMAL / HARD / EX-HARD / HAZARDを
+  QwilightのLowest (4) / Lower (0) / Default (1) / Higher (2) / Highest (5) / Failed (3)へ対応付けます。
+  種類の画像がなければDefaultを使います。ゲージのルール自体はBMZのままです。
+
+対象外はQwilight固有のオンライン・ポーズUI・カメラ入力・アプリ設定用オーバーレイ・専用SEと、別`@`テーマ・他画面です。
+オプション全組合せ・浮遊レーンの重なり順・原作との画素一致は保証しません。
+
+内部ではZIPの仮想パスを`archive.zip!skin/entry`として扱い、曲アーカイブの`!/`名前空間と分けます。
+アーカイブ実体を許可rootで確認し、entryの親移動・絶対パスを拒否します。
+Windowsのツールが`\`区切りで保存したentryは`/`に正規化して読みます。
+親移動・絶対パス・ドライブ指定のentryは一覧から除き、同じZIPの他のentryは使えます。
+YAML / Luaは各2 MiB、ZIPは32,768 entry・各64 MiBまでです。
+通常の分割画像は`sourceFrames`へ変換し、最大4096セル、各系列の入力RGBA合計とatlasをそれぞれ128 MiB以内に制限します。
+欠番で直前の画像を保持するフレームは、同じ画像のセルを共有します。atlasには異なる画像を1回ずつ置き、
+フレームとセルの対応を`qwilightFrameCells`に持ちます。例えばQMAX_Humanoidの判定は120フレームのうち実画像が11枚です。
+終了演出は最大4096フレームで、同じ画像を重複保持せず、可逆圧縮してメモリ上に保持します（`deferredSources`）。
+1画像のRGBAは16 MiB、圧縮後の合計は512 MiB、同時にGPUへ置く画像は128 MiBまでです。
+描画するフレームを転送し、直近に使ったフレームは128 MiBまでGPUに残して、保持中・ループ中の再転送を省きます。
+演出の次の数フレームは別スレッドで先に展開します（待機中の展開済み画像は64 MiBまで）。演出が表示されなくなるとGPU画像を解放します。
+展開・転送できないフレームや同時表示の上限を超えたフレームは、その画像だけを描かずに画面の他の部分は描画します。
+展開済みの全画像を一括でGPUへ載せません。
+`qwilightAnimation`・`qwilightFrameCells`は変換後の画像・数字に付く内部メタデータです。既存JSON / Lua / LR2の通常のアニメーションは変更しません。
+`note.qwilightGeometry`は変換専用のLN配置情報で、既存JSON / Lua / LR2のLN配置には影響しません。
+
+### Qwilightのカスタマイズ
+
+Qwilight本体の設定画面にある項目のうち、プレイスキンの配置に関わるものを既存のスキン設定へ対応させます。
+保存先・履歴・再読み込みは他のスキンと共通で、変更すると表示中のPlayスキンを読み込み直します。
+
+**各要素の表示切り替え**
+
+「表示: …」で曲情報、NPS、時間、レベル、難易度表、難易度バッジ、打鍵タイミング、判定推移、
+スペクトラム、BGA、判定・コンボ・ms、FAST/SLOW累計、判定内訳、RATE、EXスコアレート、HS、BPM、
+スコア、ゲージ、ボム、判定ライン、最大コンボ、終了演出、ゲージ%、再生倍率、目標差、判定内訳の帯、
+AUTOPLAY、進行状況、レーン別FAST/SLOWを個別に切り替えます。初期値は表示です。
+保存キーは`Qwilight show …`、値は`On` / `Off`で、Play枠ごとに保存します。
+`paintProperty`の9番目のpipelineヒントがある装飾は、対応する表示と一緒に切り替えます。
+複数の固定ラベルが一枚に描かれている画像や、ヒントのない背景画像から一部分だけを消す処理は行いません。
+
+**オプションの表示名と条件付き表示**
+
+- 保存する項目名は`configure-comment-{i}-1041`、なければ`configure-comment-{i}`、なければ`Qwilight configure {i}`です。
+  保存する選択肢は`configure-{i}`の名前で、BMZのUI言語を切り替えても変わりません。
+- 表示名は`configure-comment-{i}-{LCID}`と`configure-{i}-{LCID}`から選びます。日本語は1041、韓国語は1042、
+  英語と中国語は1033（なければ言語指定なし）です。選択肢の対応は順番で取るため、個数が違う言語別リストは使いません。
+- 設定画面では、スロットのオプションでLuaを実行して`configure-available-{i}`を評価し、`true`以外の項目を隠します。
+  隠れた項目の保存値は残ります。Qwilightと同じく、`lambda`・`format`の値と素材名（`_Get*`）は保存値で、
+  `point`・`frame`・`alt-*`の値は隠れた項目を先頭の選択肢として計算します。
+  式がLuaエラーになる場合は、保存値を戻せるよう項目を表示したままにします（Qwilightでは読み込み自体が失敗します）。
+
+`SkinDocument.propertyLabels`はこの表示名のためのBMZ拡張です。項目名をキーに、`name`と`items`へUI言語コード（`ja` / `ko` / `en`等）ごとの文字列を持ちます。
+設定画面は表示言語の[フォールバック](i18n.md#フォールバック)順に探し、なければ保存名を表示します。
+
+**位置・サイズの調整**
+
+スキンが`lambda`で`true`にした調整だけを「位置・サイズ」へ追加します。値はQwilightの設定と同じLuaのグローバル変数へ渡し、
+宣言していない調整は0です。Qwilightのスライダーと同じく各値を±1000 pxへ制限します。
+
+| スキンのフラグ | BMZの項目名（ID） | 値 | Luaの変数 |
+|---|---|---|---|
+| `setMainPosition` | Qwilight lane position（1001） | x | `mainPosition` |
+| `setNoteLength` | Qwilight note width（1002） | w | `noteLength` |
+| `setNoteHeight` | Qwilight note height（1003） | h | `noteHeight` |
+| `setHitNotePaintArea` | Qwilight hit effect size（1004） | w | `hitNotePaintArea` |
+| `setBandPosition` | Qwilight combo position（1006） | y | `bandPosition` = −y |
+| `setJudgmentPaintPosition` | Qwilight judgment position（1007） | y | `judgmentPaintPosition` = −y |
+| `setJudgmentVisualizerPosition` | Qwilight judgment visualizer position（1008） | y | `judgmentVisualizerPosition` = −y |
+
+- BMZのyは他のオフセットと同じく正の値で上へ動きます。Qwilight本体の値とは符号が逆です。
+- 値はPlay枠ごとに保存します。Qwilightでキー数別に保存するレーン位置・ノーツ幅・高さ・ボム範囲に加え、
+  Qwilightでは全キー数共通のコンボ・判定・判定ビジュアライザーの位置も、BMZではキー数ごとの値です。
+- IDはbeatorajaの描画時offsetの範囲外で、描画中の要素へ直接は適用しません。
+
+判定線はBMZのLIFTで動かします。スキン側の`Qwilight judgment line position`（旧1005）は表示せず、
+保存済みの旧値も使いません。Luaの`judgmentMainPosition` / `V2` / `V3`は600 / 1 / 0として基準配置を計算します。
+LIFTを変更すると、ノーツに加えて判定線・押下画像・ボム・判定文字・コンボ・判定誤差msが描画時に移動します。
+`paintProperty`の判定線に揃った装飾と、pipeline 31へ明示的に紐付いた装飾も追従します。スキンの再読み込みは不要です。
+
+共通の位置・サイズの項目は、変換後の要素があるものだけを表示します。
+「All offset(%)」は画面全体、「Notes offset」（30）はノーツ、「Judge offset」（32）は判定画像・コンボ数（`band`）・判定誤差msへ適用します。
+対応する要素を描画しない「Judge Detail offset」と「Bar Line offset」は表示しません。
+
+BMZ独自の要素別調整は「Qwilight elements」の`Qwilight <要素名> offset`に表示します。
+スキンの配置定義がある項目だけを追加し、値はPlay枠・スキン履歴ごとに保存します。
+表示ON/OFFを切り替えても調整値は保持します。既存のQwilight互換調整をLuaへ渡した後に適用し、
+LIFT・共通Judge offsetは引き続き描画時に加わります。第三者製YAML/Lua/画像は変更しません。
+
+要素別・装飾別オフセットは、読み込み時に保持した元の配置から再計算して即時反映します。
+Luaの再実行・画像の読み直し・スキン画像のGPUへの再転送は行わず、設定を繰り返し変更しても位置やサイズは累積しません。
+読み込み中の変更も、完了時に最新値を適用します。元のQwilight互換調整（1001〜1008）はLuaの入力であるため
+再計算が必要ですが、待機要求は画面ごとの最新1件にまとめ、古い要求は画像処理・GPU転送前に中止します。
+画像列の合成結果はフレームの並び・列数・元ファイルの更新情報をキーに再利用し、ZIP内の名前検索も索引を使います。
+
+| 対象 | 調整単位 |
+|---|---|
+| Judgment / Combo / Timing ms | 判定画像・コンボ・FAST/SLOWのmsをそれぞれ独立 |
+| FAST / SLOW / RATE / Judgment counts | 累計FAST・累計SLOW・比率を独立、判定数6行は一覧全体 |
+| Score / Score rate / Max combo | EXスコア・EXスコアレート・最大コンボを独立 |
+| BPM / HS / Playback speed / Target difference | BPM・表示HS・再生倍率・目標差を独立 |
+| Title / Artist / Genre / Level / Table / Difficulty | 曲情報・譜面レベル・難易度表レベル・バッジを独立 |
+| NPS / Time | NPSと経過・総時間を独立 |
+| Gauge / Gauge percent / Judgment ratio bar | ゲージ・ゲージ%・判定内訳の帯を独立 |
+| Timing / Judgment graph / Spectrum / BGA | 各ビジュアライザーとBGAを独立 |
+| Progress | 進行バーとつまみ・移動範囲を一組 |
+| Bomb / Key beam / Lane timing | ボム・キービーム・レーン別FAST/SLOWを種類ごと、各レーン共通の補正 |
+| Judgment line | 判定線の見た目。yは追加せずLIFTを使う |
+
+- xは右、yは上への移動量、w/hは表示領域の幅・高さへの加算量です。単位はスキン座標のpxです。
+  w/hは領域の中心を基準に拡縮し、各部品の間隔・数字・小数点・単位も同じ倍率で変えます。
+  整数値は最大桁数の領域、条件付きの小数値・時間・msはその桁数の領域を基準にします。
+  テキストのwは表示幅、hは文字サイズも変更します。正の領域を1px未満には縮めません。
+- DPの複製表示はそれぞれの領域、レーン別表示はそれぞれのレーンを基準にし、複製間・レーン間の距離を拡大しません。
+  幅0の非表示レーンはサイズ補正で復活させません。判定線の厚さを変えても上端は固定します。
+- aは不透明度への加算量（255で100%相当）です。通常は0が元の表示、-255で透明です。
+  スペクトラムは既定10%なので、正のaで濃くできます。最終値は0〜100%に制限します。
+  判定誤差msの時間減衰やレーン別FAST/SLOWのフェードは補正後の不透明度に掛かります。
+- フルコン/PERFECT/CLEAR演出、AUTO PLAY、背景・フレームは要素別調整の対象外です。描画順・表示条件・判定処理は変更しません。
+- `paintProperty`装飾のうち、9番目の値（pipelineヒント）で要素に紐付いたものは、その要素の調整に追従します。
+  要素と同じ領域を基準に拡縮するため、枠やラベルと数値の位置関係を保ちます。
+  DPの複製は横方向に重なる側、重ならない装飾は最も近い要素の領域を基準にします。
+- 装飾ごとの調整は「Qwilight decorations」の`Qwilight Decoration <n> offset`（ID 1200+n）です。
+  nは`paintProperty<n>`（画像は`Drawing/P <n> …`）の番号で、YAMLに定義がある装飾だけを表示します。
+  調整は装飾の中心を基準とし、要素への追従の後に加えます。x/y/w/h/aの意味は要素別調整と同じです。
+  複数の要素のラベルを1枚に描いた装飾は、要素別調整だけでは動きません。
+  例えばCR_minimalの`Drawing/P 3`はFAST・SLOW・RATE・判定数のラベルを含むため、
+  4項目と`Qwilight Decoration 3 offset`を同じx/yにすると、ラベルと数値を揃えたまま動かせます。
+
+**レーンカバー（Qwilightのveil）**
+
+- BMZのSUDDEN+でレーンの上側を隠すときに描画します。カバーの下端がSUDDEN+の位置になり、1Pのレーン幅に合わせて縦横比を保ちます。
+  DPでは2P側にも同じ画像を描きます。SUDDEN+を使わないときは描画しません。
+  描画順は`pipeline`の50（VeilDrawing）で、ない場合はノーツ（7）の直後です。
+- Qwilightのカバー高さ・終了時に下ろす設定・プレイ中の開閉は再現せず、BMZのSUDDEN+の量と操作を使います。
+- 画像はBMZが追加するオプション「Lane cover image」で選びます。既定の「Skin」はスキンの`_GetVeil()`（既定は`Veil`）が返す
+  ZIP内`Drawing/`の画像です。`[a, b]`の形で複数ある場合は読み込みごとに1枚を選びます。該当する画像がなければ描画しません。
+- 設定画面の「レーンカバー画像を追加」で選んだ画像は、`<data>/skins/qwilight-veil/`へコピーし、すべてのQwilightスキンで共有します。
+  png / jpg / jpeg / bmp / webpの32 MiBまでで、同名の別画像は`名前 (2).png`のように保存します。
+  オプションには「Random」（追加画像から読み込みごとに1枚）と各画像のファイル名が加わります。
+  選んだ画像を削除・移動した場合は、スキンの画像に戻ります。「選択中の追加画像を削除」はBMZのコピーだけを削除します。
 ## JSONの構文と文字コード
 
 beatorajaはJSONスキンをlibGDXの`Json`で読むため、厳密なJSONではないファイルも読み込めます。
@@ -44,6 +276,14 @@ ModernChicのオプション画面は、3000 pxの画像に対して240 pxの窓
 LR2の`SRC`はLR2の仕様どおり、はみ出した分を元画像の内側に詰め、
 残った範囲をDSTの大きさへ引き伸ばします（従来どおり）。`w` / `h`が負の場合は、どちらも始点から
 元画像の端までです。
+
+## 判定線とノーツの描画順
+
+JSON / Luaの判定線画像は、`destination`内で`notes`より前ならノーツの背後、後なら手前へ描きます。
+LIFT（offset 3）は位置の調整であり、描画順を変更しません。
+ECFNの`id=15`も定義どおりノーツの背後に置き、`src=0`の明示的な切り出し画像を保持します。
+旧実装の、ノーツ直前の細長い画像を手前へ移す補正は廃止しました。
+検証範囲は[作業記録](../notes/2026/2026-11-13-play-judge-line-order.md)を参照してください。
 
 ## Destinationのクリッピング
 
@@ -2436,6 +2676,12 @@ select snapshotへ予定配置を設定します。
 | 1918 | number / event_index / text | HS設定です。`0=NORMAL`, `1=CLASSIC`, `2=FLOATING`, `3=NORMAL+FLOATING`, `4=CLASSIC+FLOATING`, `5=LR2` |
 
 `op: [1901]`または`draw: "number(1901)==1"`でFloating時だけdestinationを表示できます。
+
+### BMZ Result Settlement Timer
+
+`timer 19075`（`SKIN_TIMER_BMZ_RESULT_SETTLED`）はPlayの結果が自然確定した時点からの実時間の経過msです。
+全ノーツ処理後、空POOR等のSLOW側受付が終わるまでOFFです。手動退出・FAILEDでの結果確定では起動しません。
+保存の有無とは独立しており、AUTO・リプレイ・動画出力でも使用できます。ゲージによるクリア可否は表示側で判定します。
 
 ### BMZ Key Mode Refs
 

@@ -2,6 +2,9 @@ use super::*;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SkinNoteSetDef {
+    /// Qwilight uses signed, independent cap geometry and body overlap per lane.
+    #[serde(default, rename = "qwilightGeometry")]
+    pub qwilight_geometry: Vec<QwilightNoteGeometry>,
     #[serde(default, rename = "lr2Horizontal")]
     pub lr2_horizontal: bool,
     /// LR2 sprites for lanes played automatically by an assist.
@@ -83,6 +86,18 @@ pub struct SkinNoteSetDef {
     pub stop: Vec<SkinDestinationDef>,
     #[serde(default)]
     pub time: Vec<SkinDestinationDef>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QwilightNoteGeometry {
+    pub front_height: f32,
+    pub front_offset: f32,
+    pub tail_height: f32,
+    pub tail_offset: f32,
+    pub front_body_extension: f32,
+    pub tail_body_extension: f32,
+    pub maintain_front: bool,
 }
 
 fn default_note_dst2() -> i32 {

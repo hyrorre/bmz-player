@@ -119,15 +119,28 @@ impl WinitApp {
         self.boot.profile_config.sync_active_play_mode();
     }
 
-    pub(super) fn skin_defs_for_path(&mut self, path: &str, play: bool) -> SceneSkinDefs {
-        let key = (path.trim().to_string(), play);
-        if let Some(defs) = self.skin.skin_defs_cache.get(&key) {
-            return defs.clone();
-        }
-        let defs =
-            skin_defs_from_path(&self.boot.app_paths, &self.boot.profile_config.skin, &key.0, play);
-        self.skin.skin_defs_cache.insert(key, defs.clone());
-        defs
+    /// Qwilight definitions depend on the slot's options (`configure-available-*`),
+    /// so they are cached per selection. See [`cached_skin_defs`].
+    pub(super) fn skin_defs_for_path(
+        &mut self,
+        path: &str,
+        play: bool,
+        options: &BTreeMap<String, String>,
+    ) -> SceneSkinDefs {
+        cached_skin_defs(
+            &mut self.skin.skin_defs_cache,
+            &self.boot.app_paths,
+            &self.boot.profile_config.skin,
+            path,
+            play,
+            options,
+        )
+    }
+
+    /// The lane cover list of a Qwilight definition is read from the added images.
+    /// Called after they change, or when files may have been dropped in by hand.
+    pub(super) fn forget_qwilight_skin_defs(&mut self) {
+        forget_qwilight_skin_defs(&mut self.skin.skin_defs_cache);
     }
 
     pub(super) fn reset_skin_config_from_disk(&mut self) {
@@ -193,4 +206,44 @@ impl WinitApp {
             active_play.running.gameplay.edit(move |session| session.skin_offsets = offsets);
         }
     }
+}
+
+pub(super) type SkinDefsCache =
+    BTreeMap<(String, bool, Option<BTreeMap<String, String>>), SceneSkinDefs>;
+
+/// Every Play slot may use the same path with its own options, so old Qwilight
+/// selections are dropped only past that many entries per path.
+pub(super) fn cached_skin_defs(
+    cache: &mut SkinDefsCache,
+    app_paths: &crate::paths::AppPaths,
+    skin: &SkinConfig,
+    path: &str,
+    play: bool,
+    options: &BTreeMap<String, String>,
+) -> SceneSkinDefs {
+    let path = path.trim().to_string();
+    let options =
+        (play && bmz_skin::is_qwilight_play_skin_path(Path::new(&path))).then(|| options.clone());
+    let key = (path, play, options);
+    if let Some(defs) = cache.get(&key) {
+        return defs.clone();
+    }
+    let defs = skin_defs_from_path(app_paths, skin, &key.0, play, key.2.as_ref());
+    const SELECTIONS_PER_PATH: usize = 16;
+    let same_path = |cached: &(String, bool, Option<BTreeMap<String, String>>)| {
+        cached.2.is_some() && cached.0 == key.0 && cached.1 == key.1
+    };
+    if key.2.is_some()
+        && cache.keys().filter(|cached| same_path(cached)).count() >= SELECTIONS_PER_PATH
+    {
+        cache.retain(|cached, _| !same_path(cached));
+    }
+    cache.insert(key, defs.clone());
+    defs
+}
+
+/// The cache key covers the options but not the lane cover images on disk, so
+/// returning to an earlier selection would otherwise list stale covers.
+pub(super) fn forget_qwilight_skin_defs(cache: &mut SkinDefsCache) {
+    cache.retain(|(_, _, options), _| options.is_none());
 }

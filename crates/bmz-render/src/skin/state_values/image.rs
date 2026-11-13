@@ -106,6 +106,9 @@ fn skin_image_texture_region_with_elapsed(
     let divx = image.divx.max(1);
     let divy = image.divy.max(1);
     let frame_count = divx * divy;
+    // Qwilight atlases store each distinct image once; logical frames map to cells.
+    let cells = &image.qwilight_frame_cells;
+    let logical_frames = if cells.is_empty() { frame_count } else { cells.len() as i32 };
 
     // ref_id / act が指定されている画像は「状態値 = 行」「cycle = 列のサブアニメ」と解釈する。
     // 値が解決できない場合 (state 未提供 or 値 None) は行 0 にフォールバックし、
@@ -140,12 +143,21 @@ fn skin_image_texture_region_with_elapsed(
             0
         };
         row * divx + col
-    } else if image.cycle > 0 && frame_count > 1 {
-        skin_source_image_animation_frame_index(i64::from(frame_count), image.cycle, elapsed_ms)
+    } else if let Some(animation) =
+        image.qwilight_animation.as_ref().filter(|a| a.sources.is_empty())
+    {
+        crate::skin::qwilight_animation::image_frame(image, animation, state, elapsed_ms)
+            .min(logical_frames as usize - 1) as i32
+    } else if image.cycle > 0 && logical_frames > 1 {
+        skin_source_image_animation_frame_index(i64::from(logical_frames), image.cycle, elapsed_ms)
             as i32
     } else {
         0
     };
+    let frame_index = cells
+        .get(frame_index as usize)
+        .map_or(frame_index, |cell| i32::from(*cell))
+        .min(frame_count - 1);
 
     let source_column = frame_index % divx;
     let source_row = frame_index / divx;

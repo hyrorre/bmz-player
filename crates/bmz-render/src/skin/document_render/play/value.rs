@@ -26,7 +26,10 @@ macro_rules! skin_document_render_play_value_methods {
             let digit_column = digit as i32 % divx;
             let digit_row = digit as i32 / divx;
             let animation_rows = divy.saturating_sub(digit_row).max(1);
-            let animation_row = if value.cycle > 0 && animation_rows > 1 {
+            let animation_row = if let Some(animation) = &value.qwilight_animation {
+                crate::skin::qwilight_animation::frame_index(animation, elapsed_ms)
+                    .min(animation_rows as usize - 1) as i32
+            } else if value.cycle > 0 && animation_rows > 1 {
                 (elapsed_ms.rem_euclid(value.cycle) * animation_rows / value.cycle)
                     .min(animation_rows - 1)
             } else {
