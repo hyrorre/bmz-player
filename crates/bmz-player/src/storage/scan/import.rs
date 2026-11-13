@@ -2,7 +2,8 @@ use super::*;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use crate::storage::library_db::{ChartImportAnalysis, PreparedChartImport, library_path_key};
+use super::content_cache::{ChartContentCache, ImportWork, ScanChart, ScanImportError};
+use crate::storage::library_db::{ChartImportSource, library_path_key};
 
 /// 1回のバッチで並列パースするファイル数
 pub(super) const IMPORT_BATCH_SIZE: usize = 256;
@@ -48,9 +49,8 @@ pub fn scan_song_roots_with_progress(
         path: PathBuf,
         file_size: u64,
         modified_at: i64,
-        result: Result<(ImportResult, Result<PreparedChartImport>), ImportError>,
-        analysis_time: Duration,
-        encode_time: Duration,
+        result: Result<(Arc<ScanChart>, String), ScanImportError>,
+        work: ImportWork,
     }
 
     let total_start = Instant::now();
@@ -146,6 +146,17 @@ pub fn scan_song_roots_with_progress(
         .iter()
         .flat_map(|root| root.entries.iter().map(|(key, _)| key.as_str()))
         .collect();
+    // Skip building the size index entirely when nothing needs importing.
+    let content_cache = OnceLock::new();
+    let cache_for_import = || {
+        content_cache.get_or_init(|| {
+            ChartContentCache::new(
+                discovered_roots
+                    .iter()
+                    .flat_map(|root| root.entries.iter().map(|(_, entry)| entry.file_size)),
+            )
+        })
+    };
     let root_key = |path: &Path| {
         let key = library_path_key(path);
         #[cfg(windows)]
@@ -161,6 +172,7 @@ pub fn scan_song_roots_with_progress(
         .collect();
     let mut pending_prune = Vec::new();
     let mut commit_time = Duration::ZERO;
+    let mut batch_wait_time = Duration::ZERO;
 
     let mut progress_done = 0_u32;
     for root in &discovered_roots {
@@ -257,12 +269,14 @@ pub fn scan_song_roots_with_progress(
                 &fingerprints,
                 &archive_entries,
                 generation,
+                cache_for_import,
             ) {
                 Ok(archive) => {
                     report.summary.imported += archive.summary.imported;
                     report.summary.skipped += archive.summary.skipped;
                     report.summary.failed += archive.summary.failed;
                     report.summary.warnings += archive.summary.warnings;
+                    report.summary.reused += archive.summary.reused;
                     report.timing.parse_ms += archive.timing.parse_ms;
                     report.failures.extend(archive.failures);
                 }
@@ -297,7 +311,8 @@ pub fn scan_song_roots_with_progress(
         // 書き込む。パースは別スレッドのrayonで進み、SQLiteへの書き込みと重なる。重い譜面が
         // あっても他のスレッドは次の譜面へ進む（バッチ全件の完了を待たない）。チャネルの容量は
         // IMPORT_BATCH_SIZEなので、メモリ上の解析結果は書き込み中のバッチ、チャネル内、
-        // 解析中のものに限られる。書き込みが遅ければパース側は送信で待つ。書き込みが失敗すると
+        // 解析中のものに限られる。同一内容の再利用には別途、上限付きのキャッシュを使う。
+        // 書き込みが遅ければパース側は送信で待つ。書き込みが失敗すると
         // 受信側が破棄され、パース側の送信が失敗して終了してから scope が戻る。
         let mut last_log = std::time::Instant::now();
         let log_interval = std::time::Duration::from_secs(2);
@@ -306,31 +321,53 @@ pub fn scan_song_roots_with_progress(
         let (parsed_tx, parsed_rx) = std::sync::mpsc::sync_channel::<ParsedFile>(IMPORT_BATCH_SIZE);
         let parse_ms = std::thread::scope(|scope| -> Result<u128> {
             let to_import = &to_import;
+            let cache_for_import = &cache_for_import;
             let parser = scope.spawn(move || {
                 let parse_start = std::time::Instant::now();
                 // A closed receiver means the writer failed; stop parsing.
                 let _ = to_import.par_iter().try_for_each_with(parsed_tx, |tx, todo| {
-                    let mut analysis_time = Duration::ZERO;
-                    let mut encode_time = Duration::ZERO;
-                    let result =
-                        import_bms_chart_catching_unwind(&todo.path, &todo.preview_fallback).map(
-                            |imported| {
-                                let started = Instant::now();
-                                let analysis = ChartImportAnalysis::new(&imported.chart);
-                                analysis_time = started.elapsed();
-                                let started = Instant::now();
-                                let prepared = analysis.encode();
-                                encode_time = started.elapsed();
-                                (imported, prepared)
-                            },
+                    if todo.file_size >= 1024 * 1024 {
+                        tracing::debug!(path = %todo.path.display(), file_size = todo.file_size, "reading large chart");
+                    }
+                    let started = Instant::now();
+                    let bytes = bmz_song_resource::read_file(&todo.path);
+                    let read_time = started.elapsed();
+                    let mut work = ImportWork::default();
+                    let result = match bytes {
+                        Ok(bytes) => cache_for_import()
+                            .import(&todo.path, &bytes, &mut work)
+                            .map(|chart| {
+                                let preview =
+                                    crate::chart_asset::normalize_preview_file_with_fallback(
+                                        &todo.path,
+                                        chart.prepared.declared_preview_file(),
+                                        &todo.preview_fallback,
+                                    );
+                                (chart, preview)
+                            }),
+                        Err(source) => Err(ScanImportError::Chart(ImportError::Io {
+                            path: todo.path.clone(),
+                            source,
+                        })),
+                    };
+                    let elapsed = started.elapsed();
+                    if elapsed >= Duration::from_millis(500) {
+                        tracing::info!(
+                            path = %todo.path.display(),
+                            elapsed_ms = elapsed.as_millis(),
+                            read_ms = read_time.as_millis(),
+                            parse_ms = work.parse.as_millis(),
+                            analysis_ms = work.analysis.as_millis(),
+                            encode_ms = work.encode.as_millis(),
+                            "slow chart import"
                         );
+                    }
                     tx.send(ParsedFile {
                         path: todo.path.clone(),
                         file_size: todo.file_size,
                         modified_at: todo.modified_at,
                         result,
-                        analysis_time,
-                        encode_time,
+                        work,
                     })
                     .map_err(drop)
                 });
@@ -340,6 +377,7 @@ pub fn scan_song_roots_with_progress(
             let parsed_rx = parsed_rx;
             let mut batch_done = 0_usize;
             for batch_idx in 0.. {
+                let wait_started = Instant::now();
                 let Ok(first) = parsed_rx.recv() else {
                     break;
                 };
@@ -351,6 +389,8 @@ pub fn scan_song_roots_with_progress(
                         Err(_) => break,
                     }
                 }
+                let waited = wait_started.elapsed();
+                batch_wait_time += waited;
                 let now = std::time::Instant::now();
                 if now.duration_since(last_log) >= log_interval || batch_idx == 0 {
                     last_log = now;
@@ -365,36 +405,38 @@ pub fn scan_song_roots_with_progress(
                 }
 
                 // 1トランザクションでバッチ書き込み
+                let mut batch_reused = 0;
                 for file in &parsed {
-                    analysis_time += file.analysis_time;
-                    encode_time += file.encode_time;
+                    analysis_time += file.work.analysis;
+                    encode_time += file.work.encode;
+                    batch_reused += u32::from(file.work.reused);
                 }
+                report.summary.reused += batch_reused;
                 let write_start = std::time::Instant::now();
                 let commit_ms;
                 {
                     let tx = db.conn_mut().transaction()?;
                     for p in &parsed {
                         match &p.result {
-                            Ok((import_result, prepared)) => {
-                                let prepared = prepared.as_ref().map_err(|error| {
-                                    anyhow::anyhow!("failed to encode chart analysis: {error:#}")
-                                })?;
-                                let record = ChartImportRecord {
+                            Ok((chart, preview_file)) => {
+                                let record = ChartImportSource {
                                     root_id: Some(root.root_id),
                                     file_path: &p.path,
                                     file_size: p.file_size,
                                     modified_at: p.modified_at,
                                     scanned_at,
-                                    chart: &import_result.chart,
+                                    preview_file,
                                 };
                                 let (_, chart_file_id) =
                                     LibraryDatabase::write_prepared_chart_import(
-                                        &tx, &record, prepared,
+                                        &tx,
+                                        &record,
+                                        &chart.prepared,
                                     )?;
                                 let warnings_written = LibraryDatabase::write_import_warnings(
                                     &tx,
                                     chart_file_id,
-                                    &import_result.warnings,
+                                    &chart.warnings,
                                     scanned_at,
                                 )?;
                                 report.summary.imported += 1;
@@ -402,7 +444,7 @@ pub fn scan_song_roots_with_progress(
                             }
                             // Deleted after discovery: nothing failed. An earlier
                             // registration stays until the next scan finds it gone.
-                            Err(ImportError::Io { source, .. })
+                            Err(ScanImportError::Chart(ImportError::Io { source, .. }))
                                 if source.kind() == io::ErrorKind::NotFound =>
                             {
                                 tracing::debug!(
@@ -410,7 +452,10 @@ pub fn scan_song_roots_with_progress(
                                     "chart disappeared before import"
                                 );
                             }
-                            Err(error) => {
+                            Err(ScanImportError::Encode(error)) => {
+                                anyhow::bail!("failed to encode chart analysis: {error:#}");
+                            }
+                            Err(ScanImportError::Chart(error)) => {
                                 let message = error.to_string();
                                 LibraryDatabase::write_failed_chart(
                                     &tx,
@@ -441,6 +486,8 @@ pub fn scan_song_roots_with_progress(
                     files = parsed.len(),
                     write_ms,
                     commit_ms,
+                    wait_ms = waited.as_millis(),
+                    reused = batch_reused,
                     root = %root_path.display(),
                     "batch timing"
                 );
@@ -564,6 +611,7 @@ pub fn scan_song_roots_with_progress(
 
     report.timing.prune_ms = prune_start.elapsed().as_millis();
     report.timing.commit_ms = commit_time.as_millis();
+    report.timing.batch_wait_ms = batch_wait_time.as_millis();
     on_progress(ScanProgress { done: files_total, total: files_total });
     report.timing.total_ms = total_start.elapsed().as_millis();
     Ok(report)
@@ -573,36 +621,4 @@ pub fn scan_song_roots_with_progress(
 /// same way until the file or `CHART_IMPORT_VERSION` changes; a read error is retried.
 pub(super) fn failed_import_version(error: &ImportError) -> i64 {
     if matches!(error, ImportError::Io { .. }) { 0 } else { CHART_IMPORT_VERSION }
-}
-
-fn import_bms_chart_catching_unwind(
-    path: &Path,
-    preview_fallback: &OnceLock<Option<PathBuf>>,
-) -> Result<ImportResult, ImportError> {
-    // The library stores metadata and analysis only; resolving every BGA file on disk
-    // cost several lookups per #BMP line (about 95 ms for a chart with 234 of them).
-    let import =
-        || import_chart_with_assets(path, BmsRandomSource::Seed(None), AssetLookup::Declared);
-    match catch_unwind(AssertUnwindSafe(import)) {
-        Ok(result) => result.map(|mut result| {
-            result.chart.metadata.preview_file =
-                crate::chart_asset::normalize_preview_file_with_fallback(
-                    path,
-                    &result.chart.metadata.preview_file,
-                    preview_fallback,
-                );
-            result
-        }),
-        Err(payload) => {
-            let message = payload
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| payload.downcast_ref::<&'static str>().copied())
-                .unwrap_or("unknown panic");
-            Err(ImportError::Parse {
-                path: path.to_path_buf(),
-                message: format!("chart import panicked: {message}"),
-            })
-        }
-    }
 }

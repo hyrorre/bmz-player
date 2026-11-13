@@ -1,11 +1,12 @@
+use super::content_cache::{ChartContentCache, ImportWork, ScanImportError};
 use super::*;
 use crate::chart_source::{ChartLocator, archive_preview_file};
 use crate::song_archive::{self, ArchiveControl};
-use bmz_chart::import::{AssetLookup, BmsRandomSource, import_chart_bytes_with_assets};
+use crate::storage::library_db::ChartImportSource;
 use rusqlite::OptionalExtension;
 
 /// A failed decoder/CRC must roll back the whole container, including earlier members.
-pub(super) fn import_archive(
+pub(super) fn import_archive<'a>(
     db: &mut LibraryDatabase,
     container: &Path,
     root_id: i64,
@@ -14,6 +15,7 @@ pub(super) fn import_archive(
     fingerprints: &HashMap<String, super::super::library_db::ChartFileFingerprint>,
     entries: &[&str],
     expected: &song_archive::ArchiveGeneration,
+    cache: impl FnOnce() -> &'a ChartContentCache,
 ) -> Result<ScanReport> {
     let control = ArchiveControl::default();
     // Discovery already listed the archive. Its metadata stamp still mapping to the same
@@ -65,6 +67,7 @@ pub(super) fn import_archive(
         .map(|time| time.as_secs() as i64)
         .unwrap_or(0);
     let started = Instant::now();
+    let cache = cache();
     let tx = db.conn_mut().transaction()?;
     let scanned = song_archive::scan_charts(container, &control, |entry, bytes| {
         let path =
@@ -73,45 +76,36 @@ pub(super) fn import_archive(
         if !allowed.contains(crate::storage::library_db::library_path_key(&path).as_str()) {
             return Ok(());
         }
-        let parsed = catch_unwind(AssertUnwindSafe(|| {
-            import_chart_bytes_with_assets(
-                &path,
-                bytes,
-                BmsRandomSource::Seed(None),
-                AssetLookup::Declared,
-            )
-        }));
-        let result = parsed.unwrap_or_else(|_| {
-            Err(ImportError::Parse {
-                path: path.clone(),
-                message: "chart import panicked".to_string(),
-            })
-        });
+        let mut work = ImportWork::default();
+        let result = cache.import(&path, bytes, &mut work);
         match result {
-            Ok(mut imported) => {
-                imported.chart.metadata.preview_file = archive_preview_file(
+            Ok(chart) => {
+                let preview_file = archive_preview_file(
                     &index,
                     &entry.name,
-                    &imported.chart.metadata.preview_file,
+                    chart.prepared.declared_preview_file(),
                 );
-                let record = ChartImportRecord {
+                let record = ChartImportSource {
                     root_id: Some(root_id),
                     file_path: &path,
                     file_size: bytes.len() as u64,
                     modified_at,
                     scanned_at,
-                    chart: &imported.chart,
+                    preview_file: &preview_file,
                 };
-                let (_, chart_file_id) = LibraryDatabase::write_chart_import(&tx, &record)?;
+                let (_, chart_file_id) =
+                    LibraryDatabase::write_prepared_chart_import(&tx, &record, &chart.prepared)?;
                 report.summary.warnings += LibraryDatabase::write_import_warnings(
                     &tx,
                     chart_file_id,
-                    &imported.warnings,
+                    &chart.warnings,
                     scanned_at,
                 )? as u32;
                 report.summary.imported += 1;
+                report.summary.reused += u32::from(work.reused);
             }
-            Err(error) => {
+            Err(ScanImportError::Encode(error)) => return Err(error),
+            Err(ScanImportError::Chart(error)) => {
                 let message = error.to_string();
                 LibraryDatabase::write_failed_chart(
                     &tx,

@@ -182,7 +182,11 @@ pub(super) fn chart_bms_total(metadata_total: Option<f64>) -> f64 {
     metadata_total.unwrap_or(0.0)
 }
 
-pub(super) fn upsert_chart_file(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64> {
+pub(super) fn upsert_chart_file(
+    conn: &Connection,
+    record: &ChartImportSource<'_>,
+    identity: &ChartIdentity,
+) -> Result<i64> {
     conn.prepare_cached(
         "INSERT INTO chart_files (
             root_id,
@@ -211,8 +215,8 @@ pub(super) fn upsert_chart_file(conn: &Connection, record: &ChartImportRecord<'_
             path_key(record.file_path),
             record.file_size as i64,
             record.modified_at,
-            hash_to_hex(&record.chart.identity.file_md5),
-            hash_to_hex(&record.chart.identity.file_sha256),
+            hash_to_hex(&identity.file_md5),
+            hash_to_hex(&identity.file_sha256),
             record.scanned_at,
         ],
         |row| row.get(0),
@@ -222,10 +226,10 @@ pub(super) fn upsert_chart_file(conn: &Connection, record: &ChartImportRecord<'_
 
 pub(super) fn insert_chart(
     conn: &Connection,
-    record: &ChartImportRecord<'_>,
-    stats: &ChartStats,
+    source: &ChartImportSource<'_>,
+    chart: &PreparedChartImport,
 ) -> Result<i64> {
-    let chart = record.chart;
+    let stats = &chart.stats;
     conn.prepare_cached(
         "INSERT INTO charts (
             sha256, md5, title, subtitle, artist, subartist, genre,
@@ -258,14 +262,14 @@ pub(super) fn insert_chart(
         chart.metadata.initial_bpm,
         stats.min_bpm,
         stats.max_bpm,
-        chart.end_time.0 / 1_000,
+        chart.length_ms,
         stats.ln_type,
         chart.metadata.has_bga,
         stats.has_long_notes,
         stats.has_mines,
-        folder_path(record.file_path),
+        folder_path(source.file_path),
         chart.metadata.stage_file.as_str(),
-        chart.metadata.preview_file.as_str(),
+        source.preview_file,
         chart.metadata.banner_file.as_str(),
         chart.metadata.backbmp_file.as_str(),
         chart.metadata.judge_rank,
@@ -291,15 +295,13 @@ pub(super) fn insert_chart(
         stats.ln_counts.defined_hln_pairs,
     ])?;
     let chart_id = conn.last_insert_rowid();
-    write_chart_kaleid(conn, chart_id, chart)?;
+    write_chart_kaleid(conn, chart_id, &chart.kaleid_json)?;
     Ok(chart_id)
 }
 
-fn write_chart_kaleid(conn: &Connection, chart_id: i64, chart: &PlayableChart) -> Result<()> {
-    conn.execute(
-        "UPDATE charts SET kaleid_json = ?1 WHERE id = ?2",
-        params![serde_json::to_string(&chart.metadata.kaleid)?, chart_id,],
-    )?;
+fn write_chart_kaleid(conn: &Connection, chart_id: i64, kaleid_json: &str) -> Result<()> {
+    conn.prepare_cached("UPDATE charts SET kaleid_json = ?1 WHERE id = ?2")?
+        .execute(params![kaleid_json, chart_id])?;
     Ok(())
 }
 
@@ -313,10 +315,10 @@ pub(super) fn chart_headers_json() -> &'static str {
 pub(super) fn update_chart(
     conn: &Connection,
     chart_id: i64,
-    record: &ChartImportRecord<'_>,
-    stats: &ChartStats,
+    source: &ChartImportSource<'_>,
+    chart: &PreparedChartImport,
 ) -> Result<()> {
-    let chart = record.chart;
+    let stats = &chart.stats;
     conn.prepare_cached(
         "UPDATE charts SET
             sha256 = ?1, md5 = ?2, title = ?3, subtitle = ?4, artist = ?5,
@@ -348,14 +350,14 @@ pub(super) fn update_chart(
         chart.metadata.initial_bpm,
         stats.min_bpm,
         stats.max_bpm,
-        chart.end_time.0 / 1_000,
+        chart.length_ms,
         stats.ln_type,
         chart.metadata.has_bga,
         stats.has_long_notes,
         stats.has_mines,
-        folder_path(record.file_path),
+        folder_path(source.file_path),
         chart.metadata.stage_file.as_str(),
-        chart.metadata.preview_file.as_str(),
+        source.preview_file,
         chart.metadata.banner_file.as_str(),
         chart.metadata.backbmp_file.as_str(),
         chart.metadata.judge_rank,
@@ -381,7 +383,7 @@ pub(super) fn update_chart(
         stats.ln_profile.has_defined_hln,
         stats.ln_counts.defined_hln_pairs,
     ])?;
-    write_chart_kaleid(conn, chart_id, chart)?;
+    write_chart_kaleid(conn, chart_id, &chart.kaleid_json)?;
     Ok(())
 }
 
@@ -397,9 +399,35 @@ impl ChartImportAnalysis {
         Self { stats, analysis: ChartAnalysis::from_chart_with_total(chart, total) }
     }
 
-    pub(in crate::storage) fn encode(self) -> Result<PreparedChartImport> {
+    pub(in crate::storage) fn encode(self, chart: &PlayableChart) -> Result<PreparedChartImport> {
         let Self { stats, analysis } = self;
+        let source = &chart.metadata;
         Ok(PreparedChartImport {
+            identity: chart.identity.clone(),
+            total_notes: chart.total_notes,
+            length_ms: chart.end_time.0 / 1_000,
+            metadata: StoredChartMetadata {
+                title: source.title.clone(),
+                subtitle: source.subtitle.clone(),
+                artist: source.artist.clone(),
+                subartist: source.subartist.clone(),
+                genre: source.genre.clone(),
+                difficulty_name: source.difficulty_name.clone(),
+                play_level: source.play_level.clone(),
+                key_mode: source.key_mode,
+                initial_bpm: source.initial_bpm,
+                total: source.total,
+                stage_file: source.stage_file.clone(),
+                banner_file: source.banner_file.clone(),
+                backbmp_file: source.backbmp_file.clone(),
+                preview_file: source.preview_file.clone(),
+                judge_rank: source.judge_rank,
+                has_bga: source.has_bga,
+                has_bms_random: source.has_bms_random,
+                source_url: source.source_url.clone(),
+                append_url: source.append_url.clone(),
+            },
+            kaleid_json: serde_json::to_string(&source.kaleid)?,
             stats,
             summary: ChartAnalysisSummary {
                 normal_notes: analysis.normal_notes,
@@ -420,12 +448,71 @@ impl ChartImportAnalysis {
 }
 
 pub(in crate::storage) struct PreparedChartImport {
-    pub(super) stats: ChartStats,
+    pub(super) identity: ChartIdentity,
+    total_notes: u32,
+    length_ms: i64,
+    metadata: StoredChartMetadata,
+    kaleid_json: String,
+    stats: ChartStats,
     summary: ChartAnalysisSummary,
     total_gauge: f64,
     distribution_json: String,
     speed_changes_json: String,
     lane_notes_json: String,
+}
+
+impl PreparedChartImport {
+    pub(in crate::storage) fn declared_preview_file(&self) -> &str {
+        &self.metadata.preview_file
+    }
+
+    pub(in crate::storage) fn heap_bytes(&self) -> usize {
+        let m = &self.metadata;
+        [
+            &m.title,
+            &m.subtitle,
+            &m.artist,
+            &m.subartist,
+            &m.genre,
+            &m.difficulty_name,
+            &m.play_level,
+            &m.stage_file,
+            &m.banner_file,
+            &m.backbmp_file,
+            &m.preview_file,
+            &m.source_url,
+            &m.append_url,
+            &self.kaleid_json,
+            &self.distribution_json,
+            &self.speed_changes_json,
+            &self.lane_notes_json,
+        ]
+        .into_iter()
+        .map(String::capacity)
+        .sum()
+    }
+}
+
+struct StoredChartMetadata {
+    title: String,
+    subtitle: String,
+    artist: String,
+    subartist: String,
+    genre: String,
+    difficulty_name: String,
+    play_level: String,
+    key_mode: bmz_core::lane::KeyMode,
+    initial_bpm: f64,
+    total: Option<f64>,
+    stage_file: String,
+    banner_file: String,
+    backbmp_file: String,
+    preview_file: String,
+    judge_rank: Option<i32>,
+    has_bga: bool,
+    has_bms_random: bool,
+    source_url: String,
+    append_url: String,
 }
 
 pub(super) fn write_chart_analysis(

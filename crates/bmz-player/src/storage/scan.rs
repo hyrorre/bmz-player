@@ -5,14 +5,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, UNIX_EPOCH};
 
 use anyhow::Result;
-use bmz_chart::import::ImportResult;
 use bmz_chart::import::error::ImportError;
-use bmz_chart::import::{AssetLookup, BmsRandomSource, import_chart_with_assets};
 use rayon::prelude::*;
 
 use crate::config::app_config::{PathEntry, ScanConfig};
 
-use super::library_db::{CHART_IMPORT_VERSION, ChartImportRecord, LibraryDatabase};
+use super::library_db::{CHART_IMPORT_VERSION, LibraryDatabase};
 
 #[derive(Debug, Clone, Default)]
 pub struct ScanSummary {
@@ -30,6 +28,8 @@ pub struct ScanSummary {
     pub failed: u32,
     pub skipped: u32,
     pub warnings: u32,
+    /// Successfully imported copies that reused the analysis of identical bytes.
+    pub reused: u32,
     pub removed_files: usize,
 }
 
@@ -109,6 +109,8 @@ pub struct ScanTiming {
     pub fingerprint_ms: u128,
     pub skip_check_ms: u128,
     pub parse_ms: u128,
+    /// Time the writer spent receiving regular-file batches.
+    pub batch_wait_ms: u128,
     /// Worker time summed across files, so this can exceed the scan's wall time.
     pub analysis_worker_ms: u128,
     pub encode_worker_ms: u128,
@@ -129,6 +131,7 @@ pub struct ScanProgress {
 }
 
 mod archive;
+mod content_cache;
 mod discovery;
 #[cfg(test)]
 mod discovery_bench;
@@ -796,6 +799,47 @@ mod tests {
         assert_eq!(preview_file, "_Preview.ogg");
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rescan_reuses_same_bytes_across_roots_but_resolves_each_preview() {
+        let base = tempfile::tempdir().unwrap();
+        let root_a = base.path().join("a");
+        let root_b = base.path().join("b");
+        let source = "#PLAYER 1\n#TITLE shared\n#BPM 120\n#WAV01 key.wav\n#00111:01\n";
+        for (root, extension) in [(&root_a, "ogg"), (&root_b, "wav")] {
+            std::fs::create_dir(root).unwrap();
+            std::fs::write(root.join("song.bms"), source).unwrap();
+            std::fs::write(root.join(format!("preview.{extension}")), []).unwrap();
+        }
+        let roots = [&root_a, &root_b].map(|root| PathEntry {
+            path: root.to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        });
+        let db_path = base.path().join("library.db");
+        crate::storage::migration::migrate_library_db(&db_path).unwrap();
+        let mut db = LibraryDatabase::open(&db_path).unwrap();
+        for force in [false, true] {
+            let report = scan_song_roots(&mut db, &roots, &scan_config(), 1, force).unwrap();
+            assert_eq!(report.summary.imported, 2);
+            assert_eq!(report.summary.reused, 1);
+            let mut query =
+                db.conn().prepare("SELECT preview_file FROM charts ORDER BY folder_path").unwrap();
+            let previews = query
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            assert_eq!(previews, ["preview.ogg", "preview.wav"]);
+        }
+        // A same-size edit must use the new bytes, even when a second copy still
+        // supplies the old content's key.
+        std::fs::write(root_b.join("song.bms"), source.replace("shared", "edited")).unwrap();
+        let report = scan_song_roots(&mut db, &roots, &scan_config(), 2, true).unwrap();
+        assert_eq!(report.summary.imported, 2);
+        assert_eq!(report.summary.reused, 0);
+        assert!(db.chart_id_by_title("edited").unwrap().is_some());
     }
 
     #[test]

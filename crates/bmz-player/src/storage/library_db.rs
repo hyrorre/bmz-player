@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use bmz_chart::import::error::ImportWarning;
 use bmz_chart::model::{LongNoteMode, NoteKind, PlayableChart, TimingEventKind};
+use bmz_core::chart::ChartIdentity;
 use bmz_core::lane::Lane;
 use bmz_gameplay::gauge::gauge_total_for_chart;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -61,6 +62,15 @@ pub struct ChartImportRecord<'a> {
     pub modified_at: i64,
     pub scanned_at: i64,
     pub chart: &'a PlayableChart,
+}
+
+pub(super) struct ChartImportSource<'a> {
+    pub root_id: Option<i64>,
+    pub file_path: &'a Path,
+    pub file_size: u64,
+    pub modified_at: i64,
+    pub scanned_at: i64,
+    pub preview_file: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq)]

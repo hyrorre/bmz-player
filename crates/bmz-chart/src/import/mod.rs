@@ -183,6 +183,11 @@ pub fn import_bms_chart_with_random_source(
     import_chart_with_random_source(path, random_source, check_resource_existence)
 }
 
+/// The syntax selected by the importer for this path.
+pub fn chart_source_format(path: &Path) -> ChartSourceFormat {
+    chart_file_format(path).source_format()
+}
+
 fn chart_file_format(path: &Path) -> ChartFileFormat {
     match path
         .extension()

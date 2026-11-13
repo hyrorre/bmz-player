@@ -87,7 +87,7 @@ pub struct ChartMetadata {
     pub long_note_mode_defined: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ChartSourceFormat {
     #[default]
     Unknown,

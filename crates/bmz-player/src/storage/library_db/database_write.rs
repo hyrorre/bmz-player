@@ -180,16 +180,24 @@ impl LibraryDatabase {
         conn: &Connection,
         record: &ChartImportRecord<'_>,
     ) -> Result<(i64, i64)> {
-        let prepared = ChartImportAnalysis::new(record.chart).encode()?;
-        Self::write_prepared_chart_import(conn, record, &prepared)
+        let prepared = ChartImportAnalysis::new(record.chart).encode(record.chart)?;
+        let source = ChartImportSource {
+            root_id: record.root_id,
+            file_path: record.file_path,
+            file_size: record.file_size,
+            modified_at: record.modified_at,
+            scanned_at: record.scanned_at,
+            preview_file: &record.chart.metadata.preview_file,
+        };
+        Self::write_prepared_chart_import(conn, &source, &prepared)
     }
 
     pub(in crate::storage) fn write_prepared_chart_import(
         conn: &Connection,
-        record: &ChartImportRecord<'_>,
+        source: &ChartImportSource<'_>,
         prepared: &PreparedChartImport,
     ) -> Result<(i64, i64)> {
-        let chart_file_id = upsert_chart_file(conn, record)?;
+        let chart_file_id = upsert_chart_file(conn, source, &prepared.identity)?;
 
         let existing_chart_id: Option<i64> = conn
             .query_row(
@@ -200,10 +208,10 @@ impl LibraryDatabase {
             .optional()?;
 
         let chart_id = if let Some(existing_id) = existing_chart_id {
-            update_chart(conn, existing_id, record, &prepared.stats)?;
+            update_chart(conn, existing_id, source, prepared)?;
             existing_id
         } else {
-            let new_id = insert_chart(conn, record, &prepared.stats)?;
+            let new_id = insert_chart(conn, source, prepared)?;
             conn.execute(
                 "INSERT INTO chart_file_links (chart_id, chart_file_id) VALUES (?1, ?2)",
                 params![new_id, chart_file_id],
@@ -214,8 +222,8 @@ impl LibraryDatabase {
         write_chart_analysis(conn, chart_id, prepared)?;
         super::super::course_db::refresh_course_entries_for_chart(
             conn,
-            &hash_to_hex(&record.chart.identity.file_sha256),
-            &hash_to_hex(&record.chart.identity.file_md5),
+            &hash_to_hex(&prepared.identity.file_sha256),
+            &hash_to_hex(&prepared.identity.file_md5),
         )?;
 
         Ok((chart_id, chart_file_id))

@@ -270,7 +270,7 @@ fn load_songs(
     println!(
         "Timing: total={}ms discovery={}ms fingerprint={}ms skip={}ms parse={}ms write={}ms \
          archive={}ms folder_flags={}ms prune={}ms scope={scope_ms}ms \
-         analysis_worker={}ms encode_worker={}ms commit={}ms",
+         analysis_worker={}ms encode_worker={}ms commit={}ms batch_wait={}ms reused={}",
         t.total_ms,
         t.discovery_ms,
         t.fingerprint_ms,
@@ -283,6 +283,8 @@ fn load_songs(
         t.analysis_worker_ms,
         t.encode_worker_ms,
         t.commit_ms,
+        t.batch_wait_ms,
+        s.reused,
     );
     println!(
         "Discovery backends: everything={} native={} fallback={}",
