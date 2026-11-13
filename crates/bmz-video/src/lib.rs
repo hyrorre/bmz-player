@@ -150,7 +150,7 @@ impl VideoTimestampNormalizer {
 
 #[derive(Default)]
 struct VideoDecodeContext {
-    scaler: Option<ffmpeg_next::software::scaling::context::Context>,
+    scaler: Option<RgbaVideoScaler>,
     timestamp_normalizer: VideoTimestampNormalizer,
 }
 

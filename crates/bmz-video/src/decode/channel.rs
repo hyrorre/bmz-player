@@ -162,7 +162,7 @@ pub(crate) fn decode_video_channel_pass(
     ictx: &mut ffmpeg_next::format::context::Input,
     decoder: &mut ffmpeg_next::decoder::Video,
     selected: &SelectedVideoStream,
-    scaler: &mut Option<ffmpeg_next::software::scaling::context::Context>,
+    scaler: &mut Option<RgbaVideoScaler>,
     decoded: &mut ffmpeg_next::frame::Video,
     sender: &SyncSender<QueuedDecodedFrame>,
     stop_decode: &AtomicBool,
@@ -327,7 +327,7 @@ pub(crate) fn is_skippable_video_packet_error(
 
 pub(crate) fn publish_last_skipped_channel_frame(
     catch_up: &mut ChannelFrameCatchUp<(ffmpeg_next::frame::Video, i64)>,
-    scaler: &mut Option<ffmpeg_next::software::scaling::context::Context>,
+    scaler: &mut Option<RgbaVideoScaler>,
     sender: &SyncSender<QueuedDecodedFrame>,
     generation: u64,
     stop_decode: &AtomicBool,

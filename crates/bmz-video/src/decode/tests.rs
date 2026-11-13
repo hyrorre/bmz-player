@@ -39,8 +39,31 @@ fn scaler_rebuilds_when_frame_dimensions_or_pixel_format_change() {
             rgba_frame_from_video_with_scaler(&decoded, 0, &mut scaler, None, [0; 2]).unwrap();
         assert_eq!((frame.width, frame.height), (width, height));
         assert_eq!(frame.pixels.len(), width as usize * height as usize * 4);
-        assert_eq!(scaler.as_ref().unwrap().input().format, format);
+        assert_eq!(scaler.as_ref().unwrap().context.input().format, format);
     }
+}
+
+#[test]
+fn rgba_scaler_reuses_its_output_and_preserves_frame_alpha() {
+    use ffmpeg_next::{format::Pixel, frame::Video};
+
+    bmz_ffmpeg::ensure_init().unwrap();
+    let mut scaler = None;
+    let mut rgb = Video::new(Pixel::RGB24, 4, 4);
+    rgb.data_mut(0).fill(0);
+    let opaque = rgba_frame_from_video_with_scaler(&rgb, 0, &mut scaler, None, [0; 2]).unwrap();
+    let output = scaler.as_ref().unwrap().output.data(0).as_ptr();
+    assert!(opaque.pixels.as_chunks::<4>().0.iter().all(|pixel| *pixel == [0, 0, 0, 255]));
+
+    let mut decoded = Video::new(Pixel::RGBA, 4, 4);
+    for color in [[29, 83, 201, 64], [230, 151, 20, 192]] {
+        decoded.data_mut(0).as_chunks_mut::<4>().0.fill(color);
+        let frame =
+            rgba_frame_from_video_with_scaler(&decoded, 1, &mut scaler, None, [0; 2]).unwrap();
+        assert_eq!(scaler.as_ref().unwrap().output.data(0).as_ptr(), output);
+        assert!(frame.pixels.as_chunks::<4>().0.iter().all(|pixel| *pixel == color));
+    }
+    assert!(opaque.pixels.as_chunks::<4>().0.iter().all(|pixel| *pixel == [0, 0, 0, 255]));
 }
 
 #[test]

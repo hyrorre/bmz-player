@@ -161,6 +161,11 @@ pub(crate) fn rgba_frame_from_video(
     rgba_frame_from_video_with_scaler(decoded, pts_us, &mut scaler, None, [0; 2])
 }
 
+pub(crate) struct RgbaVideoScaler {
+    pub(super) context: ffmpeg_next::software::scaling::context::Context,
+    pub(super) output: ffmpeg_next::frame::Video,
+}
+
 fn video_output_size([width, height]: [u32; 2], [canvas_w, canvas_h]: [u32; 2]) -> [u32; 2] {
     if canvas_w == 0 || canvas_h == 0 || width <= canvas_w || height <= canvas_h {
         return [width, height];
@@ -179,7 +184,7 @@ fn video_output_size([width, height]: [u32; 2], [canvas_w, canvas_h]: [u32; 2]) 
 pub(crate) fn playback_frame(
     decoded: &ffmpeg_next::frame::Video,
     pts_us: i64,
-    scaler: &mut Option<ffmpeg_next::software::scaling::context::Context>,
+    scaler: &mut Option<RgbaVideoScaler>,
     mut pixels: Option<Vec<u8>>,
     canvas_size: [u32; 2],
     allow_yuv: bool,
@@ -242,7 +247,7 @@ pub(crate) fn playback_frame(
 pub(crate) fn rgba_frame_from_video_with_scaler(
     decoded: &ffmpeg_next::frame::Video,
     pts_us: i64,
-    scaler: &mut Option<ffmpeg_next::software::scaling::context::Context>,
+    scaler: &mut Option<RgbaVideoScaler>,
     rgba_buffer: Option<Vec<u8>>,
     canvas_size: [u32; 2],
 ) -> Result<DecodedFrame> {
@@ -258,11 +263,11 @@ pub(crate) fn rgba_frame_from_video_with_scaler(
     };
     let [width, height] = video_output_size([w, h], canvas_size);
     if scaler.as_ref().is_none_or(|scaler| {
-        scaler.input() != &input
-            || scaler.output().width != width
-            || scaler.output().height != height
+        scaler.context.input() != &input
+            || scaler.context.output().width != width
+            || scaler.context.output().height != height
     }) {
-        *scaler = Some(ffmpeg_next::software::scaling::context::Context::get(
+        let context = ffmpeg_next::software::scaling::context::Context::get(
             decoded.format(),
             w,
             h,
@@ -270,7 +275,14 @@ pub(crate) fn rgba_frame_from_video_with_scaler(
             width,
             height,
             ffmpeg_next::software::scaling::flag::Flags::FAST_BILINEAR,
-        )?);
+        )?;
+        // The decoder owns this scratch frame. Keep its allocation when the
+        // scaler input changes without a change in the RGBA output dimensions.
+        let output = scaler
+            .take()
+            .filter(|scaler| scaler.output.width() == width && scaler.output.height() == height)
+            .map_or_else(ffmpeg_next::frame::Video::empty, |scaler| scaler.output);
+        *scaler = Some(RgbaVideoScaler { context, output });
         tracing::debug!(
             source_width = w,
             source_height = h,
@@ -280,11 +292,11 @@ pub(crate) fn rgba_frame_from_video_with_scaler(
         );
     }
 
-    let mut rgba_frame = ffmpeg_next::frame::Video::empty();
-    scaler.as_mut().unwrap().run(decoded, &mut rgba_frame)?;
+    let scaler = scaler.as_mut().unwrap();
+    scaler.context.run(decoded, &mut scaler.output)?;
 
-    let data = rgba_frame.data(0);
-    let stride = rgba_frame.stride(0);
+    let data = scaler.output.data(0);
+    let stride = scaler.output.stride(0);
     let row_bytes = (width as usize) * 4;
     let rgba =
         copy_rgba_frame_data_with_buffer(data, stride, row_bytes, height as usize, rgba_buffer);
