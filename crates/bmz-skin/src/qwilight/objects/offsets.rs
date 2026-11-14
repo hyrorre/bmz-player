@@ -7,7 +7,7 @@ const ELEMENTS: &[Element] = &[
     (0, "BGA", &["media"]),
     (1, "Spectrum", &["audioVisualizer"]),
     (6, "Gauge", &["hitPointsPosition", "hitPointsLength", "hitPointsHeight"]),
-    (8, "Key beam", &["inputPosition", "inputHeight"]),
+    (8, "Key beam", &["mainPosition1", "mainHeight"]),
     (9, "Combo", &["bandPosition"]),
     (10, "Timing ms", &["judgmentMeterPosition"]),
     (11, "Score", &["standPosition"]),
@@ -59,12 +59,14 @@ fn decoration_name(index: usize) -> String {
 }
 
 fn element(pipeline: i32) -> Option<&'static Element> {
-    let pipeline = match pipeline {
+    let element_id = match pipeline {
+        3 => 8, // Keep Key beam offset ID 1108 for the Main pipeline.
+        8 => return None,
         35..=40 => 35,
         58 => 28,
         _ => pipeline,
     };
-    ELEMENTS.iter().find(|(id, _, _)| *id == pipeline)
+    ELEMENTS.iter().find(|(id, _, _)| *id == element_id)
 }
 
 pub(in crate::qwilight) fn definitions(definition: &Definition) -> Vec<Json> {

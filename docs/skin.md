@@ -207,7 +207,8 @@ Luaの再実行・画像の読み直し・スキン画像のGPUへの再転送�
 | Gauge / Gauge percent / Judgment ratio bar | ゲージ・ゲージ%・判定内訳の帯を独立 |
 | Timing / Judgment graph / Spectrum / BGA | 各ビジュアライザーとBGAを独立 |
 | Progress | 進行バーとつまみ・移動範囲を一組 |
-| Bomb / Key beam / Lane timing | ボム・キービーム・レーン別FAST/SLOWを種類ごと、各レーン共通の補正 |
+| Bomb / Lane timing | ボム・レーン別FAST/SLOWを種類ごと、各レーン共通の補正 |
+| Key beam | `Main` のキービーム画像（描画枠3）に各レーン共通の補正 |
 | Judgment line | 判定線の見た目。yは追加せずLIFTを使う |
 
 - xは右、yは上への移動量、w/hは表示領域の幅・高さへの加算量です。単位はスキン座標のpxです。

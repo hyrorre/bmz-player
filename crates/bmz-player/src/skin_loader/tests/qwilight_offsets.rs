@@ -345,6 +345,9 @@ fn qwilight_element_offsets_bind_requested_controls_and_preserve_exclusions() {
         })
         .collect();
     assert_eq!(adjusted.len(), 34);
+    assert!(
+        base.document.offset.iter().any(|o| o.id == 1108 && o.name == "Qwilight Key beam offset")
+    );
     assert!(!adjusted.keys().any(|n| {
         ["Completion", "Auto", "Background", "Frame", "Decoration"].iter().any(|s| n.contains(s))
     }));
@@ -386,7 +389,7 @@ fn qwilight_element_offsets_bind_requested_controls_and_preserve_exclusions() {
     }
     assert_ne!(base.document.judge[0].images, moved.document.judge[0].images);
     assert_eq!(base.document.note, moved.document.note);
-    for id in ["qw-lane-8-0", "qw-hit-false-0", "qw-lane-timing-0"] {
+    for id in ["qw-hit-false-0", "qw-lane-timing-0"] {
         assert_ne!(frame(destination(&base, id), 0), frame(destination(&moved, id), 0), "{id}");
         assert_eq!(destination(&moved, id).offset, 3);
     }
@@ -398,10 +401,17 @@ fn qwilight_element_offsets_bind_requested_controls_and_preserve_exclusions() {
         "line top remains at the same hit position even with saved y"
     );
     assert_eq!(
-        destination(&base, "qw-lane-3-0"),
-        destination(&moved, "qw-lane-3-0"),
-        "lane background is excluded"
+        destination(&base, "qw-lane-8-0"),
+        destination(&moved, "qw-lane-8-0"),
+        "Input buttons are excluded"
     );
+    let beam_before = frame(destination(&base, "qw-lane-3-0"), 0);
+    let beam_after = frame(destination(&moved, "qw-lane-3-0"), 0);
+    assert_eq!(beam_after.x.unwrap() - beam_before.x.unwrap(), 10);
+    assert_eq!(beam_after.y.unwrap() - beam_before.y.unwrap(), 15);
+    assert_eq!(beam_after.w.unwrap() - beam_before.w.unwrap(), 40);
+    assert_eq!(beam_after.h.unwrap() - beam_before.h.unwrap(), 10);
+    assert_eq!(beam_after.a, Some(191));
     assert_eq!(destination(&base, "qw-auto-main"), destination(&moved, "qw-auto-main"));
     assert_eq!(
         base.document

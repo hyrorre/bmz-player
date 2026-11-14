@@ -135,3 +135,11 @@ BMZ独自のx/y/w/h/a調整を追加する。判定線はyを除外しLIFTに統
 検証（Windows）：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、
 `cargo test --workspace --locked --no-fail-fast -- --test-threads=4`、Winitを使う設定経路のテスト、
 実素材（`SavesDir (beta)/UI`）のbmz-skin 3件とbmz-playerのQwilight関連44件が成功。実ウィンドウの操作は未確認。
+
+## 2026-11-14 キービームの補正先
+
+`Qwilight Key beam offset` がボタン画像（`Input`、描画枠8）を動かしていた。
+キービーム画像（`Main`、描画枠3）に補正を割り当て、既存の設定名とID 1108を維持した。
+ボタンとキービームを両方含むテスト素材で、5項目の補正結果とボタンの配置を確認した。
+Windowsでfmt、workspace check、all-targets Clippy（`-D warnings`）、workspace testが成功した。
+実ウィンドウでの表示は未確認。
