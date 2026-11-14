@@ -78,7 +78,7 @@ fn virtual_folders(
 }
 
 #[test]
-fn archive_folder_autoplay_includes_root_shallow_and_deep_songs() {
+fn archive_folder_autoplay_follows_groups_and_stops_below_song_folders() {
     use std::io::Write;
 
     let data = ProfileTestDir::new();
@@ -86,10 +86,10 @@ fn archive_folder_autoplay_includes_root_shallow_and_deep_songs() {
     let archive = boot.app_paths.data_dir.join("pack.zip");
     let mut writer = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
     for (entry, title) in [
-        ("chart.bms", "Root"),
-        ("song/chart.bms", "Shallow"),
-        ("group/song/chart.bms", "Group"),
-        ("group/song/subgroup/song/chart.bms", "Deep"),
+        ("group_a/song/chart.bms", "Group"),
+        ("group_a/song/sabun/chart.bms", "Hidden"),
+        ("group_b/subgroup/song/chart.bms", "Deep"),
+        ("group_c/song/chart.bms", "Shallow"),
     ] {
         writer.start_file(entry, zip::write::SimpleFileOptions::default()).unwrap();
         writer.write_all(format!("#TITLE {title}\n#BPM 120\n#00111:01\n").as_bytes()).unwrap();
@@ -119,8 +119,18 @@ fn archive_folder_autoplay_includes_root_shallow_and_deep_songs() {
         summary: None,
     };
     let ids = autoplay_folder_chart_ids(&source, &catalog, [&item]).unwrap();
-    assert_eq!(ids.len(), 4);
-    assert_eq!(ids.iter().collect::<HashSet<_>>().len(), 4);
+    assert_eq!(ids.len(), 3);
+    assert_eq!(ids.iter().collect::<HashSet<_>>().len(), 3);
+    let visible_folders = ["group_a/song", "group_b/subgroup/song", "group_c/song"]
+        .map(|entry| format!("{archive_path}/{entry}"));
+    let expected_ids = boot
+        .library_db
+        .list_charts_in_folders(&visible_folders.iter().map(String::as_str).collect::<Vec<_>>())
+        .unwrap()
+        .into_iter()
+        .map(|chart| chart.chart_id)
+        .collect::<HashSet<_>>();
+    assert_eq!(ids.iter().copied().collect::<HashSet<_>>(), expected_ids);
     let listed = build_select_items_for_stack(&source, &catalog, &[archive_path], &[]).unwrap();
     let mut from_items = autoplay_folder_chart_ids(&source, &catalog, &listed).unwrap();
     let mut expected = ids;
@@ -128,7 +138,7 @@ fn archive_folder_autoplay_includes_root_shallow_and_deep_songs() {
     expected.sort_unstable();
     assert_eq!(from_items, expected);
 
-    for (folder, title) in [("", "Root"), ("/group/song", "Group")] {
+    for (folder, title) in [("/group_a/song", "Group"), ("/group_c/song", "Shallow")] {
         let same_folder = same_folder_path(&format!(
             "{}!{folder}",
             crate::storage::library_db::library_path_key(&archive)

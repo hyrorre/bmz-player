@@ -59,14 +59,14 @@ fn write_7z(path: &Path, entries: &[(&str, &str)]) {
 }
 
 #[test]
-fn multi_folder_archives_register_and_expose_charts_at_every_depth() {
+fn multi_folder_archives_register_deep_charts_and_browse_only_to_song_folders() {
     use crate::screens::select_model::reachable_chart_folders;
 
-    let titles = [chart_text("Root"), chart_text("Shallow"), chart_text("Deep")];
+    let titles = [chart_text("First"), chart_text("Hidden"), chart_text("Deep")];
     let entries = [
-        ("root.bms", titles[0].as_str()),
-        ("song/chart.bms", titles[1].as_str()),
-        ("group/subgroup/song/chart.bms", titles[2].as_str()),
+        ("group_a/song/chart.bms", titles[0].as_str()),
+        ("group_a/song/sabun/chart.bms", titles[1].as_str()),
+        ("group_b/subgroup/song/chart.bms", titles[2].as_str()),
     ];
     for name in ["pack.zip", "pack.7z"] {
         let root = temp();
@@ -85,11 +85,11 @@ fn multi_folder_archives_register_and_expose_charts_at_every_depth() {
         reachable.sort();
         assert_eq!(
             reachable,
-            [folder.clone(), format!("{folder}/group/subgroup/song"), format!("{folder}/song")]
+            [format!("{folder}/group_a/song"), format!("{folder}/group_b/subgroup/song")]
         );
         let chart = crate::song_archive::read_chart(
             &archive,
-            "group/subgroup/song/chart.bms",
+            "group_b/subgroup/song/chart.bms",
             &Default::default(),
         )
         .unwrap();
