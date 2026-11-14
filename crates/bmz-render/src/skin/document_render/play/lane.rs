@@ -17,7 +17,7 @@ macro_rules! skin_document_render_play_lane_public_methods {
             enabled_options: &[i32],
         ) -> Option<Rect> {
             let note = self.note.as_ref()?;
-            let lane_idx = beatoraja_note_index(lane, key_mode);
+            let lane_idx = skin_note_index(self, lane, key_mode);
             let canvas_w = self.w as f32;
             let canvas_h = self.h as f32;
 

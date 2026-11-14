@@ -173,13 +173,16 @@ pub(super) fn display_number_digits(
     max_digits: usize,
     padding: NumberPadding,
 ) -> Vec<u8> {
+    if max_digits == 0 {
+        return Vec::new();
+    }
     let value = value.saturating_abs();
-    let mut text = if padding.is_zero_padding() && max_digits > 0 {
+    let mut text = if padding.is_zero_padding() {
         format!("{value:0width$}", width = max_digits)
     } else {
         value.to_string()
     };
-    if max_digits > 0 && text.len() > max_digits {
+    if text.len() > max_digits {
         text = text[text.len() - max_digits..].to_string();
     }
     let mut digits: Vec<u8> =

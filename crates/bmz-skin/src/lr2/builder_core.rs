@@ -33,7 +33,7 @@ impl<'a> CsvBuilder<'a> {
             .resolve(&infer_skin_root(path, context))
             .unwrap_or_else(|_| context.entry_dir().to_path_buf());
         let skin_file_dir = path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
-        let remap_single_play_2p_lanes = matches!(header.skin_type, 0 | 1 | 3 | 4 | 12 | 13)
+        let remap_single_play_2p_lanes = matches!(header.skin_type, 0 | 1 | 4)
             && header.selected_ops.get(&901).copied().unwrap_or(false);
         Self {
             path_context: context.clone(),
@@ -100,7 +100,7 @@ impl<'a> CsvBuilder<'a> {
                 dependencies.insert(id, *value);
             }
         }
-        if matches!(self.header.skin_type, 0 | 1 | 3 | 4 | 12 | 13) {
+        if matches!(self.header.skin_type, 0 | 1 | 4) {
             dependencies.insert(901, self.header.selected_ops.get(&901).copied().unwrap_or(false));
         }
         if self.header.selected_ops.contains_key(&981) {

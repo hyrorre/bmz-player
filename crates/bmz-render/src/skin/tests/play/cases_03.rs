@@ -368,6 +368,8 @@ fn hispeed_refs_show_display_value_while_durations_use_effective_hispeed() {
 
 #[test]
 fn display_number_digits_uses_absolute_value_like_beatoraja_skin_number() {
+    assert!(display_number_digits(0, 0, NumberPadding::None).is_empty());
+    assert!(display_number_digits(9, 0, NumberPadding::Blank).is_empty());
     assert_eq!(display_number_digits(-34, 2, NumberPadding::Zero), vec![3, 4]);
     assert_eq!(display_number_digits(-34, 4, NumberPadding::Blank), vec![10, 10, 3, 4]);
 }

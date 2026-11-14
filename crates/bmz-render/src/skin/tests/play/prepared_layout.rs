@@ -1,6 +1,48 @@
 use super::*;
 
 #[test]
+fn lr2_five_key_layout_uses_the_same_slots_for_note_geometry_and_sprites() {
+    let slots = [0, 7, 8, 12, 15];
+    let mut ids = vec![""; 16];
+    let mut areas = vec![serde_json::json!({}); 16];
+    let mut destinations = vec![serde_json::Value::Null; 16];
+    let mut images = Vec::new();
+    for (slot, id) in slots.into_iter().zip(["key1", "scratch", "key8", "key12", "scratch2"]) {
+        ids[slot] = id;
+        let frame = serde_json::json!({"x":slot * 5,"y":10,"w":5,"h":90});
+        areas[slot] = frame.clone();
+        destinations[slot] = serde_json::json!({"dst":[frame]});
+        images.push(serde_json::json!({"id":id,"src":"1","x":slot * 5,"w":5,"h":5}));
+    }
+    let document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "lr2":true,"w":100,"h":100,"image":images,
+        "note":{"note":ids,"dst":areas,"lr2Dst":destinations}
+    }))
+    .unwrap();
+    let skin = SkinContext::from_manifest_and_document(
+        default_skin_manifest(),
+        document,
+        mock_source("1", 100.0, 10.0).into_values(),
+    );
+    let state = SkinDrawState::default();
+    for (mode, lane, expected_x) in [
+        (KeyMode::K5, Lane::Scratch, 0.35),
+        (KeyMode::K10, Lane::Scratch, 0.35),
+        (KeyMode::K10, Lane::Key8, 0.40),
+        (KeyMode::K10, Lane::Key12, 0.60),
+        (KeyMode::K10, Lane::Scratch2, 0.75),
+    ] {
+        let prepared = skin.prepare_note_layout(mode, &state);
+        let rect = prepared.note_rect(lane, 0.5, prepared.note_height(lane).unwrap()).unwrap();
+        assert!(approx_eq(rect.x, expected_x));
+        let Some(SkinRenderItem::Image { uv, .. }) = prepared.tap_item(lane, rect, false) else {
+            panic!("missing sprite for {mode:?} {lane:?}");
+        };
+        assert!(approx_eq(uv.x, expected_x));
+    }
+}
+
+#[test]
 fn qwilight_long_note_geometry_overlaps_body_and_keeps_independent_animated_caps() {
     let document: SkinDocument=serde_json::from_value(serde_json::json!({
         "w":100,"h":100,

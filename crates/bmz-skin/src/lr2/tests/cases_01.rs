@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn lr2_double_and_battle_keep_both_sides_with_option_901() {
+    let files = BTreeMap::new();
+    for (skin_type, right_slots) in
+        [(1, [0, 7]), (2, [8, 15]), (3, [8, 15]), (12, [8, 15]), (13, [8, 15])]
+    {
+        let header =
+            Header { skin_type, selected_ops: HashMap::from([(901, true)]), ..Header::default() };
+        let builder = CsvBuilder::new(Path::new("play.lr2skin"), header, &files);
+        assert_eq!(builder.lr2_lane_to_beatoraja_index(11), Some(right_slots[0]));
+        assert_eq!(builder.lr2_lane_to_beatoraja_index(10), Some(right_slots[1]));
+    }
+}
+
+#[test]
 fn horizontal_mode_preserves_missed_note_x_coordinate() {
     let files = BTreeMap::new();
     for horizontal in [false, true] {

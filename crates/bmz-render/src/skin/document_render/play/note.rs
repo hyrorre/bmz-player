@@ -8,7 +8,7 @@ macro_rules! skin_document_render_play_note_methods {
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Option<SkinRenderItem> {
             let note = self.note.as_ref()?;
-            let image_id = note.note.get(beatoraja_note_index(lane, key_mode))?;
+            let image_id = note.note.get(skin_note_index(self, lane, key_mode))?;
             self.note_part_render_item(image_id, rect, 0, sources)
         }
 
@@ -20,7 +20,7 @@ macro_rules! skin_document_render_play_note_methods {
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Option<SkinRenderItem> {
             let note = self.note.as_ref()?;
-            let index = beatoraja_note_index(lane, key_mode);
+            let index = skin_note_index(self, lane, key_mode);
             let image_id = note.processed.get(index)?;
             self.note_part_render_item(image_id, rect, 0, sources)
         }
@@ -37,7 +37,7 @@ macro_rules! skin_document_render_play_note_methods {
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Option<SkinRenderItem> {
             let note = self.note.as_ref()?;
-            let index = beatoraja_note_index(lane, key_mode);
+            let index = skin_note_index(self, lane, key_mode);
             let hcn = (mode == LongNoteMode::Hln)
                 .then(|| note.hlnstart.get(index))
                 .flatten()
@@ -65,7 +65,7 @@ macro_rules! skin_document_render_play_note_methods {
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Option<SkinRenderItem> {
             let note = self.note.as_ref()?;
-            let index = beatoraja_note_index(lane, key_mode);
+            let index = skin_note_index(self, lane, key_mode);
             let hcn = (mode == LongNoteMode::Hln)
                 .then(|| note.hlnend.get(index))
                 .flatten()
@@ -177,7 +177,7 @@ macro_rules! skin_document_render_play_note_methods {
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Option<SkinRenderItem> {
             let note = self.note.as_ref()?;
-            let index = beatoraja_note_index(lane, key_mode);
+            let index = skin_note_index(self, lane, key_mode);
             let image_id = if mode == LongNoteMode::Hln {
                 match state {
                     LongBodyState::Processing => note.hlnbody_active.get(index),
@@ -213,13 +213,13 @@ macro_rules! skin_document_render_play_note_methods {
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Option<SkinRenderItem> {
             let note = self.note.as_ref()?;
-            let image_id = note.mine.get(beatoraja_note_index(lane, key_mode))?;
+            let image_id = note.mine.get(skin_note_index(self, lane, key_mode))?;
             self.note_part_render_item(image_id, rect, 0, sources)
         }
 
         fn note_height_for_lane(&self, lane: Lane, key_mode: KeyMode) -> Option<f32> {
             let note = self.note.as_ref()?;
-            let index = beatoraja_note_index(lane, key_mode);
+            let index = skin_note_index(self, lane, key_mode);
             if let Some(size) = note.size.get(index).copied().filter(|size| *size > 0) {
                 return Some(size as f32 / self.h.max(1) as f32);
             }

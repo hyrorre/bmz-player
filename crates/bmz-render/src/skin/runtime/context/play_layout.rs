@@ -177,7 +177,7 @@ impl PreparedNoteLayout<'_> {
     fn part_sprite(&self, lane: Lane, part: NotePart) -> Option<NoteSprite> {
         let document = self.skin.document.as_ref()?;
         let note = document.note.as_ref()?;
-        let index = beatoraja_note_index(lane, self.key_mode);
+        let index = skin_note_index(document, lane, self.key_mode);
         fn select<'a>(
             document: &SkinDocument,
             note: &'a SkinNoteSetDef,

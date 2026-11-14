@@ -482,7 +482,7 @@ pub(super) fn lr2_note_destination(
     lane: Lane,
     key_mode: KeyMode,
 ) -> Option<&SkinDestinationDef> {
-    document.note.as_ref()?.lr2_dst.get(beatoraja_note_index(lane, key_mode))?.as_ref()
+    document.note.as_ref()?.lr2_dst.get(skin_note_index(document, lane, key_mode))?.as_ref()
 }
 
 pub(super) fn lr2_note_frame(

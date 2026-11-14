@@ -186,6 +186,16 @@ impl SkinDefinition {
     }
 }
 
+fn skin_note_index(document: &SkinDocument, lane: Lane, key_mode: KeyMode) -> usize {
+    // LR2 conversion keeps eight slots per side even for five-key layouts.
+    let layout = if document.lr2 && matches!(key_mode, KeyMode::K5 | KeyMode::K10) {
+        KeyMode::K14
+    } else {
+        key_mode
+    };
+    beatoraja_note_index(lane, layout)
+}
+
 /// beatoraja スキンの `note` 配列インデックスをキーモードに応じて返す。
 /// スキン側の並び順: 1P [Key1..KeyN, Scratch], 2P [Key(N+1)..Key(2N), Scratch2]
 fn beatoraja_note_index(lane: Lane, key_mode: KeyMode) -> usize {
