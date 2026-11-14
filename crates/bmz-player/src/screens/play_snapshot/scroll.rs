@@ -153,22 +153,25 @@ pub(super) fn visible_timing_events(
 
 pub(super) fn visible_long_notes<'a>(
     long_notes: &'a [bmz_chart::model::LongNotePair],
-    prefix_max_end_times: &[i64],
+    index: &'a [LongNoteIndexEntry],
     lower_time: TimeUs,
-    tick_range: Option<(f64, f64)>,
+    tick_upper_bound: Option<f64>,
 ) -> impl Iterator<Item = (usize, &'a bmz_chart::model::LongNotePair)> + 'a {
-    let range = tick_range.map_or(0..long_notes.len(), |(_, upper_tick)| {
-        debug_assert_eq!(long_notes.len(), prefix_max_end_times.len());
+    let (range, sorted) = if let Some(upper_tick) = tick_upper_bound {
+        debug_assert_eq!(long_notes.len(), index.len());
         // prefix max は単調なので、この位置より前の LN はすべて終端が判定線より前。
-        let start = prefix_max_end_times.partition_point(|&end_time| end_time < lower_time.0);
-        // 既存実装も start tick 順を前提に break していたので、その順序を保つ。
-        let end = long_notes.partition_point(|long| (long.start_tick.0 as f64) <= upper_tick);
-        start.min(end)..end
-    });
-    long_notes[range.clone()]
-        .iter()
-        .enumerate()
-        .map(move |(offset, long)| (range.start + offset, long))
+        let start = index.partition_point(|entry| entry.prefix_max_end_time < lower_time);
+        let end = index.partition_point(|entry| {
+            (long_notes[entry.pair_index].start_tick.0 as f64) <= upper_tick
+        });
+        (start.min(end)..end, Some(index))
+    } else {
+        (0..long_notes.len(), None)
+    };
+    range.map(move |i| {
+        let pair_index = sorted.map_or(i, |entries| entries[i].pair_index);
+        (pair_index, &long_notes[pair_index])
+    })
 }
 
 /// `1..=end_second` のうち、単純スクロール画面に入り得る秒線を返す。

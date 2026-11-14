@@ -1,6 +1,74 @@
 use super::*;
 
 #[test]
+fn add_ln_is_visible_and_shows_its_hold_with_or_without_extra_notes() {
+    use std::fmt::Write;
+    use std::path::Path;
+
+    use bmz_chart::import::{AssetLookup, BmsRandomSource, import_chart_bytes_with_assets};
+
+    use crate::assist::{apply_chart_assists, apply_extra_note_assist};
+    use crate::config::profile_config::{AssistLongNoteMode, AssistOptionConfig};
+
+    let mut bms = String::from("#PLAYER 1\n#BPM 120\n#WAV01 tap.wav\n#WAV02 bgm.wav\n");
+    bms.push_str("#00112:01\n#00101:00020000\n");
+    // Seed 0 converts two later Key1 taps before the early Key2 tap.
+    for measure in 3..19 {
+        writeln!(bms, "#{measure:03}11:01\n#{measure:03}01:00020000").unwrap();
+    }
+    let source = import_chart_bytes_with_assets(
+        Path::new("add-ln.bms"),
+        bms.as_bytes(),
+        BmsRandomSource::Seed(Some(0)),
+        AssetLookup::Declared,
+    )
+    .unwrap()
+    .chart;
+    let profile = ProfileConfig::new_default("default", "Default", 1);
+    for depth in [0, 1, 16] {
+        let mut chart = source.clone();
+        let config = AssistOptionConfig {
+            long_note_mode: AssistLongNoteMode::AddLn,
+            long_note_rate: 0.15,
+            extra_note_depth: depth,
+            ..Default::default()
+        };
+        let mut runtime = apply_chart_assists(&mut chart, config, 0);
+        assert_eq!(
+            apply_extra_note_assist(&mut chart, config, &mut runtime, false).is_some(),
+            depth > 0
+        );
+        let mut session =
+            build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+        let pair = session.chart.long_notes.iter().find(|ln| ln.lane == Lane::Key2).unwrap();
+        let (start, end, id) = (pair.start_time, pair.end_time, pair.start_note_id);
+
+        let before = build_render_snapshot(&session, TimeUs(start.0 - 150_000), &[], None);
+        assert_eq!(before.visible_long_notes.len(), 1, "depth={depth}");
+        assert_eq!(before.visible_long_notes[0].lane, Lane::Key2);
+        assert_eq!(before.visible_long_notes[0].body_state, LongBodyState::Inactive);
+
+        let input = |kind, time| InputEvent {
+            lane: Lane::Key2,
+            kind,
+            time,
+            source: InputSource::Human,
+            device_kind: InputDeviceKind::Keyboard,
+            scratch_direction: None,
+        };
+        session.judge.process_input(&session.chart, input(InputKind::Press, start));
+        let held = build_render_snapshot(&session, TimeUs(start.0 + 150_000), &[], None);
+        assert_eq!(held.visible_long_notes.len(), 1, "depth={depth}");
+        assert_eq!(held.visible_long_notes[0].lane, Lane::Key2);
+        assert_eq!(held.visible_long_notes[0].body_state, LongBodyState::Processing);
+
+        session.judge.process_input(&session.chart, input(InputKind::Release, end));
+        assert_eq!(session.judge.judged_notes.get(&id), Some(&Judge::PGreat));
+    }
+}
+
+#[test]
 fn negative_bpm_fold_moves_past_unjudged_notes_back_into_the_snapshot() {
     use bmz_chart::model::{BarLine, TimingEvent, TimingEventKind};
 

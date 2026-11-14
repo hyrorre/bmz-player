@@ -168,12 +168,14 @@ fn simple_scroll_long_note_range_keeps_crossing_notes_without_past_scan() {
         end_time: TimeUs(end_tick as i64),
         sound: None,
     };
-    let longs = vec![long(0, 960), long(480, 3_000), long(1_920, 2_880), long(4_000, 5_000)];
-    let prefix = [960, 3_000, 3_000, 5_000];
-    let visible = visible_long_notes(&longs, &prefix, TimeUs(1_920), Some((1_920.0, 3_000.0)))
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
-    assert_eq!(visible, vec![1, 2]);
+    let mut chart = chart();
+    chart.long_notes = vec![long(4_000, 5_000), long(480, 3_000), long(0, 960), long(1_920, 2_880)];
+    let cache = PlayRenderSnapshotCache::from_chart(&chart);
+    let visible =
+        visible_long_notes(&chart.long_notes, &cache.long_note_index, TimeUs(1_920), Some(3_000.0))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+    assert_eq!(visible, vec![1, 3]);
 }
 
 #[test]

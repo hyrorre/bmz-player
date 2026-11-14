@@ -42,12 +42,15 @@ pub struct PlayRenderSnapshotCache {
     pub(super) missed_notes: super::missed_notes::MissedNoteFallCache,
     /// SPEED イベントの `(time_us, factor)`。beatoraja と同じく時間で補間する。
     pub(super) speed_segments: Arc<[(f64, f64)]>,
-    /// `long_notes` は start tick 順であることを前提にしている。各位置までの
-    /// end time 最大値を保持し、画面より前に完全に抜けた LN 群を二分探索で飛ばす。
-    /// start tick の上限と組み合わせることで、simple scroll 中の LN 走査を
-    /// 可視候補だけに絞る。
-    pub(super) long_note_prefix_max_end_times: Arc<[i64]>,
+    /// 始点 tick 順。判定の保持状態を参照するために元のペア番号を記録する。
+    pub(super) long_note_index: Arc<[LongNoteIndexEntry]>,
     pub(super) bga_events: BgaEventCache,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct LongNoteIndexEntry {
+    pub(super) pair_index: usize,
+    pub(super) prefix_max_end_time: TimeUs,
 }
 
 #[derive(Debug, Clone)]
@@ -93,18 +96,23 @@ impl PlayRenderSnapshotCache {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         );
-        let mut max_end_time = i64::MIN;
-        let long_note_prefix_max_end_times = Arc::from(
-            chart
-                .long_notes
-                .iter()
-                .map(|long| {
-                    max_end_time = max_end_time.max(long.end_time.0);
-                    max_end_time
-                })
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-        );
+        let mut long_note_index: Vec<_> = chart
+            .long_notes
+            .iter()
+            .enumerate()
+            .map(|(pair_index, long)| LongNoteIndexEntry {
+                pair_index,
+                prefix_max_end_time: long.end_time,
+            })
+            .collect();
+        long_note_index.sort_unstable_by_key(|entry| {
+            (chart.long_notes[entry.pair_index].start_tick, entry.pair_index)
+        });
+        let mut max_end_time = TimeUs(i64::MIN);
+        for entry in &mut long_note_index {
+            max_end_time = max_end_time.max(entry.prefix_max_end_time);
+            entry.prefix_max_end_time = max_end_time;
+        }
         let bga_events = BgaEventCache::from_chart(chart);
         let timing =
             TimingMap::from_chart_timing_events(chart.metadata.initial_bpm, &chart.timing_events);
@@ -138,7 +146,7 @@ impl PlayRenderSnapshotCache {
             scroll_integral,
             missed_notes,
             speed_segments,
-            long_note_prefix_max_end_times,
+            long_note_index: long_note_index.into(),
             bga_events,
         }
     }

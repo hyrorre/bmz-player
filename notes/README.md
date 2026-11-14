@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-14 | [ADD LNで生成したLNの表示欠落（#103）](2026/2026-11-14-add-ln-visibility.md) |
 | 2026-11-14 | [Kaleid・負のBPM・Result IRのレビュー対応](2026/2026-11-14-kaleid-playback-review-fixes.md) |
 | 2026-11-14 | [旧ライブラリでBMS-IRの選曲ランキングを取得](2026/2026-11-14-select-bms-ir-legacy-library.md) |
 | 2026-11-14 | [BMSの負のBPMをLR2互換で処理](2026/2026-11-14-lr2-negative-bpm.md) |

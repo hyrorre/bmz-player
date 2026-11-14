@@ -294,12 +294,11 @@ fn populate_visible_long_notes(
             alpha,
         });
     }
-    let tick_range = tick_upper_bound.map(|upper| (cursor_tick, upper));
     for (pair_index, long) in visible_long_notes(
         &session.chart.long_notes,
-        &cache.long_note_prefix_max_end_times,
+        &cache.long_note_index,
         visible_from,
-        tick_range,
+        tick_upper_bound,
     ) {
         let Some(alpha) = constant_object_alpha(session, scroll_time, long.start_time) else {
             continue;
