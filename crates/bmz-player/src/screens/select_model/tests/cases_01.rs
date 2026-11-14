@@ -485,9 +485,9 @@ fn archive_level_stays_when_it_has_several_folders() {
     // The archive level shows like the extracted folder, without the extension and `!`.
     assert_eq!(listing_shape(&several), ["folder set /bms/set.7z!"]);
 
-    // An archive with its own charts is a song folder, like an extracted folder.
+    // Root charts must not hide the other songs in the archive.
     let own_charts = folder_listing(&["/bms/set.zip!/a.bms", "/bms/set.zip!/x/b.bms"], "/bms");
-    assert_eq!(listing_shape(&own_charts), ["chart 0"]);
+    assert_eq!(listing_shape(&own_charts), ["folder set /bms/set.zip!"]);
     let dotted = folder_listing(&["/bms/v1.2.RAR!/x/a.bms", "/bms/v1.2.RAR!/y/b.bms"], "/bms");
     assert_eq!(listing_shape(&dotted), ["folder v1.2 /bms/v1.2.RAR!"]);
 
@@ -497,12 +497,142 @@ fn archive_level_stays_when_it_has_several_folders() {
 }
 
 #[test]
-fn archive_contents_have_no_folder_entries() {
-    // beatoraja registers an archive as one folder, so songs nested two levels below
-    // the archive root have no folder row to open.
+fn archive_contents_can_be_browsed_through_multiple_groups() {
     let paths = ["/bms/set.7z!/group_a/x/a.bms", "/bms/set.7z!/group_b/y/b.bms"];
     assert_eq!(listing_shape(&folder_listing(&paths, "/bms")), ["folder set /bms/set.7z!"]);
-    assert!(folder_listing(&paths, "/bms/set.7z!").is_empty());
+    assert_eq!(
+        listing_shape(&folder_listing(&paths, "/bms/set.7z!")),
+        ["folder group_a /bms/set.7z!/group_a", "folder group_b /bms/set.7z!/group_b"]
+    );
+    assert_eq!(listing_shape(&folder_listing(&paths, "/bms/set.7z!/group_a")), ["chart 0"]);
+    assert_eq!(listing_shape(&folder_listing(&paths, "/bms/set.7z!/group_b")), ["chart 1"]);
+}
+
+#[test]
+fn archive_lists_root_songs_and_deep_folders_together() {
+    let paths = [
+        "/bms/set.zip!/a.bms",
+        "/bms/set.zip!/song/b.bms",
+        "/bms/set.zip!/group/c.bms",
+        "/bms/set.zip!/group/deep/song/d.bms",
+        "/bms/set.zip!/group/deep/song/sabun/e.bms",
+    ];
+    assert_eq!(
+        listing_shape(&folder_listing(&paths, "/bms/set.zip!")),
+        ["folder group /bms/set.zip!/group", "chart 0", "chart 1"]
+    );
+    assert_eq!(
+        listing_shape(&folder_listing(&paths, "/bms/set.zip!/group")),
+        ["folder deep /bms/set.zip!/group/deep", "chart 2"]
+    );
+    assert_eq!(
+        listing_shape(&folder_listing(&paths, "/bms/set.zip!/group/deep")),
+        ["folder song /bms/set.zip!/group/deep/song"]
+    );
+    assert_eq!(
+        listing_shape(&folder_listing(&paths, "/bms/set.zip!/group/deep/song")),
+        ["chart 3", "chart 4"]
+    );
+}
+
+#[test]
+fn archive_wrapper_with_own_and_deep_charts_remains_browsable_in_every_format() {
+    for extension in ["zip", "RAR", "7z", "7zip", "tar.gz", "tgz", "lzh", "lha"] {
+        let archive = format!("/bms/set.{extension}!");
+        let own = format!("{archive}/Pack/a.bms");
+        let deep = format!("{archive}/Pack/group/song/b.bms");
+        let paths = [own.as_str(), deep.as_str()];
+        assert_eq!(
+            listing_shape(&folder_listing(&paths, "/bms")),
+            [format!("folder Pack {archive}/Pack")],
+            "{extension}"
+        );
+        assert_eq!(
+            listing_shape(&folder_listing(&paths, &format!("{archive}/Pack"))),
+            [format!("folder group {archive}/Pack/group"), "chart 0".into()]
+        );
+        assert_eq!(
+            listing_shape(&folder_listing(&paths, &format!("{archive}/Pack/group"))),
+            ["chart 1"]
+        );
+    }
+}
+
+#[test]
+fn archive_folder_summary_and_reachability_include_all_depths_once() {
+    let (mut library_db, mut score_db) = open_in_memory_dbs();
+    let folders = [
+        "/bms/set.zip!",
+        "/bms/set.zip!/group",
+        "/bms/set.zip!/group/deep/song",
+        "/bms/set.zip!/group/deep/song/sabun",
+        "/bms/set.zip!/song",
+    ];
+    for (index, folder) in folders.iter().enumerate() {
+        let chart = chart(&format!("{index}"));
+        library_db
+            .upsert_chart_import(&record_for_chart(&format!("{folder}/chart.bms"), &chart))
+            .unwrap();
+        if index != 0 {
+            score_db.insert_score(&score_for_chart(chart.identity.file_sha256)).unwrap();
+        }
+    }
+    for root in ["/bms", "/bms/set.zip!"] {
+        let mut reachable = reachable_chart_folders(&library_db, root).unwrap();
+        reachable.sort();
+        assert_eq!(reachable, folders);
+        let summary = select_folder_summary(
+            &library_db,
+            &score_db,
+            root,
+            SelectRowKind::Folder,
+            LnPolicySetting::AutoLn,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(summary.lamp_counts[0], 1);
+        assert_eq!(summary.lamp_counts[5], 4);
+        assert_eq!(summary.lamp_counts.iter().sum::<u32>(), 5);
+    }
+}
+
+#[test]
+fn archive_deep_chain_keeps_every_chart_reachable() {
+    let (mut library_db, score_db) = open_in_memory_dbs();
+    let mut folder = "/bms/set.zip!".to_string();
+    let mut folders = Vec::new();
+    for index in 0..32 {
+        library_db
+            .upsert_chart_import(&record_for_chart(
+                &format!("{folder}/chart.bms"),
+                &chart(&format!("{index}")),
+            ))
+            .unwrap();
+        folders.push(folder.clone());
+        folder.push_str("/inner");
+    }
+    let reachable = reachable_chart_folders(&library_db, "/bms/set.zip!").unwrap();
+    assert_eq!(reachable, folders);
+    for (index, folder) in folders.iter().enumerate() {
+        let items =
+            load_select_items_in_folder(&library_db, &score_db, folder, LnPolicySetting::AutoLn)
+                .unwrap();
+        assert!(items.iter().any(|item| matches!(item, SelectItem::Chart(row)
+            if row.display_title() == index.to_string())));
+        if index < 30 {
+            assert!(items.iter().any(|item| matches!(item, SelectItem::Folder { path, .. }
+                if path == &folders[index + 1])));
+        }
+    }
+}
+
+#[test]
+fn archive_internal_directory_names_are_not_treated_as_containers() {
+    let paths = ["/bms/set.zip!/group.7z!/inner/song/a.bms"];
+    assert_eq!(
+        listing_shape(&folder_listing(&paths, "/bms/set.zip!")),
+        ["folder group.7z! /bms/set.zip!/group.7z!"]
+    );
 }
 
 #[test]

@@ -252,7 +252,7 @@ fn build_select_items_for_stack_with_startup(
         },
         Some(path) if parse_same_folder_path(path).is_some() => {
             let folder = parse_same_folder_path(path).unwrap();
-            load_select_items_in_folder_for_rule_mode_with_filters(
+            let mut items = load_select_items_in_folder_for_rule_mode_with_filters(
                 boot.library_db,
                 boot.score_db,
                 folder,
@@ -261,7 +261,15 @@ fn build_select_items_for_stack_with_startup(
                 &active_table_sources,
                 Some(&active_song_roots),
                 Some(&active_table_sources),
-            )?
+            )?;
+            // Archive browsing can include descendants; the same-folder view is
+            // still limited to charts beside the selected chart.
+            let folder_key = folder.replace('\\', "/");
+            items.retain(|item| {
+                matches!(item, SelectItem::Chart(row)
+                    if row.chart.as_ref().is_some_and(|chart| chart.folder_path == folder_key))
+            });
+            items
         }
         Some(path) if path.starts_with(VIRTUAL_FOLDER_PATH_PREFIX) => {
             virtual_folders.as_ref().map_err(|error| anyhow::anyhow!("{error}"))?.load_items(
