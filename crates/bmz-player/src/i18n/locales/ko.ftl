@@ -344,6 +344,7 @@ settings-video-frame-latency-stable = 안정
 settings-video-target-fps = 목표 FPS
 settings-video-background-fps = 백그라운드 FPS 제한
 settings-video-renderer = 렌더링 백엔드
+renderer-opengl-fallback = OpenGL로 시작할 수 없어 { $backend } 백엔드를 사용 중입니다. BMZ 메뉴에서 변경할 수 있습니다.
 settings-video-apply-help = 너비·높이·전체 화면에 사용할 화면·그리기 방식은 다음에 실행할 때 반영됩니다. 그 밖의 항목은 바로 반영됩니다.
 settings-screenshot-title = 스크린샷
 settings-screenshot-directory = 저장 위치

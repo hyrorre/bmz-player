@@ -53,44 +53,48 @@ pub(super) fn configure_surface_settings(
         config.present_mode,
         cfg!(target_os = "macos"),
     );
-    config.usage |= wgpu::TextureUsages::COPY_SRC;
 }
 
-/// `Surface::configure` がdevice error sinkへ送る同期エラーを局所的に捕捉する。
-///
-/// wgpu 29のerror scopeはfilterごとに分かれているため、全種類を積み、必ず
-/// pushと逆順にpopする。scope外のGPUエラーには既定のuncaptured handlerを残す。
+pub(super) fn screenshot_surface_usage(supported: wgpu::TextureUsages) -> wgpu::TextureUsages {
+    wgpu::TextureUsages::RENDER_ATTACHMENT | (supported & wgpu::TextureUsages::COPY_SRC)
+}
+
+pub(super) struct RendererErrorScopes([wgpu::ErrorScopeGuard; 3]);
+
+impl RendererErrorScopes {
+    pub(super) fn push(device: &wgpu::Device) -> Self {
+        Self([
+            device.push_error_scope(wgpu::ErrorFilter::Validation),
+            device.push_error_scope(wgpu::ErrorFilter::Internal),
+            device.push_error_scope(wgpu::ErrorFilter::OutOfMemory),
+        ])
+    }
+
+    pub(super) fn pop(self) -> Option<String> {
+        // Each filter catches a distinct kind of error. Pop every scope in reverse order.
+        let errors: Vec<_> = self
+            .0
+            .into_iter()
+            .rev()
+            .filter_map(|scope| block_on(scope.pop()))
+            .map(|error| error.to_string())
+            .collect();
+        (!errors.is_empty()).then(|| errors.join("; "))
+    }
+}
+
+/// Capture synchronous errors reported by `Surface::configure` to the device.
 pub(super) fn configure_surface_checked(
     surface: &wgpu::Surface<'_>,
     device: &wgpu::Device,
     config: &wgpu::SurfaceConfiguration,
     adapter_info: &wgpu::AdapterInfo,
 ) -> Result<()> {
-    let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let internal_scope = device.push_error_scope(wgpu::ErrorFilter::Internal);
-    let out_of_memory_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-
+    let scopes = RendererErrorScopes::push(device);
     surface.configure(device, config);
-
-    let mut captured = Vec::new();
-    if let Some(error) = block_on(out_of_memory_scope.pop()) {
-        captured.push(("out_of_memory", error));
-    }
-    if let Some(error) = block_on(internal_scope.pop()) {
-        captured.push(("internal", error));
-    }
-    if let Some(error) = block_on(validation_scope.pop()) {
-        captured.push(("validation", error));
-    }
-    if captured.is_empty() {
+    let Some(captured_errors) = scopes.pop() else {
         return Ok(());
-    }
-
-    let captured_errors = captured
-        .iter()
-        .map(|(kind, error)| format!("{kind}: {error}"))
-        .collect::<Vec<_>>()
-        .join("; ");
+    };
     tracing::error!(
         adapter_name = %adapter_info.name,
         adapter_backend = ?adapter_info.backend,

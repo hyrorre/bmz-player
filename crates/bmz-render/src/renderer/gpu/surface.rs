@@ -1,5 +1,20 @@
 use super::*;
 
+fn blit_quad_bytes(rect: &Rect, aspect: f32) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(IMAGE_INSTANCE_BYTES);
+    encode_image_instance(
+        &mut bytes,
+        rect,
+        &UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+        &Color::rgb(1.0, 1.0, 1.0),
+        0.0,
+        Point { x: 0.5, y: 0.5 },
+        aspect,
+        Point { x: 1.0, y: 1.0 },
+    );
+    bytes
+}
+
 impl WgpuRenderer {
     pub(in crate::renderer) fn resize(&mut self, size: SurfaceSize) -> Result<()> {
         anyhow::ensure!(
@@ -91,6 +106,7 @@ impl WgpuRenderer {
         }
         if applied {
             self.clear_internal_scene_target();
+            self.screenshot_target = None;
             self.clear_offscreen_rect_batches();
         }
         applied
@@ -133,8 +149,43 @@ impl WgpuRenderer {
         if self.internal_scene_target.as_ref().is_some_and(|target| target.size == size) {
             return;
         }
+        self.internal_scene_target = Some(self.create_scene_target(size, false));
+        self.upscale_rect = None;
+        tracing::info!(
+            width = size.width,
+            height = size.height,
+            "created internal scene render target"
+        );
+    }
+
+    pub(in crate::renderer) fn ensure_screenshot_target(&mut self, size: SurfaceSize) {
+        if !self.screenshot_target.as_ref().is_some_and(|target| target.size == size) {
+            self.screenshot_target = Some(self.create_scene_target(size, true));
+        }
+        if self.screenshot_blit_buffer.is_none() {
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("bmz-render screenshot blit quad"),
+                size: IMAGE_INSTANCE_BYTES as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let rect = Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 };
+            self.queue.write_buffer(&buffer, 0, &blit_quad_bytes(&rect, 1.0));
+            self.screenshot_blit_buffer = Some(buffer);
+        }
+    }
+
+    fn create_scene_target(&self, size: SurfaceSize, readable: bool) -> SceneTarget {
+        let mut usage =
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
+        let (label, sampler) = if readable {
+            usage |= wgpu::TextureUsages::COPY_SRC;
+            ("bmz-render screenshot target", &self.image_sampler)
+        } else {
+            ("bmz-render internal scene target", &self.image_sampler_linear)
+        };
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("bmz-render internal scene target"),
+            label: Some(label),
             size: wgpu::Extent3d {
                 width: size.width,
                 height: size.height,
@@ -144,12 +195,12 @@ impl WgpuRenderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: self.config.format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("bmz-render internal scene bind group"),
+            label: Some(label),
             layout: &self.image_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -158,18 +209,11 @@ impl WgpuRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.image_sampler_linear),
+                    resource: wgpu::BindingResource::Sampler(sampler),
                 },
             ],
         });
-        self.internal_scene_target =
-            Some(InternalSceneTarget { _texture: texture, view, bind_group, size });
-        self.upscale_rect = None;
-        tracing::info!(
-            width = size.width,
-            height = size.height,
-            "created internal scene render target"
-        );
+        SceneTarget { texture, view, bind_group, size }
     }
 
     pub(in crate::renderer) fn update_upscale_instance(
@@ -180,18 +224,8 @@ impl WgpuRenderer {
         if self.upscale_rect == Some(rect) {
             return;
         }
-        let mut bytes = Vec::with_capacity(IMAGE_INSTANCE_BYTES);
-        encode_image_instance(
-            &mut bytes,
-            &rect,
-            &UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
-            &Color::rgb(1.0, 1.0, 1.0),
-            0.0,
-            Point { x: 0.5, y: 0.5 },
-            surface_size.width as f32 / surface_size.height.max(1) as f32,
-            Point { x: 1.0, y: 1.0 },
-        );
-        self.queue.write_buffer(&self.upscale_buffer, 0, &bytes);
+        let aspect = surface_size.width as f32 / surface_size.height.max(1) as f32;
+        self.queue.write_buffer(&self.upscale_buffer, 0, &blit_quad_bytes(&rect, aspect));
         self.upscale_rect = Some(rect);
     }
 

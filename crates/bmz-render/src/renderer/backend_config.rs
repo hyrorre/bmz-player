@@ -56,6 +56,16 @@ pub(super) const LOW_LATENCY_MAXIMUM_FRAME_LATENCY: u32 = 1;
 pub(super) const STABLE_MAXIMUM_FRAME_LATENCY: u32 = 2;
 
 impl WgpuBackend {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::Vulkan => "Vulkan",
+            Self::Metal => "Metal",
+            Self::Dx12 => "DirectX 12",
+            Self::Gl => "OpenGL",
+        }
+    }
+
     pub fn to_wgpu(self) -> wgpu::Backends {
         match self {
             Self::Auto => auto_wgpu_backends(),
@@ -113,6 +123,13 @@ pub(super) fn fallback_wgpu_backends(backend: WgpuBackend) -> &'static [WgpuBack
         WgpuBackend::Vulkan => &[WgpuBackend::Vulkan],
         WgpuBackend::Metal => &[WgpuBackend::Metal],
         WgpuBackend::Dx12 => &[WgpuBackend::Dx12],
+        #[cfg(target_os = "linux")]
+        WgpuBackend::Gl => &[WgpuBackend::Gl, WgpuBackend::Vulkan],
+        #[cfg(target_os = "windows")]
+        WgpuBackend::Gl => &[WgpuBackend::Gl, WgpuBackend::Dx12, WgpuBackend::Vulkan],
+        #[cfg(target_os = "macos")]
+        WgpuBackend::Gl => &[WgpuBackend::Gl, WgpuBackend::Metal],
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         WgpuBackend::Gl => &[WgpuBackend::Gl],
     }
 }

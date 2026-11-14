@@ -1,8 +1,8 @@
 use super::*;
 
 impl WgpuRenderer {
-    pub(in crate::renderer) fn new_with_fallbacks<T>(
-        window: T,
+    pub(in crate::renderer) fn new_with_fallbacks<T, D>(
+        (window, display): (T, D),
         size: SurfaceSize,
         present_mode: WgpuPresentMode,
         frame_latency_mode: WgpuFrameLatencyMode,
@@ -12,47 +12,23 @@ impl WgpuRenderer {
     ) -> Result<Self>
     where
         T: Into<wgpu::SurfaceTarget<'static>> + Clone,
+        D: wgpu::wgt::WgpuHasDisplayHandle + Clone,
     {
-        let candidates = fallback_wgpu_backends(backend);
-        let mut last_error = None;
-        for candidate in candidates {
-            tracing::info!(
-                requested_backend = ?backend,
-                candidate_backend = ?candidate,
-                "initializing renderer backend candidate"
-            );
-            match Self::new(
-                Some(window.clone()),
+        try_backend_candidates(backend, wgpu::Instance::enabled_backend_features(), |candidate| {
+            Self::new(
+                Some((window.clone(), Box::new(display.clone()))),
                 size,
                 present_mode,
                 frame_latency_mode,
-                *candidate,
+                candidate,
                 default_font_coverage,
                 default_font_search_paths.clone(),
-            ) {
-                Ok(renderer) => {
-                    if backend == WgpuBackend::Auto && *candidate != WgpuBackend::Auto {
-                        tracing::info!(backend = ?candidate, "selected auto renderer backend");
-                    }
-                    return Ok(renderer);
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        requested = ?backend,
-                        candidate = ?candidate,
-                        %error,
-                        "failed to initialize renderer backend candidate"
-                    );
-                    last_error = Some(error);
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| anyhow!("no renderer backend candidates available")))
+            )
+        })
     }
 
     pub(in crate::renderer) fn new<T>(
-        window: Option<T>,
+        window: Option<(T, Box<dyn wgpu::wgt::WgpuHasDisplayHandle>)>,
         size: SurfaceSize,
         present_mode: WgpuPresentMode,
         frame_latency_mode: WgpuFrameLatencyMode,
@@ -63,8 +39,13 @@ impl WgpuRenderer {
     where
         T: Into<wgpu::SurfaceTarget<'static>>,
     {
+        let (window, display) = match window {
+            Some((window, display)) => (Some(window), Some(display)),
+            None => (None, None),
+        };
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = backend.to_wgpu();
+        descriptor.display = display;
         let instance = wgpu::Instance::new(descriptor);
         let surface = window
             .map(|window| instance.create_surface(window))
@@ -90,10 +71,18 @@ impl WgpuRenderer {
         // 含まれることがある。Apple Silicon / モダンGPU 環境では 16384px までは許容
         // されるので、アダプタが報告する上限まで広げて取得する。
         let adapter_limits = adapter.limits();
-        let required_limits = wgpu::Limits {
-            max_texture_dimension_2d: adapter_limits.max_texture_dimension_2d,
-            max_texture_dimension_1d: adapter_limits.max_texture_dimension_1d,
-            ..Default::default()
+        let required_limits = if adapter_info.backend == wgpu::Backend::Gl {
+            // BMZ and egui use render passes with uniform buffers and sampled textures.
+            // GLES 3.0 can have no storage bindings or compute support.
+            wgpu::Limits::downlevel_webgl2_defaults()
+                .using_resolution(adapter_limits.clone())
+                .using_alignment(adapter_limits.clone())
+        } else {
+            wgpu::Limits {
+                max_texture_dimension_2d: adapter_limits.max_texture_dimension_2d,
+                max_texture_dimension_1d: adapter_limits.max_texture_dimension_1d,
+                ..Default::default()
+            }
         };
         let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("bmz-render device"),
@@ -109,9 +98,10 @@ impl WgpuRenderer {
         device.set_device_lost_callback(move |reason, message| {
             callback_state.notify(reason, message)
         });
-        let present_modes = surface
+        let capabilities = surface.as_ref().map(|surface| surface.get_capabilities(&adapter));
+        let present_modes = capabilities
             .as_ref()
-            .map(|s| s.get_capabilities(&adapter).present_modes)
+            .map(|capabilities| capabilities.present_modes.clone())
             .unwrap_or_else(|| vec![wgpu::PresentMode::Fifo]);
         let mut config = if let Some(surface) = &surface {
             surface
@@ -119,7 +109,7 @@ impl WgpuRenderer {
                 .ok_or_else(|| anyhow!("surface is not supported by the selected adapter"))?
         } else {
             wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage: screenshot_surface_usage(wgpu::TextureUsages::COPY_SRC),
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 width: size.width,
                 height: size.height,
@@ -133,6 +123,9 @@ impl WgpuRenderer {
         // beatoraja (libGDX) は GL_FRAMEBUFFER_SRGB を使わないため値をそのまま表示する。
         // それと合わせるため sRGB サフィックスを除去して non-sRGB サーフェスとして使う。
         config.format = config.format.remove_srgb_suffix();
+        if let Some(capabilities) = capabilities {
+            config.usage = screenshot_surface_usage(capabilities.usages);
+        }
         configure_surface_settings(&mut config, present_mode, frame_latency_mode, &present_modes);
         if let Some(surface) = &surface
             && size.is_drawable()
@@ -149,6 +142,7 @@ impl WgpuRenderer {
                     && size.height <= adapter_limits.max_texture_dimension_2d),
             "unsupported export dimensions"
         );
+        let resource_errors = RendererErrorScopes::push(&device);
         let export_target = surface.is_none().then(|| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("bmz offline output"),
@@ -161,7 +155,7 @@ impl WgpuRenderer {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: config.format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                usage: config.usage,
                 view_formats: &[],
             })
         });
@@ -242,6 +236,10 @@ impl WgpuRenderer {
         let text_sampler = create_text_sampler(&device);
         let text_pipeline = create_text_pipeline(&device, config.format, &text_bind_group_layout);
         let egui = EguiPainter::new(&device, config.format);
+        if let Some(errors) = resource_errors.pop() {
+            anyhow::bail!("failed to initialize renderer GPU resources: {errors}");
+        }
+        anyhow::ensure!(!device_loss.is_lost(), "device lost during renderer GPU initialization");
 
         let max_texture_dimension_2d = device.limits().max_texture_dimension_2d;
         Ok(Self {
@@ -272,6 +270,8 @@ impl WgpuRenderer {
             upscale_buffer,
             upscale_rect: None,
             internal_scene_target: None,
+            screenshot_target: None,
+            screenshot_blit_buffer: None,
             image_textures,
             texture_uploads: TextureUploads::default(),
             image_bind_group_cache: HashMap::new(),
@@ -304,5 +304,79 @@ impl WgpuRenderer {
             surface,
             export_target,
         })
+    }
+}
+
+fn try_backend_candidates<T>(
+    requested: WgpuBackend,
+    enabled: wgpu::Backends,
+    mut initialize: impl FnMut(WgpuBackend) -> Result<T>,
+) -> Result<T> {
+    let mut failures = Vec::new();
+    for &candidate in fallback_wgpu_backends(requested) {
+        if !enabled.intersects(candidate.to_wgpu()) {
+            failures.push(format!("{candidate:?}: backend unavailable in this build"));
+            continue;
+        }
+        tracing::info!(?requested, ?candidate, "initializing renderer backend candidate");
+        match initialize(candidate) {
+            Ok(renderer) => return Ok(renderer),
+            Err(error) => {
+                tracing::warn!(?requested, ?candidate, error = %format_args!("{error:#}"), "failed to initialize renderer backend candidate");
+                failures.push(format!("{candidate:?}: {error:#}"));
+            }
+        }
+    }
+    anyhow::bail!("could not initialize requested renderer {requested:?}: {}", failures.join("\n"))
+}
+
+#[cfg(all(test, any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+mod tests {
+    use super::*;
+
+    fn native_candidate() -> WgpuBackend {
+        #[cfg(target_os = "windows")]
+        return WgpuBackend::Dx12;
+        #[cfg(target_os = "linux")]
+        return WgpuBackend::Vulkan;
+        #[cfg(target_os = "macos")]
+        return WgpuBackend::Metal;
+    }
+
+    #[test]
+    fn opengl_failure_retries_and_stops_at_first_success() {
+        let mut attempted = Vec::new();
+        let chosen = try_backend_candidates(WgpuBackend::Gl, wgpu::Backends::all(), |candidate| {
+            attempted.push(candidate);
+            anyhow::ensure!(candidate != WgpuBackend::Gl, "injected surface configure failure");
+            Ok(candidate)
+        })
+        .unwrap();
+        assert_eq!(chosen, native_candidate());
+        assert_eq!(attempted, [WgpuBackend::Gl, native_candidate()]);
+    }
+
+    #[test]
+    fn opengl_success_does_not_try_other_backends() {
+        let chosen = try_backend_candidates(WgpuBackend::Gl, wgpu::Backends::all(), |candidate| {
+            assert_eq!(candidate, WgpuBackend::Gl);
+            Ok(candidate)
+        })
+        .unwrap();
+        assert_eq!(chosen, WgpuBackend::Gl);
+    }
+
+    #[test]
+    fn reports_unavailable_backends_and_initialization_errors() {
+        let native = native_candidate();
+        let error =
+            try_backend_candidates(WgpuBackend::Gl, native.to_wgpu(), |candidate| -> Result<()> {
+                assert_eq!(candidate, native);
+                anyhow::bail!("injected device creation failure");
+            })
+            .unwrap_err();
+        let error = error.to_string();
+        assert!(error.contains("Gl: backend unavailable in this build"));
+        assert!(error.contains(&format!("{native:?}: injected device creation failure")));
     }
 }
