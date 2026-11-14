@@ -1,9 +1,9 @@
 use super::value::{format_random_mix_bpm, format_random_mix_level};
 use super::*;
 use crate::config::profile_config::{
-    LANE_COVER_HOLD_DELAY_MS_MAX, LANE_COVER_HOLD_STEP_MAX, LANE_COVER_HOLD_STEP_MIN,
-    LANE_COVER_STEP_MAX, LANE_COVER_STEP_MIN, LANE_COVER_WHEEL_STEP_MAX, LANE_COVER_WHEEL_STEP_MIN,
-    LaneEffectConfig,
+    EXTRA_NOTE_MAX_DEPTH, LANE_COVER_HOLD_DELAY_MS_MAX, LANE_COVER_HOLD_STEP_MAX,
+    LANE_COVER_HOLD_STEP_MIN, LANE_COVER_STEP_MAX, LANE_COVER_STEP_MIN, LANE_COVER_WHEEL_STEP_MAX,
+    LANE_COVER_WHEEL_STEP_MIN, LaneEffectConfig,
 };
 
 // One entry owns its value binding, adjustment and display. The same definition
@@ -512,7 +512,7 @@ define_settings! {
     AssistExtraNoteDepth(AssistOptionConfig) {
         value: [field play.assist],
         adjust: |profile, delta| {
-            adjust_u8(&mut profile.play.assist.extra_note_depth, delta, 0, 16)
+            adjust_u8(&mut profile.play.assist.extra_note_depth, delta, 0, EXTRA_NOTE_MAX_DEPTH)
         },
         format: |profile| profile.play.assist.extra_note_depth.to_string(),
     }

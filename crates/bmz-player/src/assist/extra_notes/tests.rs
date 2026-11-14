@@ -142,7 +142,7 @@ fn extra_notes_preserve_all_original_objects_sounds_and_timing() {
 }
 
 #[test]
-fn extra_notes_enforce_pairwise_gaps_density_and_depth_with_dense_bgm() {
+fn extra_notes_enforce_pairwise_gaps_chord_cap_and_density_at_max_depth() {
     let mut chart = chart(KeyMode::K7);
     for i in 0..=80 {
         tap(&mut chart, Lane::Key4, i * 100_000, 1);
@@ -154,7 +154,7 @@ fn extra_notes_enforce_pairwise_gaps_density_and_depth_with_dense_bgm() {
     }
     let before = chart.clone();
     let first = super::super::next_note_id(&chart);
-    assert!(add_extra_notes(&mut chart, 2, false, false));
+    assert!(add_extra_notes(&mut chart, 16, false, false));
     let mut added_times = Vec::new();
     let mut chords = BTreeMap::<TimeUs, usize>::new();
     let tempo = Tempo::new(&before);
@@ -177,11 +177,17 @@ fn extra_notes_enforce_pairwise_gaps_density_and_depth_with_dense_bgm() {
     }
     added_times.sort_unstable();
     assert!(added_times.len() > 10);
-    assert!(chords.values().all(|&count| count <= 2));
+    for (time, count) in chords {
+        let original_chord = usize::from(time.0 % 100_000 == 0);
+        assert!(count + original_chord <= 4);
+    }
+    let mut peak = 0;
     for &time in &added_times {
         let recent = added_times.iter().filter(|at| time.0 - SECOND < at.0 && **at <= time).count();
-        assert!(recent <= 8);
+        assert!(recent <= 16);
+        peak = peak.max(recent);
     }
+    assert_eq!(peak, 16);
     assert_eq!(sounding_events(&chart), sounding_events(&before));
 }
 
@@ -203,8 +209,10 @@ fn extra_notes_limit_sparse_charts_to_the_source_density() {
         let count =
             original.iter().filter(|at| time.0 - SECOND <= at.0 && at.0 < time.0 + SECOND).count();
         let recent = added.iter().filter(|at| time.0 - SECOND < at.0 && **at <= time).count();
-        assert!(recent <= count.div_ceil(2).min(8));
+        let budget = (count + count.div_ceil(2)).min(16);
+        assert!(recent <= budget);
     }
+    assert!(added.len() > original.len() * 2);
 }
 
 #[test]
@@ -385,16 +393,89 @@ fn extra_notes_are_independent_of_the_installation_directory() {
 }
 
 #[test]
-fn extra_notes_depth_groups_equal_times_even_when_ticks_differ() {
+fn extra_notes_chord_cap_counts_equal_times_even_when_ticks_differ() {
     let mut chart = chart(KeyMode::K7);
     for at in [0, 1_000_000, 2_000_000] {
         tap(&mut chart, Lane::Key1, at, 1);
     }
-    bgm(&mut chart, 500_000, 2);
-    bgm(&mut chart, 500_000, 3);
-    chart.bgm_events[1].tick = ChartTick(123);
+    for lane in [Lane::Key2, Lane::Key3, Lane::Key4] {
+        tap(&mut chart, lane, 500_000, 1);
+    }
+    for sound in 2..=6 {
+        bgm(&mut chart, 500_000, sound);
+        chart.bgm_events.last_mut().unwrap().tick = ChartTick(u64::from(sound));
+    }
     let first = super::super::next_note_id(&chart);
-    assert!(add_extra_notes(&mut chart, 1, false, false));
+    assert!(add_extra_notes(&mut chart, 16, false, false));
     assert_eq!(chart.lane_notes.iter().flatten().filter(|n| n.id >= first).count(), 1);
-    assert_eq!(chart.bgm_events.len(), 1);
+    assert_eq!(chart.bgm_events.len(), 4);
+}
+
+#[test]
+fn extra_notes_depth_adds_a_growing_subset_across_the_chart() {
+    let mut source = chart(KeyMode::K7);
+    for second in 0..=32 {
+        tap(&mut source, Lane::Key1, second * SECOND, 1);
+    }
+    for second in 0..32 {
+        bgm(&mut source, second * SECOND + SECOND / 2, 2);
+    }
+    let first = super::super::next_note_id(&source);
+    let original_sounds = sounding_events(&source);
+    let mut previous = BTreeSet::new();
+    for depth in 1..=16 {
+        let mut chart = source.clone();
+        assert!(add_extra_notes(&mut chart, depth, false, false));
+        let added: BTreeSet<_> = chart
+            .lane_notes
+            .iter()
+            .flatten()
+            .filter(|note| note.id >= first)
+            .map(|note| (note.time, note.lane.index(), note.sound))
+            .collect();
+        assert_eq!(added.len(), usize::from(depth) * 2);
+        assert!(previous.is_subset(&added));
+        assert_eq!(sounding_events(&chart), original_sounds);
+        if depth == 1 {
+            assert_eq!(
+                added.iter().map(|(time, _, _)| time.0).collect::<Vec<_>>(),
+                vec![15_500_000, 23_500_000]
+            );
+        }
+        previous = added;
+    }
+}
+
+#[test]
+fn extra_notes_depth_rounds_up_with_few_candidates() {
+    assert!(selected_placements(0, 1).is_empty());
+    assert_eq!(selected_placements(3, 1), [1]);
+    assert_eq!(selected_placements(3, 6), [0, 1]);
+    assert_eq!(selected_placements(3, 11), [0, 1, 2]);
+    assert_eq!(selected_placements(3, 100), [0, 1, 2]);
+}
+
+#[test]
+fn extra_notes_are_reproducible_across_bms_imports() {
+    use std::path::Path;
+
+    use bmz_chart::import::{AssetLookup, BmsRandomSource, import_chart_bytes_with_assets};
+
+    let import_and_add = || {
+        let mut chart = import_chart_bytes_with_assets(
+            Path::new("extra-note.bms"),
+            b"#BPM 150\n#WAV04 bass.wav\n#WAV01 key.wav\n#WAV07 drums.wav\n#00111:01000100\n#00219:01\n#00101:00040007\n#00101:00070004\n",
+            BmsRandomSource::Seed(Some(0)),
+            AssetLookup::Declared,
+        )
+        .unwrap()
+        .chart;
+        assert!(add_extra_notes(&mut chart, 16, false, false));
+        let sounds: Vec<_> = chart.sounds.iter().map(|sound| (sound.id, &sound.path)).collect();
+        format!("{sounds:?} {:?} {:?}", chart.lane_notes, chart.bgm_events)
+    };
+    let first = import_and_add();
+    for _ in 0..8 {
+        assert_eq!(import_and_add(), first);
+    }
 }

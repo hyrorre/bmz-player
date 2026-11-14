@@ -1,14 +1,17 @@
 //! Deterministic, sound-aware BGM placement on the final player arrangement.
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
 
 use bmz_chart::model::{NoteEvent, NoteKind, PlayableChart, TimingEventKind};
-use bmz_core::ids::SoundId;
+use bmz_core::ids::{NoteId, SoundId};
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
+use crate::config::profile_config::EXTRA_NOTE_MAX_DEPTH;
+
 const SECOND: i64 = 1_000_000;
+const MAX_ADDITIONS_PER_SECOND: usize = 16;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum SoundKey {
@@ -300,14 +303,15 @@ pub(super) fn add_extra_notes(
     }
     let mut repeats = BTreeMap::<SoundKey, u32>::new();
     let mut grouped = BTreeMap::<TimeUs, Vec<_>>::new();
-    for event in std::mem::take(&mut chart.bgm_events) {
+    for (index, event) in chart.bgm_events.iter().enumerate() {
         *repeats.entry(key(event.sound)).or_default() += 1;
-        grouped.entry(event.time).or_default().push(event);
+        grouped.entry(event.time).or_default().push(index);
     }
     let mut recent: [VecDeque<TimeUs>; 2] = std::array::from_fn(|_| VecDeque::new());
-    let mut next_id = Some(first_id);
-    let mut moved = false;
-    for (time, mut events) in grouped {
+    let max_placements = (u32::MAX - first_id) as usize + 1;
+    let mut placements = Vec::new();
+    'timeline: for (time, events) in grouped.range_mut(start..=end) {
+        let time = *time;
         for times in &mut recent {
             while times.front().is_some_and(|at| at.0 <= time.0.saturating_sub(SECOND)) {
                 times.pop_front();
@@ -316,9 +320,11 @@ pub(super) fn add_extra_notes(
         let budget: [usize; 2] = std::array::from_fn(|p| {
             let lower = source[p].partition_point(|at| at.0 < time.0.saturating_sub(SECOND));
             let upper = source[p].partition_point(|at| at.0 < time.0.saturating_add(SECOND));
-            (upper - lower).div_ceil(2).min(8)
+            let count = upper - lower;
+            (count + count.div_ceil(2)).min(MAX_ADDITIONS_PER_SECOND)
         });
-        events.sort_by_key(|event| {
+        events.sort_by_key(|&index| {
+            let event = &chart.bgm_events[index];
             let sound = key(event.sound);
             (
                 Reverse(affinity.contains_key(&sound)),
@@ -328,8 +334,11 @@ pub(super) fn add_extra_notes(
                 event.tick,
             )
         });
-        let mut count = 0;
-        for event in events {
+        for &event_index in events.iter() {
+            if placements.len() == max_placements {
+                break 'timeline;
+            }
+            let event = &chart.bgm_events[event_index];
             let sound = key(event.sound);
             let counts = affinity.get(&sound).copied().unwrap_or_default();
             let hash = sound.hash();
@@ -342,73 +351,104 @@ pub(super) fn add_extra_notes(
                     )
                 })
                 .unwrap();
-            let target =
-                if next_id.is_none() || time < start || time > end || count >= usize::from(depth) {
-                    None
-                } else {
-                    eligible
+            let target = eligible
+                .iter()
+                .enumerate()
+                .filter_map(|(position, &lane)| {
+                    let p = side(lane);
+                    if recent[p].len() >= budget[p] {
+                        return None;
+                    }
+                    let occupied = lanes
                         .iter()
-                        .enumerate()
-                        .filter_map(|(position, &lane)| {
-                            let p = side(lane);
-                            if recent[p].len() >= budget[p] {
-                                return None;
-                            }
-                            let occupied = lanes
-                                .iter()
-                                .filter(|&&l| side(l) == p && indices[l.index()].busy(time))
-                                .count();
-                            if occupied >= chord_cap[p] {
-                                return None;
-                            }
-                            let gap = tempo.gap(time, lane);
-                            let slack = indices[lane.index()].slack(time, gap)?;
-                            let load = indices[lane.index()].added.partition_point(|&(at, _)| {
-                                at.0 < time.0.saturating_sub(2 * SECOND)
-                            });
-                            Some((
-                                (
-                                    Reverse(counts[lane.index()] > 0),
-                                    position.abs_diff(primary),
-                                    Reverse(slack),
-                                    indices[lane.index()].added.len() - load,
-                                    (position + eligible.len() - rotation) % eligible.len(),
-                                ),
-                                lane,
-                                gap,
-                            ))
-                        })
-                        .min_by_key(|&(rank, _, _)| rank)
-                        .map(|(_, lane, gap)| (lane, gap))
-                };
+                        .filter(|&&l| side(l) == p && indices[l.index()].busy(time))
+                        .count();
+                    if occupied >= chord_cap[p] {
+                        return None;
+                    }
+                    let gap = tempo.gap(time, lane);
+                    let slack = indices[lane.index()].slack(time, gap)?;
+                    let load = indices[lane.index()]
+                        .added
+                        .partition_point(|&(at, _)| at.0 < time.0.saturating_sub(2 * SECOND));
+                    Some((
+                        (
+                            Reverse(counts[lane.index()] > 0),
+                            position.abs_diff(primary),
+                            Reverse(slack),
+                            indices[lane.index()].added.len() - load,
+                            (position + eligible.len() - rotation) % eligible.len(),
+                        ),
+                        lane,
+                        gap,
+                    ))
+                })
+                .min_by_key(|&(rank, _, _)| rank)
+                .map(|(_, lane, gap)| (lane, gap));
             let Some((lane, gap)) = target else {
-                chart.bgm_events.push(event);
                 continue;
             };
-            chart.lane_notes[lane.index()].push(NoteEvent {
-                id: bmz_core::ids::NoteId(next_id.expect("checked above")),
-                lane,
-                kind: NoteKind::Tap,
-                tick: event.tick,
-                time,
-                sound: Some(event.sound),
-                layered_sounds: Vec::new(),
-                damage: None,
-            });
+            placements.push((event_index, lane));
             indices[lane.index()].added.push((time, gap));
             recent[side(lane)].push_back(time);
-            next_id = next_id.and_then(|id| id.checked_add(1));
-            count += 1;
-            moved = true;
         }
     }
+    if placements.is_empty() {
+        return false;
+    }
+
+    let mut moved = vec![false; chart.bgm_events.len()];
+    for (offset, placement) in selected_placements(placements.len(), depth).into_iter().enumerate()
+    {
+        let (event_index, lane) = placements[placement];
+        let event = &chart.bgm_events[event_index];
+        moved[event_index] = true;
+        chart.lane_notes[lane.index()].push(NoteEvent {
+            id: NoteId(first_id + offset as u32),
+            lane,
+            kind: NoteKind::Tap,
+            tick: event.tick,
+            time: event.time,
+            sound: Some(event.sound),
+            layered_sounds: Vec::new(),
+            damage: None,
+        });
+    }
+    let mut moved = moved.into_iter();
+    chart.bgm_events.retain(|_| !moved.next().unwrap());
     chart.bgm_events.sort_by_key(|event| (event.time, event.tick));
-    if moved {
-        for notes in &mut chart.lane_notes {
-            notes.sort_by_key(|note| (note.time, note.id));
+    for notes in &mut chart.lane_notes {
+        notes.sort_by_key(|note| (note.time, note.id));
+    }
+    true
+}
+
+fn selected_placements(count: usize, depth: u8) -> Vec<usize> {
+    let max_depth = usize::from(EXTRA_NOTE_MAX_DEPTH);
+    let depth = usize::from(depth).min(max_depth);
+    let total = count / max_depth * depth + ((count % max_depth) * depth).div_ceil(max_depth);
+    if total == count {
+        return (0..count).collect();
+    }
+
+    // Split the largest remaining run of chronological candidates. Earlier runs
+    // win ties, so increasing depth always extends the same selection.
+    let mut runs = BinaryHeap::from([(count, Reverse(0_usize))]);
+    let mut selected = Vec::with_capacity(total);
+    for _ in 0..total {
+        let (len, Reverse(start)) = runs.pop().unwrap();
+        let midpoint = start + (len - 1) / 2;
+        selected.push(midpoint);
+        let end = start + len;
+        if start < midpoint {
+            runs.push((midpoint - start, Reverse(start)));
+        }
+        if midpoint + 1 < end {
+            runs.push((end - midpoint - 1, Reverse(midpoint + 1)));
         }
     }
-    moved
+    selected.sort_unstable();
+    selected
 }
 
 #[cfg(test)]

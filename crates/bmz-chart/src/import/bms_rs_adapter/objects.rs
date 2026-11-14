@@ -31,12 +31,14 @@ pub(super) fn restore_default_poor_bga(chart: &mut IntermediateChart, path: Opti
 }
 
 pub(super) fn build_resources(bms: &Bms) -> IntermediateResources {
-    let wavs: Vec<WavDef> = bms
+    let mut wavs: Vec<WavDef> = bms
         .wav
         .wav_files
         .iter()
         .map(|(id, path)| WavDef { key: id.as_u16(), path: path.clone(), slice: None })
         .collect();
+    // Normalization assigns SoundId in this order, which EXTRA NOTE uses for tie-breaking.
+    wavs.sort_unstable_by_key(|wav| wav.key);
     let bmps: Vec<BmpDef> = bms
         .bmp
         .bmp_files

@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::profile_config::{
-    KeyModeConversionConfig, SRandomCorrectionConfig, SevenToNinePattern, SevenToNineRuleMode,
-    SevenToNineType,
+    EXTRA_NOTE_MAX_DEPTH, KeyModeConversionConfig, SRandomCorrectionConfig, SevenToNinePattern,
+    SevenToNineRuleMode, SevenToNineType,
 };
 
 pub(in crate::ui::profile_panel) fn build_profile_play_section(
@@ -371,9 +371,10 @@ pub(in crate::ui::profile_panel) fn build_profile_play_section(
                         });
 
                     ui.add(
-                        egui::Slider::new(&mut assist.extra_note_depth, 0..=16)
+                        egui::Slider::new(&mut assist.extra_note_depth, 0..=EXTRA_NOTE_MAX_DEPTH)
                             .text("EXTRA NOTE DEPTH"),
-                    );
+                    )
+                    .on_hover_text(tr!(text, "settings-entry-description-assist-extra-note-depth"));
                     ui.checkbox(&mut assist.extra_note_scratch, "EXTRA NOTE SCRATCH");
                     ui.add(
                         egui::Slider::new(&mut assist.extra_note_type, 0..=2)

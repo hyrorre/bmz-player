@@ -728,6 +728,8 @@ impl LaneEffectConfig {
     }
 }
 
+pub const EXTRA_NOTE_MAX_DEPTH: u8 = 16;
+
 /// beatoraja `PlayerConfig` のアシスト設定。
 ///
 /// 選曲画面の7トグルは同時に有効化できるため、旧来の単一 enum ではなく
@@ -997,7 +999,7 @@ impl<'de> Deserialize<'de> for AssistOptionConfig {
                     default_assist_long_note_rate()
                 },
                 extra_note_type: fields.extra_note_type,
-                extra_note_depth: fields.extra_note_depth.min(100),
+                extra_note_depth: fields.extra_note_depth.min(EXTRA_NOTE_MAX_DEPTH),
                 extra_note_scratch: fields.extra_note_scratch,
                 auto_scratch: fields.auto_scratch,
             },
