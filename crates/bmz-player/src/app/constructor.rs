@@ -32,9 +32,8 @@ impl WinitApp {
         }
         let mut boot = boot;
         let viewer_mode = options.viewer_play;
-        if let Some(cli_renderer) = options.renderer.clone() {
+        if let Some(cli_renderer) = &options.renderer {
             tracing::info!(?cli_renderer, "overriding renderer backend via CLI option");
-            boot.app_config.video.renderer = cli_renderer;
         }
 
         phase.complete();
@@ -137,6 +136,9 @@ impl WinitApp {
         let mut renderer = Box::new(Renderer::default());
         phase.complete();
         let phase = StartupPhase::begin(startup_started_at, "renderer_initial_configuration");
+        renderer.set_backend(config_renderer_backend(
+            options.renderer.clone().unwrap_or_else(|| boot.app_config.video.renderer.clone()),
+        ));
         renderer.set_default_font_search_paths(vec![boot.app_paths.bundled_noto_cjk_font_root()]);
         renderer.set_default_font_coverage(boot.profile_config.ui.locale().font_coverage());
         renderer

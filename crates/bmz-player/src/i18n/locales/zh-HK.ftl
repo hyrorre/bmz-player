@@ -345,6 +345,7 @@ settings-video-frame-latency-stable = 穩定
 settings-video-target-fps = 目標 FPS
 settings-video-background-fps = 背景 FPS 上限
 settings-video-renderer = 算繪後端
+renderer-opengl-fallback = 無法使用 OpenGL 啟動，目前使用 { $backend }。可在 BMZ 選單中更改算繪後端。
 settings-video-apply-help = 寬度、高度、全屏幕使用的屏幕與繪製方式會在下次啟動時生效。其他項目會立即生效。
 settings-screenshot-title = 螢幕截圖
 settings-screenshot-directory = 儲存位置

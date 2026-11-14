@@ -58,7 +58,7 @@ impl ScreenshotCapture {
         Self { buffer, width, height, padded_bytes_per_row, format }
     }
 
-    pub(super) fn copy_from_surface(
+    pub(super) fn copy_from_texture(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         texture: &wgpu::Texture,

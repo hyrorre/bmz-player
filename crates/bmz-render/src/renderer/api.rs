@@ -31,7 +31,7 @@ impl Renderer {
         );
         let mut encoder =
             gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        capture.copy_from_surface(&mut encoder, target);
+        capture.copy_from_texture(&mut encoder, target);
         gpu.queue.submit([encoder.finish()]);
         let rx = capture.start_readback();
         gpu.device.poll(wgpu::PollType::wait_indefinitely())?;
@@ -39,12 +39,17 @@ impl Renderer {
         Ok(capture.mapped_rgba())
     }
 
-    pub fn attach_surface<T>(&mut self, window: T, size: SurfaceSize) -> Result<()>
+    pub fn attach_surface<T>(
+        &mut self,
+        window: T,
+        display: impl wgpu::wgt::WgpuHasDisplayHandle + Clone,
+        size: SurfaceSize,
+    ) -> Result<()>
     where
         T: Into<wgpu::SurfaceTarget<'static>> + Clone,
     {
         let mut gpu = WgpuRenderer::new_with_fallbacks(
-            window,
+            (window, display),
             size,
             self.present_mode,
             self.frame_latency_mode,
@@ -63,6 +68,16 @@ impl Renderer {
         self.deferred.forget_gpu();
         self.install_pending_sprite_sheets();
         Ok(())
+    }
+
+    pub fn effective_backend(&self) -> Option<WgpuBackend> {
+        self.gpu.as_ref().and_then(|gpu| match gpu.adapter_info.backend {
+            wgpu::Backend::Vulkan => Some(WgpuBackend::Vulkan),
+            wgpu::Backend::Metal => Some(WgpuBackend::Metal),
+            wgpu::Backend::Dx12 => Some(WgpuBackend::Dx12),
+            wgpu::Backend::Gl => Some(WgpuBackend::Gl),
+            _ => None,
+        })
     }
 
     /// `max_texture_dimension_2d` of the attached device, or `None` without a GPU.
@@ -863,6 +878,10 @@ impl Renderer {
 
     pub fn set_backend(&mut self, backend: WgpuBackend) {
         self.backend = backend;
+    }
+
+    pub fn requested_backend(&self) -> WgpuBackend {
+        self.backend
     }
 
     /// 未指定テキストの CJK 字形で最優先する地域 coverage を変更する。
