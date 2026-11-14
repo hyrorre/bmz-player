@@ -78,6 +78,78 @@ fn virtual_folders(
 }
 
 #[test]
+fn archive_folder_autoplay_follows_groups_and_stops_below_song_folders() {
+    use std::io::Write;
+
+    let data = ProfileTestDir::new();
+    let mut boot = data.boot();
+    let archive = boot.app_paths.data_dir.join("pack.zip");
+    let mut writer = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+    for (entry, title) in [
+        ("group_a/song/chart.bms", "Group"),
+        ("group_a/song/sabun/chart.bms", "Hidden"),
+        ("group_b/subgroup/song/chart.bms", "Deep"),
+        ("group_c/song/chart.bms", "Shallow"),
+    ] {
+        writer.start_file(entry, zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(format!("#TITLE {title}\n#BPM 120\n#00111:01\n").as_bytes()).unwrap();
+    }
+    writer.finish().unwrap();
+    boot.app_config.songs.roots = vec![PathEntry {
+        path: boot.app_paths.data_dir.to_string_lossy().into_owned(),
+        enabled: true,
+        recursive: true,
+    }];
+    let report = crate::storage::scan::scan_song_roots(
+        &mut boot.library_db,
+        &boot.app_config.songs.roots,
+        &boot.app_config.scan,
+        1,
+        false,
+    )
+    .unwrap();
+    assert_eq!(report.summary.imported, 4);
+    let source = SelectListSource::from(&boot);
+    let catalog = virtual_folders(&boot);
+    let archive_path = format!("{}!", crate::storage::library_db::library_path_key(&archive));
+    let item = SelectItem::Folder {
+        path: archive_path.clone(),
+        name: "pack".into(),
+        kind: SelectRowKind::Folder,
+        summary: None,
+    };
+    let ids = autoplay_folder_chart_ids(&source, &catalog, [&item]).unwrap();
+    assert_eq!(ids.len(), 3);
+    assert_eq!(ids.iter().collect::<HashSet<_>>().len(), 3);
+    let visible_folders = ["group_a/song", "group_b/subgroup/song", "group_c/song"]
+        .map(|entry| format!("{archive_path}/{entry}"));
+    let expected_ids = boot
+        .library_db
+        .list_charts_in_folders(&visible_folders.iter().map(String::as_str).collect::<Vec<_>>())
+        .unwrap()
+        .into_iter()
+        .map(|chart| chart.chart_id)
+        .collect::<HashSet<_>>();
+    assert_eq!(ids.iter().copied().collect::<HashSet<_>>(), expected_ids);
+    let listed = build_select_items_for_stack(&source, &catalog, &[archive_path], &[]).unwrap();
+    let mut from_items = autoplay_folder_chart_ids(&source, &catalog, &listed).unwrap();
+    let mut expected = ids;
+    from_items.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(from_items, expected);
+
+    for (folder, title) in [("/group_a/song", "Group"), ("/group_c/song", "Shallow")] {
+        let same_folder = same_folder_path(&format!(
+            "{}!{folder}",
+            crate::storage::library_db::library_path_key(&archive)
+        ));
+        let items = build_select_items_for_stack(&source, &catalog, &[same_folder], &[]).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], SelectItem::Chart(row) if row.display_title() == title));
+    }
+}
+
+#[test]
 fn table_folder_autoplay_walks_every_level_once_per_chart() {
     let (_data, boot, [first, second, third]) = table_boot();
     let source = SelectListSource::from(&boot);
