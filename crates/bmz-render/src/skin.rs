@@ -295,13 +295,7 @@ fn beatoraja_note_index(lane: Lane, key_mode: KeyMode) -> usize {
 fn imageset_ref_lane(ref_id: i32) -> Option<Lane> {
     match ref_id {
         500 => Some(Lane::Scratch),
-        501 => Some(Lane::Key1),
-        502 => Some(Lane::Key2),
-        503 => Some(Lane::Key3),
-        504 => Some(Lane::Key4),
-        505 => Some(Lane::Key5),
-        506 => Some(Lane::Key6),
-        507 => Some(Lane::Key7),
+        501..=509 => Lane::from_pms_key((ref_id - 500) as u8),
         _ => None,
     }
 }

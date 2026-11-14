@@ -693,6 +693,57 @@ fn skin_document_resolves_lane_imageset_effects() {
 }
 
 #[test]
+fn skin_document_selects_normal_and_pgreat_bombs_for_keys_eight_and_nine() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"
+        {
+            "type": 4,
+            "w": 100,
+            "h": 100,
+            "source": [{ "id": 1, "path": "bomb.png" }],
+            "image": [
+                { "id": "normal", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 },
+                { "id": "pgreat", "src": 1, "x": 10, "y": 0, "w": 10, "h": 10 },
+                { "id": "dummy", "src": 1, "x": 20, "y": 0, "w": 10, "h": 10 }
+            ],
+            "imageset": [
+                { "id": "bomb8", "ref": 508, "images": ["normal", "dummy"] },
+                { "id": "bombpg8", "ref": 508, "images": ["dummy", "pgreat"] },
+                { "id": "bomb9", "ref": 509, "images": ["normal", "dummy"] },
+                { "id": "bombpg9", "ref": 509, "images": ["dummy", "pgreat"] }
+            ],
+            "destination": [
+                { "id": "bomb8", "timer": 58, "dst": [{ "x": 10, "y": 0, "w": 10, "h": 10 }] },
+                { "id": "bombpg8", "timer": 58, "dst": [{ "x": 10, "y": 0, "w": 10, "h": 10 }] },
+                { "id": "bomb9", "timer": 59, "dst": [{ "x": 30, "y": 0, "w": 10, "h": 10 }] },
+                { "id": "bombpg9", "timer": 59, "dst": [{ "x": 30, "y": 0, "w": 10, "h": 10 }] }
+            ]
+        }
+        "#,
+    )
+    .unwrap();
+    let sources = mock_source("1", 100.0, 100.0);
+    let mut state = SkinDrawState::default();
+    state.bomb_ms[Lane::Key8.index()] = Some(0);
+    state.bomb_ms[Lane::Key9.index()] = Some(0);
+
+    for (key8_judge, key9_judge, expected_uvs) in
+        [(0, 1, [0.2, 0.1, 0.0, 0.2]), (1, 0, [0.0, 0.2, 0.2, 0.1])]
+    {
+        state.lane_judge[Lane::Key8.index()] = Some(key8_judge);
+        state.lane_judge[Lane::Key9.index()] = Some(key9_judge);
+        let items = document.static_image_render_items(&sources, &state);
+        assert_eq!(items.len(), expected_uvs.len());
+        for (item, expected_u) in items.iter().zip(expected_uvs) {
+            assert!(
+                matches!(item, SkinRenderItem::Image { uv, .. } if approx_eq(uv.x, expected_u)),
+                "key 8 judge {key8_judge}, key 9 judge {key9_judge}: expected texture u={expected_u}, got {item:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn judge_timing_value_omits_sign_when_numeric_digits_fill_all_cells() {
     let document: SkinDocument = serde_json::from_str(
             r#"

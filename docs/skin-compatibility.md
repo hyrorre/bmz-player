@@ -10,6 +10,10 @@ BMZ固有のIDや詳細な動作契約は[skin.md](skin.md)、互換修正の方
 
 ## 対応済みの主な範囲
 
+Playの`imageset.ref = 500..509`は1Pの皿・1〜9鍵の判定を参照します。
+2枚構成ではPGREAT時に2枚目、それ以外は1枚目を使います。
+`simple-play-bmz`の8K・9Kで使う8鍵・9鍵のボム切替は[回帰テスト](../crates/bmz-render/src/skin/tests/play/cases_06.rs)で確認します。
+
 判定線とノーツの重なりはスキンの定義順に従います。ECFNの`destination`とQwilightの`pipeline`に対し、
 判定線を手前へ移す補正は行いません。ECFN・CR_minimalの実素材での確認範囲は
 [作業記録](../notes/2026/2026-11-13-play-judge-line-order.md)を参照してください。
