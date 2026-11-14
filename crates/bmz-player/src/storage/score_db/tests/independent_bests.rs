@@ -169,6 +169,10 @@ fn first_numeric_play_after_clear_only_initializes_even_zero_ex() {
         let mut db = database();
         let assisted = record(2200, ClearType::AssistEasy);
         db.update_score_clear_only(&assisted).unwrap();
+        assert!(
+            !db.best_scores_for_charts(&[key(assisted.chart_sha256)]).unwrap()[0]
+                .numeric_score_available
+        );
         assert_eq!(numeric_best(&db), (0, 0, 0, 0));
         let mut first = play(ex, 20, 12, ex / 2);
         first.clear_type = ClearType::Failed;
@@ -176,6 +180,7 @@ fn first_numeric_play_after_clear_only_initializes_even_zero_ex() {
         let id = db.insert_score(&first).unwrap();
         assert_eq!(numeric_best(&db), (ex, 20, 12, ex / 2));
         let saved = db.best_scores_for_charts(&[key(first.chart_sha256)]).unwrap().remove(0);
+        assert!(saved.numeric_score_available);
         assert_eq!(saved.clear_type, "AssistEasy");
         assert_eq!((saved.play_count, saved.clear_count), (2, 1));
         assert_eq!(

@@ -105,7 +105,8 @@ pub(in crate::skin) fn grade_diff_score_available(state: &SkinDrawState) -> bool
         || state.select_ex_score.is_some_and(|score| score > 0)
 }
 
-const SCORE_GRADE_LABELS: [&str; 9] = ["F", "E", "D", "C", "B", "A", "AA", "AAA", "MAX"];
+pub(in crate::skin) const SCORE_GRADE_LABELS: [&str; 9] =
+    ["F", "E", "D", "C", "B", "A", "AA", "AAA", "MAX"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::skin) struct ScoreGradeFacts {
@@ -119,7 +120,7 @@ pub(in crate::skin) struct ScoreGradeFacts {
 }
 
 impl ScoreGradeFacts {
-    fn new(ex_score: u32, total_notes: u32) -> Option<Self> {
+    pub(in crate::skin) fn new(ex_score: u32, total_notes: u32) -> Option<Self> {
         let max_score = i64::from(total_notes).checked_mul(2)?;
         if max_score <= 0 {
             return None;

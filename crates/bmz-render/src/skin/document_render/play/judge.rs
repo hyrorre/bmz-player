@@ -337,75 +337,24 @@ macro_rules! skin_document_render_play_judge_methods {
             if value.lr2_number && compact_digits {
                 digits.retain(|digit| !matches!(*digit, 10 | 22 | u8::MAX));
             }
-            // 桁間スペース (space フィールド、px 単位)
-            let digit_step = frame.w + value.space;
-            // 先頭の空き桁数 (align のためのオフセット計算に使用)
-            let shiftbase = max_digits.saturating_sub(digits.len());
-            // align=0: 右寄せ (デフォルト), align=1: 左寄せ, align=2: 中央
-            let shift = match align {
-                1 => digit_step * shiftbase as i32,
-                2 => digit_step * shiftbase as i32 / 2,
-                _ => 0,
-            };
-            let lr2_center_shift = if value.lr2_number && !compact_digits && align == 2 {
-                digit_step
-                    * digits.iter().filter(|digit| matches!(**digit, 10 | 22 | u8::MAX)).count()
-                        as i32
-                    / 2
-            } else {
-                0
-            };
-
-            digits
-                .into_iter()
-                .enumerate()
-                .filter(|(_, digit)| *digit != u8::MAX)
-                .map(|(index, digit)| {
-                    let digit_position =
-                        if compact_digits { index } else { shiftbase + index } as i32;
-                    let enlarge = value.qwilight_animation.as_ref().map_or(0, |a| {
-                        (f64::from(a.enlarge)
-                            * (1.0
-                                - f64::from(elapsed_ms.max(0)) * f64::from(a.fps)
-                                    / (a.count.max(1) as f64 * 1000.0))
-                                .clamp(0.0, 1.0))
-                        .round() as i32
-                    });
-                    let rect = normalize_skin_frame_rect(
-                        ResolvedSkinFrame {
-                            x: base_frame.x + frame.x + digit_step * digit_position - shift
-                                + lr2_center_shift
-                                - enlarge,
-                            y: base_frame.y + frame.y - enlarge,
-                            w: frame.w + 2 * enlarge,
-                            h: frame.h + 2 * enlarge,
-                            ..frame
-                        },
-                        self.w,
-                        self.h,
-                    );
-                    let uv = Self::value_digit_texture_region(
-                        value,
-                        digit.into(),
-                        elapsed_ms,
-                        source.source_size,
-                        cell_width_px,
-                        cell_height_px,
-                        divx,
-                        divy,
-                    );
-                    skin_image_item_for_frame(
-                        source.texture,
-                        rect,
-                        uv,
-                        frame,
-                        0,
-                        BlendMode::Normal,
-                        Some(source.source_size),
-                        false,
-                    )
-                })
-                .collect()
+            number_cells::render(
+                self,
+                value,
+                &digits,
+                number_cells::Layout {
+                    max_digits,
+                    align,
+                    compact_digits,
+                    center: 0,
+                    blend: BlendMode::Normal,
+                    filter: false,
+                    hidden_cell: Some(u32::from(u8::MAX)),
+                },
+                base_frame,
+                frame,
+                elapsed_ms,
+                source,
+            )
         }
     };
 }
