@@ -1,4 +1,59 @@
 use super::*;
+use flate2::{Compression, read::DeflateDecoder, write::DeflateEncoder};
+use rusqlite::types::{Value, ValueRef};
+use std::borrow::Cow;
+use std::io::{Read, Write};
+
+// Keep old TEXT rows readable. Only store a BLOB when compression saves bytes.
+const ANALYSIS_DEFLATE: u8 = 1;
+const MAX_COMPRESSED_ANALYSIS_INPUT: usize = 64 * 1024 * 1024;
+
+pub(super) fn pack_analysis_text(text: String) -> std::io::Result<Value> {
+    if !(128..=MAX_COMPRESSED_ANALYSIS_INPUT).contains(&text.len()) {
+        return Ok(Value::Text(text));
+    }
+    let mut encoder = DeflateEncoder::new(vec![ANALYSIS_DEFLATE], Compression::fast());
+    encoder.write_all(text.as_bytes())?;
+    let blob = encoder.finish()?;
+    if blob.len() < text.len() { Ok(Value::Blob(blob)) } else { Ok(Value::Text(text)) }
+}
+
+pub(super) fn analysis_text<'a>(
+    row: &'a rusqlite::Row<'_>,
+    index: usize,
+) -> rusqlite::Result<Cow<'a, str>> {
+    let decode = |bytes: &[u8]| -> std::io::Result<String> {
+        let Some((&ANALYSIS_DEFLATE, compressed)) = bytes.split_first() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "unknown analysis codec",
+            ));
+        };
+        let mut text = String::new();
+        DeflateDecoder::new(compressed)
+            .take(MAX_COMPRESSED_ANALYSIS_INPUT as u64 + 1)
+            .read_to_string(&mut text)?;
+        if text.len() > MAX_COMPRESSED_ANALYSIS_INPUT {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "analysis payload exceeds codec limit",
+            ));
+        }
+        Ok(text)
+    };
+    match row.get_ref(index)? {
+        ValueRef::Blob(bytes) => decode(bytes).map(Cow::Owned).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                index,
+                rusqlite::types::Type::Blob,
+                Box::new(error),
+            )
+        }),
+        value => value.as_str().map(Cow::Borrowed).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(index, value.data_type(), Box::new(error))
+        }),
+    }
+}
 
 pub(super) fn analysis_distribution_seconds(chart: &PlayableChart) -> usize {
     let last_note_us = chart
@@ -100,9 +155,9 @@ pub(super) fn chart_analysis_from_row_with_offset(
     row: &rusqlite::Row<'_>,
     offset: usize,
 ) -> rusqlite::Result<ChartAnalysis> {
-    let distribution_json: String = row.get(offset + 9)?;
-    let speed_changes_json: String = row.get(offset + 10)?;
-    let lane_notes_json: String = row.get(offset + 11)?;
+    let distribution_json = analysis_text(row, offset + 9)?;
+    let speed_changes_json = analysis_text(row, offset + 10)?;
+    let lane_notes_json = analysis_text(row, offset + 11)?;
     Ok(ChartAnalysis {
         normal_notes: row.get(offset)?,
         long_notes: row.get(offset + 1)?,

@@ -433,7 +433,7 @@ pub fn scan_song_roots_with_progress(
                                         &record,
                                         &chart.prepared,
                                     )?;
-                                let warnings_written = LibraryDatabase::write_import_warnings(
+                                let warnings_written = LibraryDatabase::write_scan_warnings(
                                     &tx,
                                     chart_file_id,
                                     &chart.warnings,

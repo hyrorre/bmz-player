@@ -95,7 +95,7 @@ pub(super) fn import_archive<'a>(
                 };
                 let (_, chart_file_id) =
                     LibraryDatabase::write_prepared_chart_import(&tx, &record, &chart.prepared)?;
-                report.summary.warnings += LibraryDatabase::write_import_warnings(
+                report.summary.warnings += LibraryDatabase::write_scan_warnings(
                     &tx,
                     chart_file_id,
                     &chart.warnings,

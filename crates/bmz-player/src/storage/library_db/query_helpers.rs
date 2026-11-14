@@ -440,9 +440,13 @@ impl ChartImportAnalysis {
                 main_bpm: analysis.main_bpm,
             },
             total_gauge: analysis.total_gauge,
-            distribution_json: encode_distribution_compact(&analysis.distribution),
-            speed_changes_json: serde_json::to_string(&analysis.speed_changes)?,
-            lane_notes_json: serde_json::to_string(&analysis.lane_notes)?,
+            distribution_json: pack_analysis_text(encode_distribution_compact(
+                &analysis.distribution,
+            ))?,
+            speed_changes_json: pack_analysis_text(serde_json::to_string(
+                &analysis.speed_changes,
+            )?)?,
+            lane_notes_json: pack_analysis_text(serde_json::to_string(&analysis.lane_notes)?)?,
         })
     }
 }
@@ -457,9 +461,9 @@ pub(in crate::storage) struct PreparedChartImport {
     stats: ChartStats,
     summary: ChartAnalysisSummary,
     total_gauge: f64,
-    distribution_json: String,
-    speed_changes_json: String,
-    lane_notes_json: String,
+    distribution_json: rusqlite::types::Value,
+    speed_changes_json: rusqlite::types::Value,
+    lane_notes_json: rusqlite::types::Value,
 }
 
 impl PreparedChartImport {
@@ -486,13 +490,18 @@ impl PreparedChartImport {
             &m.source_url,
             &m.append_url,
             &self.kaleid_json,
-            &self.distribution_json,
-            &self.speed_changes_json,
-            &self.lane_notes_json,
         ]
         .into_iter()
         .map(String::capacity)
-        .sum()
+        .sum::<usize>()
+            + [&self.distribution_json, &self.speed_changes_json, &self.lane_notes_json]
+                .into_iter()
+                .map(|value| match value {
+                    rusqlite::types::Value::Text(text) => text.capacity(),
+                    rusqlite::types::Value::Blob(blob) => blob.capacity(),
+                    _ => 0,
+                })
+                .sum::<usize>()
     }
 }
 
@@ -524,6 +533,50 @@ pub(super) fn write_chart_analysis(
     prepared: &PreparedChartImport,
 ) -> Result<()> {
     let analysis = &prepared.summary;
+    let values = params![
+        chart_id,
+        analysis.normal_notes,
+        analysis.long_notes,
+        analysis.scratch_notes,
+        analysis.long_scratch_notes,
+        analysis.density,
+        analysis.peak_density,
+        analysis.end_density,
+        prepared.total_gauge,
+        analysis.main_bpm,
+        &prepared.distribution_json,
+        &prepared.speed_changes_json,
+        &prepared.lane_notes_json,
+        CHART_IMPORT_VERSION,
+    ];
+    let unchanged: Option<bool> = conn
+        .prepare_cached(
+            "SELECT normal_notes IS ?2 AND long_notes IS ?3
+             AND scratch_notes IS ?4 AND long_scratch_notes IS ?5
+             AND density IS ?6 AND peak_density IS ?7 AND end_density IS ?8
+             AND total_gauge IS ?9 AND main_bpm IS ?10
+             AND distribution_json IS ?11 AND speed_changes_json IS ?12 AND lane_notes_json IS ?13,
+             analysis_version IS ?14 AND loudness_lufs IS NULL AND loudness_analysis_version IS 0
+         FROM chart_analysis WHERE chart_id = ?1",
+        )?
+        .query_row(values, |row| {
+            let same_payload: bool = row.get(0)?;
+            let same_version: bool = row.get(1)?;
+            Ok(same_payload.then_some(same_version))
+        })
+        .optional()?
+        .flatten();
+    if let Some(same_version) = unchanged {
+        if !same_version {
+            conn.prepare_cached(
+                "UPDATE chart_analysis
+                 SET analysis_version = ?2, loudness_lufs = NULL, loudness_analysis_version = 0
+                 WHERE chart_id = ?1",
+            )?
+            .execute(params![chart_id, CHART_IMPORT_VERSION])?;
+        }
+        return Ok(());
+    }
     conn.prepare_cached(
         "INSERT INTO chart_analysis (
             chart_id, normal_notes, long_notes, scratch_notes, long_scratch_notes,
@@ -549,21 +602,6 @@ pub(super) fn write_chart_analysis(
             loudness_analysis_version = 0,
             analysis_version = excluded.analysis_version",
     )?
-    .execute(params![
-        chart_id,
-        analysis.normal_notes,
-        analysis.long_notes,
-        analysis.scratch_notes,
-        analysis.long_scratch_notes,
-        analysis.density,
-        analysis.peak_density,
-        analysis.end_density,
-        prepared.total_gauge,
-        analysis.main_bpm,
-        &prepared.distribution_json,
-        &prepared.speed_changes_json,
-        &prepared.lane_notes_json,
-        CHART_IMPORT_VERSION,
-    ])?;
+    .execute(values)?;
     Ok(())
 }

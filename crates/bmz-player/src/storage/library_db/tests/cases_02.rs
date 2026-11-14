@@ -789,3 +789,41 @@ fn chart_file_fingerprint_reads_imported_file_metadata() {
         })
     );
 }
+#[test]
+fn scan_preserves_unchanged_warning_rows_and_replaces_changed_rows() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    configure_connection(&conn).unwrap();
+    run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+    let mut db = LibraryDatabase { conn };
+    let chart_id = db
+        .upsert_chart_import(&record_for_chart("/songs/warnings.bms", &chart("warnings")))
+        .unwrap();
+    let file_id: i64 = db
+        .conn()
+        .query_row(
+            "SELECT chart_file_id FROM chart_file_links WHERE chart_id = ?1",
+            [chart_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let warnings = [ImportWarning::EncodingFallback, ImportWarning::TextReplacementOccurred];
+    let saved = || {
+        let mut stmt = db
+            .conn()
+            .prepare("SELECT code, created_at FROM chart_import_warnings ORDER BY id")
+            .unwrap();
+        stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    };
+    assert_eq!(LibraryDatabase::write_scan_warnings(db.conn(), file_id, &warnings, 10).unwrap(), 2);
+    let first = saved();
+    assert_eq!(LibraryDatabase::write_scan_warnings(db.conn(), file_id, &warnings, 20).unwrap(), 2);
+    assert_eq!(saved(), first);
+    let reversed = [ImportWarning::TextReplacementOccurred, ImportWarning::EncodingFallback];
+    assert_eq!(LibraryDatabase::write_scan_warnings(db.conn(), file_id, &reversed, 30).unwrap(), 2);
+    assert_eq!(saved(), [(first[1].0.clone(), 30), (first[0].0.clone(), 30)]);
+    assert_eq!(LibraryDatabase::write_scan_warnings(db.conn(), file_id, &[], 40).unwrap(), 0);
+    assert!(saved().is_empty());
+}

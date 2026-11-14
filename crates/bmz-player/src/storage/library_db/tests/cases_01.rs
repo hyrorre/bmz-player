@@ -536,6 +536,17 @@ fn upsert_chart_import_persists_chart_analysis_distribution() {
         .unwrap();
     assert!(stored_distribution.starts_with('#'));
     assert_eq!(stored_distribution.len(), 1 + analysis.distribution.len() * 14);
+    let lane_storage: String = db
+        .conn()
+        .query_row(
+            "SELECT typeof(lane_notes_json) FROM chart_analysis WHERE chart_id = ?1",
+            [chart_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(lane_storage, "blob");
+    let graphs = db.chart_graphs_by_chart_ids(&[chart_id]).unwrap();
+    assert_eq!(graphs[&chart_id].distribution, analysis.distribution);
 }
 
 #[test]
@@ -577,6 +588,43 @@ fn chart_normalization_analysis_roundtrips_and_rescan_clears_it() {
 
     db.upsert_chart_import(&record_for_chart("/songs/normalization.bms", &chart)).unwrap();
     assert!(db.chart_normalization_analysis_by_chart_id(chart_id).unwrap().is_none());
+}
+
+#[test]
+fn unchanged_analysis_only_updates_stamps_when_needed() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    configure_connection(&conn).unwrap();
+    run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+    let mut db = LibraryDatabase { conn };
+    let chart = chart("analysis stamps");
+    let record = record_for_chart("/songs/stamps.bms", &chart);
+    let id = db.upsert_chart_import(&record).unwrap();
+    db.conn()
+        .execute_batch(
+            "CREATE TEMP TABLE analysis_updates (n INTEGER);
+             CREATE TEMP TRIGGER analysis_updated AFTER UPDATE ON chart_analysis
+                 BEGIN INSERT INTO analysis_updates VALUES (1); END;
+             CREATE TEMP TRIGGER main_bpm_updated BEFORE UPDATE OF main_bpm ON chart_analysis
+                 BEGIN SELECT RAISE(ABORT, 'unexpected main BPM rewrite'); END;",
+        )
+        .unwrap();
+    let updates = |db: &LibraryDatabase| {
+        db.conn()
+            .query_row("SELECT count(*) FROM analysis_updates", [], |row| row.get::<_, i64>(0))
+            .unwrap()
+    };
+    assert_eq!(db.upsert_chart_import(&record).unwrap(), id);
+    assert_eq!(updates(&db), 0);
+    db.conn().execute("UPDATE chart_analysis SET analysis_version = 0", []).unwrap();
+    assert_eq!(db.upsert_chart_import(&record).unwrap(), id);
+    assert_eq!(updates(&db), 2);
+    let version: i64 = db
+        .conn()
+        .query_row("SELECT analysis_version FROM chart_analysis WHERE chart_id=?1", [id], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(version, CHART_IMPORT_VERSION);
 }
 
 #[test]

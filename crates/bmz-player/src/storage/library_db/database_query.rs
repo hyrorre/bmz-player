@@ -115,24 +115,70 @@ impl LibraryDatabase {
         warnings: &[ImportWarning],
         created_at: i64,
     ) -> Result<usize> {
-        conn.prepare_cached("DELETE FROM chart_import_warnings WHERE chart_file_id = ?1")?
-            .execute(params![chart_file_id])?;
+        Self::store_import_warnings(conn, chart_file_id, warnings, created_at, false)
+    }
+
+    /// Scan warnings keep their original rows while their ordered content matches.
+    pub(in crate::storage) fn write_scan_warnings(
+        conn: &Connection,
+        chart_file_id: i64,
+        warnings: &[ImportWarning],
+        scanned_at: i64,
+    ) -> Result<usize> {
+        Self::store_import_warnings(conn, chart_file_id, warnings, scanned_at, true)
+    }
+
+    fn store_import_warnings(
+        conn: &Connection,
+        chart_file_id: i64,
+        warnings: &[ImportWarning],
+        created_at: i64,
+        reuse_existing: bool,
+    ) -> Result<usize> {
         // 同一 (code, message) の警告は1行にまとめる。
         // 非対応チャンネル等はオブジェクトごとに警告が出るため、重複排除しないと
         // warnings テーブルが数千行/チャート規模に膨張する。
         let mut seen = std::collections::HashSet::new();
+        let mut ordered = Vec::new();
         for warning in warnings {
             let (code, message) = warning_details(warning);
-            if !seen.insert((code.clone(), message.clone())) {
-                continue;
+            if seen.insert((code.clone(), message.clone())) {
+                ordered.push((code, message));
             }
-            conn.prepare_cached(
+        }
+        if reuse_existing && !ordered.is_empty() {
+            let mut select = conn.prepare_cached(
+                "SELECT code, message FROM chart_import_warnings
+                 WHERE chart_file_id = ?1 ORDER BY id",
+            )?;
+            let mut rows = select.query([chart_file_id])?;
+            let mut matches = true;
+            for (code, message) in &ordered {
+                let Some(row) = rows.next()? else {
+                    matches = false;
+                    break;
+                };
+                if row.get_ref(0)?.as_str()? != code || row.get_ref(1)?.as_str()? != message {
+                    matches = false;
+                    break;
+                }
+            }
+            if matches && rows.next()?.is_none() {
+                return Ok(ordered.len());
+            }
+        }
+        conn.prepare_cached("DELETE FROM chart_import_warnings WHERE chart_file_id = ?1")?
+            .execute(params![chart_file_id])?;
+        if !ordered.is_empty() {
+            let mut insert = conn.prepare_cached(
                 "INSERT INTO chart_import_warnings (chart_file_id, code, message, created_at)
                 VALUES (?1, ?2, ?3, ?4)",
-            )?
-            .execute(params![chart_file_id, code, message, created_at])?;
+            )?;
+            for (code, message) in &ordered {
+                insert.execute(params![chart_file_id, code, message, created_at])?;
+            }
         }
-        Ok(seen.len())
+        Ok(ordered.len())
     }
 
     pub fn replace_import_warnings(
@@ -586,18 +632,20 @@ impl LibraryDatabase {
         )?;
         let mut out = HashMap::with_capacity(ids.len());
         for id in ids {
-            if let Some((chart_id, distribution_json, speed_changes_json)) = stmt
+            if let Some((chart_id, graph)) = stmt
                 .query_row(params![id], |row| {
-                    Ok((row.get(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?))
+                    let distribution = decode_distribution(&analysis_text(row, 1)?);
+                    let speed_changes =
+                        if matches!(row.get_ref(2)?, rusqlite::types::ValueRef::Null) {
+                            Vec::new()
+                        } else {
+                            serde_json::from_str(&analysis_text(row, 2)?).unwrap_or_default()
+                        };
+                    Ok((row.get(0)?, ChartGraphData { distribution, speed_changes }))
                 })
                 .optional()?
             {
-                let distribution = decode_distribution(&distribution_json);
-                let speed_changes = speed_changes_json
-                    .as_deref()
-                    .and_then(|json| serde_json::from_str(json).ok())
-                    .unwrap_or_default();
-                out.insert(chart_id, ChartGraphData { distribution, speed_changes });
+                out.insert(chart_id, graph);
             }
         }
         Ok(out)
