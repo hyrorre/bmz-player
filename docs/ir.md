@@ -884,6 +884,7 @@ payloadと署名は次のとおりです。
 - 既定では無効です。BMS-IRの数値IDとLR2のgame tokenを、秘密情報の保存先に保存します。
 - ログインした後はprimary providerに選べ、既存のqueueから単曲と、最後のコース / 段位のscoreを送ります。
 - ランキング、登録したライバルとbestの同期、BMS-IRの難易度表、サーバーからローカルへの自己スコアの同期を、providerごとのcacheで扱います。ライバルの追加・解除はWebで行います。
+- 選曲では、Kaleid解析情報が未記録の旧ライブラリでも、単曲・コースのランキングを取得できます。旧プレイのスコア送信には、プレイ時のKaleid解析情報が必要です。
 - BMS / PMSはMD5、BMSONはBMS-IR互換のSHA hashで照合します。
 - 送信の対象は、Beatoraja / LR2orajaのルール、実際のLN / CN / HCN、Off / Flip / Battle / Battle ASの、4 / 5 / 6 / 7 / 8 / 9 / 10 / 14 / 24 / 48Kです。BattleとBattle ASは別の区分、G-BATTLEは通常の区分を使います。4 / 6 / 8KもBMS-IRの正規のキーモードとして送ります。
 - DX、full autoplay、リプレイ再生、プラクティス、実効アシスト、リプレイファイルの送受信、local backfillは対象外です。

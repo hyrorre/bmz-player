@@ -496,7 +496,8 @@ impl WinitApp {
         if crate::ir::provider_key::primary_provider_config(&self.boot.profile_config.ir)
             .is_some_and(|provider| {
                 !crate::ir::bokutachi::is_config(provider)
-                    && crate::ir::kaleid::block_reason(provider, &provenance).is_some()
+                    && crate::ir::kaleid::select_ranking_block_reason(provider, &provenance)
+                        .is_some()
             })
         {
             return;

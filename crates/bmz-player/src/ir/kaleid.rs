@@ -7,6 +7,10 @@ pub fn bms_ir_block_reason(chart: &KaleidProvenance) -> Option<&'static str> {
             "BMS-IR: このプレイの拡張解釈情報がありません。旧結果を再スキャンだけで送信可能にはできません。",
         );
     }
+    bms_ir_feature_block_reason(chart)
+}
+
+fn bms_ir_feature_block_reason(chart: &KaleidProvenance) -> Option<&'static str> {
     if chart.partial() {
         return Some("BMS-IR: 部分対応・不正拡張を含む結果の受入条件は未確認です。");
     }
@@ -72,6 +76,18 @@ pub fn block_reason(
         bokutachi_block_reason(chart)
     } else {
         None
+    }
+}
+
+/// Select can look up an existing ranking before the local library is re-imported.
+pub fn select_ranking_block_reason(
+    provider: &crate::config::profile_config::IrProviderConfig,
+    chart: &KaleidProvenance,
+) -> Option<&'static str> {
+    if super::bms_ir::is_bms_ir_config(provider) && chart.version == 0 {
+        bms_ir_feature_block_reason(chart)
+    } else {
+        block_reason(provider, chart)
     }
 }
 
@@ -165,5 +181,31 @@ mod tests {
         assert!(
             ensure_course_supported(&IrProviderConfig::bms_ir(), &serde_json::json!({})).is_err()
         );
+    }
+
+    #[test]
+    fn bms_ir_select_can_look_up_legacy_charts_and_courses_without_submission_evidence() {
+        let provider = IrProviderConfig::bms_ir();
+        // The library migration leaves existing chart rows with this JSON value.
+        let legacy: KaleidProvenance = serde_json::from_str("{}").unwrap();
+        let normal = KaleidProvenance::imported();
+        for chart in [&legacy, &normal] {
+            assert!(select_ranking_block_reason(&provider, chart).is_none());
+        }
+        assert!(block_reason(&provider, &legacy).is_some());
+        let course = serde_json::json!({
+            "course": { "charts": ["a", "b"] },
+            "play_options": { "entry_kaleid": [&legacy, &normal] },
+        });
+        assert!(ensure_course_supported(&provider, &course).is_err());
+
+        let known_unsupported = KaleidProvenance {
+            source: KaleidFeatures { hln: true, ..Default::default() },
+            ..legacy
+        };
+        assert!(select_ranking_block_reason(&provider, &known_unsupported).is_some());
+        let future =
+            KaleidProvenance { version: bmz_chart::kaleid::INTERPRETATION_VERSION + 1, ..normal };
+        assert!(select_ranking_block_reason(&provider, &future).is_some());
     }
 }

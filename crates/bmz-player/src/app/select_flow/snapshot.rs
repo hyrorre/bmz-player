@@ -582,7 +582,7 @@ impl WinitApp {
             }
             let provenance =
                 row.chart.as_ref().map(|chart| chart.kaleid.clone()).unwrap_or_default();
-            if crate::ir::kaleid::block_reason(provider, &provenance).is_some() {
+            if crate::ir::kaleid::select_ranking_block_reason(provider, &provenance).is_some() {
                 return None;
             }
         }
@@ -609,7 +609,7 @@ impl WinitApp {
                     .and_then(|mut rows| rows.pop())
                     .map(|chart| chart.kaleid)
                     .unwrap_or_default();
-                if crate::ir::kaleid::block_reason(provider, &provenance).is_some() {
+                if crate::ir::kaleid::select_ranking_block_reason(provider, &provenance).is_some() {
                     return None;
                 }
             }
