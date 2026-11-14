@@ -426,7 +426,14 @@ fn run(
         let previous_chart = runtime.session.chart.clone();
         let mut frame = runtime.advance(&audio);
         if !Arc::ptr_eq(&previous_chart, &runtime.session.chart) {
-            config.cache = config.cache.for_updated_chart(&runtime.session.chart);
+            config.cache = PlayRenderSnapshotCache::from_chart(&runtime.session.chart);
+            judge_graph.rebind_chart(
+                &runtime.session,
+                &config.cache.play_note_graphs,
+                &mut note_graphs,
+            );
+        } else {
+            judge_graph.record(&runtime.session.result_judgements, &frame.judgements);
         }
         hispeed_transition.retarget(
             runtime.session.hispeed,
@@ -461,7 +468,6 @@ fn run(
         );
         last_time = frame.times.audio_now;
         graph.record_runtime_frame(&runtime.session, &frame);
-        judge_graph.record(&runtime.session.result_judgements, &frame.judgements);
         #[cfg(test)]
         if let Some(probe) = &config.probe {
             probe.record(&runtime.session, &audio);

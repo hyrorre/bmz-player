@@ -558,11 +558,25 @@ impl PlayJudgeGraphTracker {
             changed: false,
             published_at: None,
         };
-        // A viewer start position judges the notes before it up front.
+        // Include judgements already recorded after a seek or chart replacement.
         for (note_id, detail) in judgements {
             tracker.apply(*note_id, detail);
         }
         tracker
+    }
+
+    pub(crate) fn rebind_chart(
+        &mut self,
+        session: &GameSession,
+        chart_graphs: &PlayNoteGraphs,
+        graphs: &mut PlayNoteGraphs,
+    ) {
+        let previous_revision = graphs.judge_revision;
+        graphs.clone_from(chart_graphs);
+        graphs.judge_revision = previous_revision;
+        *self = Self::new(&session.chart, &session.result_judgements, graphs);
+        // Publish on the next snapshot even if no notes on the new chart were judged.
+        self.changed = true;
     }
 
     /// `events` name the notes whose entry in `judgements` a frame changed.

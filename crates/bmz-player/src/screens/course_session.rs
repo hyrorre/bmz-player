@@ -479,6 +479,7 @@ mod tests {
                     chart_id: i as i64 + 1,
                     finished: FinishedPlaySession {
                         conditional_reference_total: None,
+                        kaleid: Default::default(),
                         result,
                         stored: StoredPlayResult {
                             score_history_id: 0,
@@ -742,6 +743,7 @@ mod tests {
                     chart_id: i as i64 + 1,
                     finished: FinishedPlaySession {
                         conditional_reference_total: None,
+                        kaleid: Default::default(),
                         result,
                         stored,
                         summary,

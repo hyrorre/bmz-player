@@ -26,6 +26,7 @@ pub fn spawn_result_ir_task(
         ir_config,
         ResultIrTarget::Chart {
             local_score_id,
+            played_kaleid: None,
             chart_sha256_hex,
             ln_policy,
             double_option,
@@ -47,6 +48,7 @@ pub fn cached_result_ir_state(
     double_option: DoubleOptionScoreBucket,
     rule_mode: RuleMode,
     bokutachi_game: Option<crate::ir::bokutachi::Game>,
+    played_kaleid: bmz_chart::kaleid::KaleidProvenance,
 ) -> Option<ResultIrState> {
     let provider = crate::ir::provider_key::primary_provider_config(ir_config)?;
     let provider_key = crate::ir::provider_key::configured_provider_key(provider)?;
@@ -80,6 +82,7 @@ pub fn cached_result_ir_state(
             ranking_primary: true,
             target: ResultIrTarget::Chart {
                 local_score_id: 0,
+                played_kaleid: Some(played_kaleid),
                 chart_sha256_hex,
                 ln_policy,
                 double_option,
@@ -728,6 +731,7 @@ pub(super) async fn fetch_result_ranking(
     match &query.target {
         ResultIrTarget::Chart {
             local_score_id,
+            played_kaleid,
             chart_sha256_hex,
             ln_policy,
             double_option,
@@ -735,12 +739,15 @@ pub(super) async fn fetch_result_ranking(
             bokutachi_game,
         } => {
             if !crate::ir::bokutachi::is_provider(&query.provider) {
-                let provenance = crate::storage::score_db::ScoreDatabase::open(
-                    &query.profile_root.join("score.db"),
-                )?
-                .kaleid_evidence(*local_score_id)?
-                .map(|evidence| evidence.provenance)
-                .unwrap_or_default();
+                let provenance = match played_kaleid {
+                    Some(provenance) => provenance.clone(),
+                    None => crate::storage::score_db::ScoreDatabase::open(
+                        &query.profile_root.join("score.db"),
+                    )?
+                    .kaleid_evidence(*local_score_id)?
+                    .map(|evidence| evidence.provenance)
+                    .unwrap_or_default(),
+                };
                 let blocked = if crate::ir::bms_ir::is_bms_ir_provider(&query.provider) {
                     crate::ir::kaleid::bms_ir_block_reason(&provenance)
                 } else if crate::ir::rian_ir::is_rian_ir_provider(&query.provider) {
@@ -895,6 +902,7 @@ mod tests {
             ranking_primary: true,
             target: ResultIrTarget::Chart {
                 local_score_id: 42,
+                played_kaleid: None,
                 chart_sha256_hex: "chart".to_string(),
                 ln_policy: LnScorePolicy::AutoLn,
                 double_option: DoubleOptionScoreBucket::Off,
@@ -941,6 +949,7 @@ mod tests {
             ranking_primary: true,
             target: ResultIrTarget::Chart {
                 local_score_id: 42,
+                played_kaleid: None,
                 chart_sha256_hex: "ab".repeat(32),
                 ln_policy: LnScorePolicy::AutoLn,
                 double_option: DoubleOptionScoreBucket::Off,

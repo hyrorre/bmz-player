@@ -69,13 +69,13 @@ pub fn advance_session_frame(
             while let Some(at) =
                 super::conditional::next_evaluation(session).filter(|at| *at <= times.audio_now)
             {
-                judgements.extend(super::conditional::advance_before_boundary(
-                    session,
-                    TimeUs(at.0.saturating_sub(1)),
-                ));
+                let before = TimeUs(at.0.saturating_sub(1));
+                judgements.extend(super::conditional::advance_before_boundary(session, before));
                 if session.state != PlayState::Playing {
                     break;
                 }
+                // A delayed wake can cross the boundary before all prefix audio is queued.
+                schedule_chart_audio(session, before, audio);
                 super::conditional::evaluate(session, at);
             }
             if session.state == PlayState::Playing {

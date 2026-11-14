@@ -65,11 +65,6 @@ pub(super) struct BgaEventCache {
 }
 
 impl PlayRenderSnapshotCache {
-    pub fn for_updated_chart(&self, chart: &PlayableChart) -> Self {
-        let mut cache = Self::from_chart(chart);
-        cache.judge_graph_density = self.judge_graph_density.clone();
-        cache
-    }
     pub(crate) fn bga_event_at(&self, kind: BgaEventKind, time: TimeUs) -> Option<&BgaEvent> {
         let events = self.bga_events.events(kind);
         let end = events.partition_point(|event| event.time <= time);

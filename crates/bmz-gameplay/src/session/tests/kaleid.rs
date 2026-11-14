@@ -19,6 +19,46 @@ fn free_zone_replaces_inner_judgements_with_one_score_and_display_event() {
 }
 
 #[test]
+fn free_zone_waits_for_normal_ln_moved_to_another_lane() {
+    let mut chart = imported("#LNMODE 1\n#LNOBJ ZZ\n#001SF:01\n#00116:0100ZZ00");
+    let zone = &chart.metadata.free_zones[0];
+    let pair = &mut chart.long_notes[0];
+    let zone_id = zone.note_id;
+    let start_id = pair.start_note_id;
+    let start = pair.start_time;
+    let zone_end = zone.end_time;
+    assert_eq!((start.0, zone_end.0, pair.end_time.0), (2_000_000, 2_500_000, 3_000_000));
+    assert!(zone.inner_notes.contains(&start_id));
+
+    // S-RANDOM EX leaves the zone on scratch while moving both LN endpoints.
+    pair.lane = Lane::Key1;
+    let (moved, remaining): (Vec<_>, Vec<_>) =
+        std::mem::take(&mut chart.lane_notes[Lane::Scratch.index()])
+            .into_iter()
+            .partition(|note| zone.inner_notes.contains(&note.id));
+    chart.lane_notes[Lane::Scratch.index()] = remaining;
+    chart.lane_notes[Lane::Key1.index()] =
+        moved.into_iter().map(|note| NoteEvent { lane: Lane::Key1, ..note }).collect();
+
+    let mut session = session_with_autoplay(chart);
+    session.autoplay = None;
+    session.conditional.pending_inputs.push(human_press(start));
+    let mut audio = ScheduledSoundQueue::new();
+    advance(&mut session, zone_end.0, &mut audio);
+    assert_eq!(session.judge.judged_notes.get(&start_id), Some(&Judge::PGreat));
+    assert!(!session.result_judgements.contains_key(&zone_id));
+    assert_eq!(session.score.past_notes, 0);
+
+    let release = TimeUs(2_550_000);
+    session.conditional.pending_inputs.push(human_release(release));
+    advance(&mut session, release.0, &mut audio);
+    assert_eq!(session.judge.judged_notes.get(&start_id), Some(&Judge::Bad));
+    assert_eq!(session.result_judgements[&zone_id].judge, Judge::Good);
+    assert_eq!(session.score.past_notes, 1);
+    assert_eq!(session.score.ex_score(), 0);
+}
+
+#[test]
 fn free_zone_inner_hcn_and_hln_do_not_apply_body_gauge() {
     for mode in [3, 4] {
         let mut session = session_with_autoplay(imported(&format!(

@@ -84,7 +84,7 @@ impl JudgeEngine {
                         continue;
                     }
                 }
-                if self.lanes[zone.lane.index()]
+                if self.lanes[note.lane.index()]
                     .active_long
                     .is_some_and(|ln| ln.start_note_id == id)
                     || self.hln.pending_note(chart, id)

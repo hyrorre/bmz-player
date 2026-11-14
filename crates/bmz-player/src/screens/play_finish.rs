@@ -38,6 +38,7 @@ pub struct FinishedPlaySession {
     /// Initial DEFAULT count, for replacing this stage's course-wide estimate.
     pub conditional_reference_total: Option<u32>,
     pub bokutachi_dan_stage: Option<crate::ir::bokutachi::dan::StageEvidence>,
+    pub kaleid: bmz_chart::kaleid::KaleidProvenance,
     pub result: PlayResult,
     pub stored: StoredPlayResult,
     pub summary: ResultSummary,
@@ -675,6 +676,7 @@ fn finish_session_snapshot_result(
 
     Ok(FinishedPlaySession {
         conditional_reference_total: snapshot.reference_total,
+        kaleid: snapshot.kaleid.provenance.clone(),
         bokutachi_dan_stage: (finish_mode == FinishResultMode::CourseStage).then(|| {
             crate::ir::bokutachi::dan::StageEvidence {
                 chart_md5: crate::storage::common::hash_to_hex(&snapshot.chart.identity.file_md5),

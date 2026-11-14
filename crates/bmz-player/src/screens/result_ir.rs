@@ -104,6 +104,7 @@ pub use crate::ir::ranking::ChartRankingQuery as ResultIrQuery;
 pub enum ResultIrTarget {
     Chart {
         local_score_id: i64,
+        played_kaleid: Option<bmz_chart::kaleid::KaleidProvenance>,
         chart_sha256_hex: String,
         ln_policy: LnScorePolicy,
         double_option: DoubleOptionScoreBucket,
@@ -857,6 +858,7 @@ mod tests {
                 base_url: "https://ir.example.test".to_string(),
                 ranking_primary: true,
                 target: ResultIrTarget::Chart {
+                    played_kaleid: None,
                     local_score_id: 1,
                     chart_sha256_hex: "chart".to_string(),
                     ln_policy: LnScorePolicy::AutoLn,
@@ -1012,6 +1014,7 @@ mod tests {
             DoubleOptionScoreBucket::Off,
             RuleMode::Beatoraja,
             None,
+            bmz_chart::kaleid::KaleidProvenance::imported(),
         )
         .unwrap()
     }
@@ -1078,6 +1081,64 @@ mod tests {
         assert_eq!(failed.skin_snapshot().state, bmz_render::scene::ResultIrState::Failed);
     }
 
+    #[tokio::test]
+    async fn unsaved_bms_ir_result_checks_the_played_chart_on_cache_miss() {
+        use std::time::Duration;
+
+        use crate::config::profile_config::{IrConfig, IrProviderConfig};
+        use crate::screens::select_ir::SelectIrResultLookup;
+
+        let profile = tempfile::tempdir().unwrap();
+        let mut provider = IrProviderConfig::bms_ir();
+        provider.provider_key.clone_from(&provider.provider);
+        provider.enabled = true;
+        let config = IrConfig {
+            primary_provider: provider.provider_key.clone(),
+            providers: vec![provider],
+            ..IrConfig::default()
+        };
+        for has_hln in [false, true] {
+            let mut provenance = bmz_chart::kaleid::KaleidProvenance::imported();
+            provenance.source.hln = has_hln;
+            let mut state = super::cached_result_ir_state(
+                profile.path().to_path_buf(),
+                &config,
+                "ab".repeat(32),
+                LnScorePolicy::AutoLn,
+                DoubleOptionScoreBucket::Off,
+                RuleMode::Beatoraja,
+                None,
+                provenance,
+            )
+            .unwrap();
+            state.apply_select_cache(SelectIrResultLookup::Unavailable);
+            let event = tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    match state.receiver.try_recv() {
+                        Ok(event) => break event,
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                        Err(error) => panic!("{error}"),
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            let ResultIrEvent::Ranking { result, .. } = event else {
+                panic!("expected a ranking response");
+            };
+            let error = result.unwrap_err();
+            if has_hln {
+                assert!(error.contains("HLN"), "{error}");
+            } else {
+                // Eligibility passed and the request reached the normal auth path.
+                assert!(error.contains("not signed in"), "{error}");
+            }
+            assert!(!profile.path().join("score.db").exists());
+        }
+    }
+
     #[test]
     fn cached_result_does_not_write_its_own_fetch_back_to_select_cache() {
         let mut state = cached_state();
@@ -1128,6 +1189,7 @@ mod tests {
             base_url: "https://ir.example.test".to_string(),
             ranking_primary: true,
             target: ResultIrTarget::Chart {
+                played_kaleid: None,
                 local_score_id: 2,
                 chart_sha256_hex: "current".to_string(),
                 ln_policy: LnScorePolicy::AutoLn,
@@ -1219,6 +1281,7 @@ mod tests {
             base_url: "https://ir.example.test".to_string(),
             ranking_primary: true,
             target: ResultIrTarget::Chart {
+                played_kaleid: None,
                 local_score_id: 2,
                 chart_sha256_hex: "current".to_string(),
                 ln_policy: LnScorePolicy::AutoLn,
@@ -1261,6 +1324,7 @@ mod tests {
     #[test]
     fn chart_result_target_rejects_previous_retry_with_same_chart_hash() {
         let target = ResultIrTarget::Chart {
+            played_kaleid: None,
             local_score_id: 42,
             chart_sha256_hex: "same-chart".to_string(),
             ln_policy: LnScorePolicy::AutoLn,

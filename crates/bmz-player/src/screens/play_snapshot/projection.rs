@@ -124,8 +124,7 @@ impl PlayfieldProjection {
             !opponent.display_uses_primary_arrangement
                 || opponent.chart.metadata.kaleid.source.conditional
         }) {
-            let projection =
-                self.opponent.get_or_insert_with(|| OpponentProjection::new(opponent, &self.cache));
+            let projection = self.opponent.get_or_insert_with(|| OpponentProjection::new(opponent));
             projection.update(opponent);
         } else {
             self.opponent = None;
@@ -133,7 +132,7 @@ impl PlayfieldProjection {
         if !Arc::ptr_eq(&self.chart, &session.chart) {
             self.chart = session.chart.clone();
             self.timing_map = Arc::new(session.timing_map.clone());
-            self.cache = self.cache.for_updated_chart(&session.chart);
+            self.cache = PlayRenderSnapshotCache::from_chart(&session.chart);
         }
         self.hln_bodies.clear();
         self.hln_bodies.extend(session.judge.hln_body_visuals());
@@ -348,17 +347,14 @@ struct OpponentProjection {
 }
 
 impl OpponentProjection {
-    fn new(
-        opponent: &bmz_gameplay::session::BattleOpponentSession,
-        cache: &PlayRenderSnapshotCache,
-    ) -> Self {
+    fn new(opponent: &bmz_gameplay::session::BattleOpponentSession) -> Self {
         Self {
             chart: opponent.chart.clone(),
             timing_map: TimingMap::from_chart_timing_events(
                 opponent.chart.metadata.initial_bpm,
                 &opponent.chart.timing_events,
             ),
-            cache: cache.for_updated_chart(&opponent.chart),
+            cache: PlayRenderSnapshotCache::from_chart(&opponent.chart),
             judged_notes: HashMap::new(),
             hln_bodies: Vec::new(),
             lanes: opponent.judge.lanes,
@@ -373,7 +369,7 @@ impl OpponentProjection {
                 opponent.chart.metadata.initial_bpm,
                 &opponent.chart.timing_events,
             );
-            self.cache = self.cache.for_updated_chart(&opponent.chart);
+            self.cache = PlayRenderSnapshotCache::from_chart(&opponent.chart);
         }
         self.judged_notes.clone_from(&opponent.judge.judged_notes);
         self.hln_bodies.clear();

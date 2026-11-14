@@ -226,6 +226,33 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn video_export_graphs_follow_the_selected_branch() {
+    let fixture = Fixture::new();
+    fs::write(
+        &fixture.options.chart,
+        "#BPM 120\n#WAV01 click.wav\n#00011:00000001\n\
+         #CONDITIONAL 1\n#WHEN AUTO==1\n#00111:0101\n\
+         #DEFAULT\n#00111:01\n#00311:01\n#ENDCONDITIONAL\n",
+    )
+    .unwrap();
+    let mut simulation = fixture.simulation();
+    let advance_to = |simulation: &mut simulation::Simulation, scene_us: u64| {
+        simulation.advance_to(scene_us * 48_000 / 1_000_000, |_| Ok(())).unwrap();
+        simulation.snapshot(scene_us as i64, &Default::default()).play_note_graphs
+    };
+    let before = advance_to(&mut simulation, 2_000_000);
+    assert_eq!(before.notes[6].values[5], 1);
+    let after = advance_to(&mut simulation, 4_300_000);
+    assert_ne!(before.judge_revision, after.judge_revision);
+    assert_eq!(after.notes.len(), 4);
+    for second in [1, 2, 3] {
+        assert_eq!(after.notes[second].values[5], 1);
+        assert_eq!(after.judge[second].values, [0, 1, 0, 0, 0, 0]);
+        assert_eq!(after.early_late[second].values[1], 1);
+    }
+}
+
+#[test]
 fn fps_and_consumer_stalls_do_not_change_pcm_or_judgements() {
     let fixture = Fixture::new();
     let profile_before = fs::read(fixture.root.join("profiles/default/profile.toml")).unwrap();

@@ -227,7 +227,14 @@ impl Simulation {
         let frame = advance_session_frame(session, &mut self.queue);
         if !std::sync::Arc::ptr_eq(&previous_chart, &session.chart) {
             self.prepared.play.render_snapshot_cache =
-                self.prepared.play.render_snapshot_cache.for_updated_chart(&session.chart);
+                crate::screens::play_snapshot::PlayRenderSnapshotCache::from_chart(&session.chart);
+            self.judge_graph.rebind_chart(
+                session,
+                &self.prepared.play.render_snapshot_cache.play_note_graphs,
+                &mut self.note_graphs,
+            );
+        } else {
+            self.judge_graph.record(&session.result_judgements, &frame.judgements);
         }
         if let Some(anchor) = scratch_anchor
             && session.audio_clock.now().0 - anchor.0 < 1000
@@ -239,7 +246,6 @@ impl Simulation {
             self.prepared.play.audio.set_sound_volume(id, volume);
         }
         self.skin_events.extend(frame.skin_events);
-        self.judge_graph.record(&self.prepared.play.session.result_judgements, &frame.judgements);
         self.judge_graph.publish(
             std::time::Duration::from_micros(scene_us.max(0) as u64),
             &mut self.note_graphs,

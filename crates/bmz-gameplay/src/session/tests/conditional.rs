@@ -197,6 +197,47 @@ fn undecided_branch_blocks_audio_lookahead_and_common_bgm_is_not_repeated() {
 }
 
 #[test]
+fn stalled_update_queues_bgm_and_auto_keysounds_before_each_branch_boundary() {
+    let body = concat!(
+        "#00001:00000000000000000000000000000001\n", // 1.875s
+        "#00011:0000000000000002\n",                 // 1.75s
+        "#CONDITIONAL 1\n#WHEN AUTO==1\n",
+        "#00101:01000000000000000000000000000001\n", // 2s and 3.875s
+        "#00111:00000000000000000000000000000002\n", // 3.875s
+        "#DEFAULT\n#00101:02\n#ENDCONDITIONAL\n",
+        "#CONDITIONAL 2\n#WHEN AUTO==1\n",
+        "#00201:01\n#00211:02\n", // 4s
+        "#DEFAULT\n#00201:02\n#ENDCONDITIONAL",
+    );
+    let mut session = session_with_autoplay(imported(body));
+    session.audio_clock.schedule_ahead = true;
+    let bgm = session.chart.sounds.iter().find(|asset| asset.path.ends_with("a.wav")).unwrap().id;
+    let key = session.chart.sounds.iter().find(|asset| asset.path.ends_with("b.wav")).unwrap().id;
+    let mut audio = ScheduledSoundQueue::new();
+    advance(&mut session, 1_600_000, &mut audio);
+    assert_eq!(audio.drain_all().count(), 0);
+    advance(&mut session, 4_010_000, &mut audio);
+    advance(&mut session, 4_020_000, &mut audio);
+    let mut sounds = audio
+        .drain_all()
+        .map(|sound| (sound.start_frame, sound.sound_id.0, sound.catch_up))
+        .collect::<Vec<_>>();
+    sounds.sort_unstable();
+    assert_eq!(session.conditional.decisions.len(), 2);
+    let mut expected = [
+        (84_000, key.0, false),
+        (90_000, bgm.0, true),
+        (96_000, bgm.0, true),
+        (186_000, bgm.0, true),
+        (186_000, key.0, false),
+        (192_000, bgm.0, true),
+        (192_000, key.0, false),
+    ];
+    expected.sort_unstable();
+    assert_eq!(sounds, expected);
+}
+
+#[test]
 fn multiple_tempo_branches_in_one_update_match_small_updates() {
     let body = "#BPM01 240\n#STOP01 192\n#CONDITIONAL 1\n#WHEN AUTO==1\n#00108:01\n#00109:01\n#00202:0.5\n#DEFAULT\n#ENDCONDITIONAL\n#CONDITIONAL 3\n#WHEN AUTO==1\n#00411:0101\n#DEFAULT\n#00411:01\n#ENDCONDITIONAL";
     let mut s = session_with_autoplay(imported(body));

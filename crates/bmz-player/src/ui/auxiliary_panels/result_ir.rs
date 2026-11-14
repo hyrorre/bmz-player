@@ -236,6 +236,7 @@ mod tests {
             DoubleOptionScoreBucket::Off,
             bmz_gameplay::rule::RuleMode::Beatoraja,
             None,
+            bmz_chart::kaleid::KaleidProvenance::imported(),
         )
         .unwrap();
         state.global = RankingLoadState::Loaded(ResultIrRanking {

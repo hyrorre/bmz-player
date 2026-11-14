@@ -587,6 +587,7 @@ impl WinitApp {
             finished.double_option,
             finished.rule_mode,
             self.bokutachi_result_ranking_game(finished),
+            finished.kaleid.clone(),
         );
         let Some(mut state) = state else {
             return;

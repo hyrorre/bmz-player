@@ -284,6 +284,7 @@ pub(super) fn debug_boot_finished_play_session() -> FinishedPlaySession {
     let course_max_combo = result.score.max_combo;
     FinishedPlaySession {
         conditional_reference_total: None,
+        kaleid: Default::default(),
         result,
         stored: StoredPlayResult {
             score_history_id: 0,

@@ -159,7 +159,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
     cache: &PlayRenderSnapshotCache,
 ) -> RenderSnapshot {
     let refreshed = (cache.conditional_revision != session.chart.metadata.conditional_revision)
-        .then(|| cache.for_updated_chart(&session.chart));
+        .then(|| PlayRenderSnapshotCache::from_chart(&session.chart));
     let cache = refreshed.as_ref().unwrap_or(cache);
     let mut snapshot = build_render_state_with_target_and_bga_frames_cached(
         session,
@@ -192,7 +192,7 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
     cache: &PlayRenderSnapshotCache,
 ) -> RenderSnapshot {
     let refreshed = (cache.conditional_revision != session.chart.metadata.conditional_revision)
-        .then(|| cache.for_updated_chart(&session.chart));
+        .then(|| PlayRenderSnapshotCache::from_chart(&session.chart));
     let cache = refreshed.as_ref().unwrap_or(cache);
     let projected_best_ex_score =
         best_ghost.map(|ghost| ghost_ex_score_at_progress(ghost, session.score.past_notes));

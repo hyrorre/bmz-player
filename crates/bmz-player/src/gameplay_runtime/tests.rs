@@ -320,6 +320,49 @@ fn runtime_publishes_target_id_and_resolved_name_from_the_first_frame() {
 }
 
 #[test]
+fn runtime_rebuilds_play_graphs_when_a_branch_changes_note_times_and_ids() {
+    use std::io::Write;
+
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    write!(
+        file,
+        "#BPM 120\n#BPM01 60\n#00011:00010000\n\
+         #CONDITIONAL 1\n#WHEN AUTO==1\n#00108:01\n#00111:0101\n\
+         #DEFAULT\n#00111:01\n#00311:01\n#ENDCONDITIONAL\n"
+    )
+    .unwrap();
+    let chart = bmz_chart::import::import_chart(file.path(), Some(1), false).unwrap().chart;
+    let mut session = prepared_with_chart(SharedInputBackend::default(), Arc::new(chart));
+    session.autoplay = Some(Default::default());
+    let render_config = config(&session, Arc::new(RuntimeProbe::default()));
+    let audio = AudioEngineHandle::new(AudioEngine::new(1_000_000));
+    let mut client = GameplayClient::new(session);
+    client.start(audio, render_config).unwrap();
+    let initial = &client.latest_frame.as_ref().unwrap().render_snapshot.play_note_graphs;
+    assert_eq!(initial.notes[6].values[5], 1);
+    let previous_judge_revision = initial.judge_revision;
+
+    assert!(client.edit(|session| {
+        session.audio_clock.current_frame.store(4_100_000, Ordering::Release);
+    }));
+    wait_until(|| {
+        client.poll();
+        client.session.chart.metadata.conditional_revision > 0
+    });
+    let snapshot = &client.latest_frame.as_ref().unwrap().render_snapshot;
+    let graphs = &snapshot.play_note_graphs;
+    assert_ne!(graphs.judge_revision, previous_judge_revision);
+    assert_eq!(graphs.notes.len(), 5);
+    assert_eq!(snapshot.judge_graph_density.as_ref(), [1, 0, 1, 0, 1]);
+    for second in [0, 2, 4] {
+        assert_eq!(graphs.notes[second].values[5], 1);
+        assert_eq!(graphs.judge[second].values, [0, 1, 0, 0, 0, 0]);
+        assert_eq!(graphs.early_late[second].values[1], 1);
+    }
+    client.shutdown();
+}
+
+#[test]
 fn final_note_state_reaches_input_path_without_render_poll() {
     let session = prepared(SharedInputBackend::default());
     let audio = AudioEngineHandle::new(AudioEngine::new(1_000_000));

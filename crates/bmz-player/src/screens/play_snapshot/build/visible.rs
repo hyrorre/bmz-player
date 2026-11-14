@@ -301,14 +301,6 @@ fn populate_visible_long_notes(
         visible_from,
         tick_range,
     ) {
-        if scroll.reflection_tick.is_some()
-            && session.judge.judged_notes.contains_key(&long.start_note_id)
-            && session.judge.lanes[long.lane.index()]
-                .active_long
-                .is_none_or(|active| active.pair_index != pair_index)
-        {
-            continue;
-        }
         let Some(alpha) = constant_object_alpha(session, scroll_time, long.start_time) else {
             continue;
         };
@@ -318,13 +310,23 @@ fn populate_visible_long_notes(
             continue;
         }
         let mode = long.mode.unwrap_or(session.chart.metadata.long_note_mode);
+        let body_state = long_body_state(session, chart_now, pair_index, long, mode);
+        if scroll.reflection_tick.is_some()
+            && session.judge.judged_notes.contains_key(&long.start_note_id)
+            && session.judge.lanes[long.lane.index()]
+                .active_long
+                .is_none_or(|active| active.pair_index != pair_index)
+            && !(mode == LongNoteMode::Hln && body_state != LongBodyState::Inactive)
+        {
+            continue;
+        }
         snapshot.visible_long_notes.push(VisibleLongNote {
             lane: session.output_lane(long.lane),
             mode,
             head_y: head.clamp(0.0, 1.0),
             tail_y: tail.clamp(0.0, 1.0),
             alpha,
-            body_state: long_body_state(session, chart_now, pair_index, long, mode),
+            body_state,
         });
     }
 }

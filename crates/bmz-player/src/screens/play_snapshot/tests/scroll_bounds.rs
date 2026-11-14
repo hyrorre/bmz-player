@@ -39,6 +39,47 @@ fn negative_bpm_fold_moves_past_unjudged_notes_back_into_the_snapshot() {
 }
 
 #[test]
+fn negative_bpm_fold_keeps_the_missed_hln_body_until_its_end() {
+    use bmz_chart::model::{LongNoteMode, TimingEvent, TimingEventKind};
+    use bmz_render::snapshot::LongBodyState;
+
+    let mut chart = chart_with_long_note();
+    chart.long_notes[0].mode = Some(LongNoteMode::Hln);
+    chart.timing_events.push(TimingEvent {
+        tick: ChartTick(1_920),
+        time: TimeUs(1_000_000),
+        kind: TimingEventKind::BpmReflection,
+    });
+    let profile = ProfileConfig::new_default("default", "Default", 1);
+    let mut session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+    session.hispeed = 1.0;
+    session.judge.process_misses(&session.chart, TimeUs(900_000));
+    assert_eq!(session.judge.judged_notes.get(&NoteId(1)), Some(&Judge::Poor));
+    assert!(session.judge.lanes[Lane::Key1.index()].active_long.is_none());
+
+    let after = build_render_snapshot(&session, TimeUs(1_010_000), &[], None);
+    assert_eq!(after.visible_long_notes.len(), 1);
+    assert_eq!(after.visible_long_notes[0].body_state, LongBodyState::HcnDamage);
+
+    session.judge.process_input(
+        &session.chart,
+        InputEvent {
+            lane: Lane::Key1,
+            kind: InputKind::Press,
+            time: TimeUs(1_020_000),
+            source: InputSource::Human,
+            device_kind: InputDeviceKind::Keyboard,
+            scratch_direction: None,
+        },
+    );
+    let held = build_render_snapshot(&session, TimeUs(1_020_000), &[], None);
+    assert_eq!(held.visible_long_notes.len(), 1);
+    assert_eq!(held.visible_long_notes[0].body_state, LongBodyState::HcnActive);
+    let ended = build_render_snapshot(&session, TimeUs(1_500_000), &[], None);
+    assert!(ended.visible_long_notes.is_empty());
+}
+
+#[test]
 fn positive_scroll_bound_keeps_every_visible_tick_across_changes_and_duplicates() {
     let timing = bmz_chart::timing::build_timing_map(120.0, Vec::new());
     for segments in [
