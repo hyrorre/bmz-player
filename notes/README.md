@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-14 | [OpenGL の起動復旧とスクリーンショット](2026/2026-11-14-opengl-startup-screenshot.md) |
 | 2026-11-14 | [書庫内の複数フォルダ・深い階層を選曲で辿る](2026/2026-11-14-archive-folder-depth.md) |
 | 2026-11-14 | [書庫内動画の世代テストとFFmpegの色変換差](2026/2026-11-14-archive-video-color-test.md) |
 | 2026-11-14 | [動画BGAの縮小とFast Vsyncの表示間隔](2026/2026-11-14-video-bga-playback-resolution.md) |

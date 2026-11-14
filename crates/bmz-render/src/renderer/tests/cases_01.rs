@@ -126,7 +126,7 @@ fn present_mode_fallbacks_follow_vsync_mode_semantics() {
 #[test]
 fn surface_settings_apply_frame_latency_mode_and_preserve_capture_usage() {
     let mut config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        usage: screenshot_surface_usage(wgpu::TextureUsages::RENDER_ATTACHMENT),
         format: wgpu::TextureFormat::Bgra8Unorm,
         width: 1,
         height: 1,
@@ -145,7 +145,10 @@ fn surface_settings_apply_frame_latency_mode_and_preserve_capture_usage() {
 
     assert_eq!(config.desired_maximum_frame_latency, 1);
     assert_eq!(config.present_mode, wgpu::PresentMode::Fifo);
-    assert!(config.usage.contains(wgpu::TextureUsages::COPY_SRC));
+    assert_eq!(config.usage, wgpu::TextureUsages::RENDER_ATTACHMENT);
+
+    let capture_usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC;
+    config.usage = screenshot_surface_usage(capture_usage | wgpu::TextureUsages::COPY_DST);
 
     configure_surface_settings(
         &mut config,
@@ -155,6 +158,7 @@ fn surface_settings_apply_frame_latency_mode_and_preserve_capture_usage() {
     );
     assert_eq!(config.present_mode, wgpu::PresentMode::Mailbox);
     assert_eq!(config.desired_maximum_frame_latency, 2);
+    assert_eq!(config.usage, capture_usage);
 }
 
 #[test]
