@@ -115,6 +115,9 @@ macro_rules! skin_document_render_play_lane_methods {
                     let distance = (1.0 - area.x).max(0.0) * self.w.max(1) as f32;
                     let lift = (state.offset_lift_px as f32).clamp(0.0, distance);
                     frame.x += (note_y.clamp(0.0, 1.0) * (distance - lift)).round() as i32;
+                } else if self.lr2 {
+                    let distance = lr2_visible_scroll_distance(area.height, state) * canvas_h;
+                    frame.y += (note_y.clamp(0.0, 1.0) * distance).round() as i32;
                 } else {
                     frame.y += (timeline_bottom_px - judge_bottom_px).round() as i32;
                 }

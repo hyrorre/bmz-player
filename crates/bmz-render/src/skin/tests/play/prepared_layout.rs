@@ -1,6 +1,38 @@
 use super::*;
 
 #[test]
+fn lr2_vertical_chords_keep_dst_origins_and_share_displacement_with_lift() {
+    let mut areas = vec![serde_json::json!({}); 8];
+    let mut destinations = vec![serde_json::Value::Null; 8];
+    for (slot, x, top, height) in [(0, 80, 395, 5), (7, 41, 391, 13)] {
+        let bottom = top + height;
+        areas[slot] = serde_json::json!({"x":x,"y":480-bottom,"w":20,"h":bottom});
+        destinations[slot] = serde_json::json!({"dst":[{"x":x,"y":480-bottom,"w":20,"h":height}]});
+    }
+    let document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "lr2":true,"w":640,"h":480,"note":{"dst":areas,"lr2Dst":destinations}
+    }))
+    .unwrap();
+    let skin = SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+    for (lift, offset_lift_px) in [(0.0, 0), (0.13, 52)] {
+        let state = SkinDrawState { lift, offset_lift_px, ..Default::default() };
+        let layout = skin.prepare_note_layout(KeyMode::K5, &state);
+        let progress = 0.5 / (1.0 - lift);
+        for (lane, top, height) in [(Lane::Key1, 395, 5), (Lane::Scratch, 391, 13)] {
+            let height = height as f32;
+            let measured_height = layout.note_height(lane).unwrap();
+            assert!(approx_eq(measured_height, height / 480.0));
+            let expected = (top - offset_lift_px - 200) as f32 / 480.0;
+            let rect = layout.note_rect(lane, progress, measured_height).unwrap();
+            assert!(approx_eq(rect.y, expected), "{lane:?}: {rect:?}");
+            let body = layout.body_rect(lane, progress, 0.0).unwrap();
+            assert!(approx_eq(body.y, expected + measured_height));
+            assert!(approx_eq(body.height, (200.0 - height) / 480.0));
+        }
+    }
+}
+
+#[test]
 fn lr2_five_key_layout_uses_the_same_slots_for_note_geometry_and_sprites() {
     let slots = [0, 7, 8, 12, 15];
     let mut ids = vec![""; 16];

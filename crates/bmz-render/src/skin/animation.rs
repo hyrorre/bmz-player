@@ -273,6 +273,12 @@ pub(super) fn note_judge_bottom_y(area: Rect, state: &SkinDrawState, canvas_h: f
     (area.y + area.height - lift_norm).max(scroll_top)
 }
 
+/// Play progress includes the inverse LIFT fraction. Undo it so LIFT
+/// translates the LR2 scroll origin without changing the displacement.
+pub(super) fn lr2_visible_scroll_distance(lane_height: f32, state: &SkinDrawState) -> f32 {
+    lane_height * (1.0 - state.lift.clamp(0.0, 1.0))
+}
+
 /// beatoraja LaneRenderer の PMS 見逃し POOR と同じく、1小節で判定ラインから
 /// レーン上端までの高さぶん落とす。`fall` は落下開始からの小節数。
 pub(super) fn missed_note_bottom_y(area: Rect, judge_bottom: f32, fall: f32) -> f32 {

@@ -24,6 +24,7 @@ pub(crate) struct PreparedNoteLayout<'a> {
     frames: [Option<ResolvedSkinFrame>; LANE_COUNT],
     horizontal: bool,
     scroll_distances_px: [f32; LANE_COUNT],
+    lr2_vertical_scroll_distance: Option<f32>,
     offset: SkinOffsetValue,
     canvas_w: f32,
     canvas_h: f32,
@@ -47,6 +48,7 @@ impl SkinContext {
             frames: [None; LANE_COUNT],
             horizontal: false,
             scroll_distances_px: [0.0; LANE_COUNT],
+            lr2_vertical_scroll_distance: None,
             offset: SkinOffsetValue::default(),
             canvas_w: 1.0,
             canvas_h: 1.0,
@@ -56,6 +58,15 @@ impl SkinContext {
         if let Some(document) = &self.document {
             layout.horizontal = document.note.as_ref().is_some_and(|note| note.lr2_horizontal);
             let options = document.enabled_options();
+            if document.lr2 && !layout.horizontal {
+                let lane_height = document
+                    .note_lane_area(Lane::Key1, key_mode, &options)
+                    .map_or(1.0, |area| area.height);
+                // Play progress already divides by the visible fraction. Use one
+                // distance for all lanes while keeping their individual DST origins.
+                layout.lr2_vertical_scroll_distance =
+                    Some(lr2_visible_scroll_distance(lane_height, state));
+            }
             for lane in Lane::ALL {
                 if layout.horizontal {
                     layout.scroll_distances_px[lane.index()] = document
@@ -284,7 +295,7 @@ impl PreparedNoteLayout<'_> {
             rect.x += self.horizontal_scroll_px(lane, progress) / self.canvas_w;
             return Some(rect);
         }
-        let bottom = note_progress_to_y(area, progress, self.state, self.canvas_h);
+        let bottom = self.scrolling_bottom(area, progress);
         Some(self.rect_at_bottom(area, bottom, height))
     }
 
@@ -334,6 +345,15 @@ impl PreparedNoteLayout<'_> {
         (self.state.offset_lift_px as f32).clamp(0.0, self.scroll_distances_px[lane.index()])
     }
 
+    fn scrolling_bottom(&self, area: Rect, progress: f32) -> f32 {
+        if let Some(distance) = self.lr2_vertical_scroll_distance {
+            let bottom = area.y + area.height - self.state.offset_lift_px as f32 / self.canvas_h;
+            bottom - progress.clamp(0.0, 1.0) * distance
+        } else {
+            note_progress_to_y(area, progress, self.state, self.canvas_h)
+        }
+    }
+
     pub(crate) fn body_rect(&self, lane: Lane, head: f32, tail: f32) -> Option<Rect> {
         let area = self.areas[lane.index()]?;
         let height = self.heights[lane.index()]?;
@@ -347,8 +367,8 @@ impl PreparedNoteLayout<'_> {
                 height: head.height,
             });
         }
-        let head = note_progress_to_y(area, head, self.state, self.canvas_h);
-        let tail = note_progress_to_y(area, tail, self.state, self.canvas_h);
+        let head = self.scrolling_bottom(area, head);
+        let tail = self.scrolling_bottom(area, tail);
         if let Some(geometry) = self.qwilight_geometry(lane) {
             let top = tail - geometry.tail_body_extension / self.canvas_h;
             let bottom = head + geometry.front_body_extension / self.canvas_h;

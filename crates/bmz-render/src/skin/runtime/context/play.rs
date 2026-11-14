@@ -357,7 +357,7 @@ impl SkinContext {
         state: &SkinDrawState,
     ) -> Option<Rect> {
         let document = self.document.as_ref()?;
-        if document.note.as_ref().is_some_and(|note| note.lr2_horizontal) {
+        if document.lr2 || document.note.as_ref().is_some_and(|note| note.lr2_horizontal) {
             return self.prepare_note_layout(key_mode, state).note_rect(lane, note_y, note_height);
         }
         let enabled_options = document.enabled_options();
@@ -409,7 +409,7 @@ impl SkinContext {
         state: &SkinDrawState,
     ) -> Option<Rect> {
         let document = self.document.as_ref()?;
-        if document.note.as_ref().is_some_and(|note| note.lr2_horizontal) {
+        if document.lr2 || document.note.as_ref().is_some_and(|note| note.lr2_horizontal) {
             return self.prepare_note_layout(key_mode, state).body_rect(lane, head_y, tail_y);
         }
         let enabled_options = document.enabled_options();
