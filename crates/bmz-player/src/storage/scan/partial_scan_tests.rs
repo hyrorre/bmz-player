@@ -97,6 +97,66 @@ fn multi_folder_archives_register_deep_charts_and_browse_only_to_song_folders() 
     }
 }
 
+#[test]
+fn rescan_prunes_charts_below_a_song_folder_and_restores_them_when_it_opens() {
+    let base = temp();
+    let root = base.path();
+    let group = root.join("group");
+    let song = group.join("song");
+    let target = entry(&group, true);
+    let direct = song.join("main.bms");
+    let nested = song.join("sabun/b.bms");
+    let archive = song.join("sabun.zip");
+    chart(&nested, "Nested");
+    write_zip(&archive, &[("c.bms", &chart_text("Archive"))]);
+    chart(&group.join("sibling/d.bms"), "Sibling");
+    let mut db = db();
+    configure_and_scan(&mut db, &[entry(root, true)]);
+    assert_eq!(registered(&db, root).len(), 3);
+
+    chart(&direct, "Main");
+    // The enclosing configured root must not keep an intentionally omitted entry.
+    let report = partial_scan(&mut db, target.clone(), 2);
+    assert_eq!(report.summary.removed_files, 2);
+    assert_eq!(registered(&db, root), ["group/sibling/d.bms", "group/song/main.bms"]);
+    assert!(nested.is_file());
+    assert!(archive.is_file());
+    assert_consistent(&db);
+
+    std::fs::remove_file(direct).unwrap();
+    let report = partial_scan(&mut db, target, 3);
+    assert_eq!(report.summary.imported, 2);
+    assert_eq!(report.summary.removed_files, 1);
+    assert_eq!(
+        registered(&db, root),
+        ["group/sibling/d.bms", "group/song/sabun.zip!/c.bms", "group/song/sabun/b.bms"]
+    );
+    assert_consistent(&db);
+}
+
+#[test]
+fn indexed_prune_checks_the_filesystem_before_removing_charts_below_a_song_folder() {
+    let base = temp();
+    let root = base.path();
+    let mut db = db();
+    chart(&root.join("song/sabun/a.bms"), "Nested");
+    write_zip(&root.join("song/pack.zip"), &[("a.bms", &chart_text("Archive"))]);
+    chart(&root.join("sibling/a.bms"), "Sibling");
+    configure_and_scan(&mut db, &[entry(root, true)]);
+    let request = PruneRequest {
+        root,
+        recursive: true,
+        omission_proves_absence: false,
+        protected_roots: &[],
+    };
+    let mut index = db.chart_paths_not_discovered(&HashSet::new()).unwrap();
+    assert_eq!(db.prune_missing_chart_files(&mut index, &request).unwrap(), 0);
+    chart(&root.join("song/main.bms"), "Main");
+    assert_eq!(db.prune_missing_chart_files(&mut index, &request).unwrap(), 2);
+    assert_eq!(registered(&db, root), ["sibling/a.bms"]);
+    assert_consistent(&db);
+}
+
 fn db() -> LibraryDatabase {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
@@ -189,7 +249,7 @@ fn partial_scan_below_configured_root_prunes_deleted_charts() {
     chart(&insane2.join("song_B/b.bme"), "B another");
     chart(&insane2.join("song_B/b.bml"), "B long");
     chart(&insane2.join("song_B/b.pms"), "B pop");
-    chart(&insane2.join("song_D.bms"), "D");
+    chart(&insane2.join("song_D/d.bms"), "D");
     write_zip(&insane2.join("song_C.zip"), &[("song_C/c.bms", &chart_text("C"))]);
     chart(&bms.join("EVENT/song_E/e.bms"), "E");
     let mut db = db();
@@ -198,7 +258,7 @@ fn partial_scan_below_configured_root_prunes_deleted_charts() {
 
     std::fs::remove_dir_all(insane2.join("song_B")).unwrap();
     std::fs::remove_file(insane2.join("song_C.zip")).unwrap();
-    std::fs::remove_file(insane2.join("song_D.bms")).unwrap();
+    std::fs::remove_file(insane2.join("song_D/d.bms")).unwrap();
     // Outside the partial scan: it must wait for a scan that covers it.
     std::fs::remove_file(bms.join("INSANE1/song_Y/y.bms")).unwrap();
 
@@ -396,21 +456,20 @@ fn shallow_partial_scan_keeps_descendants_it_did_not_read() {
     let base = temp();
     let bms = base.path().join("BMS");
     let insane2 = bms.join("INSANE2");
-    chart(&insane2.join("direct.bms"), "Direct");
-    chart(&insane2.join("kept.bms"), "Kept");
     chart(&insane2.join("song_B/nested.bms"), "Nested");
-    write_zip(&insane2.join("song_B/nested.zip"), &[("n.bms", &chart_text("Nested zip"))]);
+    write_zip(&insane2.join("song_C/nested.zip"), &[("n.bms", &chart_text("Nested zip"))]);
+    write_zip(&insane2.join("direct.zip"), &[("a.bms", &chart_text("Direct zip"))]);
     let mut db = db();
     configure_and_scan(&mut db, &[entry(&bms, true)]);
 
-    std::fs::remove_file(insane2.join("direct.bms")).unwrap();
+    std::fs::remove_file(insane2.join("direct.zip")).unwrap();
     std::fs::remove_dir_all(insane2.join("song_B")).unwrap();
     let report = partial_scan(&mut db, entry(&insane2, false), 2);
 
     assert_eq!(report.summary.removed_files, 1);
     assert_eq!(
         registered(&db, &bms),
-        ["INSANE2/kept.bms", "INSANE2/song_B/nested.bms", "INSANE2/song_B/nested.zip!/n.bms"]
+        ["INSANE2/song_B/nested.bms", "INSANE2/song_C/nested.zip!/n.bms"]
     );
     assert_consistent(&db);
 }
@@ -531,13 +590,13 @@ fn partial_scan_treats_dot_named_charts_like_others() {
     let bms = base.path().join("BMS");
     let insane2 = bms.join("INSANE2");
     chart(&insane2.join(".hidden/song.bms"), "Hidden");
-    chart(&insane2.join(".gone.bms"), "Hidden gone");
+    chart(&insane2.join("song/.gone.bms"), "Hidden gone");
     write_zip(&insane2.join("pack.zip"), &[(".hidden/z.bms", &chart_text("Hidden zip"))]);
     let mut db = db();
     configure_and_scan(&mut db, &[entry(&bms, true)]);
     assert_eq!(count(&db, "SELECT COUNT(*) FROM chart_files"), 3);
 
-    std::fs::remove_file(insane2.join(".gone.bms")).unwrap();
+    std::fs::remove_file(insane2.join("song/.gone.bms")).unwrap();
     let report = partial_scan(&mut db, entry(&insane2, true), 2);
 
     assert_eq!(report.summary.files_seen, 2);

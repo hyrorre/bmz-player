@@ -50,6 +50,7 @@ impl LibraryDatabase {
         let mut archive_entries: HashMap<PathBuf, Option<std::collections::HashSet<String>>> =
             HashMap::new();
         let mut containers_gone: HashMap<PathBuf, bool> = HashMap::new();
+        let mut song_folders = HashMap::new();
         // A root cannot protect its own omitted entries. A root enclosing this one
         // (a configured library above a partial scan) knows nothing about this scope
         // that the scan did not just read, so it cannot keep a confirmed absence.
@@ -78,12 +79,19 @@ impl LibraryDatabase {
                 // An offline, disabled, or unscanned root cannot prove absence.
                 continue;
             }
-            // The enclosing root's own scan may have chosen a different alias, so
-            // only the file system or a decoded archive index may remove its
-            // registrations, never the omission alone.
+            // The enclosing root's scan may have chosen a different alias. An
+            // indexed discovery can lag, so in either case verify omissions.
             let enclosed =
                 !exact_archive && enclosing_roots.iter().any(|other| other.contains_key(key));
             if request.omission_proves_absence && !enclosed {
+                missing.push(*id);
+                continue;
+            }
+            if !exact_archive
+                && locator
+                    .as_ref()
+                    .is_ok_and(|locator| hidden_by_song_folder(locator, &root, &mut song_folders))
+            {
                 missing.push(*id);
                 continue;
             }
@@ -252,6 +260,23 @@ impl LibraryDatabase {
             .optional()
             .map_err(Into::into)
     }
+}
+
+fn hidden_by_song_folder(
+    locator: &crate::chart_source::ChartLocator,
+    root: &RootScope,
+    song_folders: &mut HashMap<PathBuf, bool>,
+) -> bool {
+    use crate::storage::scan::{enclosing_song_folders, folder_has_loose_chart};
+
+    enclosing_song_folders(locator.container_path(), locator.is_archive())
+        .take_while(|path| {
+            let key = scope_key(&path.to_string_lossy());
+            root.is_root_key(&key) || root.contains_key(&key)
+        })
+        .any(|path| {
+            *song_folders.entry(path.to_path_buf()).or_insert_with(|| folder_has_loose_chart(path))
+        })
 }
 
 /// A chart that moved, or whose alias path was replaced by the chosen one, keeps its

@@ -143,8 +143,8 @@ mod link_tests;
 #[cfg(test)]
 mod partial_scan_tests;
 
-pub(crate) use discovery::folder_has_document;
 pub use discovery::{ChartFileEntry, discover_chart_files};
+pub(crate) use discovery::{enclosing_song_folders, folder_has_document, folder_has_loose_chart};
 pub use import::{scan_song_roots, scan_song_roots_with_progress};
 
 pub fn is_chart_file(path: &Path) -> bool {
@@ -233,7 +233,6 @@ mod tests {
         let old = root.join("old");
         std::fs::create_dir_all(&old).unwrap();
         let contents = "#TITLE Duplicate\n#BPM 120\n#00011:01\n";
-        write_file(&root.join("keep.bms"), contents);
         write_file(&old.join("removed.bms"), contents);
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
@@ -245,7 +244,7 @@ mod tests {
             recursive: true,
         }];
         scan_song_roots(&mut db, &roots, &scan_config(), 1, false).unwrap();
-        assert_eq!(db.list_charts(10, 0).unwrap().len(), 2);
+        write_file(&root.join("keep.bms"), contents);
         std::fs::remove_file(old.join("removed.bms")).unwrap();
         // A shallow scan must not prune descendants, even when their files are missing.
         let shallow = vec![PathEntry { recursive: false, ..roots[0].clone() }];
@@ -279,7 +278,7 @@ mod tests {
 
         // Hidden files are scanned like beatoraja; only fixed names are excluded.
         assert_eq!(shallow.len(), 2);
-        assert_eq!(deep.len(), 3);
+        assert_eq!(deep.len(), 2);
         assert!(shallow[0].has_document);
         assert!(deep.iter().any(|entry| entry.has_document));
 

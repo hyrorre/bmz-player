@@ -338,6 +338,7 @@ impl DiscoveryWalk<'_> {
         };
         let mut charts_in_dir = Vec::new();
         let mut linked_files_in_dir = Vec::new();
+        let mut archives_in_dir = Vec::new();
         let mut has_document = false;
         for entry in entries {
             let entry = match entry {
@@ -434,28 +435,7 @@ impl DiscoveryWalk<'_> {
             } else if file_type.is_file()
                 && file_name.to_str().and_then(bmz_song_resource::archive_extension).is_some()
             {
-                let path = entry.path();
-                if let Some(parent) = &unit.canonical {
-                    listing.regular_files.push(parent.join(&file_name));
-                }
-                match discover_archive_charts(&path) {
-                    Ok((entries, generation)) => {
-                        listing.archives.push(DiscoveredArchive { path: path.clone(), generation });
-                        listing.entries.extend(entries);
-                    }
-                    Err(error) => {
-                        // An encrypted or otherwise unsupported archive yields no charts
-                        // on any scan, so it must not block pruning the rest of the root.
-                        listing.complete &= crate::song_archive::is_unsupported(&error);
-                        record_discovery_issue(
-                            &mut listing.issues,
-                            root,
-                            &path,
-                            ScanDiscoveryOperation::ReadArchive,
-                            io::Error::other(format!("{error:#}")),
-                        );
-                    }
-                }
+                archives_in_dir.push(entry.path());
             } else if file_type.is_file() && is_chart_file_name(&file_name) {
                 let path = entry.path();
                 let metadata = match entry.metadata() {
@@ -476,6 +456,37 @@ impl DiscoveryWalk<'_> {
                     listing.regular_files.push(parent.join(&file_name));
                 }
                 charts_in_dir.push(chart_file_entry(path, &metadata, false));
+            }
+        }
+        // File aliases are deduplicated after the walk, so only a regular chart
+        // establishes a song folder here. Defer archive reads until that is known.
+        if !charts_in_dir.is_empty() {
+            listing.subdirs.clear();
+            listing.linked_dirs.clear();
+            linked_files_in_dir.retain(|file| !file.archive);
+        } else {
+            for path in archives_in_dir {
+                if let (Some(parent), Some(name)) = (&unit.canonical, path.file_name()) {
+                    listing.regular_files.push(parent.join(name));
+                }
+                match discover_archive_charts(&path) {
+                    Ok((entries, generation)) => {
+                        listing.archives.push(DiscoveredArchive { path, generation });
+                        listing.entries.extend(entries);
+                    }
+                    Err(error) => {
+                        // An encrypted or otherwise unsupported archive yields no charts
+                        // on any scan, so it must not block pruning the rest of the root.
+                        listing.complete &= crate::song_archive::is_unsupported(&error);
+                        record_discovery_issue(
+                            &mut listing.issues,
+                            root,
+                            &path,
+                            ScanDiscoveryOperation::ReadArchive,
+                            io::Error::other(format!("{error:#}")),
+                        );
+                    }
+                }
             }
         }
         charts_in_dir.iter_mut().for_each(|entry| entry.has_document = has_document);
@@ -636,6 +647,25 @@ pub(super) fn is_chart_file_name(name: &std::ffi::OsStr) -> bool {
             .iter()
             .any(|candidate| extension.eq_ignore_ascii_case(candidate))
     })
+}
+
+/// An indexed candidate must be verified before it can hide other registrations.
+pub(crate) fn folder_has_loose_chart(folder: &Path) -> bool {
+    std::fs::read_dir(folder).is_ok_and(|entries| {
+        entries.filter_map(Result::ok).any(|entry| {
+            let name = entry.file_name();
+            is_chart_file_name(&name)
+                && !is_excluded_name(&name)
+                && entry.file_type().is_ok_and(|kind| kind.is_file())
+                && entry.metadata().is_ok()
+        })
+    })
+}
+
+/// Loose charts share their own folder. An archive counts as a child of the
+/// physical folder containing it, just like a subdirectory.
+pub(crate) fn enclosing_song_folders(path: &Path, archive: bool) -> impl Iterator<Item = &Path> {
+    path.parent().into_iter().flat_map(Path::ancestors).skip(usize::from(!archive))
 }
 
 /// Names that never hold charts, excluded on every platform by name alone, without

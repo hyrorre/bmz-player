@@ -115,6 +115,8 @@ fn overlapping_external_links_read_every_folder_once() {
     let ext = base.path().join("ext");
     chart(&ext.join("c.bms"), "C");
     chart(&ext.join("sub/b.bms"), "B");
+    // A loose chart makes ext a song folder. An independently adopted
+    // descendant still has its own traversal starting point.
 
     // The descendant is chosen first; the ancestor is then read without it.
     let root = base.path().join("root1");
@@ -128,7 +130,7 @@ fn overlapping_external_links_read_every_folder_once() {
     std::fs::create_dir_all(&root).unwrap();
     link(&ext, &root.join("a"));
     link(&ext.join("sub"), &root.join("b"));
-    assert_eq!(discovered(&root, true, &config(true)).0, ["a/c.bms", "a/sub/b.bms"]);
+    assert_eq!(discovered(&root, true, &config(true)).0, ["a/c.bms"]);
 
     // A link found inside an adopted tree that points at its ancestor.
     let root = base.path().join("root3");
@@ -165,8 +167,8 @@ fn cyclic_links_terminate_without_duplicates_or_incomplete_scans() {
     let base = temp();
     let root = base.path().join("root");
     let ext = base.path().join("ext");
-    chart(&root.join("r.bms"), "Root");
-    chart(&ext.join("e.bms"), "Ext");
+    chart(&root.join("song/r.bms"), "Root");
+    chart(&ext.join("song/e.bms"), "Ext");
     chart(&ext.join("nested/n.bms"), "Nested");
     link(&ext, &root.join("ext"));
     link(&root, &ext.join("back"));
@@ -177,7 +179,7 @@ fn cyclic_links_terminate_without_duplicates_or_incomplete_scans() {
 
     let (paths, discovery) = discovered(&root, true, &config(true));
 
-    assert_eq!(paths, ["ext/e.bms", "ext/nested/n.bms", "r.bms"]);
+    assert_eq!(paths, ["ext/nested/n.bms", "ext/song/e.bms", "song/r.bms"]);
     assert!(discovery.complete);
     assert!(discovery.issues.is_empty());
 }
@@ -292,15 +294,15 @@ fn inaccessible_link_target_keeps_existing_registrations() {
     let base = temp();
     let root = base.path().join("root");
     let ext = base.path().join("ext");
-    chart(&root.join("a.bms"), "A");
-    chart(&root.join("b.bms"), "B");
+    chart(&root.join("song/a.bms"), "A");
+    chart(&root.join("song/b.bms"), "B");
     chart(&ext.join("e.bms"), "E");
     link(&ext, &root.join("ext"));
     let mut db = db();
     scan_song_roots(&mut db, &roots(&root, true), &config(true), 1, false).unwrap();
-    assert_eq!(registered(&db, &root), ["a.bms", "b.bms", "ext/e.bms"]);
+    assert_eq!(registered(&db, &root), ["ext/e.bms", "song/a.bms", "song/b.bms"]);
 
-    std::fs::remove_file(root.join("b.bms")).unwrap();
+    std::fs::remove_file(root.join("song/b.bms")).unwrap();
     std::fs::set_permissions(&ext, std::fs::Permissions::from_mode(0o000)).unwrap();
     let result = scan_song_roots(&mut db, &roots(&root, true), &config(true), 2, false);
     std::fs::set_permissions(&ext, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -308,7 +310,7 @@ fn inaccessible_link_target_keeps_existing_registrations() {
 
     assert_eq!(report.summary.discovery_skipped, 1);
     assert_eq!(report.summary.removed_files, 0);
-    assert_eq!(registered(&db, &root), ["a.bms", "b.bms", "ext/e.bms"]);
+    assert_eq!(registered(&db, &root), ["ext/e.bms", "song/a.bms", "song/b.bms"]);
 }
 
 /// Discovery is the evidence of presence: a chart deleted after it was discovered is
@@ -357,7 +359,7 @@ fn links_are_ignored_without_follow_symlinks() {
     let base = temp();
     let root = base.path().join("root");
     let ext = base.path().join("ext");
-    chart(&root.join("a.bms"), "A");
+    chart(&root.join("song/a.bms"), "A");
     chart(&ext.join("e.bms"), "E");
     chart(&base.path().join("other/o.bms"), "O");
     link(&ext, &root.join("ext"));
@@ -366,14 +368,14 @@ fn links_are_ignored_without_follow_symlinks() {
 
     let (paths, discovery) = discovered(&root, true, &config(false));
 
-    assert_eq!(paths, ["a.bms"]);
+    assert_eq!(paths, ["song/a.bms"]);
     assert!(discovery.complete);
     // A registration through a link is out of scope once links are not followed.
     let mut db = db();
     scan_song_roots(&mut db, &roots(&root, true), &config(true), 1, false).unwrap();
-    assert_eq!(registered(&db, &root), ["a.bms", "ext/e.bms", "o-link.bms"]);
+    assert_eq!(registered(&db, &root), ["ext/e.bms", "o-link.bms", "song/a.bms"]);
     scan_song_roots(&mut db, &roots(&root, true), &config(false), 2, false).unwrap();
-    assert_eq!(registered(&db, &root), ["a.bms"]);
+    assert_eq!(registered(&db, &root), ["song/a.bms"]);
 }
 
 #[cfg(unix)]
@@ -392,12 +394,13 @@ fn shallow_scan_follows_file_links_but_not_folders() {
     assert_eq!(discovered(&root, false, &config(true)).0, ["a.bms", "f.bms"]);
 
     // A shallow scan neither registers nor prunes deeper charts.
+    std::fs::remove_file(root.join("a.bms")).unwrap();
     let mut db = db();
     scan_song_roots(&mut db, &roots(&root, true), &config(true), 1, false).unwrap();
-    assert_eq!(registered(&db, &root), ["a.bms", "ext/e.bms", "f.bms", "sub/s.bms"]);
+    assert_eq!(registered(&db, &root), ["ext/e.bms", "f.bms", "sub/s.bms"]);
     std::fs::remove_file(root.join("sub/s.bms")).unwrap();
     scan_song_roots(&mut db, &roots(&root, false), &config(true), 2, false).unwrap();
-    assert_eq!(registered(&db, &root), ["a.bms", "ext/e.bms", "f.bms", "sub/s.bms"]);
+    assert_eq!(registered(&db, &root), ["ext/e.bms", "f.bms", "sub/s.bms"]);
 }
 
 fn write_zip(path: &Path, entries: &[(&str, &str)]) {
@@ -553,7 +556,7 @@ fn hidden_charts_are_scanned_and_pruned_like_other_charts() {
     let base = temp();
     let root = base.path().join("root");
     let folder = root.join(".hidden-folder");
-    let file = root.join(".hidden.bms");
+    let file = root.join("song/.hidden.bms");
     chart(&folder.join("song.bms"), "Inside");
     chart(&file, "Hidden");
     #[cfg(windows)]
@@ -623,12 +626,12 @@ fn archive_entries_and_archives_are_pruned_only_when_gone() {
     let pack = root.join("pack.zip");
     let chart_text = |title: &str| format!("#TITLE {title}\n#BPM 120\n#00011:01\n");
     write_zip(&pack, &[("song/a.bms", &chart_text("A")), ("song/b.bms", &chart_text("B"))]);
-    chart(&root.join("plain.bms"), "Plain");
+    chart(&root.join("plain/plain.bms"), "Plain");
     let mut db = db();
     scan_song_roots(&mut db, &roots(&root, true), &config(true), 1, false).unwrap();
     assert_eq!(
         registered(&db, &root),
-        ["pack.zip!/song/a.bms", "pack.zip!/song/b.bms", "plain.bms"]
+        ["pack.zip!/song/a.bms", "pack.zip!/song/b.bms", "plain/plain.bms"]
     );
 
     // Unchanged archives are confirmed without being re-read.
@@ -637,11 +640,11 @@ fn archive_entries_and_archives_are_pruned_only_when_gone() {
 
     write_zip(&pack, &[("song/a.bms", &chart_text("A"))]);
     scan_song_roots(&mut db, &roots(&root, true), &config(true), 3, false).unwrap();
-    assert_eq!(registered(&db, &root), ["pack.zip!/song/a.bms", "plain.bms"]);
+    assert_eq!(registered(&db, &root), ["pack.zip!/song/a.bms", "plain/plain.bms"]);
 
     std::fs::remove_file(&pack).unwrap();
     scan_song_roots(&mut db, &roots(&root, true), &config(true), 4, false).unwrap();
-    assert_eq!(registered(&db, &root), ["plain.bms"]);
+    assert_eq!(registered(&db, &root), ["plain/plain.bms"]);
 }
 
 #[cfg(unix)]

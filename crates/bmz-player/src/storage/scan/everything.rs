@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -6,8 +6,9 @@ use anyhow::{Context, Result, bail};
 use everything_ipc::wm::{EverythingClient, FileInfo, RequestFlags};
 
 use super::discovery::{
-    ChartDiscovery, ChartFileEntry, DiscoveredArchive, discover_archive_charts, is_chart_file_name,
-    is_document_file_name, is_excluded_name, record_discovery_issue, usize_to_u32,
+    ChartDiscovery, ChartFileEntry, DiscoveredArchive, discover_archive_charts,
+    enclosing_song_folders, folder_has_loose_chart, is_chart_file_name, is_document_file_name,
+    is_excluded_name, record_discovery_issue, usize_to_u32,
 };
 use super::{ScanConfig, ScanDiscoveryBackend, ScanDiscoveryOperation};
 
@@ -83,11 +84,12 @@ pub(super) fn discover_chart_files_everything(
         return Err(NoIndexedFiles.into());
     }
 
-    let mut chart_entries = Vec::new();
+    let mut entries = Vec::new();
     let mut archives = Vec::new();
     let mut issues = Vec::new();
     let mut complete = true;
     let mut document_folders = HashSet::new();
+    let mut verified = HashMap::new();
     for item in results.iter() {
         let parent = item
             .get_str(RequestFlags::Path)
@@ -110,20 +112,22 @@ pub(super) fn discover_chart_files_everything(
             continue;
         }
 
+        let name = relative_path.file_name().unwrap_or_default();
         let output_path =
             if root.is_absolute() { absolute_path } else { root.join(&relative_path) };
-        if is_document_file_name(output_path.file_name().unwrap_or_default()) {
+        if is_document_file_name(name) {
             if let Some(parent) = output_path.parent() {
                 document_folders.insert(parent.to_path_buf());
             }
             continue;
         }
         if crate::chart_source::is_archive_file(&output_path) {
-            // Like native discovery, one unreadable archive is an issue, not a reason to
-            // abandon the whole root and fall back to a much slower directory walk.
+            if inside_song_folder(root, &relative_path, true, &mut verified) {
+                continue;
+            }
             match discover_archive_charts(&output_path) {
-                Ok((entries, generation)) => {
-                    chart_entries.extend(entries);
+                Ok((charts, generation)) => {
+                    entries.extend(charts);
                     archives.push(DiscoveredArchive { path: output_path, generation });
                 }
                 Err(error) => {
@@ -139,7 +143,9 @@ pub(super) fn discover_chart_files_everything(
             }
             continue;
         }
-        if !is_chart_file_name(output_path.file_name().unwrap_or_default()) {
+        if !is_chart_file_name(name)
+            || inside_song_folder(root, &relative_path, false, &mut verified)
+        {
             continue;
         }
 
@@ -150,7 +156,7 @@ pub(super) fn discover_chart_files_everything(
             .get_time(RequestFlags::DateModified)
             .context("Everything result is missing its modified time")?;
         let filetime = ((modified.dwHighDateTime as u64) << 32) | modified.dwLowDateTime as u64;
-        chart_entries.push(ChartFileEntry {
+        entries.push(ChartFileEntry {
             path: output_path,
             file_size,
             modified_at: filetime_to_unix_seconds(filetime),
@@ -158,30 +164,48 @@ pub(super) fn discover_chart_files_everything(
         });
     }
 
-    for entry in &mut chart_entries {
+    for entry in &mut entries {
         entry.has_document |=
             entry.path.parent().is_some_and(|parent| document_folders.contains(parent));
     }
-    for count in 1..=usize_to_u32(chart_entries.len()) {
+    for count in 1..=usize_to_u32(entries.len()) {
         on_discovered(count);
     }
 
     tracing::debug!(
         version = ?client.get_version(),
         query_results = results.len(),
-        charts = chart_entries.len(),
+        charts = entries.len(),
         root = %root.display(),
         "Everything song discovery query complete"
     );
 
     Ok(ChartDiscovery {
-        entries: chart_entries,
+        entries,
         archives,
         complete,
         issues,
         root_readable: true,
         backend: ScanDiscoveryBackend::Everything,
         fallback_reason: None,
+    })
+}
+
+fn folder_key(path: &Path) -> String {
+    crate::paths::normalize_library_path(&path.to_string_lossy()).to_lowercase()
+}
+
+fn inside_song_folder(
+    root: &Path,
+    relative: &Path,
+    archive: bool,
+    verified: &mut HashMap<String, bool>,
+) -> bool {
+    enclosing_song_folders(relative, archive).any(|ancestor| {
+        // The index can still contain deleted charts or miss newly added ones.
+        *verified
+            .entry(folder_key(ancestor))
+            .or_insert_with(|| folder_has_loose_chart(&root.join(ancestor)))
     })
 }
 
@@ -232,6 +256,26 @@ fn filetime_to_unix_seconds(filetime: u64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn song_folder_filter_keeps_direct_charts_and_ignores_stale_index_matches() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path();
+        std::fs::create_dir(path.join("Song")).unwrap();
+        std::fs::create_dir(path.join("Stale")).unwrap();
+        std::fs::write(path.join("Song/a.bms"), "").unwrap();
+        let mut verified = HashMap::new();
+        let mut excluded = |relative: &str, archive| {
+            inside_song_folder(path, Path::new(relative), archive, &mut verified)
+        };
+        assert!(!excluded("SONG/a.bms", false));
+        assert!(excluded("Song/nested/b.bms", false));
+        assert!(excluded("Song/pack.zip", true));
+        assert!(excluded("Song/nested/pack.zip", true));
+        assert!(!excluded("Song-other/pack.zip", true));
+        assert!(!excluded("Stale/nested/b.bms", false));
+        assert!(!excluded("Stale/pack.zip", true));
+    }
 
     #[test]
     fn query_quotes_root_and_adds_trailing_separator() {
