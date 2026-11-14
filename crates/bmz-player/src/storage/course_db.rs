@@ -385,7 +385,7 @@ where
          FROM course_entries
          {filter}"
     );
-    let mut stmt = conn.prepare(&sql)?;
+    let mut stmt = conn.prepare_cached(&sql)?;
     let rows = stmt.query_map(params, |row| {
         let md5: String = row.get(2)?;
         let sha256: String = row.get(3)?;
@@ -404,6 +404,9 @@ where
 }
 
 fn repair_course_entry_rows(conn: &Connection, entries: Vec<CourseEntryLinkRow>) -> Result<usize> {
+    if entries.is_empty() {
+        return Ok(0);
+    }
     let mut repaired = 0;
     let mut update = conn.prepare_cached(
         "UPDATE course_entries

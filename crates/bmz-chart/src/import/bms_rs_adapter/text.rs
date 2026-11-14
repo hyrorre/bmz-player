@@ -122,10 +122,11 @@ pub(super) fn source_text_objects(
             else {
                 continue;
             };
-            let Ok(obj_id) = ObjId::try_from(&object.id, base62_obj_ids) else {
+            let token = object.token();
+            let Ok(obj_id) = ObjId::try_from(token, base62_obj_ids) else {
                 warnings.push(ImportWarning::ParserDiagnostic {
                     code: "InvalidTextObjectId".to_string(),
-                    message: format!("channel 99 has invalid object id {:?}", object.id),
+                    message: format!("channel 99 has invalid object id {token:?}"),
                 });
                 continue;
             };

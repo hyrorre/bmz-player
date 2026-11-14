@@ -185,7 +185,7 @@ pub(super) fn chart_bms_total(metadata_total: Option<f64>) -> f64 {
 pub(super) fn upsert_chart_file(
     conn: &Connection,
     record: &ChartImportSource<'_>,
-    identity: &ChartIdentity,
+    chart: &PreparedChartImport,
 ) -> Result<i64> {
     conn.prepare_cached(
         "INSERT INTO chart_files (
@@ -215,8 +215,8 @@ pub(super) fn upsert_chart_file(
             path_key(record.file_path),
             record.file_size as i64,
             record.modified_at,
-            hash_to_hex(&identity.file_md5),
-            hash_to_hex(&identity.file_sha256),
+            chart.md5.as_str(),
+            chart.sha256.as_str(),
             record.scanned_at,
         ],
         |row| row.get(0),
@@ -240,16 +240,16 @@ pub(super) fn insert_chart(
             has_undefined_ln, has_defined_ln, has_defined_cn, has_defined_hcn,
             undefined_ln_pairs, defined_ln_pairs, defined_cn_pairs, defined_hcn_pairs,
             has_bms_random, source_url, append_url, headers_json, import_version,
-            has_defined_hln, defined_hln_pairs
+            has_defined_hln, defined_hln_pairs, kaleid_json
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
             ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
-            ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42
+            ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43
         )",
     )?
     .execute(params![
-        hash_to_hex(&chart.identity.file_sha256),
-        hash_to_hex(&chart.identity.file_md5),
+        chart.sha256.as_str(),
+        chart.md5.as_str(),
         chart.metadata.title.as_str(),
         chart.metadata.subtitle.as_str(),
         chart.metadata.artist.as_str(),
@@ -293,16 +293,9 @@ pub(super) fn insert_chart(
         CHART_IMPORT_VERSION,
         stats.ln_profile.has_defined_hln,
         stats.ln_counts.defined_hln_pairs,
+        chart.kaleid_json.as_str(),
     ])?;
-    let chart_id = conn.last_insert_rowid();
-    write_chart_kaleid(conn, chart_id, &chart.kaleid_json)?;
-    Ok(chart_id)
-}
-
-fn write_chart_kaleid(conn: &Connection, chart_id: i64, kaleid_json: &str) -> Result<()> {
-    conn.prepare_cached("UPDATE charts SET kaleid_json = ?1 WHERE id = ?2")?
-        .execute(params![kaleid_json, chart_id])?;
-    Ok(())
+    Ok(conn.last_insert_rowid())
 }
 
 pub(super) fn chart_headers_json() -> &'static str {
@@ -332,12 +325,13 @@ pub(super) fn update_chart(
             undefined_ln_pairs = ?32, defined_ln_pairs = ?33,
             defined_cn_pairs = ?34, defined_hcn_pairs = ?35, has_bms_random = ?36,
             source_url = ?37, append_url = ?38, headers_json = ?39,
-            import_version = ?40, has_defined_hln = ?42, defined_hln_pairs = ?43
-         WHERE id = ?41",
+            import_version = ?40, has_defined_hln = ?41, defined_hln_pairs = ?42,
+            kaleid_json = ?43
+         WHERE id = ?44",
     )?
     .execute(params![
-        hash_to_hex(&chart.identity.file_sha256),
-        hash_to_hex(&chart.identity.file_md5),
+        chart.sha256.as_str(),
+        chart.md5.as_str(),
         chart.metadata.title.as_str(),
         chart.metadata.subtitle.as_str(),
         chart.metadata.artist.as_str(),
@@ -379,11 +373,11 @@ pub(super) fn update_chart(
         chart.metadata.append_url.as_str(),
         chart_headers_json(),
         CHART_IMPORT_VERSION,
-        chart_id,
         stats.ln_profile.has_defined_hln,
         stats.ln_counts.defined_hln_pairs,
+        chart.kaleid_json.as_str(),
+        chart_id,
     ])?;
-    write_chart_kaleid(conn, chart_id, &chart.kaleid_json)?;
     Ok(())
 }
 
@@ -394,16 +388,22 @@ pub(in crate::storage) struct ChartImportAnalysis {
 
 impl ChartImportAnalysis {
     pub(in crate::storage) fn new(chart: &PlayableChart) -> Self {
-        let stats = ChartStats::from_chart(chart);
+        let starts = chart.long_note_starts();
+        let free_zone_notes = FreeZoneNotes::from_chart(chart);
+        let stats = ChartStats::from_chart(chart, &starts, &free_zone_notes);
         let total = stats.ln_counts.canonical_total_notes(chart.total_notes);
-        Self { stats, analysis: ChartAnalysis::from_chart_with_total(chart, total) }
+        Self {
+            stats,
+            analysis: ChartAnalysis::from_chart_with_total(chart, &starts, &free_zone_notes, total),
+        }
     }
 
     pub(in crate::storage) fn encode(self, chart: &PlayableChart) -> Result<PreparedChartImport> {
         let Self { stats, analysis } = self;
         let source = &chart.metadata;
         Ok(PreparedChartImport {
-            identity: chart.identity.clone(),
+            md5: hash_to_hex(&chart.identity.file_md5),
+            sha256: hash_to_hex(&chart.identity.file_sha256),
             total_notes: chart.total_notes,
             length_ms: chart.end_time.0 / 1_000,
             metadata: StoredChartMetadata {
@@ -448,7 +448,8 @@ impl ChartImportAnalysis {
 }
 
 pub(in crate::storage) struct PreparedChartImport {
-    pub(super) identity: ChartIdentity,
+    pub(super) md5: String,
+    pub(super) sha256: String,
     total_notes: u32,
     length_ms: i64,
     metadata: StoredChartMetadata,
@@ -469,6 +470,8 @@ impl PreparedChartImport {
     pub(in crate::storage) fn heap_bytes(&self) -> usize {
         let m = &self.metadata;
         [
+            &self.md5,
+            &self.sha256,
             &m.title,
             &m.subtitle,
             &m.artist,

@@ -73,8 +73,8 @@ fn non_zero_objects(payload: &str) -> Option<Vec<SparseBmsObject>> {
     let mut objects = Vec::new();
     for (index, chunk) in payload.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         if chunk != b"00" {
-            let id = std::str::from_utf8(chunk).ok()?.to_string();
-            objects.push(SparseBmsObject { index: index as u64, id });
+            std::str::from_utf8(chunk).ok()?;
+            objects.push(SparseBmsObject { index: index as u64, id: *chunk });
         }
     }
     Some(objects)
@@ -132,12 +132,13 @@ pub(super) fn bga_messages_to_intermediate_objects(
             else {
                 continue;
             };
-            let Ok(obj_id) = ObjId::try_from(&object.id, base62_obj_ids) else {
+            let token = object.token();
+            let Ok(obj_id) = ObjId::try_from(token, base62_obj_ids) else {
                 warnings.push(ImportWarning::ParserDiagnostic {
                     code: "InvalidBgaObjectId".to_string(),
                     message: format!(
                         "line {} BGA channel has invalid object id {:?}",
-                        message.line_number, object.id
+                        message.line_number, token
                     ),
                 });
                 continue;
@@ -204,11 +205,12 @@ pub(super) fn inject_sparse_bms_message<T: KeyLayoutMapper>(
         return;
     };
 
+    let base62_obj_ids = bms_uses_base62_obj_ids(bms);
     for object in &message.objects {
         let Some(time) = ObjTime::new(message.measure, object.index, message.object_count) else {
             continue;
         };
-        let Ok(obj_id) = ObjId::try_from(&object.id, bms_uses_base62_obj_ids(bms)) else {
+        let Ok(obj_id) = ObjId::try_from(object.token(), base62_obj_ids) else {
             continue;
         };
         if obj_id.as_u16() == 0 {

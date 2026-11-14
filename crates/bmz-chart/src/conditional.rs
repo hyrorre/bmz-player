@@ -521,7 +521,8 @@ fn finish_program(
     }
     program.reserve_voices();
     let modes = |chart: &PlayableChart| {
-        chart.long_notes.iter().filter(|pair| !chart.is_dummy_long(pair)).fold(0u8, |mask, pair| {
+        let starts = chart.long_note_starts();
+        chart.long_notes.iter().filter(|pair| !starts.is_dummy(pair)).fold(0u8, |mask, pair| {
             mask | match pair.mode {
                 None => 1,
                 Some(LongNoteMode::Ln) => 2,
@@ -946,10 +947,12 @@ impl ConditionalProgram {
         for pair in &mut chart.long_notes {
             pair.start_note_id = remap[&pair.start_note_id.0];
             pair.end_note_id = remap[&pair.end_note_id.0];
-            pair.sound = chart.lane_notes[pair.lane.index()]
-                .iter()
-                .find(|n| n.id == pair.start_note_id)
-                .and_then(|n| n.sound);
+        }
+        let starts = chart.long_note_starts();
+        for pair in &mut chart.long_notes {
+            pair.sound = starts
+                .first_index(pair)
+                .and_then(|index| chart.lane_notes[pair.lane.index()][index].sound);
         }
         Ok(())
     }

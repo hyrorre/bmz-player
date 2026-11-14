@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::LongNoteMode;
+use crate::model::{LongNoteMode, LongNoteStarts};
 use bmz_core::time::ChartTick;
 
 fn compress_import_tick(tick: ChartTick) -> ChartTick {
@@ -61,7 +61,9 @@ pub(super) fn compress_import_ticks(draft: &mut PlayableChartDraft) {
     }
 }
 
-pub(super) fn finalize_playable_chart(mut draft: PlayableChartDraft) -> PlayableChart {
+pub(super) fn finalize_playable_chart(
+    mut draft: PlayableChartDraft,
+) -> (PlayableChart, LongNoteStarts) {
     for lane_notes in &mut draft.lane_notes {
         lane_notes.sort_by_key(|note| note.time);
     }
@@ -92,17 +94,13 @@ pub(super) fn finalize_playable_chart(mut draft: PlayableChartDraft) -> Playable
         .flatten()
         .filter(|n| n.kind.is_scored_head() && !inner.contains(&n.id))
         .count() as u32;
+    let starts = LongNoteStarts::new(&draft.lane_notes, &draft.long_notes);
     let beatoraja_total_notes = beatoraja_total_note_count(
         draft.total_notes,
         draft
             .long_notes
             .iter()
-            .filter(|pair| {
-                !inner.contains(&pair.start_note_id)
-                    && draft.lane_notes[pair.lane.index()]
-                        .iter()
-                        .any(|n| n.id == pair.start_note_id && !n.kind.is_dummy())
-            })
+            .filter(|pair| !inner.contains(&pair.start_note_id) && starts.has_non_dummy(pair))
             .map(|pair| pair.mode),
         draft.metadata.long_note_mode,
     );
@@ -122,7 +120,7 @@ pub(super) fn finalize_playable_chart(mut draft: PlayableChartDraft) -> Playable
     }
     draft.end_time = compute_end_time(&draft);
 
-    PlayableChart {
+    let chart = PlayableChart {
         identity: draft.identity,
         metadata: draft.metadata,
         lane_notes: draft.lane_notes,
@@ -146,7 +144,8 @@ pub(super) fn finalize_playable_chart(mut draft: PlayableChartDraft) -> Playable
         bga_assets: draft.bga_assets,
         total_notes: draft.total_notes,
         end_time: draft.end_time,
-    }
+    };
+    (chart, starts)
 }
 
 fn infer_beatoraja_difficulty_name(title: &str, subtitle: &str, total_notes: u32) -> &'static str {

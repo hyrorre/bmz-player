@@ -197,14 +197,11 @@ impl LibraryDatabase {
         source: &ChartImportSource<'_>,
         prepared: &PreparedChartImport,
     ) -> Result<(i64, i64)> {
-        let chart_file_id = upsert_chart_file(conn, source, &prepared.identity)?;
+        let chart_file_id = upsert_chart_file(conn, source, prepared)?;
 
         let existing_chart_id: Option<i64> = conn
-            .query_row(
-                "SELECT chart_id FROM chart_file_links WHERE chart_file_id = ?1",
-                params![chart_file_id],
-                |row| row.get(0),
-            )
+            .prepare_cached("SELECT chart_id FROM chart_file_links WHERE chart_file_id = ?1")?
+            .query_row(params![chart_file_id], |row| row.get(0))
             .optional()?;
 
         let chart_id = if let Some(existing_id) = existing_chart_id {
@@ -212,18 +209,18 @@ impl LibraryDatabase {
             existing_id
         } else {
             let new_id = insert_chart(conn, source, prepared)?;
-            conn.execute(
+            conn.prepare_cached(
                 "INSERT INTO chart_file_links (chart_id, chart_file_id) VALUES (?1, ?2)",
-                params![new_id, chart_file_id],
-            )?;
+            )?
+            .execute(params![new_id, chart_file_id])?;
             new_id
         };
 
         write_chart_analysis(conn, chart_id, prepared)?;
         super::super::course_db::refresh_course_entries_for_chart(
             conn,
-            &hash_to_hex(&prepared.identity.file_sha256),
-            &hash_to_hex(&prepared.identity.file_md5),
+            &prepared.sha256,
+            &prepared.md5,
         )?;
 
         Ok((chart_id, chart_file_id))

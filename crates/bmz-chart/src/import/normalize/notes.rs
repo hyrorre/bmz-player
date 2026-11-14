@@ -19,9 +19,14 @@ fn position_to_tick(
         });
     }
 
-    let measure =
-        measures.iter().find(|measure| measure.index == measure_index).ok_or_else(|| {
-            ImportError::InvalidChart { message: format!("missing measure {measure_index}") }
+    // Imported charts store measures in index order. A caller-supplied sparse
+    // or reordered table can still resolve by its explicit index.
+    let measure = measures
+        .get(measure_index as usize)
+        .filter(|measure| measure.index == measure_index)
+        .or_else(|| measures.iter().find(|measure| measure.index == measure_index))
+        .ok_or_else(|| ImportError::InvalidChart {
+            message: format!("missing measure {measure_index}"),
         })?;
 
     let local_tick = measure.tick_len.saturating_mul(position_num as u64) / position_den as u64;
@@ -80,8 +85,9 @@ pub(super) fn collect_lane_objects(
     timing_map: &TimingMap,
 ) -> [Vec<LaneObject>; LANE_COUNT] {
     let mut buckets: [Vec<LaneObject>; LANE_COUNT] = std::array::from_fn(|_| Vec::new());
-    let mut visible_by_tick: [HashMap<ChartTick, usize>; LANE_COUNT] =
-        std::array::from_fn(|_| HashMap::new());
+    // Tick objects are already sorted. Only the latest visible note in each
+    // lane can share the current tick, even with other event kinds in between.
+    let mut last_visible: [Option<(ChartTick, usize)>; LANE_COUNT] = [None; LANE_COUNT];
 
     for object in tick_objects {
         let time = timing_map.tick_to_time(object.tick);
@@ -95,14 +101,16 @@ pub(super) fn collect_lane_objects(
                     wav_key,
                     source: LaneObjectSource::Visible,
                 };
-                if let Some(index) = visible_by_tick[lane_index].get(&object.tick).copied() {
+                if let Some((_, index)) =
+                    last_visible[lane_index].filter(|&(tick, _)| tick == object.tick)
+                {
                     // beatoraja/jbms-parser merges repeated definitions of the same
                     // visible lane position, with the later definition taking effect.
                     buckets[lane_index][index] = lane_object;
                 } else {
                     let index = buckets[lane_index].len();
                     buckets[lane_index].push(lane_object);
-                    visible_by_tick[lane_index].insert(object.tick, index);
+                    last_visible[lane_index] = Some((object.tick, index));
                 }
             }
             TickObjectKind::InvisibleNote { lane, wav_key } => {
@@ -259,20 +267,39 @@ pub(super) fn apply_layered_note_sounds(
     warnings: &mut Vec<ImportWarning>,
     end_only: bool,
 ) -> Result<(), ImportError> {
-    for layer in layers {
-        let tick =
-            position_to_tick(layer.measure, layer.position_num, layer.position_den, measures)?;
+    if layers.is_empty() {
+        return Ok(());
+    }
+    let positions = layers
+        .iter()
+        .map(|layer| {
+            position_to_tick(layer.measure, layer.position_num, layer.position_den, measures)
+        })
+        .collect::<Vec<_>>();
+    let mut by_position: HashMap<_, Option<usize>> = layers
+        .iter()
+        .zip(&positions)
+        .filter_map(|(layer, tick)| tick.as_ref().ok().map(|&tick| ((layer.lane, tick), None)))
+        .collect();
+    for lane in Lane::ALL {
+        for (index, note) in draft.lane_notes[lane.index()].iter().enumerate() {
+            let eligible = if end_only {
+                note.kind == NoteKind::LongEnd
+            } else {
+                matches!(note.kind, NoteKind::Tap | NoteKind::LongStart)
+            };
+            if eligible && let Some(target) = by_position.get_mut(&(lane, note.tick)) {
+                target.get_or_insert(index);
+            }
+        }
+    }
+    let mut next_sound_id = draft.sounds.iter().map(|asset| asset.id.0).max().unwrap_or(0);
+    for (layer, tick) in layers.iter().zip(positions) {
+        let tick = tick?;
         let Some(sound_id) = resolve_sound_id(Some(layer.wav_key), sound_table, warnings) else {
             continue;
         };
-        let Some(note_index) = draft.lane_notes[layer.lane.index()].iter().position(|note| {
-            note.tick == tick
-                && if end_only {
-                    note.kind == NoteKind::LongEnd
-                } else {
-                    matches!(note.kind, NoteKind::Tap | NoteKind::LongStart)
-                }
-        }) else {
+        let Some(note_index) = by_position[&(layer.lane, tick)] else {
             continue;
         };
         if draft.lane_notes[layer.lane.index()][note_index].sounds().any(|id| id == sound_id) {
@@ -280,22 +307,11 @@ pub(super) fn apply_layered_note_sounds(
         }
         let sound_id = if end_only {
             // HCNの始点ミュートやCNの早離しミュートで、同じWAVの終端音を巻き込まない。
-            let mut asset = draft
-                .sounds
-                .iter()
-                .find(|asset| asset.id == sound_id)
-                .expect("resolved sound asset")
-                .clone();
-            asset.id = SoundId(
-                draft
-                    .sounds
-                    .iter()
-                    .map(|asset| asset.id.0)
-                    .max()
-                    .unwrap_or(0)
-                    .checked_add(1)
-                    .expect("long end sound id space exhausted"),
-            );
+            let mut asset =
+                sound_table.assets.get(sound_id.0 as usize).expect("resolved sound asset").clone();
+            next_sound_id =
+                next_sound_id.checked_add(1).expect("long end sound id space exhausted");
+            asset.id = SoundId(next_sound_id);
             let id = asset.id;
             draft.metadata.isolated_sound_sources.insert(id.0, sound_id.0);
             draft.sounds.push(asset);
@@ -339,4 +355,25 @@ pub(super) fn build_bgm_events(
             _ => None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn position_lookup_accepts_sparse_and_reordered_measures() {
+        let measure = |index, start| MeasureInfo {
+            index,
+            length: 1.0,
+            length_ratio_num: 1,
+            length_ratio_den: 1,
+            start_tick: ChartTick(start),
+            tick_len: 100,
+        };
+        let measures = [measure(5, 500), measure(0, 0)];
+        assert_eq!(position_to_tick(5, 1, 2, &measures).unwrap(), ChartTick(550));
+        assert_eq!(position_to_tick(0, 1, 2, &measures).unwrap(), ChartTick(50));
+        assert!(position_to_tick(1, 1, 2, &measures).is_err());
+    }
 }

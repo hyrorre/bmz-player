@@ -2,12 +2,20 @@ use super::*;
 
 impl ChartAnalysis {
     pub fn from_chart(chart: &PlayableChart) -> Self {
+        let starts = chart.long_note_starts();
+        let free_zone_notes = FreeZoneNotes::from_chart(chart);
         let canonical_total_notes =
-            ChartLnCounts::from_chart(chart).canonical_total_notes(chart.total_notes);
-        Self::from_chart_with_total(chart, canonical_total_notes)
+            ChartLnCounts::from_chart_with_starts(chart, &starts, &free_zone_notes)
+                .canonical_total_notes(chart.total_notes);
+        Self::from_chart_with_total(chart, &starts, &free_zone_notes, canonical_total_notes)
     }
 
-    pub(super) fn from_chart_with_total(chart: &PlayableChart, canonical_total_notes: u32) -> Self {
+    pub(super) fn from_chart_with_total(
+        chart: &PlayableChart,
+        starts: &LongNoteStarts,
+        free_zone_notes: &FreeZoneNotes,
+        canonical_total_notes: u32,
+    ) -> Self {
         let seconds = analysis_distribution_seconds(chart);
         let mut distribution = vec![ChartDistributionSecond::default(); seconds.max(1)];
         let mut lane_notes = Lane::ALL
@@ -16,7 +24,7 @@ impl ChartAnalysis {
             .collect::<Vec<_>>();
 
         for pair in &chart.long_notes {
-            if chart.is_dummy_long(pair) || chart.is_free_zone_inner(pair.start_note_id) {
+            if starts.is_dummy(pair) || free_zone_notes.contains(&pair.start_note_id) {
                 continue;
             }
             let start_sec = second_index(pair.start_time.0);
@@ -48,7 +56,7 @@ impl ChartAnalysis {
 
         for notes in &chart.lane_notes {
             for note in notes {
-                if chart.is_free_zone_inner(note.id) {
+                if free_zone_notes.contains(&note.id) {
                     continue;
                 }
                 let sec = second_index(note.time.0);

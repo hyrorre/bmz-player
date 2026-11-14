@@ -3,14 +3,15 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use bmz_chart::import::error::ImportWarning;
-use bmz_chart::model::{LongNoteMode, NoteKind, PlayableChart, TimingEventKind};
-use bmz_core::chart::ChartIdentity;
+use bmz_chart::model::{LongNoteMode, LongNoteStarts, NoteKind, PlayableChart, TimingEventKind};
 use bmz_core::lane::Lane;
 use bmz_gameplay::gauge::gauge_total_for_chart;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
-use crate::ln_policy::{ChartLnCounts, ChartLnProfile, LnPolicySetting, LnScorePolicy};
+use crate::ln_policy::{
+    ChartLnCounts, ChartLnProfile, FreeZoneNotes, LnPolicySetting, LnScorePolicy,
+};
 use crate::paths::normalize_library_path;
 
 pub use super::course_db::{StoredCourse, StoredCourseEntry};

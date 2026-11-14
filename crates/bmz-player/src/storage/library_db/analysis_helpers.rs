@@ -244,7 +244,11 @@ pub(super) struct ChartStats {
 }
 
 impl ChartStats {
-    pub(super) fn from_chart(chart: &PlayableChart) -> Self {
+    pub(super) fn from_chart(
+        chart: &PlayableChart,
+        starts: &LongNoteStarts,
+        free_zone_notes: &FreeZoneNotes,
+    ) -> Self {
         let mut min_bpm: f64 = chart.metadata.initial_bpm;
         let mut max_bpm: f64 = chart.metadata.initial_bpm;
         for event in &chart.timing_events {
@@ -259,8 +263,8 @@ impl ChartStats {
             .iter()
             .flat_map(|notes| notes.iter())
             .any(|note| note.kind == NoteKind::Mine);
-        let ln_counts = ChartLnCounts::from_chart(chart);
-        let ln_profile = ChartLnProfile::from_chart(chart);
+        let ln_counts = ChartLnCounts::from_chart_with_starts(chart, starts, free_zone_notes);
+        let ln_profile = ChartLnProfile::from_chart_with_starts(chart, starts);
 
         Self {
             min_bpm,

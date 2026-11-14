@@ -1,6 +1,8 @@
 //! Source provenance is independent of the filename and of the selected branch.
 use serde::{Deserialize, Serialize};
 
+use crate::model::{LongNoteMode, LongNoteStarts, NoteKind, PlayableChart};
+
 pub const INTERPRETATION_VERSION: u32 = 1;
 
 /// Per-play evidence is retained without adding a ranking or score-key dimension.
@@ -18,12 +20,18 @@ pub struct KaleidPlayEvidence {
     pub options: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
-pub fn features_for_chart(chart: &crate::model::PlayableChart) -> KaleidFeatures {
-    use crate::model::{LongNoteMode, NoteKind};
+pub fn features_for_chart(chart: &PlayableChart) -> KaleidFeatures {
+    features_for_chart_with_starts(chart, &chart.long_note_starts())
+}
+
+pub(crate) fn features_for_chart_with_starts(
+    chart: &PlayableChart,
+    starts: &LongNoteStarts,
+) -> KaleidFeatures {
     KaleidFeatures {
         hln: chart.long_notes.iter().any(|p| {
-            !chart.is_dummy_long(p)
-                && p.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hln
+            p.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hln
+                && !starts.is_dummy(p)
         }),
         typed_end: chart.metadata.kaleid.source.typed_end,
         conditional: chart.metadata.conditional.is_some(),

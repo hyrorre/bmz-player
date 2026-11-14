@@ -1,5 +1,27 @@
-use bmz_chart::model::{LongNoteMode, PlayableChart};
+use bmz_chart::model::{LongNoteMode, LongNoteStarts, PlayableChart};
+use bmz_core::ids::NoteId;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+
+/// Membership shared by the chart's LN counts and note distribution.
+pub(crate) struct FreeZoneNotes(HashSet<NoteId>);
+
+impl FreeZoneNotes {
+    pub(crate) fn from_chart(chart: &PlayableChart) -> Self {
+        Self(
+            chart
+                .metadata
+                .free_zones
+                .iter()
+                .flat_map(|zone| zone.inner_notes.iter().copied())
+                .collect(),
+        )
+    }
+
+    pub(crate) fn contains(&self, id: &NoteId) -> bool {
+        self.0.contains(id)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -45,9 +67,21 @@ pub struct ChartLnCounts {
 
 impl ChartLnCounts {
     pub fn from_chart(chart: &PlayableChart) -> Self {
+        Self::from_chart_with_starts(
+            chart,
+            &chart.long_note_starts(),
+            &FreeZoneNotes::from_chart(chart),
+        )
+    }
+
+    pub(crate) fn from_chart_with_starts(
+        chart: &PlayableChart,
+        starts: &LongNoteStarts,
+        free_zone_notes: &FreeZoneNotes,
+    ) -> Self {
         let mut counts = Self::default();
         for pair in &chart.long_notes {
-            if chart.is_dummy_long(pair) || chart.is_free_zone_inner(pair.start_note_id) {
+            if starts.is_dummy(pair) || free_zone_notes.contains(&pair.start_note_id) {
                 continue;
             }
             let count = match pair.mode {
@@ -115,6 +149,10 @@ impl ChartLnCounts {
 
 impl ChartLnProfile {
     pub fn from_chart(chart: &PlayableChart) -> Self {
+        Self::from_chart_with_starts(chart, &chart.long_note_starts())
+    }
+
+    pub(crate) fn from_chart_with_starts(chart: &PlayableChart, starts: &LongNoteStarts) -> Self {
         let modes =
             chart.metadata.conditional.as_ref().map_or(0, |program| program.source_ln_modes);
         let mut profile = Self {
@@ -124,7 +162,7 @@ impl ChartLnProfile {
             has_defined_hcn: modes & 8 != 0,
             has_defined_hln: modes & 16 != 0,
         };
-        for pair in chart.long_notes.iter().filter(|pair| !chart.is_dummy_long(pair)) {
+        for pair in chart.long_notes.iter().filter(|pair| !starts.is_dummy(pair)) {
             match pair.mode {
                 None => profile.has_undefined_ln = true,
                 Some(LongNoteMode::Ln) => profile.has_defined_ln = true,

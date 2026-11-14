@@ -100,7 +100,13 @@ struct SparseBmsMessage {
 #[derive(Debug, Clone)]
 struct SparseBmsObject {
     index: u64,
-    id: String,
+    id: [u8; 2],
+}
+
+impl SparseBmsObject {
+    fn token(&self) -> &str {
+        std::str::from_utf8(&self.id).expect("validated two-byte token")
+    }
 }
 
 #[derive(Debug, Clone)]

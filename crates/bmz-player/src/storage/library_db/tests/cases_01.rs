@@ -662,6 +662,28 @@ fn chart_analysis_excludes_invisible_notes_from_density() {
 }
 
 #[test]
+fn chart_analysis_excludes_free_zone_notes_but_keeps_the_representative_note() {
+    let source = b"#BPM 120\n#WAV01 key.wav\n#LNMODE 2\n#001SF:01000000\n#00156:01000100\n";
+    let imported = bmz_chart::import::import_chart_bytes_with_assets(
+        Path::new("free-zone.bms"),
+        source,
+        bmz_chart::import::BmsRandomSource::Seed(None),
+        bmz_chart::import::AssetLookup::Declared,
+    )
+    .unwrap();
+    let chart = &imported.chart;
+    assert_eq!(chart.metadata.free_zones[0].inner_notes.len(), 2);
+    assert_eq!(ChartLnCounts::from_chart(chart).total_pairs(), 0);
+    assert!(ChartLnProfile::from_chart(chart).has_defined_cn);
+
+    let analysis = ChartAnalysis::from_chart(chart);
+    assert_eq!(analysis.normal_notes, 1);
+    assert_eq!(analysis.long_notes, 0);
+    assert_eq!(analysis.distribution[2].scratch_taps, 1);
+    assert_eq!(analysis.distribution[2].scratch_long_bodies, 0);
+}
+
+#[test]
 fn compact_distribution_round_trips_and_accepts_legacy_json() {
     let distribution = vec![
         ChartDistributionSecond {

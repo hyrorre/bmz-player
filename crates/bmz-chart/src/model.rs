@@ -269,6 +269,54 @@ pub struct LongNotePair {
     pub sound: Option<SoundId>,
 }
 
+/// Look up LN starts for the current chart state. Rebuild after changing note
+/// order, IDs or kinds, or after changing the pair list.
+pub struct LongNoteStarts {
+    by_id: HashMap<(Lane, NoteId), LongNoteStart>,
+}
+
+#[derive(Default)]
+struct LongNoteStart {
+    first_index: Option<usize>,
+    has_dummy: bool,
+    has_non_dummy: bool,
+}
+
+impl LongNoteStarts {
+    pub(crate) fn new(lane_notes: &[Vec<NoteEvent>; LANE_COUNT], pairs: &[LongNotePair]) -> Self {
+        let mut by_id = HashMap::<_, LongNoteStart>::with_capacity(pairs.len());
+        let mut lanes_with_starts = [false; LANE_COUNT];
+        for pair in pairs {
+            by_id.entry((pair.lane, pair.start_note_id)).or_default();
+            lanes_with_starts[pair.lane.index()] = true;
+        }
+        for lane in Lane::ALL.into_iter().filter(|lane| lanes_with_starts[lane.index()]) {
+            for (index, note) in lane_notes[lane.index()].iter().enumerate() {
+                if let Some(start) = by_id.get_mut(&(lane, note.id)) {
+                    start.first_index.get_or_insert(index);
+                    // Conditional materialization can assign a shared ID to several notes.
+                    // Keep the first match for sound lookup and both kinds for any-match tests.
+                    start.has_dummy |= note.kind.is_dummy();
+                    start.has_non_dummy |= !note.kind.is_dummy();
+                }
+            }
+        }
+        Self { by_id }
+    }
+
+    pub fn is_dummy(&self, pair: &LongNotePair) -> bool {
+        self.by_id.get(&(pair.lane, pair.start_note_id)).is_some_and(|start| start.has_dummy)
+    }
+
+    pub(crate) fn has_non_dummy(&self, pair: &LongNotePair) -> bool {
+        self.by_id.get(&(pair.lane, pair.start_note_id)).is_some_and(|start| start.has_non_dummy)
+    }
+
+    pub(crate) fn first_index(&self, pair: &LongNotePair) -> Option<usize> {
+        self.by_id.get(&(pair.lane, pair.start_note_id)).and_then(|start| start.first_index)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SoundEvent {
     pub tick: ChartTick,
@@ -463,11 +511,65 @@ impl PlayableChart {
             .any(|note| note.id == pair.start_note_id && note.kind.is_dummy())
     }
 
+    pub fn long_note_starts(&self) -> LongNoteStarts {
+        LongNoteStarts::new(&self.lane_notes, &self.long_notes)
+    }
+
     pub fn notes_for_lane(&self, lane: Lane) -> &[NoteEvent] {
         &self.lane_notes[lane.index()]
     }
 
     pub fn note_by_id(&self, id: NoteId) -> Option<&NoteEvent> {
         self.lane_notes.iter().flatten().find(|note| note.id == id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_note_starts_keep_lane_first_match_and_both_note_kinds() {
+        let mut lanes = std::array::from_fn(|_| Vec::new());
+        let note = |lane, id, kind| NoteEvent {
+            lane,
+            id: NoteId(id),
+            kind,
+            tick: ChartTick(0),
+            time: TimeUs(0),
+            sound: None,
+            layered_sounds: Vec::new(),
+            damage: None,
+        };
+        let pair = |lane, id| LongNotePair {
+            lane,
+            style: LongNoteStyle::ChannelPair,
+            mode: None,
+            start_note_id: NoteId(id),
+            end_note_id: NoteId(id + 1),
+            start_tick: ChartTick(0),
+            end_tick: ChartTick(1),
+            start_time: TimeUs(0),
+            end_time: TimeUs(1),
+            sound: None,
+        };
+        lanes[Lane::Key1.index()].extend([
+            note(Lane::Key1, 0, NoteKind::Tap),
+            note(Lane::Key1, 1, NoteKind::LongStart),
+            note(Lane::Key1, 1, NoteKind::DummyLongStart),
+        ]);
+        lanes[Lane::Key2.index()].push(note(Lane::Key2, 1, NoteKind::LongStart));
+        let pairs = [pair(Lane::Key1, 1), pair(Lane::Key2, 1), pair(Lane::Key1, 3)];
+        let starts = LongNoteStarts::new(&lanes, &pairs);
+
+        assert_eq!(starts.first_index(&pairs[0]), Some(1));
+        assert!(starts.is_dummy(&pairs[0]));
+        assert!(starts.has_non_dummy(&pairs[0]));
+        assert_eq!(starts.first_index(&pairs[1]), Some(0));
+        assert!(!starts.is_dummy(&pairs[1]));
+        assert!(starts.has_non_dummy(&pairs[1]));
+        assert_eq!(starts.first_index(&pairs[2]), None);
+        assert!(!starts.is_dummy(&pairs[2]));
+        assert!(!starts.has_non_dummy(&pairs[2]));
     }
 }

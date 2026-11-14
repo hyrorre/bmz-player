@@ -6,6 +6,35 @@ use crate::model::{LongNoteMode, LongNoteStyle};
 use super::error::ImportWarning;
 use super::intermediate::{LaneObject, LaneObjectSource, LongNotePairDraft, ResolvedLaneEvent};
 
+#[derive(Default)]
+struct LongNoteRanges(Vec<(ChartTick, ChartTick)>);
+
+impl LongNoteRanges {
+    fn from_events(events: &[ResolvedLaneEvent]) -> Self {
+        let mut ranges: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                ResolvedLaneEvent::Long { pair } => Some((pair.start_tick, pair.end_tick)),
+                _ => None,
+            })
+            .collect();
+        ranges.sort_unstable_by_key(|&(start, _)| start);
+        // For any prefix of starts, an overlap exists iff at least one end
+        // reaches the query. Keep the farthest end even for nested pairs.
+        let mut farthest_end = ChartTick(0);
+        for (_, end) in &mut ranges {
+            farthest_end = farthest_end.max(*end);
+            *end = farthest_end;
+        }
+        Self(ranges)
+    }
+
+    fn overlaps(&self, start: ChartTick, end: ChartTick) -> bool {
+        let prefix = self.0.partition_point(|&(pair_start, _)| pair_start <= end);
+        self.0[..prefix].last().is_some_and(|&(_, farthest_end)| start <= farthest_end)
+    }
+}
+
 /// OBJの競合は宣言順によらず HLN > HCN > CN > LN とする。
 pub(crate) fn marker_priority(mode: LongNoteMode) -> u8 {
     match mode {
@@ -46,14 +75,6 @@ pub fn normalize_lane_objects_with_markers(
     let mut out = Vec::new();
 
     out.extend(resolve_long_channel_lane(lane, objects, warnings));
-    let channel_ranges: Vec<_> = out
-        .iter()
-        .filter_map(|event| match event {
-            ResolvedLaneEvent::Long { pair } => Some((pair.start_tick, pair.end_tick)),
-            _ => None,
-        })
-        .collect();
-
     let visible: Vec<_> = objects
         .iter()
         .filter(|object| object.source == LaneObjectSource::Visible)
@@ -61,6 +82,7 @@ pub fn normalize_lane_objects_with_markers(
         .collect();
 
     if lnobj_wav_key.is_some() || !typed_markers.is_empty() {
+        let channel_ranges = LongNoteRanges::from_events(&out);
         out.extend(resolve_marker_lane(
             lane,
             &visible,
@@ -102,13 +124,7 @@ pub fn normalize_lane_objects_with_markers(
     // BGM lane. At the boundaries the long start/end replaces the visible
     // note as well. This is used both for a keysound layered at the LN start
     // and for older LNTYPE 2 charts that densely place normal notes under LN.
-    let long_ranges: Vec<_> = out
-        .iter()
-        .filter_map(|event| match event {
-            ResolvedLaneEvent::Long { pair } => Some((pair.start_tick, pair.end_tick)),
-            _ => None,
-        })
-        .collect();
+    let long_ranges = LongNoteRanges::from_events(&out);
     let unterminated_long_start_tick = {
         let mut long_objects = objects
             .iter()
@@ -121,7 +137,7 @@ pub fn normalize_lane_objects_with_markers(
     };
     out.retain(|event| {
         !matches!(event, ResolvedLaneEvent::Tap { tick, .. }
-            if long_ranges.iter().any(|(start, end)| start <= tick && tick <= end)
+            if long_ranges.overlaps(*tick, *tick)
                 || unterminated_long_start_tick == Some(*tick))
     });
 
@@ -186,7 +202,14 @@ pub fn resolve_lnobj_lane(
     lnobj_wav_key: u16,
     warnings: &mut Vec<ImportWarning>,
 ) -> Vec<ResolvedLaneEvent> {
-    resolve_marker_lane(lane, visible, Some(lnobj_wav_key), &[], &[], warnings)
+    resolve_marker_lane(
+        lane,
+        visible,
+        Some(lnobj_wav_key),
+        &[],
+        &LongNoteRanges::default(),
+        warnings,
+    )
 }
 
 fn resolve_marker_lane(
@@ -194,7 +217,7 @@ fn resolve_marker_lane(
     visible: &[LaneObject],
     lnobj_wav_key: Option<u16>,
     typed_markers: &[(u16, LongNoteMode)],
-    channel_ranges: &[(ChartTick, ChartTick)],
+    channel_ranges: &LongNoteRanges,
     warnings: &mut Vec<ImportWarning>,
 ) -> Vec<ResolvedLaneEvent> {
     let mut out = Vec::new();
@@ -208,9 +231,7 @@ fn resolve_marker_lane(
             .map(|(_, mode)| *mode);
         // 種別付きOBJでは専用LNチャネルを優先する。既存LNOBJのペア処理は維持。
         if mode.is_some()
-            && pending_start.is_some_and(|start| {
-                channel_ranges.iter().any(|(from, to)| *from <= object.tick && start.tick <= *to)
-            })
+            && pending_start.is_some_and(|start| channel_ranges.overlaps(start.tick, object.tick))
         {
             let previous = pending_start.take().unwrap();
             out.push(ResolvedLaneEvent::Tap {
@@ -220,9 +241,7 @@ fn resolve_marker_lane(
                 wav_key: previous.wav_key,
             });
         }
-        if mode.is_some()
-            && channel_ranges.iter().any(|(from, to)| *from <= object.tick && object.tick <= *to)
-        {
+        if mode.is_some() && channel_ranges.overlaps(object.tick, object.tick) {
             continue;
         }
         if mode.is_some() || (lnobj_wav_key.is_some() && object.wav_key == lnobj_wav_key) {
@@ -289,6 +308,26 @@ mod tests {
             wav_key: Some(wav_key),
             source: LaneObjectSource::Visible,
         }
+    }
+
+    #[test]
+    fn long_ranges_include_nested_pairs_and_both_endpoints() {
+        let outer = resolve_long_channel_lane(
+            Lane::Key1,
+            &[long_object(10, 1), long_object(50, 1)],
+            &mut Vec::new(),
+        );
+        let mut events = resolve_long_channel_lane(
+            Lane::Key1,
+            &[long_object(20, 1), long_object(30, 1), long_object(60, 1), long_object(70, 1)],
+            &mut Vec::new(),
+        );
+        events.extend(outer);
+        let ranges = LongNoteRanges::from_events(&events);
+        assert!(ranges.overlaps(ChartTick(0), ChartTick(10)));
+        assert!(ranges.overlaps(ChartTick(40), ChartTick(50)));
+        assert!(ranges.overlaps(ChartTick(59), ChartTick(60)));
+        assert!(!ranges.overlaps(ChartTick(51), ChartTick(59)));
     }
 
     #[test]

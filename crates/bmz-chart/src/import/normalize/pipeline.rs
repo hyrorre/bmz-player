@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::LongNoteMode;
+use crate::model::{LongNoteMode, LongNoteStarts};
 
 pub fn normalize_chart(
     source_path: &Path,
@@ -110,27 +110,26 @@ pub fn normalize_chart_with_assets(
     )?;
     compress_import_ticks(&mut draft);
 
-    let mut chart = finalize_playable_chart(draft);
-    chart.metadata.kaleid.effective = crate::kaleid::features_for_chart(&chart);
+    let (mut chart, starts) = finalize_playable_chart(draft);
+    chart.metadata.kaleid.effective =
+        crate::kaleid::features_for_chart_with_starts(&chart, &starts);
     chart.metadata.kaleid.source =
         chart.metadata.kaleid.source.union(chart.metadata.kaleid.effective);
-    isolate_hln_sounds(&mut chart);
+    isolate_hln_sounds(&mut chart, &starts);
     Ok(chart)
 }
 
 /// HLN の音量ゲートを、同じ WAV を使う他のノートや BGM から分離する。
-fn isolate_hln_sounds(chart: &mut PlayableChart) {
+fn isolate_hln_sounds(chart: &mut PlayableChart, starts: &LongNoteStarts) {
     let mut next_id = chart.sounds.iter().map(|asset| asset.id.0).max().unwrap_or(0);
     for pair in &mut chart.long_notes {
         if pair.mode.unwrap_or(chart.metadata.long_note_mode) != LongNoteMode::Hln {
             continue;
         }
-        let Some(note) = chart.lane_notes[pair.lane.index()]
-            .iter_mut()
-            .find(|note| note.id == pair.start_note_id)
-        else {
+        let Some(index) = starts.first_index(pair) else {
             continue;
         };
+        let note = &mut chart.lane_notes[pair.lane.index()][index];
         for sound in note.sound.iter_mut().chain(note.layered_sounds.iter_mut()) {
             let Some(mut asset) = chart.sounds.iter().find(|asset| asset.id == *sound).cloned()
             else {
