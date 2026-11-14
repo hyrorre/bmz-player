@@ -384,7 +384,7 @@ impl WinitApp {
                 }
                 window.set_visible(true);
                 let mut size = surface_size_for_window(&window);
-                // サーフェス生成前に present mode とバックエンド設定を反映させておく。
+                // サーフェス生成前に present mode と frame latency を反映する。
                 if let Err(error) =
                     self.renderer.set_present_mode(config_present_mode(&self.boot.app_config.video))
                 {
@@ -396,13 +396,16 @@ impl WinitApp {
                 {
                     tracing::warn!(%error, "failed to prepare renderer frame latency mode");
                 }
-                let backend = config_renderer_backend(self.boot.app_config.video.renderer.clone());
-                self.renderer.set_backend(backend);
+                let backend = self.renderer.requested_backend();
                 phase.complete();
                 let mut fallback_attempted = false;
                 loop {
                     let phase = StartupPhase::optional(startup, "renderer_attach_surface");
-                    match phase.result(self.renderer.attach_surface(Arc::clone(&window), size)) {
+                    match phase.result(self.renderer.attach_surface(
+                        Arc::clone(&window),
+                        event_loop.owned_display_handle(),
+                        size,
+                    )) {
                         Ok(()) => {
                             if fallback_attempted {
                                 tracing::info!(
@@ -471,6 +474,7 @@ impl WinitApp {
                                     "failed to initialize renderer surface"
                                 );
                             }
+                            self.startup_error = Some(format_error_chain(&error));
                             event_loop.exit();
                             return;
                         }
@@ -480,10 +484,18 @@ impl WinitApp {
                 self.ui.exclusive_fullscreen_fallback_active = requested_window_mode
                     == WindowMode::ExclusiveFullscreen
                     && effective_mode == WindowMode::BorderlessFullscreen;
+                let effective_backend = self.renderer.effective_backend();
+                if backend == bmz_render::WgpuBackend::Gl
+                    && let Some(effective) =
+                        effective_backend.filter(|effective| *effective != backend)
+                {
+                    tracing::warn!(requested = ?backend, ?effective, "using fallback renderer backend");
+                }
                 tracing::info!(
                     requested_window_mode = ?requested_window_mode,
                     effective_window_mode = ?effective_mode,
                     requested_renderer_backend = ?backend,
+                    effective_renderer_backend = ?effective_backend,
                     width = size.width,
                     height = size.height,
                     "window and renderer surface ready"

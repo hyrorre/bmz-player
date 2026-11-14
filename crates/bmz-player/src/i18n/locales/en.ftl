@@ -344,6 +344,7 @@ settings-video-frame-latency-stable = Stable
 settings-video-target-fps = Target FPS
 settings-video-background-fps = Background FPS limit
 settings-video-renderer = Rendering backend
+renderer-opengl-fallback = OpenGL could not start. Using { $backend }. You can change the renderer in the BMZ Menu.
 settings-video-apply-help = Width, height, fullscreen display, and rendering backend take effect the next time you start BMZ Player. Other settings apply immediately.
 settings-screenshot-title = Screenshots
 settings-screenshot-directory = Save directory

@@ -6,6 +6,7 @@ fn renderer() -> Renderer {
         renderer.set_backend(match backend.as_str() {
             "vulkan" => WgpuBackend::Vulkan,
             "dx12" => WgpuBackend::Dx12,
+            "gl" => WgpuBackend::Gl,
             _ => panic!("unsupported surface test backend: {backend}"),
         });
     }
@@ -253,6 +254,11 @@ fn retries_are_spaced_bounded_and_terminal_failure_is_reported_once() {
 #[ignore = "requires a GPU; validates screenshot retention and readback across skipped frames"]
 fn screenshot_survives_recovery_zero_size_and_outdated_frames() {
     let mut renderer = renderer();
+    let gpu = renderer.gpu.as_mut().unwrap();
+    // The offscreen texture stands in for the window attachment. Force the
+    // same intermediate composition path used by a non-readable surface.
+    let recovery = gpu.surface_recovery.as_mut().unwrap();
+    recovery.desired.usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
     let output = tempfile::tempdir().unwrap();
     let path = output.path().join("recovered.png");
     renderer.request_screenshot(&path);
@@ -278,6 +284,80 @@ fn screenshot_survives_recovery_zero_size_and_outdated_frames() {
     renderer.flush_pending_screenshots().unwrap();
     let screenshot = image::open(&path).unwrap();
     assert_eq!((screenshot.width(), screenshot.height()), (24, 16));
+}
+
+#[test]
+#[ignore = "requires a GPU; compares readable and non-readable output composition"]
+fn screenshot_intermediate_matches_presented_scene_and_egui() {
+    let mut renderer = renderer();
+    let gpu = renderer.gpu.as_mut().unwrap();
+    gpu.surface_recovery = None;
+    gpu.surface_test = None;
+    renderer.last_plan = Some(DrawPlan {
+        clear: Color::rgb(0.0, 0.0, 0.0),
+        commands: vec![DrawCommand::Rect {
+            rect: Rect { x: 0.0, y: 0.0, width: 1.0, height: 0.5 },
+            color: Color::rgb(1.0, 0.0, 0.0),
+        }],
+    });
+    renderer.last_plan_canvas_policy = CanvasRenderPolicy {
+        fit_mode: CanvasFitMode::Contain,
+        canvas_size: Some(CanvasSize { width: 32, height: 24 }),
+    };
+
+    let id = egui::TextureId::Managed(7);
+    let rect = egui::Rect::from_min_max(egui::pos2(6.0, 43.0), egui::pos2(22.0, 55.0));
+    let mut mesh = egui::Mesh::with_texture(id);
+    mesh.add_rect_with_uv(
+        rect,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
+    let frame = || EguiFrame {
+        primitives: vec![egui::ClippedPrimitive {
+            clip_rect: rect,
+            primitive: egui::epaint::Primitive::Mesh(mesh.clone()),
+        }],
+        pixels_per_point: 1.0,
+        textures_delta: egui::TexturesDelta {
+            set: vec![(
+                id,
+                egui::epaint::ImageDelta::full(
+                    egui::ColorImage::filled([1, 1], egui::Color32::BLUE),
+                    egui::TextureOptions::NEAREST,
+                ),
+            )],
+            free: vec![],
+        },
+    };
+    let output = tempfile::tempdir().unwrap();
+    for (index, mode) in
+        [InternalResolutionMode::Native, InternalResolutionMode::Skin].into_iter().enumerate()
+    {
+        renderer.set_internal_resolution_mode(mode);
+        renderer.set_egui_frame(frame());
+        renderer.gpu.as_mut().unwrap().config.usage =
+            screenshot_surface_usage(wgpu::TextureUsages::COPY_SRC);
+        assert_eq!(renderer.render_last_plan().unwrap(), RenderSurfaceStatus::Rendered);
+        let direct = renderer.read_offscreen_rgba().unwrap();
+        assert!(renderer.gpu.as_ref().unwrap().screenshot_target.is_none());
+
+        renderer.set_egui_frame(frame());
+        renderer.gpu.as_mut().unwrap().config.usage =
+            screenshot_surface_usage(wgpu::TextureUsages::empty());
+        let path = output.path().join(format!("capture-{index}.png"));
+        renderer.request_screenshot(&path);
+        assert_eq!(renderer.render_last_plan().unwrap(), RenderSurfaceStatus::Rendered);
+        renderer.flush_pending_screenshots().unwrap();
+        let png = image::open(path).unwrap().into_rgba8();
+        assert_eq!(png.dimensions(), (64, 64));
+        assert_eq!(png.get_pixel(8, 15).0, [255, 0, 0, 255]);
+        assert_eq!(png.get_pixel(8, 47).0, [0, 0, 255, 255]);
+        assert_eq!(png.get_pixel(8, 3).0, [0, 0, 0, 255]);
+        assert_eq!(png.as_raw(), &direct);
+        assert_eq!(renderer.read_offscreen_rgba().unwrap(), direct);
+        renderer.gpu.as_mut().unwrap().screenshot_target = None;
+    }
 }
 
 #[test]

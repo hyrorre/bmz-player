@@ -179,6 +179,18 @@ impl WgpuRenderer {
             .or_else(|| self.export_target.clone())
             .expect("render target exists");
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let screenshot_target = if screenshot_request.is_some()
+            && !self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
+        {
+            self.ensure_screenshot_target(surface_size);
+            self.screenshot_target.as_ref()
+        } else {
+            None
+        };
+        // Clone the handles so later preparation can update the renderer's caches.
+        let screenshot_target = screenshot_target
+            .map(|target| (target.texture.clone(), target.view.clone(), target.bind_group.clone()));
+        let composition_view = screenshot_target.as_ref().map_or(&view, |(_, view, _)| view);
         // image ステップごとの bind group を、レンダーパスが encoder を借りる前に作る。
         // steps 内の image ステップと同じ順序で並ぶ。
         let bind_start = Instant::now();
@@ -243,33 +255,18 @@ impl WgpuRenderer {
                 });
                 draw_plan_geometry(&mut pass, &geometry, draw_resources);
             }
-            {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("bmz-render internal upscale pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(plan.clear.to_wgpu()),
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(&self.upscale_pipeline);
-                pass.set_bind_group(0, upscale_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.upscale_buffer.slice(..));
-                pass.draw(0..6, 0..1);
-            }
+            self.blit_scene(
+                &mut encoder,
+                composition_view,
+                upscale_bind_group,
+                &self.upscale_buffer,
+                plan.clear.to_wgpu(),
+            );
         } else {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("bmz-render scene surface pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: composition_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(plan.clear.to_wgpu()),
@@ -292,21 +289,31 @@ impl WgpuRenderer {
                 &self.device,
                 &self.queue,
                 &mut encoder,
-                &view,
+                composition_view,
                 frame,
                 [self.config.width, self.config.height],
             ),
             None => Vec::new(),
         };
 
+        if let Some((_, _, bind_group)) = &screenshot_target {
+            self.blit_scene(
+                &mut encoder,
+                &view,
+                bind_group,
+                self.screenshot_blit_buffer.as_ref().expect("screenshot quad was created"),
+                plan.clear.to_wgpu(),
+            );
+        }
         let screenshot = screenshot_request.map(|request| {
+            let source = screenshot_target.as_ref().map_or(&texture, |(texture, _, _)| texture);
             let capture = ScreenshotCapture::new(
                 &self.device,
                 self.config.width,
                 self.config.height,
-                self.config.format,
+                source.format(),
             );
-            capture.copy_from_surface(&mut encoder, &texture);
+            capture.copy_from_texture(&mut encoder, source);
             (request.clone(), capture)
         });
         let command_buffer = encoder.finish();
@@ -335,6 +342,36 @@ impl WgpuRenderer {
         timings.submit_us = submit_start.elapsed().as_micros();
         timings.draw_us = draw_start.elapsed().as_micros();
         Ok((RenderSurfaceStatus::Rendered, timings))
+    }
+
+    fn blit_scene(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        bind_group: &wgpu::BindGroup,
+        quad: &wgpu::Buffer,
+        clear: wgpu::Color,
+    ) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("bmz-render scene blit"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(clear),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.upscale_pipeline);
+        pass.set_bind_group(0, bind_group, &[]);
+        pass.set_vertex_buffer(0, quad.slice(..));
+        pass.draw(0..6, 0..1);
     }
 
     fn acquire_surface_texture(&mut self) -> Option<wgpu::CurrentSurfaceTexture> {

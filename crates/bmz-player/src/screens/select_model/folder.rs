@@ -5,6 +5,7 @@ use super::*;
 /// A folder that contains charts is a song folder: it lists only its own charts.
 /// Otherwise, subfolders that contain charts are flattened into this level, and
 /// subfolders without charts are listed as folders only when no subfolder has charts.
+/// Archives follow the same rules, with folder rows available at every depth.
 pub fn load_select_items_in_folder(
     library_db: &LibraryDatabase,
     score_db: &ScoreDatabase,
@@ -69,8 +70,7 @@ pub fn load_select_items_in_folder_for_rule_mode_with_filters(
 ) -> Result<Vec<SelectItem>> {
     let folder_key = folder_path.replace('\\', "/");
     let own_charts = library_db.list_charts_in_folders(&[folder_key.as_str()])?;
-    // beatorajaは譜面を含むフォルダの下を走査しないので、曲フォルダには自分の譜面だけを並べる。
-    // 同一曲フォルダもbeatorajaの `SameFolderBar` と同じく、ここで自分の譜面だけになる。
+    // 書庫内もbeatoraja互換で、曲フォルダには自分の譜面だけを並べる。
     let (folders, mut all_charts) = if own_charts.is_empty() {
         let descendants = sorted_descendant_folders(library_db, &folder_key)?;
         let listing = beatoraja_folder_listing(&folder_key, &descendants);
@@ -125,10 +125,12 @@ fn collect_reachable_chart_folders(
     descendants: &[String],
     out: &mut Vec<String>,
 ) {
-    let listing = beatoraja_folder_listing(folder_key, descendants_under(descendants, folder_key));
-    out.extend(listing.chart_folders);
-    for (path, _) in listing.folders {
-        collect_reachable_chart_folders(&path, descendants, out);
+    // Use an explicit stack: archive directory depth is not limited by the browser.
+    let mut pending = vec![folder_key.to_string()];
+    while let Some(path) = pending.pop() {
+        let listing = beatoraja_folder_listing(&path, descendants_under(descendants, &path));
+        out.extend(listing.chart_folders);
+        pending.extend(listing.folders.into_iter().rev().map(|(path, _)| path));
     }
 }
 
@@ -151,7 +153,7 @@ fn descendants_under<'a>(sorted: &'a [String], folder_key: &str) -> &'a [String]
     &sorted[start..stop]
 }
 
-/// 譜面の無いフォルダの直下に並べるもの。
+/// フォルダの直下に並べる子フォルダと曲フォルダ。
 struct FolderListing {
     /// (path, 表示名)
     folders: Vec<(String, String)>,
@@ -159,13 +161,14 @@ struct FolderListing {
     chart_folders: Vec<String>,
 }
 
-/// beatorajaの `FolderBar` と同じ規則で、譜面の無い `folder_key` の直下に並べるものを決める。
+/// `folder_key` の直下に並べるものを決める。通常フォルダはbeatorajaの `FolderBar` に従う。
 ///
 /// - 譜面を含む子フォルダは曲フォルダとして譜面を直接並べ、その下は扱わない
 ///   （beatorajaは譜面を含むフォルダの下を走査しない）。
 /// - 曲フォルダが1つでもあれば譜面だけを並べ、譜面の無い子フォルダは並べない。
-/// - 書庫の中にはフォルダの行を作らない（beatorajaは書庫を1つの曲フォルダとして登録する）。
+/// - 書庫内も同じ規則で、譜面の無い階層には子フォルダの行を作る。
 fn beatoraja_folder_listing(folder_key: &str, descendants: &[String]) -> FolderListing {
+    let inside_archive = is_inside_archive(folder_key);
     let prefix = format!("{folder_key}/");
     // child name -> 子フォルダ自身に譜面があるか
     let mut children: std::collections::BTreeMap<&str, bool> = std::collections::BTreeMap::new();
@@ -185,11 +188,12 @@ fn beatoraja_folder_listing(folder_key: &str, descendants: &[String]) -> FolderL
     let mut chart_folders = Vec::new();
     for (name, has_charts) in children {
         let mut child_path = format!("{prefix}{name}");
+        let archive = !inside_archive && is_archive_folder_name(name);
         let mut name = name.to_string();
         let mut has_charts = has_charts;
         // `pack.zip!/song/...` の書庫フォルダ1段は、展開済みの `song/` と同じに見せる。
         if !has_charts
-            && is_archive_folder_name(&name)
+            && archive
             && let Some((inner, inner_has_charts)) =
                 single_archive_subfolder(descendants, &child_path)
         {
@@ -200,11 +204,15 @@ fn beatoraja_folder_listing(folder_key: &str, descendants: &[String]) -> FolderL
         if has_charts {
             chart_folders.push(child_path);
         } else {
-            let name = archive_display_name(&name).map_or(name.clone(), str::to_owned);
+            let name = if inside_archive {
+                name
+            } else {
+                archive_display_name(&name).map_or(name.clone(), str::to_owned)
+            };
             folders.push((child_path, name));
         }
     }
-    if !chart_folders.is_empty() || folder_key.split('/').any(is_archive_folder_name) {
+    if !chart_folders.is_empty() {
         folders.clear();
     }
     // 表示順は COLLATE NOCASE 相当。BTreeMap は code-point 順なので lowercase 比較に揃え直す。
@@ -212,7 +220,11 @@ fn beatoraja_folder_listing(folder_key: &str, descendants: &[String]) -> FolderL
     FolderListing { folders, chart_folders }
 }
 
-/// `pack.zip!` のような書庫のフォルダ名か。`!` の前がZIP / RAR / 7zの拡張子の場合だけ。
+fn is_inside_archive(folder_key: &str) -> bool {
+    folder_key.split('/').any(is_archive_folder_name)
+}
+
+/// `pack.zip!` のような書庫のフォルダ名か。`!` の前が対応形式の拡張子の場合だけ。
 fn is_archive_folder_name(name: &str) -> bool {
     name.strip_suffix('!')
         .is_some_and(|archive| crate::chart_source::is_archive_file(std::path::Path::new(archive)))

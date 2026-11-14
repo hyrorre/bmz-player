@@ -344,6 +344,7 @@ settings-video-frame-latency-stable = 安定
 settings-video-target-fps = 目標 FPS
 settings-video-background-fps = バックグラウンド FPS 上限
 settings-video-renderer = レンダリングバックエンド
+renderer-opengl-fallback = OpenGL で起動できなかったため、{ $backend } を使用しています。BMZ メニューから変更できます。
 settings-video-apply-help = 幅・高さ・全画面で使う画面・描画方式は、次に起動したときに反映されます。そのほかの項目はすぐに反映されます。
 settings-screenshot-title = スクリーンショット
 settings-screenshot-directory = 保存先

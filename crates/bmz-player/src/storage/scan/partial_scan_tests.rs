@@ -58,6 +58,45 @@ fn write_7z(path: &Path, entries: &[(&str, &str)]) {
     writer.finish().unwrap();
 }
 
+#[test]
+fn multi_folder_archives_register_deep_charts_and_browse_only_to_song_folders() {
+    use crate::screens::select_model::reachable_chart_folders;
+
+    let titles = [chart_text("First"), chart_text("Hidden"), chart_text("Deep")];
+    let entries = [
+        ("group_a/song/chart.bms", titles[0].as_str()),
+        ("group_a/song/sabun/chart.bms", titles[1].as_str()),
+        ("group_b/subgroup/song/chart.bms", titles[2].as_str()),
+    ];
+    for name in ["pack.zip", "pack.7z"] {
+        let root = temp();
+        let archive = root.path().join(name);
+        if name.ends_with(".zip") {
+            write_zip(&archive, &entries);
+        } else {
+            write_7z(&archive, &entries);
+        }
+        let mut library = db();
+        // Non-recursive applies to the filesystem, not directories inside an archive.
+        configure_and_scan(&mut library, &[entry(root.path(), false)]);
+        assert_eq!(registered(&library, root.path()).len(), 3);
+        let folder = format!("{}!", library_path_key(&archive));
+        let mut reachable = reachable_chart_folders(&library, &folder).unwrap();
+        reachable.sort();
+        assert_eq!(
+            reachable,
+            [format!("{folder}/group_a/song"), format!("{folder}/group_b/subgroup/song")]
+        );
+        let chart = crate::song_archive::read_chart(
+            &archive,
+            "group_b/subgroup/song/chart.bms",
+            &Default::default(),
+        )
+        .unwrap();
+        assert_eq!(chart.bytes, titles[2].as_bytes());
+    }
+}
+
 fn db() -> LibraryDatabase {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();

@@ -107,6 +107,18 @@ impl WinitApp {
         if surface_status == Some(RenderSurfaceStatus::Rendered) && !self.smoke.first_present_logged
         {
             self.smoke.first_present_logged = true;
+            // Start the notice after the first present so slow skin or audio startup cannot hide it.
+            if self.renderer.requested_backend() == bmz_render::WgpuBackend::Gl
+                && let Some(effective) = self
+                    .renderer
+                    .effective_backend()
+                    .filter(|backend| *backend != bmz_render::WgpuBackend::Gl)
+            {
+                let text = Localizer::new(self.boot.profile_config.ui.locale());
+                let mut args = FluentArgs::new();
+                args.set("backend", effective.label());
+                self.show_left_overlay_toast(text.format("renderer-opengl-fallback", &args));
+            }
             tracing::info!(
                 startup_to_first_present_ms = self.smoke.startup_started_at.elapsed().as_millis(),
                 "first surface frame presented"

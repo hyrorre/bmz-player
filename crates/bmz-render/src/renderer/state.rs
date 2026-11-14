@@ -25,7 +25,9 @@ pub(super) struct WgpuRenderer {
     pub(super) upscale_pipeline: wgpu::RenderPipeline,
     pub(super) upscale_buffer: wgpu::Buffer,
     pub(super) upscale_rect: Option<Rect>,
-    pub(super) internal_scene_target: Option<InternalSceneTarget>,
+    pub(super) internal_scene_target: Option<SceneTarget>,
+    pub(super) screenshot_target: Option<SceneTarget>,
+    pub(super) screenshot_blit_buffer: Option<wgpu::Buffer>,
     pub(super) image_textures: HashMap<TextureId, PreparedTexture>,
     pub(super) texture_uploads: TextureUploads,
     pub(super) video_conversion: Option<super::video_texture::VideoConversion>,
@@ -59,8 +61,8 @@ pub(super) struct WgpuRenderer {
     pub(super) export_target: Option<wgpu::Texture>,
 }
 
-pub(super) struct InternalSceneTarget {
-    pub(super) _texture: wgpu::Texture,
+pub(super) struct SceneTarget {
+    pub(super) texture: wgpu::Texture,
     pub(super) view: wgpu::TextureView,
     pub(super) bind_group: wgpu::BindGroup,
     pub(super) size: SurfaceSize,

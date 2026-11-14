@@ -485,7 +485,7 @@ fn archive_level_stays_when_it_has_several_folders() {
     // The archive level shows like the extracted folder, without the extension and `!`.
     assert_eq!(listing_shape(&several), ["folder set /bms/set.7z!"]);
 
-    // An archive with its own charts is a song folder, like an extracted folder.
+    // Root charts stop browsing below the archive root, as for ordinary song folders.
     let own_charts = folder_listing(&["/bms/set.zip!/a.bms", "/bms/set.zip!/x/b.bms"], "/bms");
     assert_eq!(listing_shape(&own_charts), ["chart 0"]);
     let dotted = folder_listing(&["/bms/v1.2.RAR!/x/a.bms", "/bms/v1.2.RAR!/y/b.bms"], "/bms");
@@ -497,12 +497,127 @@ fn archive_level_stays_when_it_has_several_folders() {
 }
 
 #[test]
-fn archive_contents_have_no_folder_entries() {
-    // beatoraja registers an archive as one folder, so songs nested two levels below
-    // the archive root have no folder row to open.
+fn archive_contents_can_be_browsed_through_multiple_groups() {
     let paths = ["/bms/set.7z!/group_a/x/a.bms", "/bms/set.7z!/group_b/y/b.bms"];
     assert_eq!(listing_shape(&folder_listing(&paths, "/bms")), ["folder set /bms/set.7z!"]);
-    assert!(folder_listing(&paths, "/bms/set.7z!").is_empty());
+    assert_eq!(
+        listing_shape(&folder_listing(&paths, "/bms/set.7z!")),
+        ["folder group_a /bms/set.7z!/group_a", "folder group_b /bms/set.7z!/group_b"]
+    );
+    assert_eq!(listing_shape(&folder_listing(&paths, "/bms/set.7z!/group_a")), ["chart 0"]);
+    assert_eq!(listing_shape(&folder_listing(&paths, "/bms/set.7z!/group_b")), ["chart 1"]);
+}
+
+#[test]
+fn archive_song_folders_hide_their_descendants() {
+    let paths = [
+        "/bms/set.zip!/a.bms",
+        "/bms/set.zip!/song/b.bms",
+        "/bms/set.zip!/group/c.bms",
+        "/bms/set.zip!/group/deep/song/d.bms",
+        "/bms/set.zip!/group/deep/song/sabun/e.bms",
+    ];
+    assert_eq!(listing_shape(&folder_listing(&paths, "/bms/set.zip!")), ["chart 0"]);
+    assert_eq!(listing_shape(&folder_listing(&paths, "/bms/set.zip!/group")), ["chart 2"]);
+    assert_eq!(listing_shape(&folder_listing(&paths, "/bms/set.zip!/group/deep")), ["chart 3"]);
+    assert_eq!(
+        listing_shape(&folder_listing(&paths, "/bms/set.zip!/group/deep/song")),
+        ["chart 3"]
+    );
+    // A shallow song also keeps a parallel deeper group out of the list.
+    let mixed = ["/bms/set.zip!/song/a.bms", "/bms/set.zip!/group/song/b.bms"];
+    assert_eq!(listing_shape(&folder_listing(&mixed, "/bms/set.zip!")), ["chart 0"]);
+}
+
+#[test]
+fn archive_wrapper_with_own_charts_stops_at_the_song_in_every_format() {
+    for extension in ["zip", "RAR", "7z", "7zip", "tar.gz", "tgz", "lzh", "lha"] {
+        let archive = format!("/bms/set.{extension}!");
+        let own = format!("{archive}/Pack/a.bms");
+        let deep = format!("{archive}/Pack/group/song/b.bms");
+        let paths = [own.as_str(), deep.as_str()];
+        assert_eq!(listing_shape(&folder_listing(&paths, "/bms")), ["chart 0"], "{extension}");
+        assert_eq!(listing_shape(&folder_listing(&paths, &format!("{archive}/Pack"))), ["chart 0"]);
+        assert_eq!(
+            listing_shape(&folder_listing(&paths, &format!("{archive}/Pack/group"))),
+            ["chart 1"]
+        );
+    }
+}
+
+#[test]
+fn archive_folder_summary_and_reachability_stop_below_song_folders() {
+    let (mut library_db, mut score_db) = open_in_memory_dbs();
+    let folders = [
+        "/bms/set.zip!/group_a/song",
+        "/bms/set.zip!/group_a/song/sabun",
+        "/bms/set.zip!/group_b/deep/song",
+        "/bms/set.zip!/group_c/song",
+    ];
+    for (index, folder) in folders.iter().enumerate() {
+        let chart = chart(&format!("{index}"));
+        library_db
+            .upsert_chart_import(&record_for_chart(&format!("{folder}/chart.bms"), &chart))
+            .unwrap();
+        if index != 0 {
+            score_db.insert_score(&score_for_chart(chart.identity.file_sha256)).unwrap();
+        }
+    }
+    for root in ["/bms", "/bms/set.zip!"] {
+        let mut reachable = reachable_chart_folders(&library_db, root).unwrap();
+        reachable.sort();
+        assert_eq!(reachable, [folders[0], folders[2], folders[3]]);
+        let summary = select_folder_summary(
+            &library_db,
+            &score_db,
+            root,
+            SelectRowKind::Folder,
+            LnPolicySetting::AutoLn,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(summary.lamp_counts[0], 1);
+        assert_eq!(summary.lamp_counts[5], 2);
+        assert_eq!(summary.lamp_counts.iter().sum::<u32>(), 3);
+    }
+}
+
+#[test]
+fn archive_deep_chain_reaches_the_leaf_song() {
+    let (mut library_db, score_db) = open_in_memory_dbs();
+    let mut folder = "/bms/set.zip!".to_string();
+    let mut folders = Vec::new();
+    for _ in 0..32 {
+        folders.push(folder.clone());
+        folder.push_str("/inner");
+    }
+    let leaf = folders.last().unwrap();
+    library_db
+        .upsert_chart_import(&record_for_chart(&format!("{leaf}/chart.bms"), &chart("Deep")))
+        .unwrap();
+    let reachable = reachable_chart_folders(&library_db, "/bms/set.zip!").unwrap();
+    assert_eq!(reachable.as_slice(), std::slice::from_ref(leaf));
+    for (index, folder) in folders.iter().enumerate() {
+        let items =
+            load_select_items_in_folder(&library_db, &score_db, folder, LnPolicySetting::AutoLn)
+                .unwrap();
+        if index < 30 {
+            assert_eq!(items.len(), 1);
+            assert!(matches!(&items[0], SelectItem::Folder { path, .. }
+                if path == &folders[index + 1]));
+        } else {
+            assert_eq!(listing_shape(&items), ["chart Deep"]);
+        }
+    }
+}
+
+#[test]
+fn archive_internal_directory_names_are_not_treated_as_containers() {
+    let paths = ["/bms/set.zip!/group.7z!/inner/song/a.bms"];
+    assert_eq!(
+        listing_shape(&folder_listing(&paths, "/bms/set.zip!")),
+        ["folder group.7z! /bms/set.zip!/group.7z!"]
+    );
 }
 
 #[test]

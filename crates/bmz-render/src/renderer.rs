@@ -102,16 +102,18 @@ use canvas::{CanvasRenderPolicy, CanvasViewport, GpuRenderTimings, validate_rgba
 pub use canvas::{RenderFrameTimings, RenderSurfaceStatus, Renderer, SurfaceSize};
 pub use state::PreparedTexture;
 use state::{
-    InternalSceneTarget, OFFSCREEN_RECT_BATCH_TEXTURE_BASE,
-    OFFSCREEN_RECT_BATCH_TEXTURE_MAX_ENTRIES, OffscreenRectBatchTextureKey, PendingSpriteSheet,
-    PendingTexture, WgpuRenderer,
+    OFFSCREEN_RECT_BATCH_TEXTURE_BASE, OFFSCREEN_RECT_BATCH_TEXTURE_MAX_ENTRIES,
+    OffscreenRectBatchTextureKey, PendingSpriteSheet, PendingTexture, SceneTarget, WgpuRenderer,
 };
 #[cfg(test)]
 use surface::resolve_maximum_frame_latency;
 mod deferred;
 #[cfg(test)]
 use surface::resolve_wgpu_present_mode;
-use surface::{configure_surface_checked, configure_surface_settings, wgpu_present_mode_label};
+use surface::{
+    RendererErrorScopes, configure_surface_checked, configure_surface_settings,
+    screenshot_surface_usage, wgpu_present_mode_label,
+};
 
 #[cfg(test)]
 #[path = "renderer/tests.rs"]
