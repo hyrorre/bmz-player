@@ -282,12 +282,12 @@ pub(super) struct PlanGeometryDrawResources<'pass> {
 
 pub(super) fn draw_plan_geometry<'pass>(
     pass: &mut wgpu::RenderPass<'pass>,
-    geometry: &'pass PlanGeometry,
+    steps: &'pass [DrawStep],
     resources: PlanGeometryDrawResources<'pass>,
 ) {
     let mut image_step_index = 0_usize;
     let mut visible = true;
-    for step in &geometry.steps {
+    for step in steps {
         match step {
             DrawStep::Scissor { rect } => {
                 visible = rect.is_some();
@@ -373,7 +373,7 @@ pub(super) fn encode_plan_geometry(
     let viewport = CanvasViewport::from_policy(surface_size, CanvasRenderPolicy::default());
     let mut geometry = PlanGeometry::default();
     encode_plan_geometry_into(
-        plan,
+        &plan.commands,
         text_frame,
         surface_size,
         viewport,
@@ -393,7 +393,7 @@ pub(super) fn encode_plan_geometry_with_rect_batch_resolver(
 ) -> PlanGeometry {
     let mut geometry = PlanGeometry::default();
     encode_plan_geometry_into(
-        plan,
+        &plan.commands,
         text_frame,
         surface_size,
         canvas_viewport,
@@ -404,14 +404,14 @@ pub(super) fn encode_plan_geometry_with_rect_batch_resolver(
 }
 
 pub(super) fn encode_plan_geometry_into(
-    plan: &DrawPlan,
+    commands: &[DrawCommand],
     text_frame: &TextFrame,
     surface_size: SurfaceSize,
     canvas_viewport: CanvasViewport,
     resolve_rect_batch_texture: &mut impl FnMut(&[RectCommand], RectBatchCache) -> Option<TextureId>,
     geometry: &mut PlanGeometry,
 ) {
-    let command_count = plan.commands.len();
+    let command_count = commands.len();
     geometry.rects.clear();
     geometry.images.clear();
     geometry.steps.clear();
@@ -433,7 +433,7 @@ pub(super) fn encode_plan_geometry_into(
     let mut clips: Vec<Option<ScissorRect>> = Vec::new();
     let full_scissor = ScissorRect::full(surface_size);
 
-    for command in &plan.commands {
+    for command in commands {
         match command {
             DrawCommand::PushClip { rect } => {
                 let parent = clips.last().copied().unwrap_or(full_scissor);

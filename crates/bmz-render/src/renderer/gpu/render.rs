@@ -64,19 +64,40 @@ impl WgpuRenderer {
             canvas_policy.internal_render_size(surface_size, internal_resolution_mode);
         let render_size = internal_render_size.unwrap_or(surface_size);
         let canvas_viewport = CanvasViewport::from_policy(render_size, canvas_policy);
+        let overlay_start = plan
+            .commands
+            .iter()
+            .rposition(|command| {
+                !matches!(command, DrawCommand::Text { style, .. } if style.layer == TextLayer::Overlay)
+            })
+            .map_or(0, |index| index + 1);
+        let (scene_commands, overlay_commands) = plan.commands.split_at(overlay_start);
 
         let text_start = Instant::now();
-        let mut text_frame = self.build_text_frame(plan, font_sets, canvas_viewport.content_size());
+        // Use one atlas frame and instance buffer for both passes.
+        let mut text_frame = self.build_text_frame(
+            [(scene_commands, canvas_viewport.content_size()), (overlay_commands, surface_size)],
+            font_sets,
+        );
+        let scene_text_count = text_frame.command_quad_counts.len() - overlay_commands.len();
+        let overlay_bytes =
+            text_frame.command_quad_counts[scene_text_count..].iter().sum::<usize>()
+                * TEXT_INSTANCE_BYTES;
+        let scene_text_end = text_frame.instances.len() - overlay_bytes;
         if !canvas_viewport.is_identity() {
-            canvas_viewport.transform_text_instances(&mut text_frame.instances);
-            canvas_viewport.transform_text_caret_rects(&mut text_frame.command_caret_rects);
+            canvas_viewport.transform_text_instances(&mut text_frame.instances[..scene_text_end]);
+            canvas_viewport.transform_text_caret_rects(
+                &mut text_frame.command_caret_rects[..scene_text_count],
+            );
         }
+        let overlay_range = scene_text_end..text_frame.instances.len();
+        let has_overlay = !overlay_range.is_empty();
         timings.text_us = text_start.elapsed().as_micros();
         let geometry_start = Instant::now();
         self.prepare_ambient(plan, canvas_viewport.content_size());
         let mut geometry = std::mem::take(&mut self.geometry_scratch);
         encode_plan_geometry_into(
-            plan,
+            scene_commands,
             &text_frame,
             render_size,
             canvas_viewport,
@@ -84,13 +105,14 @@ impl WgpuRenderer {
             &mut geometry,
         );
         let geometry_stats = geometry.stats();
-        timings.steps = geometry_stats.steps;
+        timings.steps = geometry_stats.steps + usize::from(has_overlay);
         timings.rect_steps = geometry_stats.rect_steps;
         timings.image_steps = geometry_stats.image_steps;
-        timings.text_steps = geometry_stats.text_steps;
+        timings.text_steps = geometry_stats.text_steps + usize::from(has_overlay);
         timings.rect_instances = geometry_stats.rect_instances;
         timings.image_instances = geometry_stats.image_instances;
-        timings.text_instances = geometry_stats.text_instances;
+        timings.text_instances =
+            geometry_stats.text_instances + overlay_range.len() / TEXT_INSTANCE_BYTES;
         timings.geometry_us = geometry_start.elapsed().as_micros();
         let upload_start = Instant::now();
         self.ensure_rect_buffer(geometry.rects.len());
@@ -235,6 +257,7 @@ impl WgpuRenderer {
             text_bind_group: text_bind_group.as_ref(),
             text_buffer: self.text_buffer.as_ref(),
         };
+        let overlay_steps = [DrawStep::Text { range: overlay_range }];
         if let Some((internal_view, upscale_bind_group)) = &internal_target {
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -253,7 +276,7 @@ impl WgpuRenderer {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                draw_plan_geometry(&mut pass, &geometry, draw_resources);
+                draw_plan_geometry(&mut pass, &geometry.steps, draw_resources);
             }
             self.blit_scene(
                 &mut encoder,
@@ -262,6 +285,25 @@ impl WgpuRenderer {
                 &self.upscale_buffer,
                 plan.clear.to_wgpu(),
             );
+            if has_overlay {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("bmz-render overlay pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: composition_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                draw_plan_geometry(&mut pass, &overlay_steps, draw_resources);
+            }
         } else {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("bmz-render scene surface pass"),
@@ -279,7 +321,11 @@ impl WgpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            draw_plan_geometry(&mut pass, &geometry, draw_resources);
+            draw_plan_geometry(&mut pass, &geometry.steps, draw_resources);
+            if has_overlay {
+                pass.set_scissor_rect(0, 0, surface_size.width, surface_size.height);
+                draw_plan_geometry(&mut pass, &overlay_steps, draw_resources);
+            }
         }
 
         // ゲーム / スキン描画の上に egui を重ねる。staging 用 CommandBuffer は

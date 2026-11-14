@@ -200,6 +200,8 @@ pub struct TextShadow {
 pub enum TextLayer {
     Ui,
     Skin,
+    /// Text appended at the end of the plan and drawn in output coordinates.
+    Overlay,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

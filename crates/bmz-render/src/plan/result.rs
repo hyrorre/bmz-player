@@ -77,20 +77,12 @@ pub(super) fn push_scene_overlays(
     commands: &mut Vec<DrawCommand>,
     overlay: &crate::snapshot::OverlaySnapshot,
 ) {
-    push_scene_overlay_text_aligned(commands, &overlay.left_text, 0.015, TextAlign::Left);
-    push_scene_overlay_text(commands, &overlay.fps_text, 0.015);
-    push_scene_overlay_text(commands, &overlay.text, 0.975);
+    push_scene_overlay_text(commands, &overlay.left_text, 0.015, TextAlign::Left);
+    push_scene_overlay_text(commands, &overlay.fps_text, 0.015, TextAlign::Right);
+    push_scene_overlay_text(commands, &overlay.text, 0.975, TextAlign::Right);
 }
 
-pub(super) fn push_scene_overlay_text(
-    commands: &mut Vec<DrawCommand>,
-    overlay: &str,
-    origin_y: f32,
-) {
-    push_scene_overlay_text_aligned(commands, overlay, origin_y, TextAlign::Right);
-}
-
-pub(super) fn push_scene_overlay_text_aligned(
+fn push_scene_overlay_text(
     commands: &mut Vec<DrawCommand>,
     overlay: &str,
     origin_y: f32,
@@ -117,7 +109,7 @@ pub(super) fn push_scene_overlay_text_aligned(
             size: OVERLAY_FONT_SIZE_RATIO,
             bitmap_size: None,
             color: Color::rgba(0.9, 0.9, 0.9, 0.65),
-            layer: TextLayer::Ui,
+            layer: TextLayer::Overlay,
             align,
             max_width: 1.0,
             overflow: TextOverflow::Overflow,

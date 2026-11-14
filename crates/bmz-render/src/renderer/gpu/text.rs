@@ -24,20 +24,10 @@ impl WgpuRenderer {
 
     pub(in crate::renderer) fn build_text_frame(
         &mut self,
-        plan: &DrawPlan,
+        targets: [(&[DrawCommand], SurfaceSize); 2],
         font_sets: &SkinFontSets,
-        surface: SurfaceSize,
     ) -> TextFrame {
-        if !surface.is_drawable() {
-            return TextFrame::default();
-        }
-        build_text_frame_with_font_sets(
-            plan,
-            &self.default_fonts,
-            font_sets,
-            surface,
-            &mut self.text_atlas,
-        )
+        build_text_frame_for_targets(targets, &self.default_fonts, font_sets, &mut self.text_atlas)
     }
 
     /// 文字インスタンスバッファの確保と転送。

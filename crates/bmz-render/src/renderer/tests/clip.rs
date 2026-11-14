@@ -219,7 +219,7 @@ fn clip_boundaries_split_batches_and_do_not_leak_when_geometry_is_reused() {
         ],
     };
     encode_plan_geometry_into(
-        &plan,
+        &plan.commands,
         &TextFrame::default(),
         size,
         viewport,
@@ -229,7 +229,7 @@ fn clip_boundaries_split_batches_and_do_not_leak_when_geometry_is_reused() {
     assert_eq!(geometry.stats().image_steps, 3);
     plan.commands = vec![DrawCommand::PushClip { rect: OUTSIDE }, solid_image(1)];
     encode_plan_geometry_into(
-        &plan,
+        &plan.commands,
         &TextFrame::default(),
         size,
         viewport,
@@ -239,7 +239,7 @@ fn clip_boundaries_split_batches_and_do_not_leak_when_geometry_is_reused() {
     assert!(matches!(geometry.steps[0], DrawStep::Scissor { rect: None }));
     plan.commands = vec![solid_image(1)];
     encode_plan_geometry_into(
-        &plan,
+        &plan.commands,
         &TextFrame::default(),
         size,
         viewport,

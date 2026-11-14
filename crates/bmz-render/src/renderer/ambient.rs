@@ -357,7 +357,7 @@ impl WgpuRenderer {
             }
             let plan = local_layers(bounds, layers);
             encode_plan_geometry_into(
-                &plan,
+                &plan.commands,
                 &TextFrame::default(),
                 size,
                 CanvasViewport::from_policy(size, CanvasRenderPolicy::default()),
@@ -402,7 +402,7 @@ impl WgpuRenderer {
                 let mut pass = ambient_pass(encoder, &target.source.view);
                 draw_plan_geometry(
                     &mut pass,
-                    &target.geometry,
+                    &target.geometry.steps,
                     PlanGeometryDrawResources {
                         rect_pipeline: &self.rect_pipeline,
                         rect_buffer: target.rect_buffer.as_ref(),

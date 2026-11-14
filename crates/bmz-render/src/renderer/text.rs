@@ -216,6 +216,7 @@ impl SkinFontSets {
     }
 }
 
+#[cfg(test)]
 pub(super) fn build_text_frame_with_font_sets(
     plan: &DrawPlan,
     system_fonts: &FontFallbackChain,
@@ -223,12 +224,26 @@ pub(super) fn build_text_frame_with_font_sets(
     surface: SurfaceSize,
     atlas: &mut TextAtlasCache,
 ) -> TextFrame {
-    if !surface.is_drawable() {
+    build_text_frame_for_targets(
+        [(&plan.commands, surface), (&[], surface)],
+        system_fonts,
+        font_sets,
+        atlas,
+    )
+}
+
+pub(super) fn build_text_frame_for_targets(
+    targets: [(&[DrawCommand], SurfaceSize); 2],
+    system_fonts: &FontFallbackChain,
+    font_sets: &SkinFontSets,
+    atlas: &mut TextAtlasCache,
+) -> TextFrame {
+    if !targets[0].1.is_drawable() {
         return TextFrame::default();
     }
 
     atlas.begin_frame();
-    let mut frame = build_text_frame_commands(plan, system_fonts, font_sets, surface, atlas);
+    let mut frame = build_text_frame_commands(targets, system_fonts, font_sets, atlas);
     let mut missing = atlas.capacity_misses - atlas.profile.capacity_misses;
     // まだGPUへ渡していないので、このフレームのquadごと安全に組み直せる。
     // 古い行を空けられる場合だけ1回再試行し、収まらない画面での待機は維持する。
@@ -240,14 +255,14 @@ pub(super) fn build_text_frame_with_font_sets(
         // 行を残す場合は、最初の組立で追加した画素もそのまま残る。転送も引き継ぐ。
         let mut pending_regions = std::mem::take(&mut frame.dirty_regions);
         let before = atlas.capacity_misses;
-        frame = build_text_frame_commands(plan, system_fonts, font_sets, surface, atlas);
+        frame = build_text_frame_commands(targets, system_fonts, font_sets, atlas);
         missing = atlas.capacity_misses - before;
         if atlas.overflowed {
             // 画面の切替等で直近の文字と新しい文字が同時に収まらなかった場合。
             // 古い文字を残したせいで欠けたまま待機しないよう、従来の空atlasでも1回試す。
             atlas.clear();
             let before = atlas.capacity_misses;
-            frame = build_text_frame_commands(plan, system_fonts, font_sets, surface, atlas);
+            frame = build_text_frame_commands(targets, system_fonts, font_sets, atlas);
             missing = atlas.capacity_misses - before;
             atlas.frames_since_clear = 1;
         } else {
@@ -260,16 +275,18 @@ pub(super) fn build_text_frame_with_font_sets(
 }
 
 fn build_text_frame_commands(
-    plan: &DrawPlan,
+    targets: [(&[DrawCommand], SurfaceSize); 2],
     system_fonts: &FontFallbackChain,
     font_sets: &SkinFontSets,
-    surface: SurfaceSize,
     atlas: &mut TextAtlasCache,
 ) -> TextFrame {
     let mut builder = CachedTextFrameBuilder::new(atlas);
     let mut command_quad_counts = Vec::new();
     let mut command_caret_rects = Vec::new();
-    for command in &plan.commands {
+    let commands = targets
+        .into_iter()
+        .flat_map(|(commands, size)| commands.iter().map(move |command| (command, size)));
+    for (command, surface) in commands {
         let DrawCommand::Text { origin, text, style, caret, post_scale } = command else {
             continue;
         };

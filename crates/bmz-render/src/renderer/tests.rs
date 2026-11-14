@@ -155,6 +155,8 @@ mod cases_04;
 mod cases_05;
 #[path = "tests/clip.rs"]
 mod clip;
+#[path = "tests/overlay.rs"]
+mod overlay;
 #[path = "tests/shrink_raster.rs"]
 mod shrink_raster;
 #[path = "tests/text_atlas.rs"]
