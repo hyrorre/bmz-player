@@ -15,6 +15,7 @@ pub struct TimingMap {
     pub initial_bpm: f64,
     pub segments: Vec<TimingSegment>,
     tick_scale: u64,
+    bpm_reflections: Vec<TickTimePoint>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -32,11 +33,22 @@ pub struct TickTimePoint {
     pub time: TimeUs,
 }
 
+/// Reflect a judgement clock around its most recent negative BPM event.
+pub fn reflect_time(time: TimeUs, anchor: TimeUs) -> TimeUs {
+    TimeUs(anchor.0.saturating_sub(time.0.saturating_sub(anchor.0)))
+}
+
+pub fn bpm_reflection_at(points: &[TickTimePoint], time: TimeUs) -> Option<TickTimePoint> {
+    let end = points.partition_point(|point| point.time <= time);
+    points[..end].last().copied()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TickTimingEventKind {
     StopRaw { value: u64 },
     BmsonStop { duration_pulses: u64, resolution: u64 },
     SetBpm(f64),
+    SetNegativeBmsBpm(f64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -155,7 +167,7 @@ pub fn build_timing_map_with_tick_scale(
                     bmson_stop_pulses_to_us(duration_pulses, resolution, current_bpm),
                 );
             }
-            TickTimingEventKind::SetBpm(bpm) => {
+            TickTimingEventKind::SetBpm(bpm) | TickTimingEventKind::SetNegativeBmsBpm(bpm) => {
                 current_bpm = sanitize_bpm(bpm);
             }
         }
@@ -176,7 +188,7 @@ fn timing_event_priority(kind: TickTimingEventKind) -> u8 {
     match kind {
         // Match beatoraja/bms-rs: BPM changes take effect before a STOP at
         // the same position, so the STOP uses the new BPM.
-        TickTimingEventKind::SetBpm(_) => 0,
+        TickTimingEventKind::SetBpm(_) | TickTimingEventKind::SetNegativeBmsBpm(_) => 0,
         TickTimingEventKind::StopRaw { .. } | TickTimingEventKind::BmsonStop { .. } => 1,
     }
 }
@@ -192,7 +204,7 @@ impl TimingMap {
         tick_scale: u64,
     ) -> Self {
         debug_assert!(!segments.is_empty());
-        Self { initial_bpm, segments, tick_scale: tick_scale.max(1) }
+        Self { initial_bpm, segments, tick_scale: tick_scale.max(1), bpm_reflections: Vec::new() }
     }
 
     pub fn tick_to_time(&self, tick: ChartTick) -> TimeUs {
@@ -218,6 +230,18 @@ impl TimingMap {
 
     pub fn bpm_at_time(&self, time: TimeUs) -> f64 {
         self.find_segment_by_time(time).bpm
+    }
+
+    pub fn bpm_reflections(&self) -> &[TickTimePoint] {
+        &self.bpm_reflections
+    }
+
+    pub fn bpm_reflection_at(&self, time: TimeUs) -> Option<TickTimePoint> {
+        bpm_reflection_at(&self.bpm_reflections, time)
+    }
+
+    pub fn reflected_judge_time(&self, time: TimeUs) -> TimeUs {
+        self.bpm_reflection_at(time).map_or(time, |point| reflect_time(time, point.time))
     }
 
     pub fn find_segment_by_tick(&self, tick: ChartTick) -> &TimingSegment {
@@ -270,6 +294,8 @@ impl TimingMap {
         let mut current_tick = ChartTick(0);
         let mut current_time = TimeUs(0);
         let mut current_bpm = initial_bpm;
+        let mut bpm_reflections = Vec::new();
+        let mut signed_bpm_position = None;
 
         for event in sorted {
             let event_time = if use_recorded_times {
@@ -315,7 +341,17 @@ impl TimingMap {
                     current_time = add_time_us(current_time, duration_us.max(0));
                 }
                 Kind::BpmChange { bpm } => {
-                    current_bpm = bpm.max(1.0);
+                    let is_signed_bpm =
+                        signed_bpm_position.take() == Some((event.tick, event.time));
+                    current_bpm = if is_signed_bpm { sanitize_bpm(bpm) } else { bpm.max(1.0) };
+                }
+                Kind::BpmReflection => {
+                    signed_bpm_position = Some((event.tick, event.time));
+                    // In LR2 the playback origin is also the inactive boundary.
+                    if current_time.0 > 0 {
+                        bpm_reflections
+                            .push(TickTimePoint { tick: current_tick, time: current_time });
+                    }
                 }
             }
         }
@@ -328,13 +364,14 @@ impl TimingMap {
             bpm: current_bpm,
         });
 
-        TimingMap::new(initial_bpm, segments)
+        TimingMap { bpm_reflections, ..TimingMap::new(initial_bpm, segments) }
     }
 }
 
 fn timing_event_priority_from_chart_kind(kind: crate::model::TimingEventKind) -> u8 {
     match kind {
-        crate::model::TimingEventKind::BpmChange { .. } => 0,
+        crate::model::TimingEventKind::BpmChange { .. }
+        | crate::model::TimingEventKind::BpmReflection => 0,
         crate::model::TimingEventKind::Stop { .. } => 1,
     }
 }

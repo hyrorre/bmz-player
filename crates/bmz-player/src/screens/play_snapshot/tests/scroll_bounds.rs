@@ -1,6 +1,44 @@
 use super::*;
 
 #[test]
+fn negative_bpm_fold_moves_past_unjudged_notes_back_into_the_snapshot() {
+    use bmz_chart::model::{BarLine, TimingEvent, TimingEventKind};
+
+    let mut chart = chart();
+    chart.lane_notes[Lane::Key1.index()][0] = tap_note(1, Lane::Key1, 1_728, 900_000);
+    chart.bar_lines.push(BarLine { measure: 1, tick: ChartTick(1_728), time: TimeUs(900_000) });
+    chart.timing_events.push(TimingEvent {
+        tick: ChartTick(1_920),
+        time: TimeUs(1_000_000),
+        kind: TimingEventKind::BpmReflection,
+    });
+    let profile = ProfileConfig::new_default("default", "Default", 1);
+    let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+    let before = build_render_snapshot(&session, TimeUs(800_000), &[], None);
+    let at = build_render_snapshot(&session, TimeUs(1_000_000), &[], None);
+    let after = build_render_snapshot(&session, TimeUs(1_200_000), &[], None);
+
+    assert!(at.visible_notes[Lane::Key1.index()].is_empty());
+    assert_eq!(after.visible_notes[Lane::Key1.index()].len(), 1);
+    assert!(approx_eq(
+        before.visible_notes[Lane::Key1.index()][0].y,
+        after.visible_notes[Lane::Key1.index()][0].y
+    ));
+    assert!(approx_eq(before.bar_lines[0].y, after.bar_lines[0].y));
+    assert_eq!(after.now_bpm, 120.0);
+
+    let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+    let [projection, ..] = super::super::projection::PlayfieldProjection::pool(&session, &cache);
+    let mut projected = before;
+    projection.project(&mut projected, TimeUs(1_200_000), &mut Default::default());
+    assert_eq!(projected.time, TimeUs(1_200_000));
+    assert!(approx_eq(
+        projected.visible_notes[Lane::Key1.index()][0].y,
+        after.visible_notes[Lane::Key1.index()][0].y
+    ));
+}
+
+#[test]
 fn positive_scroll_bound_keeps_every_visible_tick_across_changes_and_duplicates() {
     let timing = bmz_chart::timing::build_timing_map(120.0, Vec::new());
     for segments in [
@@ -18,6 +56,7 @@ fn positive_scroll_bound_keeps_every_visible_tick_across_changes_and_duplicates(
                     visible_lane_fraction: 0.73,
                     lookahead_ticks: 768.0,
                     scroll_integral: &cache,
+                    reflection_tick: None,
                     speed,
                 };
                 let upper = context.simple_tick_upper_bound(cursor).unwrap();
@@ -51,6 +90,7 @@ fn non_forward_scroll_and_speed_keep_unrestricted_candidates() {
             visible_lane_fraction: 1.0,
             lookahead_ticks: 768.0,
             scroll_integral: &cache,
+            reflection_tick: None,
             speed,
         };
         assert!(context.simple_tick_upper_bound(0.0).is_none());

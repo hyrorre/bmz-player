@@ -31,6 +31,10 @@ impl<'a> ObjectMessageLine<'a> {
         if !self.payload.len().is_multiple_of(2) {
             return None;
         }
+        self.paired_objects()
+    }
+
+    pub(super) fn paired_objects(&self) -> Option<(u64, u64, Vec<SparseBmsObject>)> {
         let object_count = self.payload.len() / 2;
         if object_count == 0 {
             return None;
@@ -236,7 +240,12 @@ pub(super) fn inject_sparse_bms_message<T: KeyLayoutMapper>(
                     bms.bpm.bpm_defs.get(&obj_id).and_then(|sv| sv.value().as_ref().ok()).cloned()
                 {
                     bms.bpm.bpm_changes.insert(time, BpmChangeObj { time, bpm });
-                } else {
+                } else if !bms
+                    .bpm
+                    .bpm_defs
+                    .get(&obj_id)
+                    .is_some_and(|def| super::signed_bpm::negative_bpm(def.raw()).is_some())
+                {
                     warnings.push(ImportWarning::MissingBpmDefinition { key: obj_id.as_u16() });
                 }
             }

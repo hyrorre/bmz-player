@@ -1,5 +1,6 @@
 use super::*;
 use bmz_chart::model::LongNotePair;
+use bmz_chart::timing::{TickTimePoint, TimingMap};
 use std::sync::Arc;
 
 /// Own the immutable chart so pointer identity cannot be recycled. A different
@@ -12,6 +13,7 @@ pub(super) struct ChartIndex {
     hcn_prefix_end: Vec<TimeUs>,
     hcn_sorted: bool,
     result_end_time: TimeUs,
+    bpm_reflections: Vec<TickTimePoint>,
 }
 
 impl JudgeEngine {
@@ -46,6 +48,7 @@ impl JudgeEngine {
             .collect();
         self.judged_notes.reserve(count.saturating_sub(self.judged_notes.len()));
         let result_end_time = result_end_time(&chart);
+        let bpm_reflections = chart_reflections(&chart);
         self.chart_index = Some(Arc::new(ChartIndex {
             chart,
             notes,
@@ -53,6 +56,7 @@ impl JudgeEngine {
             hcn_prefix_end,
             hcn_sorted,
             result_end_time,
+            bpm_reflections,
         }));
         self
     }
@@ -66,6 +70,16 @@ impl JudgeEngine {
     pub(crate) fn result_end_time(&self, chart: &PlayableChart) -> TimeUs {
         self.matching_index(chart)
             .map_or_else(|| result_end_time(chart), |index| index.result_end_time)
+    }
+
+    pub(crate) fn bpm_reflections<'a>(
+        &'a self,
+        chart: &PlayableChart,
+    ) -> std::borrow::Cow<'a, [TickTimePoint]> {
+        match self.matching_index(chart) {
+            Some(index) => std::borrow::Cow::Borrowed(&index.bpm_reflections),
+            None => std::borrow::Cow::Owned(chart_reflections(chart)),
+        }
     }
 
     pub fn note_by_id<'a>(&self, chart: &'a PlayableChart, id: NoteId) -> Option<&'a NoteEvent> {
@@ -92,6 +106,16 @@ impl JudgeEngine {
             None => (None, 0..chart.long_notes.len()),
         };
         range.map(move |i| &chart.long_notes[indices.map_or(i, |indices| indices[i])])
+    }
+}
+
+fn chart_reflections(chart: &PlayableChart) -> Vec<TickTimePoint> {
+    if chart.timing_events.iter().any(|event| event.kind.is_bpm_reflection()) {
+        TimingMap::from_chart_timing_events(chart.metadata.initial_bpm, &chart.timing_events)
+            .bpm_reflections()
+            .to_vec()
+    } else {
+        Vec::new()
     }
 }
 

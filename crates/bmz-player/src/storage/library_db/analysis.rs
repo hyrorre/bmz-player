@@ -46,7 +46,7 @@ impl ChartAnalysis {
             .iter()
             .filter_map(|event| match event.kind {
                 TimingEventKind::BpmChange { bpm } => Some((event.time.0, bpm)),
-                TimingEventKind::Stop { .. } => None,
+                TimingEventKind::Stop { .. } | TimingEventKind::BpmReflection => None,
             })
             .collect();
         let bpm_at = |time| {

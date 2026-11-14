@@ -375,6 +375,7 @@ pub(super) fn detect_mine_hit(
     input_time: TimeUs,
     window_us: i64,
     lane_state: &LaneJudgeState,
+    minimum_index: Option<usize>,
 ) -> Option<MineHitEvent> {
     if window_us < 0 {
         return None;
@@ -382,7 +383,10 @@ pub(super) fn detect_mine_hit(
     let notes = chart.notes_for_lane(lane);
     let earliest = input_time.0.saturating_sub(window_us);
     let latest = input_time.0.saturating_add(window_us);
-    let start = notes.partition_point(|note| note.time.0 < earliest);
+    let start = notes
+        .partition_point(|note| note.time.0 < earliest)
+        .max(minimum_index.unwrap_or(0))
+        .min(notes.len());
     notes[start..]
         .iter()
         .take_while(|note| note.time.0 <= latest)

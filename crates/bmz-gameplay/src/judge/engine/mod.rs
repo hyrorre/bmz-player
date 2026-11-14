@@ -173,6 +173,15 @@ impl JudgeEngine {
     }
 
     pub fn process_input(&mut self, chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
+        self.process_input_at(chart, input, input.time)
+    }
+
+    pub(crate) fn process_input_at(
+        &mut self,
+        chart: &PlayableChart,
+        input: InputEvent,
+        judge_time: TimeUs,
+    ) -> JudgeOutcome {
         self.mark_free_zone_input(chart, input);
         let mut outcome = self.advance_hln(chart, input.time);
         // HLN の保持中にも他ノートを捕捉できる。保留取消の Press だけは既存の
@@ -184,10 +193,14 @@ impl JudgeEngine {
         {
             self.lanes[input.lane.index()].active_long = None;
         }
+        let timed_input = InputEvent { time: judge_time, ..input };
         let mut input_outcome = match input.kind {
-            InputKind::Press => self.process_press(chart, input),
-            InputKind::Release => self.process_release(chart, input),
+            InputKind::Press => self.process_press(chart, timed_input, input.time),
+            InputKind::Release => self.process_release(chart, timed_input, input.time),
         };
+        if judge_time != input.time {
+            input_outcome.stamp_judgement_time(input.time);
+        }
         self.update_hln_input(chart, input, &mut input_outcome);
         append_outcome(&mut outcome, input_outcome);
         self.filter_free_zone_outcome(chart, &mut outcome);
@@ -207,9 +220,20 @@ impl JudgeEngine {
         now: TimeUs,
         play_keysound: bool,
     ) -> JudgeOutcome {
+        self.process_misses_at(chart, now, |_| now, play_keysound)
+    }
+
+    pub(crate) fn process_misses_at(
+        &mut self,
+        chart: &PlayableChart,
+        now: TimeUs,
+        lane_judge_time: impl Fn(Lane) -> TimeUs,
+        play_keysound: bool,
+    ) -> JudgeOutcome {
         let mut outcome = self.advance_hln(chart, now);
 
         for lane in Lane::ALL {
+            let judge_time = lane_judge_time(lane);
             let lane_state = &mut self.lanes[lane.index()];
 
             while let Some((idx, note)) = next_unjudged_press_reference_note(
@@ -219,14 +243,14 @@ impl JudgeEngine {
                 &self.judged_notes,
             ) {
                 let windows = press_window(self.window_set, self.scratch_lane_mask[lane.index()]);
-                if now.0 <= note.time.0 + windows.bad_slow_us {
+                if judge_time.0 <= note.time.0 + windows.bad_slow_us {
                     break;
                 }
 
                 lane_state.next_note_index = idx + 1;
                 let bad_was_already_scored = self.bad_attempted_notes.remove(&note.id);
                 self.judged_notes.insert(note.id, Judge::Poor);
-                let miss_delta = TimeUs(now.0 - note.time.0);
+                let miss_delta = TimeUs(judge_time.0 - note.time.0);
                 if !bad_was_already_scored {
                     if play_keysound {
                         outcome.keysounds.push(KeySoundEvent {
@@ -289,7 +313,7 @@ impl JudgeEngine {
 
                 match active.mode {
                     LongNoteMode::Ln | LongNoteMode::Hln => {
-                        if now.0 > active.end.end_time.0 {
+                        if judge_time.0 > active.end.end_time.0 {
                             lane_state.active_long = None;
                             self.judged_notes.insert(active.start_note_id, active.start_judge);
                             outcome.events.push(ln_final_event(
@@ -312,7 +336,7 @@ impl JudgeEngine {
                         // used when an actual Release input occurs.
                         let windows =
                             press_window(self.window_set, self.scratch_lane_mask[lane.index()]);
-                        if now.0 > active.end.end_time.0 + windows.bad_slow_us {
+                        if judge_time.0 > active.end.end_time.0 + windows.bad_slow_us {
                             lane_state.active_long = None;
                             self.judged_notes.insert(active.end.end_note_id, Judge::Poor);
                             if play_keysound {
@@ -327,7 +351,7 @@ impl JudgeEngine {
                                 lane,
                                 judge: Judge::Poor,
                                 side: TimingSide::Slow,
-                                delta: TimeUs(now.0 - active.end.end_time.0),
+                                delta: TimeUs(judge_time.0 - active.end.end_time.0),
                                 time: now,
                                 affects_score: true,
                             });
@@ -348,6 +372,16 @@ impl JudgeEngine {
         now: TimeUs,
         lane_keyon_started_at: &[Option<TimeUs>; LANE_COUNT],
     ) -> JudgeOutcome {
+        self.process_mine_passes_at(chart, now, None, lane_keyon_started_at)
+    }
+
+    pub(crate) fn process_mine_passes_at(
+        &mut self,
+        chart: &PlayableChart,
+        now: TimeUs,
+        reflected_time: Option<TimeUs>,
+        lane_keyon_started_at: &[Option<TimeUs>; LANE_COUNT],
+    ) -> JudgeOutcome {
         let mut outcome = JudgeOutcome::default();
 
         for lane in Lane::ALL {
@@ -355,7 +389,9 @@ impl JudgeEngine {
             let lane_state = &mut self.lanes[lane.index()];
             let notes = chart.notes_for_lane(lane);
             while let Some(note) = notes.get(lane_state.next_mine_index) {
-                if note.time > now {
+                let mine_time = reflected_time.filter(|_| note.kind == NoteKind::Mine);
+                let evaluation_time = mine_time.unwrap_or(now);
+                if note.time > evaluation_time {
                     break;
                 }
                 lane_state.next_mine_index += 1;
@@ -372,7 +408,7 @@ impl JudgeEngine {
                     continue;
                 }
                 if note.kind != NoteKind::Mine
-                    || keyon_started_at > note.time
+                    || keyon_started_at > if mine_time.is_some() { now } else { note.time }
                     || Some(note.time) == lane_state.last_mine_hit_time
                 {
                     continue;
@@ -384,7 +420,7 @@ impl JudgeEngine {
                     lane,
                     damage: note.damage.unwrap_or(0.0),
                     sound: note.sound,
-                    time: note.time,
+                    time: if mine_time.is_some() { now } else { note.time },
                 });
             }
         }
@@ -422,23 +458,30 @@ impl JudgeEngine {
         })
     }
 
-    fn process_press(&mut self, chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
+    fn process_press(
+        &mut self,
+        chart: &PlayableChart,
+        input: InputEvent,
+        event_time: TimeUs,
+    ) -> JudgeOutcome {
         // Consume the BSS reverse edge before it can reach a note or Mine.
-        if self.consume_scratch_press_suppression(input) {
+        if self.consume_scratch_press_suppression(InputEvent { time: event_time, ..input }) {
             return JudgeOutcome { consumed_input: true, ..Default::default() };
         }
 
         // Mine ヒット判定は通常ノーツの判定に先んじて、もしくは並走して行う。
         // 入力は通常ノーツの判定を妨げないので、ここでは別ベクタに積むだけ。
         let mut mine_hits = Vec::new();
+        let lane_state = &mut self.lanes[input.lane.index()];
         if let Some(hit) = detect_mine_hit(
             chart,
             input.lane,
             input.time,
             press_window(self.window_set, self.scratch_lane_mask[input.lane.index()]).mine_hit_us,
-            &self.lanes[input.lane.index()],
+            lane_state,
+            (input.time != event_time).then_some(lane_state.next_mine_index),
         ) {
-            self.lanes[input.lane.index()].last_mine_hit_time = Some(hit.time);
+            lane_state.last_mine_hit_time = Some(hit.time);
             mine_hits.push(hit);
         }
 
@@ -537,7 +580,7 @@ impl JudgeEngine {
             if note_vanishes
                 && note.kind == NoteKind::LongStart
                 && let Some(mut active) =
-                    make_active_long(chart, note.id, candidate.judge, candidate.delta, input.time)
+                    make_active_long(chart, note.id, candidate.judge, candidate.delta, event_time)
             {
                 if matches!(input.lane, Lane::Scratch | Lane::Scratch2) {
                     active.scratch_direction = input.scratch_direction;
@@ -595,7 +638,12 @@ impl JudgeEngine {
         outcome
     }
 
-    fn process_release(&mut self, chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
+    fn process_release(
+        &mut self,
+        chart: &PlayableChart,
+        input: InputEvent,
+        event_time: TimeUs,
+    ) -> JudgeOutcome {
         let lane_state = &mut self.lanes[input.lane.index()];
         let Some(mut active) = lane_state.active_long else {
             return JudgeOutcome::default();
@@ -629,9 +677,9 @@ impl JudgeEngine {
                 lane_state.active_long = None;
                 lane_state.scratch_press_suppression = Some(ScratchPressSuppression {
                     direction: reverse_direction,
-                    started_at: input.time,
+                    started_at: event_time,
                     expires_at: TimeUs(
-                        input.time.0.saturating_add(BSS_REVERSE_PRESS_SUPPRESSION_US),
+                        event_time.0.saturating_add(BSS_REVERSE_PRESS_SUPPRESSION_US),
                     ),
                 });
                 self.judged_notes.insert(active.end.end_note_id, judge);
@@ -667,7 +715,7 @@ impl JudgeEngine {
                     && matches!(judge, Judge::Bad | Judge::Poor)
                 {
                     active.pending_release =
-                        Some(PendingLongRelease { released_at: input.time, judge, delta });
+                        Some(PendingLongRelease { released_at: event_time, judge, delta });
                     lane_state.active_long = Some(active);
                     return JudgeOutcome { consumed_input: true, ..Default::default() };
                 }
@@ -682,7 +730,7 @@ impl JudgeEngine {
                 let judge = classify_normal_delta(delta, windows).unwrap_or(Judge::Poor);
                 if release_margin_us > 0 && delta < 0 && matches!(judge, Judge::Bad | Judge::Poor) {
                     active.pending_release = Some(PendingLongRelease {
-                        released_at: input.time,
+                        released_at: event_time,
                         judge,
                         delta: TimeUs(delta),
                     });

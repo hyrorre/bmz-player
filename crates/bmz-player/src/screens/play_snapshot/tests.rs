@@ -22,6 +22,9 @@ use crate::select_options::{ArrangeOption, DoubleOption, SessionMode};
 
 use super::*;
 
+#[path = "tests/mrym2014.rs"]
+mod mrym2014;
+
 fn approx_eq(left: f32, right: f32) -> bool {
     (left - right).abs() < 0.0001
 }

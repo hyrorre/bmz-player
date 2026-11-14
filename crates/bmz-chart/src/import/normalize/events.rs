@@ -49,38 +49,47 @@ pub(super) fn build_timing_events(
             match event.kind {
                 // Match beatoraja: BPM changes take effect before a STOP at
                 // the same position, so the STOP uses the new BPM.
-                TickTimingEventKind::SetBpm(_) => 0,
+                TickTimingEventKind::SetBpm(_) | TickTimingEventKind::SetNegativeBmsBpm(_) => 0,
                 TickTimingEventKind::StopRaw { .. } | TickTimingEventKind::BmsonStop { .. } => 1,
             },
         )
     });
 
     let mut bpm = initial_bpm;
-    events
-        .iter()
-        .map(|event| {
-            let kind = match event.kind {
-                TickTimingEventKind::SetBpm(next_bpm) => {
-                    bpm = next_bpm;
-                    TimingEventKind::BpmChange { bpm: next_bpm }
+    let mut normalized = Vec::with_capacity(events.len());
+    for event in events {
+        let time = timing_map.tick_to_time(event.tick);
+        let kind = match event.kind {
+            TickTimingEventKind::SetBpm(next_bpm) => {
+                bpm = next_bpm;
+                TimingEventKind::BpmChange { bpm }
+            }
+            TickTimingEventKind::SetNegativeBmsBpm(magnitude) => {
+                bpm = magnitude;
+                normalized.push(TimingEvent {
+                    tick: event.tick,
+                    time,
+                    kind: TimingEventKind::BpmReflection,
+                });
+                TimingEventKind::BpmChange { bpm }
+            }
+            TickTimingEventKind::StopRaw { value } => {
+                TimingEventKind::Stop { duration_us: crate::timing::stop_raw_to_us(value, bpm) }
+            }
+            TickTimingEventKind::BmsonStop { duration_pulses, resolution } => {
+                TimingEventKind::Stop {
+                    duration_us: crate::timing::bmson_stop_pulses_to_us(
+                        duration_pulses,
+                        resolution,
+                        bpm,
+                    ),
                 }
-                TickTimingEventKind::StopRaw { value } => {
-                    TimingEventKind::Stop { duration_us: crate::timing::stop_raw_to_us(value, bpm) }
-                }
-                TickTimingEventKind::BmsonStop { duration_pulses, resolution } => {
-                    TimingEventKind::Stop {
-                        duration_us: crate::timing::bmson_stop_pulses_to_us(
-                            duration_pulses,
-                            resolution,
-                            bpm,
-                        ),
-                    }
-                }
-            };
+            }
+        };
 
-            TimingEvent { tick: event.tick, time: timing_map.tick_to_time(event.tick), kind }
-        })
-        .collect()
+        normalized.push(TimingEvent { tick: event.tick, time, kind });
+    }
+    normalized
 }
 
 pub(super) fn build_scroll_events(

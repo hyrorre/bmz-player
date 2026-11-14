@@ -283,6 +283,7 @@ fn remove_scroll_changes(chart: &mut PlayableChart) -> bool {
             (bpm - chart.metadata.initial_bpm).abs() > f64::EPSILON
         }
         TimingEventKind::Stop { duration_us } => duration_us != 0,
+        TimingEventKind::BpmReflection => true,
     });
     let changed_scroll =
         chart.scroll_events.iter().any(|event| (event.factor - start_scroll).abs() > f64::EPSILON);

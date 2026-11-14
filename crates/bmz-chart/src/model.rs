@@ -326,8 +326,21 @@ pub struct SoundEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TimingEventKind {
-    BpmChange { bpm: f64 },
-    Stop { duration_us: i64 },
+    BpmChange {
+        bpm: f64,
+    },
+    /// A negative extended BMS BPM. A paired BPM change with its positive
+    /// magnitude follows at the same position.
+    BpmReflection,
+    Stop {
+        duration_us: i64,
+    },
+}
+
+impl TimingEventKind {
+    pub const fn is_bpm_reflection(self) -> bool {
+        matches!(self, Self::BpmReflection)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

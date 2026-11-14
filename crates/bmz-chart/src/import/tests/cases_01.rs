@@ -1,4 +1,5 @@
 use super::*;
+use bmz_core::time::TimeUs;
 
 #[test]
 fn imports_mixed_space_and_colon_channel_data_into_playable_chart() {
@@ -384,6 +385,110 @@ fn ignores_zero_objects_in_legacy_bpm_channel() {
     assert!(bpm_changes.iter().all(|bpm| *bpm > 0.0), "bpm changes: {bpm_changes:?}");
 
     std::fs::remove_file(&path).unwrap();
+}
+
+#[test]
+fn negative_extended_bpm_keeps_positive_timing_and_reflection_points() {
+    use crate::timing::TimingMap;
+
+    let path = write_temp_bms(
+        "#BPM 120\n#BPM01 -60\n#BPM02 180\n#BPM03 -120\n#STOP01 48\n\
+         #WAV01 hit.wav\n#00108:01\n#00109:01\n#00208:02\n#00308:03\n#00411:01\n",
+    );
+    let imported = import_bms_chart(&path, None, false).unwrap();
+    std::fs::remove_file(path).unwrap();
+    let chart = imported.chart;
+    let map = TimingMap::from_chart_timing_events(chart.metadata.initial_bpm, &chart.timing_events);
+    assert_eq!(
+        map.bpm_reflections().iter().map(|p| p.time.0).collect::<Vec<_>>(),
+        [2_000_000, 8_333_333]
+    );
+    assert_eq!(map.bpm_at_time(TimeUs(2_500_000)), 60.0);
+    assert_eq!(map.bpm_at_time(TimeUs(7_500_000)), 180.0);
+    assert!(
+        chart
+            .timing_events
+            .iter()
+            .any(|event| event.kind == TimingEventKind::Stop { duration_us: 1_000_000 })
+    );
+    assert_eq!(map.reflected_judge_time(TimeUs(1_999_999)), TimeUs(1_999_999));
+    assert_eq!(map.reflected_judge_time(TimeUs(2_000_000)), TimeUs(2_000_000));
+    assert_eq!(map.reflected_judge_time(TimeUs(2_000_001)), TimeUs(1_999_999));
+    assert_eq!(map.reflected_judge_time(TimeUs(7_500_000)), TimeUs(-3_500_000));
+    assert_eq!(map.reflected_judge_time(TimeUs(8_333_343)), TimeUs(8_333_323));
+    assert_eq!(chart.notes_for_lane(Lane::Key1)[0].time, TimeUs(10_333_333));
+}
+
+#[test]
+fn signed_bpm_respects_sparse_slots_base62_and_selected_definitions() {
+    let sparse = format!("{}0a00", "00".repeat(8_192));
+    let text = format!(
+        "#BASE 62\n#BPM 120\n#BPM0A 60\n#BPM0a -60\n\
+         #RANDOM 2\n#IF 1\n#BPM0a -90\n#ENDIF\n#ENDRANDOM\n\
+         #00108:0A\n#00208:{sparse}\n#00308:000a0\n#00411:01\n",
+    );
+    let path = write_temp_bms(&text);
+    let chart = import_bms_chart_with_random_source(
+        &path,
+        BmsRandomSource::Choices { random: vec![1], switches: Vec::new() },
+        false,
+    )
+    .unwrap()
+    .chart;
+    std::fs::remove_file(path).unwrap();
+    let changes: Vec<_> = chart
+        .timing_events
+        .iter()
+        .filter_map(|event| match event.kind {
+            TimingEventKind::BpmChange { bpm } => Some(bpm),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(changes, [60.0, 90.0, 90.0]);
+    assert_eq!(
+        chart.timing_events.iter().filter(|event| event.kind.is_bpm_reflection()).count(),
+        2
+    );
+}
+
+#[test]
+fn unused_negative_bpm_preserves_positive_channel_output() {
+    for header in ["", "#BPM02 -60\n"] {
+        let text = format!("#BPM 120\n#BPM01 60\n{header}#00108:01\n#00211:01\n");
+        let path = write_temp_bms(&text);
+        let chart = import_bms_chart(&path, None, false).unwrap().chart;
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(chart.timing_events.len(), 1);
+        assert_eq!(chart.notes_for_lane(Lane::Key1)[0].time, TimeUs(6_000_000));
+    }
+}
+
+#[test]
+fn duplicate_extended_bpm_keeps_the_last_objects_sign() {
+    for (first, second, reflected) in [("01", "02", true), ("02", "01", false)] {
+        let text = format!(
+            "#BPM 120\n#BPM01 60\n#BPM02 -60\n#00108:{first}\n#00108:{second}\n#00211:01\n"
+        );
+        let path = write_temp_bms(&text);
+        let chart = import_bms_chart(&path, None, false).unwrap().chart;
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(
+            chart.timing_events.iter().any(|event| event.kind.is_bpm_reflection()),
+            reflected
+        );
+        assert_eq!(chart.notes_for_lane(Lane::Key1)[0].time, TimeUs(6_000_000));
+    }
+}
+
+#[test]
+fn negative_fractional_bpm_uses_its_full_magnitude_after_rebuilding_the_map() {
+    let path = write_temp_bms("#BPM 120\n#BPM01 -0.5\n#00108:01\n#00211:01\n");
+    let chart = import_bms_chart(&path, None, false).unwrap().chart;
+    std::fs::remove_file(path).unwrap();
+    let map = crate::timing::TimingMap::from_chart_timing_events(120.0, &chart.timing_events);
+    assert_eq!(map.bpm_at_time(TimeUs(2_000_001)), 0.5);
+    assert_eq!(map.tick_to_time(bmz_core::time::ChartTick(7_680)), chart.end_time);
+    assert_eq!(chart.end_time, TimeUs(482_000_000));
 }
 
 #[test]

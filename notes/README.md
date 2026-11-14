@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-14 | [BMSの負のBPMをLR2互換で処理](2026/2026-11-14-lr2-negative-bpm.md) |
 | 2026-11-14 | [simple-play-bmzの8鍵・9鍵のボム色](2026/2026-11-14-simple-play-bmz-bomb-colors.md) |
 | 2026-11-14 | [通知・FPS・バージョンをウィンドウの端に揃える（#100）](2026/2026-11-14-window-overlay-anchors.md) |
 | 2026-11-14 | [LR2縦スクロールの同時押し座標](2026/2026-11-14-lr2-vertical-note-scroll.md) |

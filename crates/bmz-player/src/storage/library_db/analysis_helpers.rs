@@ -273,6 +273,7 @@ pub(super) fn chart_speed_changes(chart: &PlayableChart) -> Vec<ChartSpeedChange
                     current = bpm;
                 }
             }
+            TimingEventKind::BpmReflection => {}
         }
     }
     // ループ終了後も STOP がペンディングなら resume エントリを出力する。

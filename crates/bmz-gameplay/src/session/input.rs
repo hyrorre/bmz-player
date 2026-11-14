@@ -184,6 +184,11 @@ pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
     judgements
 }
 
+pub(super) fn uses_ordered_inputs(session: &GameSession) -> bool {
+    super::conditional::uses_ordered_timeline(&session.chart)
+        || !session.timing_map.bpm_reflections().is_empty()
+}
+
 /// 採点を閉じた後の入力を、判定・リプレイ記録・ゲージへ渡さずに表示とキー音へ反映する。
 ///
 /// 自然確定後の入力は判定窓の外にあるため、通常の処理でも対象ノーツを持たない。
@@ -402,7 +407,7 @@ fn project_replay_input(session: &mut GameSession, mut input: InputEvent) -> Inp
         InputKind::Press => closest_pending_scratch_lane(
             &session.chart,
             &session.judge,
-            input.time,
+            session.timing_map.reflected_judge_time(input.time),
             &scratch_lane_mask,
         )
         .unwrap_or(fallback),
@@ -466,7 +471,8 @@ pub(super) fn process_hln_inputs(session: &mut GameSession, now: TimeUs) -> Vec<
         timestamp_anchor: session.input_timestamp_anchor,
     };
     let mut human = session.input_system.collect_game_inputs(&ctx);
-    if super::conditional::uses_ordered_timeline(&session.chart) {
+    let ordered_timeline = uses_ordered_inputs(session);
+    if ordered_timeline {
         human.append(&mut session.conditional.pending_inputs);
         let (ready, future): (Vec<_>, Vec<_>) =
             human.into_iter().partition(|input| input.time <= now);
@@ -519,10 +525,7 @@ pub(super) fn process_hln_inputs(session: &mut GameSession, now: TimeUs) -> Vec<
         if session.state == PlayState::Failed {
             break;
         }
-        if input.source == InputSource::Replay {
-            input = project_replay_input(session, input);
-        }
-        if super::conditional::uses_ordered_timeline(&session.chart) {
+        if ordered_timeline {
             let before = TimeUs(input.time.0.saturating_sub(1));
             events.extend(super::conditional::advance_time(session, before));
             if session.state == PlayState::Failed {
@@ -530,10 +533,13 @@ pub(super) fn process_hln_inputs(session: &mut GameSession, now: TimeUs) -> Vec<
             }
             super::frame::sync_judge_windows(session, input.time);
         }
+        if input.source == InputSource::Replay {
+            input = project_replay_input(session, input);
+        }
         update_recent_inputs(session, &[input], now);
         update_lane_key_states(session, &[input]);
         let judged = process_session_input(session, input);
-        if super::conditional::uses_ordered_timeline(&session.chart) {
+        if ordered_timeline {
             apply_hcn_gauge(session, input.time);
             update_hcn_lane_timers(session, input.time);
             if session.lane_hcn_timer.iter().any(Option::is_some) {
@@ -557,7 +563,12 @@ pub(super) fn process_session_input(
     input: InputEvent,
 ) -> Vec<JudgementEvent> {
     push_skin_runtime_event(session, SkinRuntimeEventKind::Input(input));
-    let mut outcome = session.judge.process_input(&session.chart, input);
+    let judge_time = if input.source == InputSource::Auto {
+        input.time
+    } else {
+        session.timing_map.reflected_judge_time(input.time)
+    };
+    let mut outcome = session.judge.process_input_at(&session.chart, input, judge_time);
     if input.kind == InputKind::Press {
         let hcn_passing = hold_note_passing_at(session, input.lane, input.time, LongNoteMode::Hcn);
         let hln_passing = hold_note_passing_at(session, input.lane, input.time, LongNoteMode::Hln);
@@ -582,7 +593,7 @@ pub(super) fn process_session_input(
                     && input.time >= zone.start_time
                     && input.time <= zone.end_time
             })
-            && let Some(note_id) = fallback_keysound_note_id(session, input.lane, input.time)
+            && let Some(note_id) = fallback_keysound_note_id(session, input.lane, judge_time)
         {
             outcome.keysounds.push(KeySoundEvent {
                 note_id,
@@ -672,8 +683,16 @@ pub fn process_mine_passes(session: &mut GameSession, audio_now: TimeUs) -> Vec<
         lane_keyon_started_at[idx] = Some(keyon_started_at);
     }
 
-    let outcome =
-        session.judge.process_mine_passes(&session.chart, audio_now, &lane_keyon_started_at);
+    let reflected_time = session
+        .timing_map
+        .bpm_reflection_at(audio_now)
+        .map(|point| bmz_chart::timing::reflect_time(audio_now, point.time));
+    let outcome = session.judge.process_mine_passes_at(
+        &session.chart,
+        audio_now,
+        reflected_time,
+        &lane_keyon_started_at,
+    );
     apply_judge_outcome(session, outcome)
 }
 
@@ -681,9 +700,18 @@ pub fn process_misses(session: &mut GameSession, audio_now: TimeUs) -> Vec<Judge
     session.judge.free_zone_autoplay = std::array::from_fn(|i| {
         session.autoplay.as_ref().is_some_and(|auto| auto.is_lane_enabled(Lane::ALL[i]))
     });
-    let outcome = session.judge.process_misses_with_keysounds(
+    let judge_time = session.timing_map.reflected_judge_time(audio_now);
+    let auto_lanes = session.autoplay.as_ref();
+    let outcome = session.judge.process_misses_at(
         &session.chart,
         audio_now,
+        |lane| {
+            if auto_lanes.is_some_and(|auto| auto.is_lane_enabled(lane)) {
+                audio_now
+            } else {
+                judge_time
+            }
+        },
         session.play_keysound_on_miss,
     );
     apply_judge_outcome(session, outcome)

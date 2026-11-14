@@ -45,8 +45,8 @@ pub(crate) fn library_path_key(path: &Path) -> String {
     path_helpers::path_key(path)
 }
 
-// v10 re-imports unchanged files using the Kaleid extension interpretation.
-pub const CHART_IMPORT_VERSION: i64 = 10;
+// v11 re-imports unchanged files using LR2 negative BPM timing.
+pub const CHART_IMPORT_VERSION: i64 = 11;
 // v4 excludes muted battle presentation lanes from chart analysis.
 pub const CHART_LOUDNESS_ANALYSIS_VERSION: i64 = 4;
 const MAX_ANALYSIS_DISTRIBUTION_SECONDS: usize = 10 * 60;

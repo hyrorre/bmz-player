@@ -197,6 +197,9 @@ pub enum IntermediateObjectKind {
     SetBpm {
         bpm: f64,
     },
+    SetNegativeBmsBpm {
+        magnitude: f64,
+    },
     SetExtendedBpm {
         bpm_key: u16,
     },

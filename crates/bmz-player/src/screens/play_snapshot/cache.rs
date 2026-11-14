@@ -209,7 +209,12 @@ impl ScrollIntegralCache {
         // whose primitive difference rounds to zero, instead of inverting an
         // origin + distance that rounded back to origin and culling them.
         let target = origin + distance + origin.abs() * (4.0 * f64::EPSILON);
-        if !target.is_finite() {
+        self.tick_at_position(target)
+    }
+
+    /// Inverse of the integrated scroll position on a strictly forward chart.
+    pub(super) fn tick_at_position(&self, target: f64) -> Option<f64> {
+        if !self.strictly_forward || !target.is_finite() {
             return None;
         }
         let tick = self

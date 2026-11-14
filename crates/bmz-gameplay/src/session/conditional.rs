@@ -486,6 +486,13 @@ pub(super) fn advance_time(session: &mut GameSession, at: TimeUs) -> Vec<Judgeme
         return Vec::new();
     }
     let mut points = Vec::new();
+    let reflections = session.timing_map.bpm_reflections();
+    let start = reflections.partition_point(|point| point.time <= previous);
+    for point in reflections[start..].iter().take_while(|point| point.time <= at) {
+        // Preserve due judgements on both sides even after a long wake.
+        points.push(TimeUs(point.time.0 - 1));
+        points.push(point.time);
+    }
     for pair in &session.chart.long_notes {
         if pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Hcn {
             points.extend([

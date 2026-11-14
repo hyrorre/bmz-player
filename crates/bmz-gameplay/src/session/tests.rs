@@ -349,6 +349,8 @@ fn judgement_event(judge: Judge, delta_us: i64) -> JudgementEvent {
 
 #[path = "tests/audio_scheduling.rs"]
 mod audio_scheduling;
+#[path = "tests/bpm_reflection.rs"]
+mod bpm_reflection;
 #[path = "tests/cases_01.rs"]
 mod cases_01;
 #[path = "tests/cases_02.rs"]

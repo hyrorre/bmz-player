@@ -60,11 +60,12 @@ pub fn advance_session_frame(
 
     if session.state == PlayState::Playing {
         sync_judge_windows(session, times.audio_now);
+        let ordered_timeline = super::input::uses_ordered_inputs(session);
 
         if session.scoring_closed_at.is_some() {
             // 採点確定後も、キー表示・キー音・skin入力イベントは従来どおり進める。
             present_inputs_after_scoring_closed(session, times.audio_now);
-        } else if super::conditional::uses_ordered_timeline(&session.chart) {
+        } else if ordered_timeline {
             while let Some(at) =
                 super::conditional::next_evaluation(session).filter(|at| *at <= times.audio_now)
             {
@@ -124,7 +125,7 @@ pub fn advance_session_frame(
             }
         }
         if session.scoring_closed_at.is_none()
-            && !super::conditional::uses_ordered_timeline(&session.chart)
+            && !ordered_timeline
             && (session.replay_player.is_none() || session.replay_lane_mask.is_some())
         {
             if session.state == PlayState::Playing {
@@ -164,8 +165,16 @@ pub fn advance_session_frame(
             session.scoring_closed_at = Some(times.audio_now);
             session.natural_result_settled_at = Some(times.audio_now);
         }
-        if session.state == PlayState::Playing && should_finish(session, times.audio_now) {
-            session.state = PlayState::Finished;
+        if session.state == PlayState::Playing && playback_deadline_passed(session, times.audio_now)
+        {
+            if session.judge.is_exhausted(&session.chart) {
+                session.state = PlayState::Finished;
+            } else if session.timing_map.bpm_reflection_at(times.audio_now).is_some() {
+                // The reflected clock can leave notes beyond reach for the rest of
+                // the song. LR2 ends playback with a failed result in this case.
+                session.gauge.set_initial_value(0.0);
+                session.state = PlayState::Failed;
+            }
         }
     }
     if session.scoring_closed_at.is_none()
@@ -505,6 +514,27 @@ fn uses_fixed_opponent_clock(opponent: &BattleOpponentSession) -> bool {
 }
 
 fn advance_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
+    let boundaries = {
+        let Some(opponent) = session.opponent.independent.as_ref() else { return };
+        let previous = opponent.conditional.processed_time.unwrap_or(TimeUs(-1));
+        let reflections = opponent.judge.bpm_reflections(&opponent.chart);
+        let start = reflections.partition_point(|point| point.time <= previous);
+        reflections[start..]
+            .iter()
+            .take_while(|point| point.time <= now)
+            .flat_map(|point| [TimeUs(point.time.0 - 1), point.time])
+            .filter(|&time| time > previous && time < now)
+            .collect::<Vec<_>>()
+    };
+    for time in boundaries {
+        score_battle_opponent_at(session, time);
+    }
+    score_battle_opponent_at(session, now);
+}
+
+fn score_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
+    use bmz_chart::timing::{bpm_reflection_at, reflect_time};
+
     let playback_rate_percent = session.audio_clock.playback_rate_percent();
     let Some(opponent) = &mut session.opponent.independent else {
         return;
@@ -550,15 +580,23 @@ fn advance_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
         Vec::new()
     };
     inputs.sort_by_key(|input| input.time);
+    let reflected_now = bpm_reflection_at(&opponent.judge.bpm_reflections(&opponent.chart), now)
+        .map(|point| reflect_time(now, point.time));
     let mut display_judgements = Vec::new();
     for input in inputs {
+        let judge_time = if input.source == InputSource::Auto {
+            input.time
+        } else {
+            bpm_reflection_at(&opponent.judge.bpm_reflections(&opponent.chart), input.time)
+                .map_or(input.time, |point| reflect_time(input.time, point.time))
+        };
         match input.kind {
             InputKind::Press => {
                 opponent.lane_keyon_started_at[input.lane.index()] = Some(input.time)
             }
             InputKind::Release => opponent.lane_keyon_started_at[input.lane.index()] = None,
         }
-        let outcome = opponent.judge.process_input(&opponent.chart, input);
+        let outcome = opponent.judge.process_input_at(&opponent.chart, input, judge_time);
         display_judgements.extend(apply_battle_opponent_outcome(opponent, outcome));
     }
     let mut mine_keyon = opponent.lane_keyon_started_at;
@@ -569,9 +607,22 @@ fn advance_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
             }
         }
     }
-    let mine_outcome = opponent.judge.process_mine_passes(&opponent.chart, now, &mine_keyon);
+    let mine_outcome =
+        opponent.judge.process_mine_passes_at(&opponent.chart, now, reflected_now, &mine_keyon);
     display_judgements.extend(apply_battle_opponent_outcome(opponent, mine_outcome));
-    let miss_outcome = opponent.judge.process_misses(&opponent.chart, now);
+    let autoplay = opponent.autoplay.as_ref();
+    let miss_outcome = opponent.judge.process_misses_at(
+        &opponent.chart,
+        now,
+        |lane| {
+            if autoplay.is_some_and(|auto| auto.is_lane_enabled(lane)) {
+                now
+            } else {
+                reflected_now.unwrap_or(now)
+            }
+        },
+        false,
+    );
     display_judgements.extend(apply_battle_opponent_outcome(opponent, miss_outcome));
     update_battle_opponent_hcn(opponent, now);
     update_battle_opponent_skin_timers(opponent, &display_judgements, now);
@@ -802,9 +853,12 @@ fn update_opponent_full_combo_timer(session: &mut GameSession, judgements: &[Jud
 }
 
 pub fn should_finish(session: &GameSession, audio_now: TimeUs) -> bool {
+    session.judge.is_exhausted(&session.chart) && playback_deadline_passed(session, audio_now)
+}
+
+fn playback_deadline_passed(session: &GameSession, audio_now: TimeUs) -> bool {
     let end_time = session.result_wait_end_time.unwrap_or(session.chart.end_time);
     super::conditional::next_evaluation(session).is_none()
-        && session.judge.is_exhausted(&session.chart)
         && session.bgm_scheduler.is_done(&session.chart)
         && audio_now.0 > end_time.0.saturating_add(SESSION_END_MARGIN_US)
 }
@@ -845,7 +899,7 @@ pub fn natural_result_settled(session: &GameSession, audio_now: TimeUs) -> bool 
         .0
         .saturating_add(session.judge.window_set.result_settle_margin_us());
     let primary_settled = if session.replay_player.is_some() && session.replay_lane_mask.is_none() {
-        let scored = if super::conditional::uses_ordered_timeline(&session.chart) {
+        let scored = if super::input::uses_ordered_inputs(session) {
             session.conditional.processed_time
         } else {
             session.replay_player.as_ref().and_then(ReplayPlayer::scored_until)
@@ -870,10 +924,16 @@ fn human_input_settle_margin_us(session: &GameSession) -> i64 {
 }
 
 fn battle_opponent_result_settled(opponent: &BattleOpponentSession, audio_now: TimeUs) -> bool {
-    if super::conditional::next_evaluation_for(&opponent.chart, &opponent.conditional).is_some()
-        || !opponent.judge.is_exhausted(&opponent.chart)
-    {
+    if super::conditional::next_evaluation_for(&opponent.chart, &opponent.conditional).is_some() {
         return false;
+    }
+    if !opponent.judge.is_exhausted(&opponent.chart) {
+        return audio_now.0 > opponent.chart.end_time.0.saturating_add(SESSION_END_MARGIN_US)
+            && bmz_chart::timing::bpm_reflection_at(
+                &opponent.judge.bpm_reflections(&opponent.chart),
+                audio_now,
+            )
+            .is_some();
     }
     let deadline = opponent
         .judge

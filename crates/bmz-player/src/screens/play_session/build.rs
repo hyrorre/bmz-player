@@ -881,7 +881,7 @@ pub(super) fn hsfix_base_bpm_for_chart(
             .iter()
             .filter_map(|event| match event.kind {
                 TimingEventKind::BpmChange { bpm } => Some(bpm),
-                TimingEventKind::Stop { .. } => None,
+                TimingEventKind::Stop { .. } | TimingEventKind::BpmReflection => None,
             })
             .fold(chart.metadata.initial_bpm, f64::min),
         HsFixOption::MaxBpm => chart
@@ -889,7 +889,7 @@ pub(super) fn hsfix_base_bpm_for_chart(
             .iter()
             .filter_map(|event| match event.kind {
                 TimingEventKind::BpmChange { bpm } => Some(bpm),
-                TimingEventKind::Stop { .. } => None,
+                TimingEventKind::Stop { .. } | TimingEventKind::BpmReflection => None,
             })
             .fold(chart.metadata.initial_bpm, f64::max),
         HsFixOption::MainBpm => main_bpm_for_chart(chart, timing_map, constant_enabled),

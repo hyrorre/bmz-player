@@ -236,6 +236,18 @@ ref 1918は`0=NORMAL`, `1=CLASSIC`, `2=FLOATING`,
 E1/E2操作に連動する共通HSパネルには、押下中option `1928`、共通press / hold timer
 `19008`、共通release timer `19009`を使えます。詳細は`docs/skin.md`を参照してください。
 
+## BMSの負のBPM
+
+BMS系譜面でチャンネル08が負の `#BPMxx` を参照すると、LR2互換で絶対値を
+テンポとして使います。たとえば `-83` は83 BPMでノーツ・BGM・STOPの時刻を
+計算し、BPM表示にも83を使います。
+プレイ中は負のBPMが発生した位置を基準に、ノーツ・LN・小節線の描画位置を
+折り返します。正のBPMへ変わっても折り返しは続き、次の負のBPMで基準位置を
+更新します。手動判定も同じイベントを境界として時刻を折り返します。
+
+BMZの開始余白はノーツと負のBPMイベントの両方に適用します。再生時刻が厳密に
+0のイベントはテンポを変更し、折り返しは発動しません。
+
 ## 実装入口
 
 - Configと段階表: `crates/bmz-player/src/config/profile_config/`, `config/play.rs`

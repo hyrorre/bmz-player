@@ -147,6 +147,11 @@ fn import_stage_timing() {
             )
         );
         let base62 = timed!("detect #BASE 62", bms_uses_base62_obj_ids(&bms));
+        let signed_bpm_changes =
+            timed!("signed BPM", signed_bpm::resolve(&bms, &source, base62, &mut warnings));
+        if signed_bpm_changes.is_some() {
+            bms.bpm.bpm_changes.clear();
+        }
         let mut extra_objects = timed!(
             "BGA objects",
             bga_messages_to_intermediate_objects(&source.bga_messages, base62, &mut warnings)
@@ -164,6 +169,7 @@ fn import_stage_timing() {
                 &bms,
                 ChartKeyLayout::beat(),
                 &extra_objects,
+                signed_bpm_changes.as_deref().unwrap_or_default(),
                 &mut warnings,
             )
             .unwrap()

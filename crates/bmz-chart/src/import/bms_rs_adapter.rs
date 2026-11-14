@@ -70,6 +70,7 @@ mod metadata;
 mod objects;
 mod prepare;
 mod random;
+mod signed_bpm;
 mod sparse;
 mod text;
 mod timing;
@@ -423,6 +424,10 @@ fn parse_prepared_with_layout<T: KeyLayoutMapper>(
     let base62_obj_ids = bms_uses_base62_obj_ids(&bms);
     let mut extra_objects =
         bga_messages_to_intermediate_objects(&source.bga_messages, base62_obj_ids, warnings);
+    let signed_bpm_changes = signed_bpm::resolve(&bms, &source, base62_obj_ids, warnings);
+    if signed_bpm_changes.is_some() {
+        bms.bpm.bpm_changes.clear();
+    }
     // bms-rs stores BGA changes in a single map keyed only by time, so simultaneous
     // Base/Poor/Layer changes overwrite each other. Use the source-derived events instead.
     bms.bmp.bga_changes.clear();
@@ -437,6 +442,7 @@ fn parse_prepared_with_layout<T: KeyLayoutMapper>(
         &bms,
         layout,
         &extra_objects,
+        signed_bpm_changes.as_deref().unwrap_or_default(),
         warnings,
     )?;
     restore_default_poor_bga(&mut intermediate, bms.bmp.poor_bmp.as_deref());
@@ -463,13 +469,14 @@ pub(crate) fn build_intermediate_from_bms<T: KeyLayoutMapper>(
     layout: ChartKeyLayout,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
-    build_intermediate_from_bms_with_extra_objects::<T>(bms, layout, &[], warnings)
+    build_intermediate_from_bms_with_extra_objects::<T>(bms, layout, &[], &[], warnings)
 }
 
 fn build_intermediate_from_bms_with_extra_objects<T: KeyLayoutMapper>(
     bms: &Bms,
     layout: ChartKeyLayout,
     extra_objects: &[IntermediateObject],
+    signed_bpm_changes: &[IntermediateObject],
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
     let metadata = build_metadata(bms);
@@ -481,6 +488,7 @@ fn build_intermediate_from_bms_with_extra_objects<T: KeyLayoutMapper>(
     push_bga_objects(bms, &mut objects);
     objects.extend_from_slice(extra_objects);
     push_bpm_change_objects(bms, &mut objects);
+    objects.extend_from_slice(signed_bpm_changes);
     push_stop_objects(bms, &mut objects, &mut resources);
     push_scroll_objects(bms, &mut objects);
     push_speed_objects(bms, &mut objects);

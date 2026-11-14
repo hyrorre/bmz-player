@@ -30,6 +30,12 @@ impl GameplayRuntime {
             }
         };
         consider(0);
+        let reflections = session.timing_map.bpm_reflections();
+        if let Some(point) =
+            reflections.get(reflections.partition_point(|point| point.time.0 <= now))
+        {
+            consider(point.time.0);
+        }
         if let Some(time) = crate::session::conditional::next_evaluation(session) {
             consider(time.0);
         }

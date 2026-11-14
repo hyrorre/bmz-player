@@ -106,6 +106,7 @@ pub(super) fn materialize_tick_objects(
                 Some(TickObjectKind::Bga { bmp_key, kind: bga_event_kind(kind) })
             }
             IntermediateObjectKind::SetBpm { .. }
+            | IntermediateObjectKind::SetNegativeBmsBpm { .. }
             | IntermediateObjectKind::SetExtendedBpm { .. }
             | IntermediateObjectKind::Stop { .. }
             | IntermediateObjectKind::BmsonStop { .. }

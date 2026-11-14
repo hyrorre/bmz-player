@@ -45,6 +45,12 @@ pub(crate) fn collect_timing_events(
             IntermediateObjectKind::SetBpm { bpm } => {
                 events.push(TickTimingEvent { tick, kind: TickTimingEventKind::SetBpm(bpm) });
             }
+            IntermediateObjectKind::SetNegativeBmsBpm { magnitude } => {
+                events.push(TickTimingEvent {
+                    tick,
+                    kind: TickTimingEventKind::SetNegativeBmsBpm(magnitude),
+                });
+            }
             IntermediateObjectKind::SetExtendedBpm { bpm_key } => {
                 if let Some(def) =
                     intermediate.resources.bpm_table.iter().find(|def| def.key == bpm_key)

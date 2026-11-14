@@ -208,6 +208,20 @@ pub struct JudgeOutcome {
     pub consumed_input: bool,
 }
 
+impl JudgeOutcome {
+    pub(crate) fn stamp_judgement_time(&mut self, time: TimeUs) {
+        for event in &mut self.events {
+            event.time = time;
+        }
+        for hit in &mut self.mine_hits {
+            hit.time = time;
+        }
+        for sound in &mut self.keysounds {
+            sound.time = time;
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HoldGaugeEvent {
     pub lane: Lane,

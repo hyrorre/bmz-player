@@ -19,6 +19,7 @@ pub(super) struct ScrollContext<'a> {
     /// SCROLL イベント (tick 昇順)。`(tick, factor)`。
     /// 区間ごとに factor を掛けて scroll 位置を畳む。空なら factor 1.0 固定。
     pub(super) scroll_integral: &'a ScrollIntegralCache,
+    pub(super) reflection_tick: Option<f64>,
     /// 現在時刻の SPEED 値。beatoraja の LaneRenderer と同じく、ノーツ位置ではなく
     /// 描画時刻で求めた値をレーン全体へ一律に掛ける。
     pub(super) speed: f64,
@@ -27,6 +28,10 @@ pub(super) struct ScrollContext<'a> {
 impl<'a> ScrollContext<'a> {
     pub(super) fn cursor_tick(&self, render_now: TimeUs) -> f64 {
         self.timing_map.time_to_tick_f64(render_now)
+    }
+
+    pub(super) fn visibility_start(&self, render_now: TimeUs) -> TimeUs {
+        if self.reflection_tick.is_some() { TimeUs(0) } else { render_now }
     }
 
     pub(super) fn simple_tick_upper_bound(&self, cursor_tick: f64) -> Option<f64> {
@@ -43,7 +48,21 @@ impl<'a> ScrollContext<'a> {
         // conservative margin so a note rounded onto the upper edge survives.
         let distance = self.lookahead_ticks * visible / (hispeed * self.speed)
             * (1.0 + 4.0 * f64::from(f32::EPSILON));
-        self.scroll_integral.tick_after_distance(cursor_tick, distance)
+        if self.reflection_tick.is_none() {
+            self.scroll_integral.tick_after_distance(cursor_tick, distance)
+        } else {
+            let origin = self.cursor_scroll_position(cursor_tick);
+            let target = origin + distance + origin.abs() * (4.0 * f64::EPSILON);
+            self.scroll_integral.tick_at_position(target)
+        }
+    }
+
+    fn cursor_scroll_position(&self, cursor_tick: f64) -> f64 {
+        let position = self.scroll_integral.primitive(cursor_tick);
+        self.reflection_tick.map_or(position, |tick| {
+            let anchor = self.scroll_integral.primitive(tick);
+            anchor - (position - anchor)
+        })
     }
 
     /// ノートの正規化進捗（0.0=判定ライン, 1.0=画面上端）。判定ラインより手前 (delta<0)
@@ -74,7 +93,11 @@ impl<'a> ScrollContext<'a> {
     /// 返す。factor が負だと delta も負になり、note_y は `None` に倒れる
     /// (= 逆スクロール時は画面外として描画対象外)。SPEED は `progress_from_delta` で一律に掛ける。
     pub(super) fn scroll_delta(&self, from_tick: f64, to_tick: f64) -> f64 {
-        self.scroll_integral.delta(from_tick, to_tick)
+        if self.reflection_tick.is_some() {
+            self.scroll_integral.primitive(to_tick) - self.cursor_scroll_position(from_tick)
+        } else {
+            self.scroll_integral.delta(from_tick, to_tick)
+        }
     }
 }
 
