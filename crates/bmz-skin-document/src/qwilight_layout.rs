@@ -122,11 +122,17 @@ impl QwilightLayout {
     }
 }
 
+enum VerticalAnchor {
+    Top,
+    Center,
+    Bottom,
+}
+
 fn adjust(
     offset: QwilightOffsetValue,
     bounds: [f64; 4],
     area: [f64; 4],
-    keep_top: bool,
+    anchor: VerticalAnchor,
 ) -> [f64; 4] {
     let [bx, by, bw, bh] = bounds;
     let [x, y, w, h] = area;
@@ -134,7 +140,11 @@ fn adjust(
     let height = (bh + f64::from(offset.h)).max(1.0);
     let sx = if bw > 0.0 { width / bw } else { 1.0 };
     let sy = if bh > 0.0 { height / bh } else { 1.0 };
-    let dy = if keep_top { 0.0 } else { -f64::from(offset.y) - (height - bh) / 2.0 };
+    let dy = match anchor {
+        VerticalAnchor::Top => 0.0,
+        VerticalAnchor::Center => -f64::from(offset.y) - (height - bh) / 2.0,
+        VerticalAnchor::Bottom => -f64::from(offset.y) - (height - bh),
+    };
     [
         bx + f64::from(offset.x) - (width - bw) / 2.0 + (x - bx) * sx,
         by + dy + (y - by) * sy,
@@ -173,11 +183,16 @@ impl SkinDocument {
             let value = offset(recipe.id);
             let mut area = recipe.area;
             if value != QwilightOffsetValue::default() {
-                area = adjust(value, recipe.bounds, area, recipe.id == 1131);
+                let anchor = match recipe.id {
+                    1108 => VerticalAnchor::Bottom, // Key beam
+                    1131 => VerticalAnchor::Top,    // Judgment line
+                    _ => VerticalAnchor::Center,
+                };
+                area = adjust(value, recipe.bounds, area, anchor);
             }
             let own = recipe.own.map(offset).unwrap_or_default();
             if own != QwilightOffsetValue::default() {
-                area = adjust(own, area, area, false);
+                area = adjust(own, area, area, VerticalAnchor::Center);
             }
             let [x, y, w, h] = area;
             frame.x = Some(x.round() as i32);

@@ -208,7 +208,7 @@ Luaの再実行・画像の読み直し・スキン画像のGPUへの再転送�
 | Timing / Judgment graph / Spectrum / BGA | 各ビジュアライザーとBGAを独立 |
 | Progress | 進行バーとつまみ・移動範囲を一組 |
 | Bomb / Lane timing | ボム・レーン別FAST/SLOWを種類ごと、各レーン共通の補正 |
-| Key beam | `Main` のキービーム画像（描画枠3）に各レーン共通の補正 |
+| Key beam | `Main` のキービーム画像（描画枠3）に各レーン共通の補正。高さは画像の下端を基準に変え、yで上下に移動 |
 | Judgment line | 判定線の見た目。yは追加せずLIFTを使う |
 
 - xは右、yは上への移動量、w/hは表示領域の幅・高さへの加算量です。単位はスキン座標のpxです。

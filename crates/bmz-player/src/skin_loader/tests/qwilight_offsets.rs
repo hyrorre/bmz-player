@@ -408,7 +408,11 @@ fn qwilight_element_offsets_bind_requested_controls_and_preserve_exclusions() {
     let beam_before = frame(destination(&base, "qw-lane-3-0"), 0);
     let beam_after = frame(destination(&moved, "qw-lane-3-0"), 0);
     assert_eq!(beam_after.x.unwrap() - beam_before.x.unwrap(), 10);
-    assert_eq!(beam_after.y.unwrap() - beam_before.y.unwrap(), 15);
+    assert_eq!(
+        beam_after.y.unwrap() - beam_before.y.unwrap(),
+        20,
+        "the beam's bottom moves by y alone regardless of the height change"
+    );
     assert_eq!(beam_after.w.unwrap() - beam_before.w.unwrap(), 40);
     assert_eq!(beam_after.h.unwrap() - beam_before.h.unwrap(), 10);
     assert_eq!(beam_after.a, Some(191));
