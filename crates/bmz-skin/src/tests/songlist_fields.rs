@@ -2,6 +2,29 @@ use super::*;
 use bmz_skin_document::{SongListField, SongListFieldRender};
 
 #[test]
+fn songlist_lua_definition_errors_include_the_field_and_entry() {
+    let root = unique_test_dir("songlist-score-errors");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("select.luaskin");
+    for (songlist, location, detail) in [
+        (r#"exscore={mode="digit"}"#, "songlist.exscore:", "unknown variant `digit`"),
+        (
+            r#"rivaldiff={{mode="text"},{mode="digits"}}"#,
+            "songlist.rivaldiff[1]:",
+            "missing field `digits`",
+        ),
+        (r#"scoreOrder={"exscore","typo"}"#, "songlist.scoreOrder[1]:", "unknown variant `typo`"),
+    ] {
+        fs::write(&path, format!("return {{type=5,songlist={{{songlist}}}}}")).unwrap();
+        let error = load_lua_skin(&path, SkinKind::Select, &BTreeMap::new(), &BTreeMap::new())
+            .expect_err("invalid songlist must reject the skin");
+        let message = format!("{error:#}");
+        assert!(message.contains(location), "{message}");
+        assert!(message.contains(detail), "{message}");
+    }
+}
+
+#[test]
 fn songlist_fields_load_in_json_and_lua_without_global_value_refs() {
     let root = unique_test_dir("songlist-score-fields");
     fs::create_dir_all(&root).unwrap();

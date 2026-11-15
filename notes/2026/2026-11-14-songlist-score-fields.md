@@ -54,3 +54,20 @@ TTF/OTFとビットマップの描画設定はアイテムで検証し、実フ�
 `storage::scan::link_tests::overlapping_external_links_read_every_folder_once`は外部リンク先の
 祖先内の譜面が不足し、`storage::scan::tests::scan_song_roots_skips_unreadable_subdirectory_and_keeps_accessible_files`
 は読み取り不可ディレクトリのスキップ件数が異なる。PRにも明記する。
+
+## 2026-11-15 レビュー対応
+
+- 追加フィールドのobject/arrayを明示的に読み、modeの誤記や必須素材の欠落に
+  `songlist.rivaldiff[1]` 等の場所と元の原因を付ける。scoreOrderの未知の名前も同様。
+  診断中の配列indexはJSON/Lua共通で0始まり。JSONの全13フィールドとLua loaderで検証する。
+- serde_jsonの`preserve_order`はworkspace全体に適用され、`Map::remove`はswap_remove相当で
+  残ったキーの順序を変える。songlist等の宣言順に依存するMapから削除するときは`shift_remove`を使う。
+  Lua変換器は挿入前にソート済みで、現行destinationのop削除はsonglistの順序に影響しない。
+- 通常のインポートは履歴とbest_score_history_idを保存するので、EX/BP/CB/コンボがすべて0でも
+  数値記録として扱う。参照がNULLでも同じScoreKeyの履歴があれば表示対象。
+  参照・対応履歴がなく数値がすべて0の旧データはランプのみの記録と識別できないため非表示。
+  保存仕様を変えず、beatoraja集計、LR2、出所付きダウンロードの経路を回帰テストで確認する。
+
+レビュー差分の検証はfmt、workspace check、workspace all-targets Clippyが成功。
+関連3crateは描画1060件、スキン433件、スキーマ40件が成功し、
+`cargo test -p bmz-player --locked imported_zero_bests`も3つの保存経路で成功した。

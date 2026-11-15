@@ -421,12 +421,6 @@ impl<'de> Deserialize<'de> for SkinSongListDef {
                     #[serde(deserialize_with = "deserialize_destination_entries")]
                     Vec<DestinationListEntry>,
                 );
-                #[derive(Deserialize)]
-                #[serde(untagged)]
-                enum OneOrMany {
-                    One(Box<SkinSongListFieldDef>),
-                    Many(Vec<SkinSongListFieldDef>),
-                }
                 let mut list = SkinSongListDef::default();
                 let mut explicit_order: Option<Vec<SongListField>> = None;
                 while let Some(key) = map.next_key::<String>()? {
@@ -449,97 +443,75 @@ impl<'de> Deserialize<'de> for SkinSongListDef {
                         "trophy" => list.trophy = map.next_value::<Entries>()?.0,
                         "graph" => list.graph = map.next_value::<Entries>()?.0,
                         "label" => list.label = map.next_value::<Entries>()?.0,
-                        "scoreOrder" => explicit_order = Some(map.next_value()?),
+                        "scoreOrder" => {
+                            explicit_order = Some(deserialize_songlist_score_order::<M::Error>(
+                                map.next_value()?,
+                            )?);
+                        }
                         "scorerank" => {
                             list.score_order.push(SongListField::Scorerank);
-                            list.scorerank = match map.next_value()? {
-                                OneOrMany::One(entry) => vec![*entry],
-                                OneOrMany::Many(entries) => entries,
-                            };
+                            list.scorerank =
+                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
                         }
                         "exscore" => {
                             list.score_order.push(SongListField::Exscore);
-                            list.exscore = match map.next_value()? {
-                                OneOrMany::One(entry) => vec![*entry],
-                                OneOrMany::Many(entries) => entries,
-                            };
+                            list.exscore =
+                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
                         }
                         "scorerate" => {
                             list.score_order.push(SongListField::Scorerate);
-                            list.scorerate = match map.next_value()? {
-                                OneOrMany::One(entry) => vec![*entry],
-                                OneOrMany::Many(entries) => entries,
-                            };
+                            list.scorerate =
+                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
                         }
                         "minbp" => {
                             list.score_order.push(SongListField::Minbp);
-                            list.minbp = match map.next_value()? {
-                                OneOrMany::One(entry) => vec![*entry],
-                                OneOrMany::Many(entries) => entries,
-                            };
+                            list.minbp =
+                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
                         }
                         "mincb" => {
                             list.score_order.push(SongListField::Mincb);
-                            list.mincb = match map.next_value()? {
-                                OneOrMany::One(entry) => vec![*entry],
-                                OneOrMany::Many(entries) => entries,
-                            };
+                            list.mincb =
+                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
                         }
                         "maxcombo" => {
                             list.score_order.push(SongListField::Maxcombo);
-                            list.maxcombo = match map.next_value()? {
-                                OneOrMany::One(entry) => vec![*entry],
-                                OneOrMany::Many(entries) => entries,
-                            };
+                            list.maxcombo =
+                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
                         }
                         "nextrank" => {
                             list.score_order.push(SongListField::Nextrank);
-                            list.nextrank = match map.next_value()? {
-                                OneOrMany::One(entry) => vec![*entry],
-                                OneOrMany::Many(entries) => entries,
-                            };
+                            list.nextrank =
+                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
                         }
                         "nextrankdiff" => {
                             list.score_order.push(SongListField::Nextrankdiff);
-                            list.nextrankdiff = match map.next_value()? {
-                                OneOrMany::One(entry) => vec![*entry],
-                                OneOrMany::Many(entries) => entries,
-                            };
+                            list.nextrankdiff =
+                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
                         }
                         "nearestrank" => {
                             list.score_order.push(SongListField::Nearestrank);
-                            list.nearestrank = match map.next_value()? {
-                                OneOrMany::One(entry) => vec![*entry],
-                                OneOrMany::Many(entries) => entries,
-                            };
+                            list.nearestrank =
+                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
                         }
                         "nearestrankdiff" => {
                             list.score_order.push(SongListField::Nearestrankdiff);
-                            list.nearestrankdiff = match map.next_value()? {
-                                OneOrMany::One(entry) => vec![*entry],
-                                OneOrMany::Many(entries) => entries,
-                            };
+                            list.nearestrankdiff =
+                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
                         }
                         "rivalscorerank" => {
                             list.score_order.push(SongListField::Rivalscorerank);
-                            list.rivalscorerank = match map.next_value()? {
-                                OneOrMany::One(entry) => vec![*entry],
-                                OneOrMany::Many(entries) => entries,
-                            };
+                            list.rivalscorerank =
+                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
                         }
                         "rivaldiff" => {
                             list.score_order.push(SongListField::Rivaldiff);
-                            list.rivaldiff = match map.next_value()? {
-                                OneOrMany::One(entry) => vec![*entry],
-                                OneOrMany::Many(entries) => entries,
-                            };
+                            list.rivaldiff =
+                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
                         }
                         "favorite" => {
                             list.score_order.push(SongListField::Favorite);
-                            list.favorite = match map.next_value()? {
-                                OneOrMany::One(entry) => vec![*entry],
-                                OneOrMany::Many(entries) => entries,
-                            };
+                            list.favorite =
+                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
                         }
                         _ => {
                             map.next_value::<serde::de::IgnoredAny>()?;
@@ -560,6 +532,44 @@ impl<'de> Deserialize<'de> for SkinSongListDef {
         }
         deserializer.deserialize_map(SongListVisitor)
     }
+}
+
+fn deserialize_songlist_entry<T: serde::de::DeserializeOwned, E: serde::de::Error>(
+    value: JsonValue,
+    path: &str,
+) -> Result<T, E> {
+    serde_json::from_value(value).map_err(|error| E::custom(format!("{path}: {error}")))
+}
+
+fn deserialize_songlist_fields<E: serde::de::Error>(
+    value: JsonValue,
+    field: &str,
+) -> Result<Vec<SkinSongListFieldDef>, E> {
+    let path = format!("songlist.{field}");
+    match value {
+        JsonValue::Object(_) => deserialize_songlist_entry(value, &path).map(|entry| vec![entry]),
+        JsonValue::Array(entries) => entries
+            .into_iter()
+            .enumerate()
+            .map(|(index, entry)| deserialize_songlist_entry(entry, &format!("{path}[{index}]")))
+            .collect(),
+        _ => Err(E::custom(format!("{path}: expected an object or array"))),
+    }
+}
+
+fn deserialize_songlist_score_order<E: serde::de::Error>(
+    value: JsonValue,
+) -> Result<Vec<SongListField>, E> {
+    let JsonValue::Array(entries) = value else {
+        return Err(E::custom("songlist.scoreOrder: expected an array"));
+    };
+    entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            deserialize_songlist_entry(entry, &format!("songlist.scoreOrder[{index}]"))
+        })
+        .collect()
 }
 
 /// Inline materials use the same definitions as root text/value objects.

@@ -2260,6 +2260,9 @@ JSONはフィールドの宣言順を保持します。Luaのテーブルキー�
 JSONでも同じ配列を指定でき、省略したフィールドはその後に続きます。重複指定は1回にまとめます。
 LuaでscoreOrderを省略した場合は既存変換器のキー順（辞書順）です。
 
+定義エラーには `songlist.rivaldiff[1]` や `songlist.scoreOrder[1]` のように、
+フィールド名と配列位置を含めます。診断の配列位置はJSON/Luaとも0始まりです。
+
 `mode`は必須です。`dst`, `op`, `draw`, `timer`, `loop`, `offset(s)`, `filter`,
 `blend`, `stretch`, clip等は通常のdestinationと同じ意味です。
 座標はそのバー原点からの相対座標で、選択・非選択バーともスクロールに追従します。
