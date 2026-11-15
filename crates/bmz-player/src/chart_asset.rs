@@ -127,7 +127,7 @@ fn resolve_archive_asset(
 }
 
 /// Mirror resolve_chart_asset_path/resolve_preview_file over the archive index.
-fn archive_asset_entry(
+pub(crate) fn archive_asset_entry(
     index: &crate::song_archive::ArchiveIndex,
     folder: &str,
     relative: &str,

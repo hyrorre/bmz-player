@@ -1,6 +1,7 @@
 use super::*;
 
 mod number_cells;
+mod songlist_banner;
 mod songlist_fields;
 mod songlist_parts;
 pub(in crate::skin) use songlist_parts::SongListBarParts;

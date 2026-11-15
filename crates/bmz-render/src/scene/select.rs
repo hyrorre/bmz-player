@@ -383,6 +383,14 @@ impl Default for SelectSnapshot {
     }
 }
 
+/// A shared thumbnail texture; no paths, file I/O, or CPU pixels reach rendering.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectRowBannerSnapshot {
+    pub texture: crate::skin::SkinTextureId,
+    pub size: SkinImageSize,
+    pub lease: Arc<()>,
+}
+
 /// One chart row's download progress bar.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SelectRowDownloadProgress {
@@ -395,6 +403,9 @@ pub struct SelectRowDownloadProgress {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectRowSnapshot {
+    /// Prepared per-row banner. The lease keeps its GPU resource alive with the
+    /// renderer's retained scene and draw plan, including loading transitions.
+    pub banner: Option<SelectRowBannerSnapshot>,
     pub index: u32,
     pub chart_md5: Option<[u8; 16]>,
     pub chart_sha256: Option<[u8; 32]>,
@@ -522,6 +533,7 @@ impl SelectRowSnapshot {
 impl Default for SelectRowSnapshot {
     fn default() -> Self {
         Self {
+            banner: None,
             chart_md5: None,
             chart_sha256: None,
             index: 0,

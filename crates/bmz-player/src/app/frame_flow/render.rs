@@ -38,6 +38,7 @@ impl WinitApp {
             self.sync_select_preview_audio();
             self.update_select_preview_fade();
         }
+        self.sync_select_row_banners(select_view && !self.viewer_waiting);
         self.start_scene_timers_before_snapshot(select_view, result_view);
         let snapshot_start = Instant::now();
         let mut scene = self.scene_snapshot();
@@ -65,6 +66,7 @@ impl WinitApp {
         self.submit_manual_screenshot(&scene);
         let plan_start = Instant::now();
         self.renderer.prepare_scene(scene);
+        self.collect_select_row_banner_textures();
         if play_view && let Some(play) = &mut self.play.active_play {
             crate::video_bga::update_video_bga_sample_sizes(
                 &self.renderer,

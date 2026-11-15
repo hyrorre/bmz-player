@@ -141,6 +141,18 @@ macro_rules! skin_document_render_select_songlist_methods {
                         ));
                     }
                 }
+                items.extend(
+                    songlist_banner::render(
+                        self,
+                        songlist,
+                        row,
+                        row_origin,
+                        enabled_options,
+                        &row_state,
+                    )
+                    .into_iter()
+                    .map(tag("banner", usize::MAX, &row_state)),
+                );
                 if selected {
                     items.extend(
                         self.select_songlist_child_items_by_index(

@@ -6,7 +6,7 @@ struct CachedIndex {
     path: PathBuf,
     stamp: ArchiveStamp,
     limits: ArchiveLimits,
-    index: ArchiveIndex,
+    index: Arc<ArchiveIndex>,
 }
 
 static INDEX: OnceLock<Mutex<VecDeque<CachedIndex>>> = OnceLock::new();
@@ -16,6 +16,14 @@ pub(super) fn cached_index(
     stamp: &ArchiveStamp,
     limits: &ArchiveLimits,
 ) -> Option<ArchiveIndex> {
+    cached_shared_index(path, stamp, limits).map(|index| (*index).clone())
+}
+
+pub(super) fn cached_shared_index(
+    path: &Path,
+    stamp: &ArchiveStamp,
+    limits: &ArchiveLimits,
+) -> Option<Arc<ArchiveIndex>> {
     INDEX
         .get_or_init(Mutex::default)
         .lock()
@@ -33,7 +41,7 @@ pub(super) fn remember_index(
 ) {
     let mut indexes = INDEX.get_or_init(Mutex::default).lock().unwrap();
     indexes.retain(|cached| cached.path != path);
-    indexes.push_back(CachedIndex { path, stamp, limits, index });
+    indexes.push_back(CachedIndex { path, stamp, limits, index: Arc::new(index) });
     while indexes.len() > 32
         || indexes.iter().map(|cached| cached.index.entries.len()).sum::<usize>() > 100_000
     {

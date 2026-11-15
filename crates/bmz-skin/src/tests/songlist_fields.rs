@@ -2,6 +2,44 @@ use super::*;
 use bmz_skin_document::{SongListField, SongListFieldRender};
 
 #[test]
+fn songlist_banner_single_and_array_destinations_match_in_json_and_lua() {
+    let root = unique_test_dir("songlist-banners");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("select.luaskin");
+    for (json, lua, count) in [
+        (
+            r#"{"dst":[{"x":3,"y":5,"w":200,"h":50}],"filter":1}"#,
+            "{dst={{x=3,y=5,w=200,h=50}},filter=1}",
+            1,
+        ),
+        (
+            r#"[{"dst":[{"w":100,"h":25}]},{"dst":[{"w":200,"h":50}]}]"#,
+            "{{dst={{w=100,h=25}}},{dst={{w=200,h=50}}}}",
+            2,
+        ),
+        ("[]", "{}", 0),
+    ] {
+        let json: SkinDocument =
+            serde_json::from_str(&format!("{{\"type\":5,\"songlist\":{{\"banner\":{json}}}}}"))
+                .unwrap();
+        fs::write(&path, format!("return {{type=5,songlist={{banner={lua}}}}}")).unwrap();
+        let lua =
+            load_lua_skin(&path, SkinKind::Select, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        assert_eq!(json.songlist.as_ref().unwrap().banner.len(), count);
+        assert_eq!(
+            json.songlist.as_ref().unwrap().banner,
+            lua.document.songlist.as_ref().unwrap().banner
+        );
+        assert!(lua.document.source.is_empty());
+        assert!(lua.document.image.is_empty());
+    }
+    fs::write(&path, "return {type=5,songlist={banner={{filter='invalid'}}}}").unwrap();
+    let error =
+        load_lua_skin(&path, SkinKind::Select, &BTreeMap::new(), &BTreeMap::new()).unwrap_err();
+    assert!(format!("{error:#}").contains("songlist.banner[0]"));
+}
+
+#[test]
 fn songlist_lua_definition_errors_include_the_field_and_entry() {
     let root = unique_test_dir("songlist-score-errors");
     fs::create_dir_all(&root).unwrap();
