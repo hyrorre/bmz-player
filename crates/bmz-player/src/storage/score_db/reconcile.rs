@@ -330,6 +330,7 @@ pub(super) fn rebuild_score_aggregates(conn: &Connection) -> Result<()> {
             ex_score = score_value("ex_score"),
             bp = aggregate(
                 "MIN(CASE WHEN h.source_min_bp IS NULL THEN h.bp
+                WHEN h.source_kind = 'Lr2' THEN h.source_min_bp
                 ELSE MIN(h.bp, h.source_min_bp) END)"
             ),
             cb = aggregate("MIN(h.cb)"),

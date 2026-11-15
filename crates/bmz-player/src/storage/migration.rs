@@ -245,7 +245,7 @@ mod tests {
         ] {
             let mut conn = Connection::open_in_memory().unwrap();
             run_migrations(&mut conn, &migrations[..before]).unwrap();
-            let kaleid = migrations.last().unwrap();
+            let kaleid = migrations.iter().find(|m| m.version == new_version).unwrap();
             run_migrations(
                 &mut conn,
                 &[Migration { version: old_version, statements: kaleid.statements }],
@@ -260,7 +260,7 @@ mod tests {
             assert!(column_exists(&conn, table, column).unwrap());
             assert_eq!(
                 conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0)).unwrap(),
-                new_version
+                migrations.last().unwrap().version
             );
             if old_version == 37 {
                 assert_eq!(

@@ -719,6 +719,11 @@ pub(super) fn ensure_beatoraja_aggregate_source(record: &ScoreRecord) -> Result<
 /// must continue using the BP computed from this record's judgement counts.
 pub(super) fn score_record_best_bp(record: &ScoreRecord) -> u32 {
     let bp = score_record_bp(record);
+    // LR2 merges Empty Poor into Poor, so its processed-note count is only an
+    // upper bound. Do not let that optimistic estimate undercut known minbp.
+    if record.source_kind == ScoreSourceKind::Lr2 {
+        return record.source_min_bp.unwrap_or(bp);
+    }
     score_record_source_min_bp(record).map_or(bp, |source| source.min(bp))
 }
 
