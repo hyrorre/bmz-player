@@ -70,46 +70,17 @@ impl WinitApp {
     }
 
     pub(super) fn sync_active_play_realtime_profile_settings(&mut self) {
-        if let Some(active_play) = &mut self.play.active_play {
-            active_play
-                .running
-                .gameplay
-                .set_hispeed_transition_ms(self.boot.profile_config.lane.hispeed_transition_ms);
-            let profile = self.boot.profile_config.clone();
-            active_play.running.gameplay.edit(move |session| {
-                let key_mode = session.play_config_key_mode;
-                let chart_normalization_gain = session.audio_mix.chart_normalization_gain;
-                session.audio_mix = crate::config::play::audio_mix_from_profile_with_chart_gain(
-                    &profile,
-                    chart_normalization_gain,
-                );
-                session.offsets =
-                    crate::config::play::play_offsets_from_profile_for_mode(&profile, key_mode);
-                session.input_offset_auto_adjust_enabled = profile.judge.visual_offset_auto_adjust;
-                session.guide_se_enabled = profile.play.guide_se;
-                let auto_adjust_available = session.replay_player.is_none()
-                    && !session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full());
-                if session.input_offset_auto_adjust_enabled && auto_adjust_available {
-                    session.input_offset_auto_adjust.get_or_insert_with(Default::default);
-                } else {
-                    session.input_offset_auto_adjust = None;
-                }
-            });
-            // READY前はworkerがsnapshotを作らないため、判定タイミング表示をここで更新する。
-            update_pre_ready_play_snapshot_options_for_runtime(
-                &mut self.play.last_play_snapshot,
-                &active_play.running.gameplay,
-                &active_play.running.applied_arrange,
-            );
-        } else if let Some(pending) = &self.play.pending_play_start
-            && let Some(snapshot) = &mut self.play.last_play_snapshot
-        {
-            apply_profile_judge_timing_to_snapshot(
-                snapshot,
-                &self.boot.profile_config,
-                pending.play_config_key_mode,
-            );
-        }
+        let pending_key_mode =
+            self.play.pending_play_start.as_ref().map(|pending| pending.play_config_key_mode);
+        sync_play_realtime_profile_settings(
+            self.play
+                .active_play
+                .as_mut()
+                .map(|active| (&mut active.running.gameplay, &active.running.applied_arrange)),
+            pending_key_mode,
+            &mut self.play.last_play_snapshot,
+            &self.boot.profile_config,
+        );
     }
 
     pub(super) fn sync_profile_visual_offset_from_active_play(&mut self) {

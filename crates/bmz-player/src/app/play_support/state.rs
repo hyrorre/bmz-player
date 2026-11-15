@@ -485,6 +485,50 @@ pub(in crate::app) fn update_pre_ready_play_snapshot_options_for_session(
     apply_play_arrange_to_snapshot(snapshot, applied_arrange);
 }
 
+/// profileのリアルタイム反映項目をプレイ中sessionと、READY前の表示snapshotへ反映する。
+///
+/// READY前はgameplay workerがsnapshotを作らないため、判定タイミング表示も
+/// ここで更新する。LOAD中 (session install前) はprofileの値を表示する。
+pub(in crate::app) fn sync_play_realtime_profile_settings(
+    active_play: Option<(&mut crate::gameplay_runtime::GameplayClient, &AppliedArrange)>,
+    pending_play_config_key_mode: Option<KeyMode>,
+    last_play_snapshot: &mut Option<RenderSnapshot>,
+    profile: &ProfileConfig,
+) {
+    if let Some((gameplay, applied_arrange)) = active_play {
+        gameplay.set_hispeed_transition_ms(profile.lane.hispeed_transition_ms);
+        let profile = profile.clone();
+        gameplay.edit(move |session| {
+            let key_mode = session.play_config_key_mode;
+            let chart_normalization_gain = session.audio_mix.chart_normalization_gain;
+            session.audio_mix = crate::config::play::audio_mix_from_profile_with_chart_gain(
+                &profile,
+                chart_normalization_gain,
+            );
+            session.offsets =
+                crate::config::play::play_offsets_from_profile_for_mode(&profile, key_mode);
+            session.input_offset_auto_adjust_enabled = profile.judge.visual_offset_auto_adjust;
+            session.guide_se_enabled = profile.play.guide_se;
+            let auto_adjust_available = session.replay_player.is_none()
+                && !session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full());
+            if session.input_offset_auto_adjust_enabled && auto_adjust_available {
+                session.input_offset_auto_adjust.get_or_insert_with(Default::default);
+            } else {
+                session.input_offset_auto_adjust = None;
+            }
+        });
+        update_pre_ready_play_snapshot_options_for_runtime(
+            last_play_snapshot,
+            gameplay,
+            applied_arrange,
+        );
+    } else if let Some(key_mode) = pending_play_config_key_mode
+        && let Some(snapshot) = last_play_snapshot
+    {
+        apply_profile_judge_timing_to_snapshot(snapshot, profile, key_mode);
+    }
+}
+
 /// LOAD中はsessionがまだ無いため、install時に使われるprofileの値を表示する。
 pub(in crate::app) fn apply_profile_judge_timing_to_snapshot(
     snapshot: &mut RenderSnapshot,
