@@ -255,7 +255,11 @@ impl RowBannerRuntime {
             {
                 state.loading = true;
                 self.active += 1;
-                return Some(Job::Resolve { epoch: self.epoch, source });
+                return Some(Job::Resolve {
+                    epoch: self.epoch,
+                    previous: state.revision.clone(),
+                    source,
+                });
             }
         }
         None
@@ -334,7 +338,7 @@ impl RowBannerRuntime {
                 let error = anyhow::anyhow!("row banner worker unavailable");
                 self.complete(
                     match job {
-                        Job::Resolve { epoch, source } => {
+                        Job::Resolve { epoch, source, .. } => {
                             Completion::Resolved { epoch, source, result: Err(error) }
                         }
                         Job::Decode { epoch, key } => {
@@ -356,6 +360,29 @@ impl RowBannerRuntime {
         });
     }
 
+    fn upload_candidate(
+        &self,
+        source: &Arc<Source>,
+        now: Instant,
+    ) -> Option<(&Arc<ImageKey>, &CpuImage)> {
+        if !self.visible.contains(source) {
+            return None;
+        }
+        let key = self.sources.get(source)?.revision.as_ref()?;
+        if self.gpu.contains_key(key)
+            || self.upload_failed.get(key).is_some_and(|failed| now.duration_since(*failed) < RETRY)
+        {
+            return None;
+        }
+        Some((key, self.cpu.get(key)?))
+    }
+
+    /// Borrowed eligibility check before acquiring the shared GPU cache lock.
+    /// Keep it identical to the uploader, including visibility and retry delay.
+    pub fn has_pending_upload(&self, now: Instant) -> bool {
+        self.wanted.iter().any(|source| self.upload_candidate(source, now).is_some())
+    }
+
     /// Uploads are prioritized and capped at two thumbnails / 2 MiB per frame.
     /// Retired but still leased textures remain charged to the GPU budget.
     pub fn upload_ready(
@@ -369,26 +396,10 @@ impl RowBannerRuntime {
             if uploads >= 2 {
                 break;
             }
-            if !self.visible.contains(&self.wanted[index]) {
-                continue;
-            }
-            let Some(key) = self.sources.get(&self.wanted[index]).and_then(|s| s.revision.clone())
-            else {
+            let Some((key, cpu)) = self.upload_candidate(&self.wanted[index], now) else {
                 continue;
             };
-            if self.gpu.contains_key(&key) {
-                continue;
-            }
-            if self
-                .upload_failed
-                .get(&key)
-                .is_some_and(|failed| now.duration_since(*failed) < RETRY)
-            {
-                continue;
-            }
-            let Some(cpu) = self.cpu.get(&key) else {
-                continue;
-            };
+            let key = key.clone();
             let image = cpu.image.clone();
             let bytes = image.pixels.len();
             if uploaded_bytes + bytes > 2 * MAX_THUMB_BYTES {

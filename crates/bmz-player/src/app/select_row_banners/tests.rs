@@ -79,7 +79,7 @@ fn bounded_jobs_negative_retry_refresh_and_obsolete_generations() {
     let mut runtime = RowBannerRuntime::default();
     let demands = ["a", "b", "c"].map(|file| (SourceRef { folder: "song", file }, true));
     runtime.reconcile(demands.into_iter());
-    let Some(Job::Resolve { epoch, source }) = runtime.next_job(now) else { panic!() };
+    let Some(Job::Resolve { epoch, source, .. }) = runtime.next_job(now) else { panic!() };
     let Some(Job::Resolve { source: other, .. }) = runtime.next_job(now) else { panic!() };
     assert!(runtime.next_job(now).is_none());
     runtime.complete(Completion::Resolved { epoch, source: source.clone(), result: Ok(None) }, now);
@@ -96,7 +96,7 @@ fn bounded_jobs_negative_retry_refresh_and_obsolete_generations() {
 
     let mut runtime = RowBannerRuntime::default();
     runtime.reconcile(demands[..1].iter().copied());
-    let Some(Job::Resolve { epoch, source }) = runtime.next_job(now) else { panic!() };
+    let Some(Job::Resolve { epoch, source, .. }) = runtime.next_job(now) else { panic!() };
     runtime.complete(Completion::Resolved { epoch, source, result: Ok(None) }, now);
     assert!(runtime.next_job(now + RETRY - Duration::from_millis(1)).is_none());
     assert!(runtime.next_job(now + RETRY).is_some());
@@ -108,7 +108,9 @@ fn bounded_jobs_negative_retry_refresh_and_obsolete_generations() {
     });
     seed(&mut runtime, 0, key(3));
     assert!(runtime.next_job(now + REFRESH - Duration::from_millis(1)).is_none());
-    assert!(matches!(runtime.next_job(now + REFRESH), Some(Job::Resolve { .. })));
+    assert!(
+        matches!(runtime.next_job(now + REFRESH), Some(Job::Resolve { previous: Some(previous), .. }) if previous == key(3))
+    );
 }
 
 #[test]
@@ -181,6 +183,38 @@ fn failed_uploads_back_off_and_each_frame_uploads_at_most_two() {
 }
 
 #[test]
+fn pending_upload_gate_matches_visibility_cpu_readiness_and_retry_delay() {
+    let now = Instant::now();
+    let mut runtime = RowBannerRuntime::default();
+    let source = SourceRef { folder: "song", file: "banner.png" };
+    assert!(!runtime.has_pending_upload(now));
+    runtime.reconcile([(source, true)].into_iter());
+    assert!(!runtime.has_pending_upload(now));
+    runtime.sources.get_mut(&runtime.wanted[0]).unwrap().revision = Some(key(1));
+    assert!(!runtime.has_pending_upload(now), "CPU image is not ready");
+    seed(&mut runtime, 0, key(1));
+    assert!(runtime.has_pending_upload(now));
+    runtime.reconcile([(source, false)].into_iter());
+    assert!(!runtime.has_pending_upload(now), "prefetch must not acquire the GPU cache");
+    runtime.upload_ready(now, |_| panic!("prefetch must not upload"));
+    runtime.reconcile([(source, true)].into_iter());
+    assert!(runtime.has_pending_upload(now));
+    runtime.upload_ready(now, |_| None);
+    let before_retry = now + RETRY - Duration::from_millis(1);
+    assert!(
+        !runtime.has_pending_upload(before_retry),
+        "failed uploads must back off without the GPU lock"
+    );
+    runtime.upload_ready(before_retry, |_| panic!("retry too early"));
+    assert!(runtime.has_pending_upload(now + RETRY));
+    runtime.upload_ready(now + RETRY, |_| Some(view(1)));
+    assert!(!runtime.has_pending_upload(now + RETRY), "already uploaded");
+    runtime.upload_ready(now + RETRY, |_| panic!("must not upload twice"));
+    runtime.deactivate();
+    assert!(!runtime.has_pending_upload(now + RETRY));
+}
+
+#[test]
 fn snapshot_leases_pin_retired_textures_and_keep_them_in_the_budget() {
     let now = Instant::now();
     let mut runtime = RowBannerRuntime { gpu_limit: 4, ..Default::default() };
@@ -249,12 +283,12 @@ fn native_workers_share_extension_fallback_and_reject_changed_files() {
     let folder = temp.path().to_str().unwrap();
     let a = Source { folder: folder.into(), file: "Banner.bmp".into() };
     let b = Source { folder: folder.into(), file: "Banner.PNG".into() };
-    let resolved = worker::resolve(&a).unwrap().unwrap();
-    assert_eq!(resolved, worker::resolve(&b).unwrap().unwrap());
+    let resolved = worker::resolve(&a, None).unwrap().unwrap();
+    assert_eq!(resolved, worker::resolve(&b, None).unwrap().unwrap());
     assert_eq!(worker::decode(&resolved).unwrap().pixels[..4], [7, 8, 9, 255]);
     std::fs::write(&path, b"changed").unwrap();
     assert!(worker::decode(&resolved).is_err());
-    assert_ne!(resolved, worker::resolve(&b).unwrap().unwrap());
+    assert_ne!(resolved, worker::resolve(&b, Some(&resolved)).unwrap().unwrap());
 }
 
 #[test]
@@ -289,9 +323,62 @@ fn archive_banner_reads_only_its_entry_and_invalidates_container_replacements() 
     zip.write_all(&bytes).unwrap();
     zip.finish().unwrap();
     let source = Source { folder: format!("{}!/song", path.display()), file: "banner.bmp".into() };
-    let key = worker::resolve(&source).unwrap().unwrap();
+    let key = worker::resolve(&source, None).unwrap().unwrap();
     assert_eq!(worker::decode(&key).unwrap().pixels[..4], [5, 6, 7, 255]);
     assert!(!temp.path().join("song").exists(), "no disk extraction");
     std::fs::write(path, b"replacement").unwrap();
     assert!(worker::decode(&key).is_err());
+}
+
+#[test]
+fn archive_refresh_skips_the_index_until_container_metadata_changes() {
+    use std::io::Write;
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("songs.zip");
+    let write_archive = |bytes: &[u8]| {
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        zip.start_file("song/banner.png", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(bytes).unwrap();
+        zip.finish().unwrap();
+    };
+    write_archive(b"first revision");
+    let source = Source { folder: format!("{}!/song", path.display()), file: "banner.bmp".into() };
+    let first = worker::resolve(&source, None).unwrap().unwrap();
+    let unchanged = worker::resolve_with_inspector(&source, Some(&first), |_, _| {
+        panic!("unchanged archives must not consult the index, even if it has been evicted");
+    })
+    .unwrap()
+    .unwrap();
+    assert!(Arc::ptr_eq(&first, &unchanged));
+
+    write_archive(b"a different, longer revision");
+    let inspected = std::cell::Cell::new(false);
+    let changed = worker::resolve_with_inspector(&source, Some(&first), |path, control| {
+        inspected.set(true);
+        crate::song_archive::inspect_shared(path, control)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(inspected.get(), "changed containers must resolve their entry again");
+    assert_ne!(first, changed);
+    std::fs::remove_file(&path).unwrap();
+    assert!(
+        worker::resolve(&source, Some(&changed)).is_err(),
+        "missing containers cannot reuse a key"
+    );
+}
+
+#[test]
+fn native_refresh_still_checks_extension_precedence_with_a_previous_key() {
+    let temp = tempfile::tempdir().unwrap();
+    let image = image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]));
+    image.save(temp.path().join("banner.png")).unwrap();
+    let source = Source { folder: temp.path().to_str().unwrap().into(), file: "banner.bmp".into() };
+    let fallback = worker::resolve(&source, None).unwrap().unwrap();
+    image.save(temp.path().join("banner.bmp")).unwrap();
+    let preferred = worker::resolve(&source, Some(&fallback)).unwrap().unwrap();
+    assert_ne!(
+        fallback, preferred,
+        "unchanged native fallback must not hide a newly available exact path"
+    );
 }

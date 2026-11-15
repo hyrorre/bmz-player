@@ -1,6 +1,32 @@
 use super::select_row_banners::SourceRef;
 use super::*;
 
+const BANNER_PREFETCH_ROWS: usize = 2;
+
+fn row_banner_indices(
+    item_len: usize,
+    selected: usize,
+    center: usize,
+) -> impl Iterator<Item = (usize, bool)> + Clone {
+    let selected_visible =
+        select_visible_indices_iter(item_len, center, SELECT_VISIBLE_ROWS).any(|i| i == selected);
+    std::iter::once((selected, selected_visible)).chain(
+        select_visible_indices_iter(
+            item_len,
+            center,
+            SELECT_VISIBLE_ROWS + BANNER_PREFETCH_ROWS * 2,
+        )
+        .enumerate()
+        .map(|(position, index)| {
+            (
+                index,
+                (BANNER_PREFETCH_ROWS..BANNER_PREFETCH_ROWS + SELECT_VISIBLE_ROWS)
+                    .contains(&position),
+            )
+        }),
+    )
+}
+
 impl WinitApp {
     pub(super) fn sync_select_row_banners(&mut self, enabled: bool) {
         let enabled = enabled
@@ -21,13 +47,7 @@ impl WinitApp {
             select_scroll_center_index(selected, count, self.select_bar_scroll_remaining());
         // Match the physically displayed window during long scroll animations.
         // Warm two neighbours on either side without uploading them yet.
-        let selected_visible =
-            select_visible_indices_iter(count, center, 25).any(|i| i == selected);
-        let indices = std::iter::once((selected, selected_visible)).chain(
-            select_visible_indices_iter(count, center, 29)
-                .enumerate()
-                .map(|(position, index)| (index, (2..27).contains(&position))),
-        );
+        let indices = row_banner_indices(count, selected, center);
         let items = &self.select.select_items;
         let sources = indices.filter_map(|(index, visible)| {
             let SelectItem::Chart(row) = items.get(index)? else {
@@ -44,6 +64,9 @@ impl WinitApp {
         let now = Instant::now();
         rows.tick(now);
         self.collect_select_row_banner_textures();
+        if !self.select.select_assets.row_banners.has_pending_upload(now) {
+            return;
+        }
         let Ok(mut cache) = self.skin.skin_pipeline.gpu_texture_cache.lock() else {
             return;
         };
@@ -99,6 +122,40 @@ impl WinitApp {
                 .select_assets
                 .row_banners
                 .image(SourceRef { folder: &chart.folder_path, file: &chart.banner_file });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn row_banner_window_matches_snapshot_rows_while_scrolling_and_wrapping() {
+        for count in [1, 7, 31, 100] {
+            for selected in [0, count / 2, count - 1] {
+                for remaining in [0.0, 0.4, 16.4, -16.4] {
+                    let center = select_scroll_center_index(selected, count, remaining);
+                    let snapshot_rows =
+                        select_visible_item_indices(count, center, SELECT_VISIBLE_ROWS);
+                    let indices: Vec<_> = row_banner_indices(count, selected, center).collect();
+                    assert_eq!(indices[0], (selected, snapshot_rows.contains(&selected)));
+                    let displayed: Vec<_> = indices[1..]
+                        .iter()
+                        .filter_map(|&(index, visible)| visible.then_some(index))
+                        .collect();
+                    assert_eq!(displayed, snapshot_rows);
+                    let warmed: Vec<_> = indices[1..].iter().map(|&(index, _)| index).collect();
+                    assert_eq!(
+                        warmed,
+                        select_visible_item_indices(
+                            count,
+                            center,
+                            SELECT_VISIBLE_ROWS + BANNER_PREFETCH_ROWS * 2
+                        )
+                    );
+                }
+            }
         }
     }
 }

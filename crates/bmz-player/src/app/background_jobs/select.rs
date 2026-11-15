@@ -213,7 +213,7 @@ impl WinitApp {
         let visible_indices = select_visible_item_indices(
             self.select.select_items.len(),
             self.select.selected_index,
-            25,
+            SELECT_VISIBLE_ROWS,
         );
         let ln_policy = self.boot.profile_config.play.ln_mode_policy;
         let rule_mode = self.boot.profile_config.play.rule_mode;

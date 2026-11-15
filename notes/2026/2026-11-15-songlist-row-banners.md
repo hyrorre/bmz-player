@@ -72,3 +72,31 @@ Rmz-skin、mz-select、Luxez-Flatのsubmodule素材あり。ADFX02等の未導�
 合成テストの上限確認とは区別する。進行中の書庫読み取り2件の即時中断は実装していない。
 
 生ログは実行環境の `/tmp/bmz-banner-{check,clippy,workspace-tests}.log` に置き、Gitには含めない。
+
+## 2026-11-15 PR #107レビューへの対応
+
+- 解決済みの画像キーを参照元の再確認ジョブへ渡し、同じcanonical書庫と同じ更新stampなら
+  entryを再解決せず同じArcを返す。共有indexが追い出されても毎秒の全列挙を発生させない。
+  stampが変わった場合は通常どおりindexから解決し直し、書庫の消失も検出する。
+  通常ファイルでは拡張子代替の優先順を再確認し、正しい拡張子の素材が追加された場合も切り替える。
+  なお、コメントにあった単一書庫の10万entry超は既存の上限で拒否されるが、
+  共有indexの合計entry数や32書庫上限による追い出しの指摘は有効である。
+- `SELECT_VISIBLE_ROWS` を共通化し、Snapshot、試聴用解析、フォルダ集計、バナーの窓が同じ値を使う。
+  バナーの先読み行数を基に窓幅と表示対象範囲を導出し、`29` / `2..27` の直書きを除いた。
+- GPU upload候補の判定を実アップロードと共通化し、候補がないフレームのアップロード用ロックを省略する。
+  未解決・CPU未準備・先読み・登録済み・再試行待ちを除外し、GPU予算や既存leaseの扱いは維持する。
+
+書庫のindex非参照と変更・消失検出、通常ファイルの拡張子優先順、GPU upload候補の各状態、
+Snapshotとバナーのスクロール・折り返し窓の一致を確認する4テストを追加した。
+既存の再確認ジョブのテストも、前回のキーが渡されることを検証するよう拡張した。
+
+- `cargo test -p bmz-player --locked row_banner`：16 passed。
+- `cargo fmt --all --check`、`cargo check -p bmz-player --locked`、
+  `cargo clippy -p bmz-player --all-targets --locked -- -D warnings`：成功。
+- ローカル通信を許可し、`LANG=ja_JP.UTF-8 LC_ALL=ja_JP.UTF-8 cargo test -p bmz-player --locked --no-fail-fast`
+  を実行：3270 passed / 2 failed / 67 ignored。失敗は上記と同じ変更対象外のscan系2件のみ。
+  main / integration / doc-testターゲットに失敗なし。
+
+レビュー対応はbmz-player内部だけの変更で、他crateの共有APIは変更していない。
+実GPUでの目視確認と実ライブラリのFPS計測は引き続き未実施。
+ログは `/tmp/bmz-banner-review-{focused,checks,tests}.log` に保存し、Gitには含めない。

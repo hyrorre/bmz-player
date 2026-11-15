@@ -1,6 +1,9 @@
 use super::*;
 use crate::screens::select_model::{SelectCourseRow, SelectFolderSummary};
 
+/// Shared physical row window for snapshots, chart analysis, and row assets.
+pub(in crate::app) const SELECT_VISIBLE_ROWS: usize = 25;
+
 #[derive(Default)]
 pub(in crate::app) struct CachedSelectChartDistribution {
     pub notes: Vec<ChartDistributionSecond>,

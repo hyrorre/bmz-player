@@ -27,7 +27,7 @@ impl ImageKey {
 
 #[derive(Debug)]
 pub(super) enum Job {
-    Resolve { epoch: u64, source: Arc<Source> },
+    Resolve { epoch: u64, source: Arc<Source>, previous: Option<Arc<ImageKey>> },
     Decode { epoch: u64, key: Arc<ImageKey> },
 }
 
@@ -58,8 +58,8 @@ impl Pool {
                             break;
                         };
                         let completion = match job {
-                            Job::Resolve { epoch, source } => {
-                                let result = resolve(&source);
+                            Job::Resolve { epoch, source, previous } => {
+                                let result = resolve(&source, previous.as_ref());
                                 Completion::Resolved { epoch, source, result }
                             }
                             Job::Decode { epoch, key } => {
@@ -78,13 +78,33 @@ impl Pool {
     }
 }
 
-pub(super) fn resolve(source: &Source) -> Result<Option<Arc<ImageKey>>> {
+pub(super) fn resolve(
+    source: &Source,
+    previous: Option<&Arc<ImageKey>>,
+) -> Result<Option<Arc<ImageKey>>> {
+    resolve_with_inspector(source, previous, song_archive::inspect_shared)
+}
+
+pub(super) fn resolve_with_inspector(
+    source: &Source,
+    previous: Option<&Arc<ImageKey>>,
+    inspect: impl FnOnce(&Path, &ArchiveControl) -> Result<Arc<song_archive::ArchiveIndex>>,
+) -> Result<Option<Arc<ImageKey>>> {
     let locator = ChartLocator::parse(Path::new(&source.folder))?.canonicalize()?;
     let key = match locator {
         ChartLocator::Archive { container, entry: folder } => {
             let control = ArchiveControl::default();
             let stamp = song_archive::metadata_stamp(&container)?;
-            let index = song_archive::inspect_shared(&container, &control)?;
+            // A known entry remains valid while this container's revision is
+            // unchanged, even if another loader has evicted its shared index.
+            if let Some(previous) = previous
+                && let ImageKey::Archive { path, stamp: old_stamp, .. } = previous.as_ref()
+                && path == &container
+                && old_stamp == &stamp
+            {
+                return Ok(Some(previous.clone()));
+            }
+            let index = inspect(&container, &control)?;
             let Some(entry) =
                 crate::chart_asset::archive_asset_entry(&index, &folder, &source.file, false)?
             else {

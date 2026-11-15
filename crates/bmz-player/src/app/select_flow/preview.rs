@@ -89,7 +89,7 @@ impl WinitApp {
             &self.boot.app_paths.library_db,
         );
         if self.selected_chart_needs_generated_preview_distribution() {
-            self.ensure_visible_select_chart_distributions(25);
+            self.ensure_visible_select_chart_distributions(SELECT_VISIBLE_ROWS);
         }
         let selected_cache_key = self.selected_select_preview_cache_key();
         let cache_key = select_preview_key_after_delay(

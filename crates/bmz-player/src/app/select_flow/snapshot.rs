@@ -103,7 +103,7 @@ impl WinitApp {
             }
         };
         let (search_word, search_word_alpha, search_caret_byte_index) = self.display_search_word();
-        self.ensure_visible_select_chart_distributions(25);
+        self.ensure_visible_select_chart_distributions(SELECT_VISIBLE_ROWS);
         let chart_distributions = self.select.select_distribution_cache.borrow();
         let mode_config = self
             .selected_play_config_key_mode()
@@ -239,14 +239,14 @@ impl WinitApp {
             crate::app::select_ir_battle::select_ir_battle_snapshot_rows(
                 &battle_choices,
                 self.select.ir_battle.cursor,
-                25,
+                SELECT_VISIBLE_ROWS,
                 battle_source_row.as_ref(),
             )
         } else {
             select_snapshot_rows_with_rival(
                 &self.select.select_items,
                 self.select.selected_index,
-                25,
+                SELECT_VISIBLE_ROWS,
                 &self.boot.profile_config,
                 &self.boot.app_config,
                 in_difficulty_table_level,
@@ -283,14 +283,14 @@ impl WinitApp {
             Some(crate::app::select_ir_battle::select_ir_battle_snapshot_rows(
                 &battle_choices,
                 scroll_center,
-                25,
+                SELECT_VISIBLE_ROWS,
                 battle_source_row.as_ref(),
             ))
         } else {
             let mut displayed_rows = select_snapshot_rows_with_rival(
                 &self.select.select_items,
                 scroll_center,
-                25,
+                SELECT_VISIBLE_ROWS,
                 &self.boot.profile_config,
                 &self.boot.app_config,
                 in_difficulty_table_level,
