@@ -485,6 +485,20 @@ pub(in crate::app) fn update_pre_ready_play_snapshot_options_for_session(
     apply_play_arrange_to_snapshot(snapshot, applied_arrange);
 }
 
+/// LOAD中はsessionがまだ無いため、install時に使われるprofileの値を表示する。
+pub(in crate::app) fn apply_profile_judge_timing_to_snapshot(
+    snapshot: &mut RenderSnapshot,
+    profile: &ProfileConfig,
+    play_config_key_mode: KeyMode,
+) {
+    let visual_offset_us =
+        crate::config::play::play_offsets_from_profile_for_mode(profile, play_config_key_mode)
+            .visual_offset_us;
+    snapshot.judge_timing_offset_ms =
+        (visual_offset_us / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+    snapshot.judge_timing_auto_adjust = profile.judge.visual_offset_auto_adjust;
+}
+
 pub(in crate::app) fn update_play_exit_hold_started_at(
     started_at: &mut Option<Instant>,
     e1_held: bool,

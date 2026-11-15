@@ -95,6 +95,20 @@ impl WinitApp {
                     session.input_offset_auto_adjust = None;
                 }
             });
+            // READY前はworkerがsnapshotを作らないため、判定タイミング表示をここで更新する。
+            update_pre_ready_play_snapshot_options_for_runtime(
+                &mut self.play.last_play_snapshot,
+                &active_play.running.gameplay,
+                &active_play.running.applied_arrange,
+            );
+        } else if let Some(pending) = &self.play.pending_play_start
+            && let Some(snapshot) = &mut self.play.last_play_snapshot
+        {
+            apply_profile_judge_timing_to_snapshot(
+                snapshot,
+                &self.boot.profile_config,
+                pending.play_config_key_mode,
+            );
         }
     }
 
