@@ -1,4 +1,6 @@
 use super::*;
+#[path = "tests/songlist_fields.rs"]
+mod songlist_fields;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 

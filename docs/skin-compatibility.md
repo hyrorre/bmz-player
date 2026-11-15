@@ -10,6 +10,14 @@ BMZ固有のIDや詳細な動作契約は[skin.md](skin.md)、互換修正の方
 
 ## 対応済みの主な範囲
 
+Selectの各曲バーに13個の専用スコア・状態フィールドを追加できます（BMZ拡張）。
+JSON / Lua、ランク・お気に入り画像、通常フォント（TTF/OTFとビットマップ、fallback）、
+符号・小数点・%を持つ数字画像に対応します。値は各行のSnapshotを使用し、未記録と0を区別します。
+既存songlist部品の順序と動作は維持します。Luaの追加フィールド間の順序はscoreOrderで指定できます。
+beatoraja自体には未追加です。[仕様と例](skin.md#bmz-songlist-score-fields)、
+[描画アイテム回帰テスト](../crates/bmz-render/src/skin/document_render/songlist_fields/tests.rs)、
+[Lua読み込みテスト](../crates/bmz-skin/src/tests/songlist_fields.rs)を参照してください。
+
 Playの`imageset.ref = 500..509`は1Pの皿・1〜9鍵の判定を参照します。
 2枚構成ではPGREAT時に2枚目、それ以外は1枚目を使います。
 `simple-play-bmz`の8K・9Kで使う8鍵・9鍵のボム切替は[回帰テスト](../crates/bmz-render/src/skin/tests/play/cases_06.rs)で確認します。

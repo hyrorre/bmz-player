@@ -335,6 +335,7 @@ fn select_course_row(resolved_count: usize, entry_count: usize) -> SelectCourseR
 
 fn best_score_with_replay(ex_score: u32, replay_path: &str) -> BestScoreSummary {
     BestScoreSummary {
+        numeric_score_available: true,
         play_options: None,
         chart_sha256: [0; 32],
         ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,

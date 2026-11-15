@@ -336,6 +336,7 @@ fn select_chart_snapshot(
         clear_type: score.map(|score| score.clear_type.clone()).unwrap_or_default(),
         rival_clear_index,
         ex_score: score.map(|score| score.ex_score),
+        numeric_score_available: score.is_some_and(|score| score.numeric_score_available),
         max_combo: score.map(|score| score.max_combo),
         gauge_value: score.and_then(|score| score.gauge_value),
         bp: score.map(|score| score.bp),

@@ -432,6 +432,9 @@ pub struct SelectRowSnapshot {
     /// Recently added chart: use LR2 BAR_TITLE 1.
     pub lr2_new_title: bool,
     pub ex_score: Option<u32>,
+    /// False for a clear-only record whose numeric columns are neutral zeroes.
+    /// Kept separate so legacy selected-song refs retain their behavior.
+    pub numeric_score_available: bool,
     pub max_combo: Option<u32>,
     pub gauge_value: Option<f32>,
     pub bp: Option<u32>,
@@ -546,6 +549,7 @@ impl Default for SelectRowSnapshot {
             rival_ex_score: None,
             lr2_new_title: false,
             ex_score: None,
+            numeric_score_available: true,
             max_combo: None,
             gauge_value: None,
             bp: None,

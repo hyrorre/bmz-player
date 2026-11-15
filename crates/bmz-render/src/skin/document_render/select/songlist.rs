@@ -356,6 +356,21 @@ macro_rules! skin_document_render_select_songlist_methods {
                     .into_iter()
                     .map(tag("text", usize::from(row.lr2_new_title), &row_state)),
                 );
+                items.extend(
+                    songlist_fields::render_fields(
+                        self,
+                        songlist,
+                        row,
+                        row_origin,
+                        snapshot.rival_selected,
+                        sources,
+                        images,
+                        enabled_options,
+                        &row_state,
+                    )
+                    .into_iter()
+                    .map(tag("score", usize::MAX, &row_state)),
+                );
             }
             items
         }

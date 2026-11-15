@@ -452,6 +452,8 @@ impl ScoreRecordMetadata {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BestScoreSummary {
+    /// Clear-only rows have neutral numeric zeroes, not recorded numeric bests.
+    pub numeric_score_available: bool,
     pub play_options: Option<bmz_render::snapshot::SkinBestScoreOptions>,
     pub chart_sha256: [u8; 32],
     pub ln_policy: LnScorePolicy,

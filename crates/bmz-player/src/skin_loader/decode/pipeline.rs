@@ -208,6 +208,15 @@ pub(crate) fn decode_beatoraja_skin_request_cancellable(
             text.font = format!("{}:{}", font_namespace, text.font);
         }
     }
+    if let Some(songlist) = &mut document.songlist {
+        for field in songlist.all_score_fields_mut() {
+            if let bmz_render::skin::SongListFieldRender::Text { text, .. } = &mut field.render
+                && !text.font.is_empty()
+            {
+                text.font = format!("{}:{}", font_namespace, text.font);
+            }
+        }
+    }
     let skin_root = skin_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
     tracing::debug!(?kind, "skin decode character preparation begin");
     prepare_pm_chara(&mut document, &path_context, &resolved_files);

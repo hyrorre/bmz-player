@@ -40,6 +40,7 @@
 | 日付 | 記録 |
 |---|---|
 | 2026-11-15 | [EXTRA NOTEを16段階の追加量に変更](2026/2026-11-15-extra-note-depth.md) |
+| 2026-11-14 | [選曲バーのスコア・状態フィールド](2026/2026-11-14-songlist-score-fields.md) |
 | 2026-11-14 | [ADD LNで生成したLNの表示欠落（#103）](2026/2026-11-14-add-ln-visibility.md) |
 | 2026-11-14 | [Kaleid・負のBPM・Result IRのレビュー対応](2026/2026-11-14-kaleid-playback-review-fixes.md) |
 | 2026-11-14 | [旧ライブラリでBMS-IRの選曲ランキングを取得](2026/2026-11-14-select-bms-ir-legacy-library.md) |

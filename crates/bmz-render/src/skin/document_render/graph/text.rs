@@ -18,6 +18,17 @@ macro_rules! skin_document_render_graph_text_methods {
             state: &SkinTextState<'_>,
         ) -> Option<SkinRenderItem> {
             let content = skin_state_text_with_draw_state(text, draw_state, state);
+            self.text_content_render_item(text, frame, draw_state, state, content)
+        }
+
+        fn text_content_render_item(
+            &self,
+            text: &SkinTextDef,
+            frame: ResolvedSkinFrame,
+            draw_state: Option<&SkinDrawState>,
+            state: &SkinTextState<'_>,
+            content: String,
+        ) -> Option<SkinRenderItem> {
             let rect = normalize_skin_frame_rect(frame, self.w, self.h);
             if text.lr2_system_font.is_some() && (frame.w == 0 || frame.h == 0) {
                 return None;

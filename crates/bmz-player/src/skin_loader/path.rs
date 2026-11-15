@@ -257,6 +257,24 @@ pub(super) fn required_skin_source_ids(document: &SkinDocument) -> HashSet<&str>
         .collect::<std::collections::HashMap<_, _>>();
     let mut required = HashSet::new();
 
+    if let Some(songlist) = &document.songlist {
+        for field in songlist.all_score_fields() {
+            match &field.render {
+                bmz_render::skin::SongListFieldRender::Image { images } => {
+                    for image in images {
+                        if let Some(source) = image_sources.get(image.as_str()) {
+                            required.insert(*source);
+                        }
+                    }
+                }
+                bmz_render::skin::SongListFieldRender::Digits { digits, .. } => {
+                    required.insert(digits.src.as_str());
+                }
+                bmz_render::skin::SongListFieldRender::Text { .. } => {}
+            }
+        }
+    }
+
     for image in &document.image {
         if destination_ids.contains(image.id.as_str()) {
             required.insert(image.src.as_str());

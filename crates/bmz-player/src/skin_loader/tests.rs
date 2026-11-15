@@ -1,5 +1,7 @@
 use super::decode::apply_beatoraja_json_skin_for_kind;
 use super::*;
+#[path = "tests/songlist_fields.rs"]
+mod songlist_fields;
 use std::collections::BTreeSet;
 use std::hint::black_box;
 use std::sync::atomic::AtomicBool;
