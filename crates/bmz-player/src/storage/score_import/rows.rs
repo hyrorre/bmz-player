@@ -95,18 +95,29 @@ pub(super) fn beatoraja_row(row: &Row<'_>) -> rusqlite::Result<BeatorajaScoreRow
 pub(super) fn score_state_from_lr2(row: &Lr2ScoreRow, expected_notes: u32) -> ScoreState {
     let ghost = decode_lr2_ghost(&row.ghost, expected_notes);
     let _ = (row.play_count, row.clear_count, row.total_notes);
+    let non_poor =
+        [row.perfect, row.great, row.good, row.bad].into_iter().fold(0_u32, u32::saturating_add);
+    // Only Poor beyond the remaining scoreable notes is provably Empty Poor.
+    // Keep the combined Poor count unchanged, including on unfinished plays.
+    let note_poor = row.poor.min(expected_notes.saturating_sub(non_poor));
     ScoreState {
         judges: JudgeCounts {
             fast_pgreat: row.perfect,
             fast_great: row.great,
             fast_good: row.good,
             fast_bad: row.bad,
-            fast_poor: row.poor,
+            fast_poor: note_poor,
+            fast_empty_poor: row.poor - note_poor,
             ..Default::default()
         },
         combo: 0,
         max_combo: row.max_combo,
-        past_notes: expected_notes,
+        // LR2 combines Poor and Empty Poor. This is an upper bound on
+        // processed notes; source minbp remains authoritative for LR2 BEST BP.
+        past_notes: [row.perfect, row.great, row.good, row.bad, row.poor]
+            .into_iter()
+            .fold(0_u32, u32::saturating_add)
+            .min(expected_notes),
         ghost,
         empty_poor_breaks_combo: false,
     }
@@ -135,7 +146,15 @@ pub(super) fn score_state_from_beatoraja(
         },
         combo: 0,
         max_combo: row.max_combo,
-        past_notes: expected_notes,
+        // Empty Poor does not consume a note. The source lamp is an independent
+        // best and cannot tell us whether these EX-score judges finished play.
+        past_notes: [
+            row.epg, row.lpg, row.egr, row.lgr, row.egd, row.lgd, row.ebd, row.lbd, row.epr,
+            row.lpr,
+        ]
+        .into_iter()
+        .fold(0_u32, u32::saturating_add)
+        .min(expected_notes),
         ghost,
         empty_poor_breaks_combo: false,
     }

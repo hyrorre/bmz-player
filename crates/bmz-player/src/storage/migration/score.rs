@@ -1286,4 +1286,78 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
             evidence_json TEXT NOT NULL
         );"],
     },
+    Migration {
+        version: 37,
+        // Repair imports made with past_notes = total_notes. IR downloads have
+        // their own pass_notes contract and must not be inferred from judges.
+        // Keep source minbp, identities, counters and replay ownership. For LR2
+        // split provable Empty Poor out of its combined Poor count.
+        statements: &[
+            "CREATE TEMP TABLE imported_note_repairs AS
+             SELECT id, MAX(0, total_notes - fast_pgreat - slow_pgreat
+                 - fast_great - slow_great - fast_good - slow_good
+                 - fast_bad - slow_bad - fast_poor - slow_poor) AS remaining,
+                 CASE WHEN source_kind = 'Lr2' THEN MIN(fast_poor, MAX(0,
+                     fast_pgreat + slow_pgreat + fast_great + slow_great
+                     + fast_good + slow_good + fast_bad + slow_bad
+                     + fast_poor + slow_poor - total_notes)) ELSE 0 END AS empty_poor
+             FROM score_history AS h
+             WHERE source_kind IN ('Lr2', 'Beatoraja', 'Lr2Oraja', 'Lr2OrajaDx')
+               AND course_score_id IS NULL
+               AND bp = fast_bad + slow_bad + fast_poor + slow_poor
+                        + fast_empty_poor + slow_empty_poor
+               AND cb = fast_bad + slow_bad + fast_poor + slow_poor
+               AND NOT EXISTS (SELECT 1 FROM score_history_sources AS s
+                   WHERE s.score_history_id = h.id AND s.source != 'score_db_aggregate');",
+            "UPDATE score_history SET bp = bp + r.remaining,
+                 cb = cb + r.remaining - r.empty_poor,
+                 fast_poor = fast_poor - r.empty_poor,
+                 fast_empty_poor = fast_empty_poor + r.empty_poor
+             FROM imported_note_repairs AS r WHERE score_history.id = r.id;",
+            "UPDATE score_best SET fast_poor = h.fast_poor, fast_empty_poor = h.fast_empty_poor
+             FROM score_history AS h JOIN imported_note_repairs AS r ON r.id = h.id
+             WHERE score_best.best_score_history_id = h.id AND r.empty_poor > 0;",
+            "WITH extrema AS (
+                SELECT chart_sha256, ln_policy, double_option,
+                       CASE rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
+                           WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END AS rule_bucket,
+                       MIN(CASE WHEN source_min_bp IS NULL THEN bp
+                           WHEN source_kind = 'Lr2' THEN source_min_bp
+                           ELSE MIN(bp, source_min_bp) END) AS bp,
+                       MIN(cb) AS cb
+                FROM score_history WHERE normal_best_eligible = 1
+                GROUP BY chart_sha256, ln_policy, double_option, rule_bucket
+             )
+             UPDATE score_best SET bp = e.bp, cb = e.cb
+             FROM extrema AS e
+             WHERE score_best.chart_sha256 = e.chart_sha256
+               AND score_best.ln_policy = e.ln_policy
+               AND score_best.double_option = e.double_option
+               AND score_best.rule_mode = e.rule_bucket
+               AND EXISTS (SELECT 1 FROM score_history AS h
+                   JOIN imported_note_repairs AS r ON r.id = h.id
+                   WHERE h.chart_sha256 = e.chart_sha256 AND h.ln_policy = e.ln_policy
+                     AND h.double_option = e.double_option
+                     AND CASE h.rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
+                         WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = e.rule_bucket);",
+            "DROP TABLE imported_note_repairs;",
+        ],
+    },
+    Migration {
+        version: 38,
+        // Also repair databases which already ran v37 on the PR branch. The
+        // persisted imported lamp is the evidence; never rewrite history CB or BP.
+        statements: &["UPDATE score_best SET cb = 0
+            WHERE cb != 0 AND EXISTS (
+                SELECT 1 FROM score_history AS h
+                WHERE h.chart_sha256 = score_best.chart_sha256
+                  AND h.ln_policy = score_best.ln_policy
+                  AND h.double_option = score_best.double_option
+                  AND CASE h.rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
+                      WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = score_best.rule_mode
+                  AND h.normal_best_eligible = 1
+                  AND h.source_kind IN ('Lr2', 'Beatoraja', 'Lr2Oraja', 'Lr2OrajaDx')
+                  AND h.clear_type IN ('FullCombo', 'Perfect', 'Max')
+            );"],
+    },
 ];
