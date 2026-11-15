@@ -48,6 +48,24 @@ fn active_play_visual_offset_sync_preserves_auto_adjusted_value() {
 }
 
 #[test]
+fn pending_play_judge_timing_snapshot_follows_profile_for_play_mode() {
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.activate_play_mode(KeyMode::K14);
+    profile.judge.visual_offset_us = 8_000;
+    profile.judge.visual_offset_auto_adjust = true;
+    profile.sync_active_play_mode();
+    profile.activate_play_mode(KeyMode::K7);
+    profile.judge.visual_offset_us = -3_000;
+    profile.sync_active_play_mode();
+    let mut snapshot = RenderSnapshot::default();
+
+    apply_profile_judge_timing_to_snapshot(&mut snapshot, &profile, KeyMode::K14);
+
+    assert_eq!(snapshot.judge_timing_offset_ms, 8);
+    assert!(snapshot.judge_timing_auto_adjust);
+}
+
+#[test]
 fn pending_play_uses_preload_input_before_session_install() {
     use bmz_core::input::InputKind;
     use bmz_gameplay::input::backend::InputBackend;

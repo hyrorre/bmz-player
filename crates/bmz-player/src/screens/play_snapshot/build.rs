@@ -404,7 +404,7 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         best_ex_score,
         projected_best_ex_score,
         target_ex_score,
-        judge_timing_offset_ms: (session.offsets.visual_offset_us / 1_000) as i32,
+        judge_timing_offset_ms: judge_timing_offset_ms(session),
         judge_timing_auto_adjust: session.input_offset_auto_adjust_enabled,
         main_bpm: session.chart.metadata.initial_bpm as f32,
         hsfix_index: session.hsfix_index,
@@ -591,6 +591,12 @@ pub fn update_render_snapshot_play_options(
         current_scroll_multiplier_for_session(session, lane_render_now),
     );
     snapshot.hidden_cover = session.hidden_cover;
+    snapshot.judge_timing_offset_ms = judge_timing_offset_ms(session);
+    snapshot.judge_timing_auto_adjust = session.input_offset_auto_adjust_enabled;
+}
+
+fn judge_timing_offset_ms(session: &GameSession) -> i32 {
+    (session.offsets.visual_offset_us / 1_000) as i32
 }
 
 pub(super) fn hispeed_mode_index(mode: bmz_gameplay::session::HispeedMode) -> i32 {
