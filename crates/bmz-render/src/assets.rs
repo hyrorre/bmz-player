@@ -8,6 +8,8 @@ use image::ImageReader;
 
 pub mod animated;
 pub mod deferred;
+mod thumbnail;
+pub use thumbnail::{decode_chart_thumbnail, load_chart_thumbnail};
 pub mod sprite_sheet;
 
 pub use animated::{

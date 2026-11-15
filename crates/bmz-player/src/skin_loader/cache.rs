@@ -269,6 +269,9 @@ pub struct SkinGpuTextureCache {
     pub(super) entries: HashMap<SkinSourceAssetCacheKey, CachedSkinGpuTexture>,
     pub(super) next_texture_ids: HashMap<SkinKind, u32>,
     allocations: HashMap<SkinTextureId, std::sync::Weak<()>>,
+    /// Dynamic chart thumbnails are retired by their owner, after scene leases
+    /// expire; ordinary skin-cache collection must not recycle their IDs.
+    external_allocations: HashSet<SkinTextureId>,
     free_texture_ids: Vec<SkinTextureId>,
     access_clock: u64,
     pub(super) limit_bytes: usize,
@@ -280,6 +283,7 @@ impl Default for SkinGpuTextureCache {
             entries: HashMap::new(),
             next_texture_ids: HashMap::new(),
             allocations: HashMap::new(),
+            external_allocations: HashSet::new(),
             free_texture_ids: Vec::new(),
             access_clock: 0,
             limit_bytes: 256 * 1024 * 1024,
@@ -296,6 +300,23 @@ pub struct CachedSkinGpuTexture {
 }
 
 impl SkinGpuTextureCache {
+    pub(crate) fn reserve_chart_texture(&mut self) -> (SkinTextureId, Arc<()>) {
+        let texture = self.allocate_texture_id(SkinKind::Select);
+        self.external_allocations.insert(texture);
+        (texture, self.lease_texture(texture))
+    }
+
+    pub(crate) fn release_chart_texture(&mut self, texture: SkinTextureId) -> bool {
+        if !self.external_allocations.contains(&texture)
+            || self.allocations.get(&texture).is_some_and(|lease| lease.strong_count() != 0)
+        {
+            return false;
+        }
+        self.external_allocations.remove(&texture);
+        self.allocations.remove(&texture);
+        self.free_texture_ids.push(texture);
+        true
+    }
     pub fn get(&mut self, key: &SkinSourceAssetCacheKey) -> Option<CachedSkinGpuTexture> {
         self.access_clock = self.access_clock.wrapping_add(1);
         let entry = self.entries.get_mut(key)?;
@@ -352,7 +373,11 @@ impl SkinGpuTextureCache {
         let removed: Vec<_> = self
             .allocations
             .iter()
-            .filter(|(texture, lease)| !active.contains(texture) && lease.strong_count() == 0)
+            .filter(|(texture, lease)| {
+                !active.contains(texture)
+                    && !self.external_allocations.contains(texture)
+                    && lease.strong_count() == 0
+            })
             .map(|(texture, _)| *texture)
             .collect();
         for texture in &removed {
@@ -374,6 +399,11 @@ impl SkinGpuTextureCache {
 
     pub fn clear(&mut self) {
         self.entries.clear();
+        if !self.external_allocations.is_empty() {
+            self.allocations.retain(|texture, _| self.external_allocations.contains(texture));
+            self.free_texture_ids.clear();
+            return;
+        }
         self.next_texture_ids.clear();
         self.allocations.clear();
         self.free_texture_ids.clear();

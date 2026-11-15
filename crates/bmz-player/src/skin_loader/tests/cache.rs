@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn chart_texture_ids_are_shared_with_skin_allocator_and_retired_explicitly() {
+    let mut cache = SkinGpuTextureCache::default();
+    let (texture, lease) = cache.reserve_chart_texture();
+    let (other, other_lease) = cache.reserve_chart_texture();
+    assert_ne!(texture, other);
+    assert!(!cache.release_chart_texture(texture));
+    assert!(!cache.evict_unused(&HashSet::new()).contains(&texture));
+    drop(lease);
+    // Even unleased external IDs must be removed from the renderer before reuse.
+    assert!(!cache.evict_unused(&HashSet::new()).contains(&texture));
+    cache.clear();
+    let third = cache.allocate_texture_id(SkinKind::Select);
+    assert_ne!(third, texture);
+    assert_ne!(third, other);
+    assert!(cache.release_chart_texture(texture));
+    assert_eq!(cache.allocate_texture_id(SkinKind::Select), texture);
+    drop(other_lease);
+    assert!(cache.release_chart_texture(other));
+}
+
+#[test]
 fn frame_sequence_cache_reuses_pixels_and_tracks_order_grid_and_backing_changes() {
     let root = tempfile::tempdir().unwrap();
     let a = root.path().join("a.png");

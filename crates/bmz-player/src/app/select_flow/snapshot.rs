@@ -277,7 +277,7 @@ impl WinitApp {
             },
             scroll_remaining,
         );
-        let bar_scroll_rows = if scroll_remaining.trunc() == 0.0 {
+        let mut bar_scroll_rows = if scroll_remaining.trunc() == 0.0 {
             None
         } else if self.select.ir_battle.active {
             Some(crate::app::select_ir_battle::select_ir_battle_snapshot_rows(
@@ -309,6 +309,10 @@ impl WinitApp {
             }
             Some(displayed_rows)
         };
+        self.apply_select_row_banners(&mut rows);
+        if let Some(displayed_rows) = &mut bar_scroll_rows {
+            self.apply_select_row_banners(displayed_rows);
+        }
         let (detail_options, detail_options_scroll) = self.detail_options_frame();
         SelectSnapshot {
             screen_size: [0, 0],

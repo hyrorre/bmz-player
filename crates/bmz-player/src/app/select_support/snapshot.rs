@@ -74,14 +74,20 @@ pub(in crate::app) fn select_visible_item_indices(
     selected_index: usize,
     visible_limit: usize,
 ) -> Vec<usize> {
-    if item_len == 0 || visible_limit == 0 {
-        return Vec::new();
-    }
+    select_visible_indices_iter(item_len, selected_index, visible_limit).collect()
+}
 
+pub(in crate::app) fn select_visible_indices_iter(
+    item_len: usize,
+    selected_index: usize,
+    visible_limit: usize,
+) -> impl Iterator<Item = usize> + Clone {
+    let count = if item_len == 0 { 0 } else { visible_limit };
+    let item_len = item_len.max(1);
     let selected_index = selected_index.min(item_len - 1);
     let half_window = visible_limit / 2;
     let start = (selected_index + item_len - (half_window % item_len)) % item_len;
-    (0..visible_limit).map(|offset| (start + offset) % item_len).collect()
+    (0..count).map(move |offset| (start + offset) % item_len)
 }
 
 struct SelectSnapshotRowContext<'a> {

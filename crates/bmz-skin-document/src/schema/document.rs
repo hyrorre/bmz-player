@@ -290,6 +290,8 @@ pub struct SkinSongListDef {
     pub label: Vec<DestinationListEntry>,
     pub judgegraph: Vec<DestinationListEntry>,
     pub bpmgraph: Vec<DestinationListEntry>,
+    /// Per-row #BANNER destinations; materials come from the row snapshot.
+    pub banner: Vec<SkinDestinationDef>,
     pub scorerank: Vec<SkinSongListFieldDef>,
     pub exscore: Vec<SkinSongListFieldDef>,
     pub scorerate: Vec<SkinSongListFieldDef>,
@@ -440,6 +442,12 @@ impl<'de> Deserialize<'de> for SkinSongListDef {
                         "lr2rival" => list.lr2rival = map.next_value()?,
                         "judgegraph" => list.judgegraph = map.next_value()?,
                         "bpmgraph" => list.bpmgraph = map.next_value()?,
+                        "banner" => {
+                            list.banner = deserialize_songlist_fields::<
+                                SkinDestinationDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
+                        }
                         "trophy" => list.trophy = map.next_value::<Entries>()?.0,
                         "graph" => list.graph = map.next_value::<Entries>()?.0,
                         "label" => list.label = map.next_value::<Entries>()?.0,
@@ -450,68 +458,98 @@ impl<'de> Deserialize<'de> for SkinSongListDef {
                         }
                         "scorerank" => {
                             list.score_order.push(SongListField::Scorerank);
-                            list.scorerank =
-                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
+                            list.scorerank = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
                         }
                         "exscore" => {
                             list.score_order.push(SongListField::Exscore);
-                            list.exscore =
-                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
+                            list.exscore = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
                         }
                         "scorerate" => {
                             list.score_order.push(SongListField::Scorerate);
-                            list.scorerate =
-                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
+                            list.scorerate = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
                         }
                         "minbp" => {
                             list.score_order.push(SongListField::Minbp);
-                            list.minbp =
-                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
+                            list.minbp = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
                         }
                         "mincb" => {
                             list.score_order.push(SongListField::Mincb);
-                            list.mincb =
-                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
+                            list.mincb = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
                         }
                         "maxcombo" => {
                             list.score_order.push(SongListField::Maxcombo);
-                            list.maxcombo =
-                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
+                            list.maxcombo = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
                         }
                         "nextrank" => {
                             list.score_order.push(SongListField::Nextrank);
-                            list.nextrank =
-                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
+                            list.nextrank = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
                         }
                         "nextrankdiff" => {
                             list.score_order.push(SongListField::Nextrankdiff);
                             list.nextrankdiff =
-                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
+                                deserialize_songlist_fields::<SkinSongListFieldDef, M::Error>(
+                                    map.next_value()?,
+                                    &key,
+                                )?;
                         }
                         "nearestrank" => {
                             list.score_order.push(SongListField::Nearestrank);
                             list.nearestrank =
-                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
+                                deserialize_songlist_fields::<SkinSongListFieldDef, M::Error>(
+                                    map.next_value()?,
+                                    &key,
+                                )?;
                         }
                         "nearestrankdiff" => {
                             list.score_order.push(SongListField::Nearestrankdiff);
                             list.nearestrankdiff =
-                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
+                                deserialize_songlist_fields::<SkinSongListFieldDef, M::Error>(
+                                    map.next_value()?,
+                                    &key,
+                                )?;
                         }
                         "rivalscorerank" => {
                             list.score_order.push(SongListField::Rivalscorerank);
                             list.rivalscorerank =
-                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
+                                deserialize_songlist_fields::<SkinSongListFieldDef, M::Error>(
+                                    map.next_value()?,
+                                    &key,
+                                )?;
                         }
                         "rivaldiff" => {
                             list.score_order.push(SongListField::Rivaldiff);
-                            list.rivaldiff =
-                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
+                            list.rivaldiff = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
                         }
                         "favorite" => {
                             list.score_order.push(SongListField::Favorite);
-                            list.favorite =
-                                deserialize_songlist_fields::<M::Error>(map.next_value()?, &key)?;
+                            list.favorite = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
                         }
                         _ => {
                             map.next_value::<serde::de::IgnoredAny>()?;
@@ -541,10 +579,10 @@ fn deserialize_songlist_entry<T: serde::de::DeserializeOwned, E: serde::de::Erro
     serde_json::from_value(value).map_err(|error| E::custom(format!("{path}: {error}")))
 }
 
-fn deserialize_songlist_fields<E: serde::de::Error>(
+fn deserialize_songlist_fields<T: serde::de::DeserializeOwned, E: serde::de::Error>(
     value: JsonValue,
     field: &str,
-) -> Result<Vec<SkinSongListFieldDef>, E> {
+) -> Result<Vec<T>, E> {
     let path = format!("songlist.{field}");
     match value {
         JsonValue::Object(_) => deserialize_songlist_entry(value, &path).map(|entry| vec![entry]),

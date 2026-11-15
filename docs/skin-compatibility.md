@@ -10,6 +10,14 @@ BMZ固有のIDや詳細な動作契約は[skin.md](skin.md)、互換修正の方
 
 ## 対応済みの主な範囲
 
+Selectの `songlist.banner` で各曲バーに譜面ごとのバナーを描けます（BMZ拡張）。
+JSON / Lua、複数destination、通常の画像条件・clip・アニメーションとスクロールに対応します。
+画像は静止サムネイルとして非同期に読み、CPU/GPU各32 MiBのキャッシュを使用します。
+未定義のスキンと、従来の選択譜面用banner画像は従来どおりです。beatoraja本体への追加はありません。
+[仕様と例](skin.md#bmz-songlist-row-banners)、
+[描画テスト](../crates/bmz-render/src/skin/document_render/songlist_banner/tests.rs)、
+[キャッシュ・非同期テスト](../crates/bmz-player/src/app/select_row_banners/tests.rs)を参照してください。
+
 Selectの各曲バーに13個の専用スコア・状態フィールドを追加できます（BMZ拡張）。
 JSON / Lua、ランク・お気に入り画像、通常フォント（TTF/OTFとビットマップ、fallback）、
 符号・小数点・%を持つ数字画像に対応します。値は各行のSnapshotを使用し、未記録と0を区別します。
