@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "full_combo_cb.rs"]
+mod full_combo_cb;
+
 fn unfinished_source(kind: ScoreImportKind, sha: [u8; 32], md5: [u8; 16]) -> Connection {
     let source = source(kind, sha, md5);
     let sql = if kind.uses_lr2_schema() {

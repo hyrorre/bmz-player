@@ -328,7 +328,7 @@ pub(super) fn upsert_score_best(
     let ghost = encode_beatoraja_ghost(&record.score.ghost)?;
     let clear_increment = u32::from(is_counted_clear(record.clear_type));
     let bp = score_record_best_bp(record);
-    let cb = score_record_cb(record);
+    let cb = score_record_best_cb(record);
     let rule_mode = record_rule_mode(record);
     let inserted = conn.execute(
         "INSERT INTO score_best (
@@ -725,6 +725,18 @@ pub(super) fn score_record_best_bp(record: &ScoreRecord) -> u32 {
         return record.source_min_bp.unwrap_or(bp);
     }
     score_record_source_min_bp(record).map_or(bp, |source| source.min(bp))
+}
+
+/// An imported lamp can prove a zero-CB play independently of the EX judges.
+/// Keep history and representative ranking on score_record_cb instead.
+pub(super) fn score_record_best_cb(record: &ScoreRecord) -> u32 {
+    if record.source_kind != ScoreSourceKind::Local
+        && matches!(record.clear_type, ClearType::FullCombo | ClearType::Perfect | ClearType::Max)
+    {
+        0
+    } else {
+        score_record_cb(record)
+    }
 }
 
 pub(super) fn score_record_cb(record: &ScoreRecord) -> u32 {

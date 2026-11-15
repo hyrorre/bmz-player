@@ -61,3 +61,25 @@ Debian 13の隔離コンテナ、Rust 1.100.0、FFmpeg 7の開発依存を使用
 追加9テストは4インポート種別、score/scoredatalog、未処理ノーツ、Empty Poor、独立ランプ、
 未知minbp、ローカルとの混在、再import、cleanup、旧DB修復、移行の再実行とrollbackを確認する。
 全体実行には既存のIR download/backfill、通常保存、リプレイ更新判定、選曲snapshotテストも含む。
+
+## レビュー対応: FCランプを根拠にした独立BEST CB
+
+PR #108の指摘1に対応。外部スコアのFullCombo / Perfect / Maxランプが証明するCB 0を、
+新規保存とcleanupの独立BEST CBへ反映する。履歴CB・BP・判定内訳・代表比較は維持する。
+根拠は既存の履歴ランプに残せるため、source_min_cb列や架空のプレイは追加しない。
+v37適用済みDBにも対応するmigration v38を追加した。Perfect / Maxでも空POORが
+あり得るため、BPを0にする変更は含めない。
+
+指摘2にはPR上で返信した。LR2再補正の分岐はLr2Oraja bucket専用で、未知のrule_modeは
+cleanupのCASE式でもBeatoraja側に入り、どちらの照合でも対象外になる。
+ユーザー指定どおり、今回はSQLの照合式を変更しない。
+
+追検証（同じコンテナ、日本語ロケール）:
+
+- fmt / check / all-targets Clippy（`-D warnings`）成功。
+- 追加4テスト成功。全4形式のFC系ランプ、BP・履歴CBの保全、既存EX代表の保全、
+  再import、根拠履歴の削除、v36/v37からの移行、ScoreKey分離・対象外履歴を検証。
+- 対象crate全体は3240件成功、27件失敗、67件ignore。
+  スコア関連141件・migration関連12件は全件成功。
+  失敗は前回と同じスキン素材不足25件と変更対象外のscanテスト2件。
+  ログは`/workspace/bmz-108-fc-*.log`。Windows実機・外部IR送信は未実施。

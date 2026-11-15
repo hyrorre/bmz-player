@@ -1343,4 +1343,21 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
             "DROP TABLE imported_note_repairs;",
         ],
     },
+    Migration {
+        version: 38,
+        // Also repair databases which already ran v37 on the PR branch. The
+        // persisted imported lamp is the evidence; never rewrite history CB or BP.
+        statements: &["UPDATE score_best SET cb = 0
+            WHERE cb != 0 AND EXISTS (
+                SELECT 1 FROM score_history AS h
+                WHERE h.chart_sha256 = score_best.chart_sha256
+                  AND h.ln_policy = score_best.ln_policy
+                  AND h.double_option = score_best.double_option
+                  AND CASE h.rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
+                      WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = score_best.rule_mode
+                  AND h.normal_best_eligible = 1
+                  AND h.source_kind IN ('Lr2', 'Beatoraja', 'Lr2Oraja', 'Lr2OrajaDx')
+                  AND h.clear_type IN ('FullCombo', 'Perfect', 'Max')
+            );"],
+    },
 ];
