@@ -1,6 +1,9 @@
 use super::*;
 use rusqlite::types::Value;
 
+#[path = "unfinished_scores.rs"]
+mod unfinished_scores;
+
 fn databases() -> (LibraryDatabase, ScoreDatabase, [u8; 32], [u8; 16]) {
     let mut target = chart();
     target.total_notes = 1100;
@@ -39,7 +42,7 @@ fn source(kind: ScoreImportKind, sha: [u8; 32], md5: [u8; 16]) -> Connection {
         source
             .execute_batch(
                 "UPDATE score SET epg = 1050, lpg = 0, egr = 0, lgr = 0,
-            egd = 30, lgd = 0, ebd = 12, lbd = 0, epr = 0, lpr = 0, ems = 8, lms = 0;",
+            egd = 38, lgd = 0, ebd = 12, lbd = 0, epr = 0, lpr = 0, ems = 8, lms = 0;",
             )
             .unwrap();
     }
@@ -124,7 +127,7 @@ fn imports_source_min_bp_for_every_format_without_rewriting_judges() {
         assert_eq!((report.imported, report.corrected, report.failed), (1, 0, 0));
         let saved = best(&db, sha, kind);
         assert_eq!((saved.ex_score, saved.bp, saved.max_combo), (2100, 5, 900));
-        // LR2 has no distinct empty-Poor count; preserve its existing conversion.
+        // All LR2 Poor in this fixture fit within the scoreable notes.
         let cb = if kind.uses_lr2_schema() { 20 } else { 12 };
         assert_eq!(saved.cb, cb);
         assert_eq!(all_rows(&db, "score_history", &[]).len(), 1);
@@ -261,7 +264,12 @@ fn zero_unknown_and_large_bp_follow_source_semantics() {
                 .query_row("SELECT source_min_bp FROM score_history", [], |r| r.get(0))
                 .unwrap();
             assert_eq!(stored, expected);
-            assert_eq!(best(&db, sha, kind).bp, expected.unwrap_or(20).min(20));
+            let expected_bp = if kind.uses_lr2_schema() {
+                expected.unwrap_or(20)
+            } else {
+                expected.unwrap_or(20).min(20)
+            };
+            assert_eq!(best(&db, sha, kind).bp, expected_bp);
         }
     }
 }
