@@ -43,7 +43,7 @@ pub(super) fn select_note_distribution_background_items(
     frame_alpha: f32,
     blend: BlendMode,
     pixel_w: f32,
-    pixel_h: f32,
+    _pixel_h: f32,
 ) -> Vec<SkinRenderItem> {
     let mut items = vec![SkinRenderItem::Rect {
         rect,
@@ -52,9 +52,12 @@ pub(super) fn select_note_distribution_background_items(
     }];
 
     for density in (10..max_density).step_by(10) {
-        let y = rect.y + rect.height - rect.height * density as f32 / max_density.max(1) as f32;
+        // beatoraja fills a ten-note band, rather than drawing a grid line.
+        let height = rect.height * 10.0 / max_density.max(1) as f32;
+        let y =
+            rect.y + rect.height - rect.height * (density + 10) as f32 / max_density.max(1) as f32;
         items.push(SkinRenderItem::Rect {
-            rect: Rect { x: rect.x, y, width: rect.width, height: pixel_h },
+            rect: Rect { x: rect.x, y, width: rect.width, height },
             color: Color::rgba(0.007 * density as f32, 0.007 * density as f32, 0.0, frame_alpha),
             blend,
         });
@@ -458,4 +461,36 @@ pub(super) fn result_note_graph_background_item_count(
     let band_count = (10..graph_max).step_by(10).count();
     let line_count = (0..bucket_count).filter(|second| second % 10 == 0).count();
     1 + band_count + line_count
+}
+
+#[cfg(test)]
+mod select_background_tests {
+    use super::*;
+
+    #[test]
+    fn density_background_fills_bands_and_rescales_with_the_peak() {
+        for (maximum, count, height) in [(20, 1, 50.0), (40, 3, 25.0), (100, 9, 10.0)] {
+            let items = select_note_distribution_background_items(
+                Rect { x: 5.0, y: 10.0, width: 200.0, height: 100.0 },
+                0,
+                maximum,
+                0.5,
+                BlendMode::Normal,
+                1.0,
+                1.0,
+            );
+            assert_eq!(items.len(), count + 1);
+            for item in &items[1..] {
+                let SkinRenderItem::Rect { rect, color, .. } = item else {
+                    panic!("background band")
+                };
+                assert_eq!(rect.height, height);
+                assert_eq!(rect.width, 200.0);
+                assert_eq!(color.a, 0.5);
+                assert!(color.r > 0.0 && color.r == color.g && color.b == 0.0);
+            }
+            let SkinRenderItem::Rect { rect, .. } = &items[count] else { unreachable!() };
+            assert!((rect.y - 10.0).abs() < 0.001, "last band reaches the graph top");
+        }
+    }
 }

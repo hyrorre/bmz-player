@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-16 | [選曲ツール・撮影名・終了操作・ローカルライバル](2026/2026-11-16-select-tools-local-rivals.md) |
 | 2026-11-16 | [選曲G-BATTLEの保持解除とSESSION MODE ref](2026/2026-11-16-select-battle-hold-session-mode.md) |
 | 2026-11-16 | [BMZ IRの選曲ライバルと全譜面ベスト取得](2026/2026-11-16-bmz-ir-rival-best-scores.md) |
 | 2026-11-16 | [beatoraja系から累計プレイ統計を取り込む（#114）](2026/2026-11-16-import-player-stats.md) |
