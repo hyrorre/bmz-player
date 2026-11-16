@@ -1,5 +1,85 @@
 use super::*;
 
+#[cfg(target_os = "linux")]
+pub(super) fn assert_battle_session_mode_snapshots(app: &mut WinitApp) {
+    for mode in SessionMode::VALUES {
+        app.set_session_mode(mode);
+        let expected = Some(crate::skin_extension::session_mode_index(mode));
+        for open in [false, true, false] {
+            if open {
+                app.open_select_ir_battle();
+            } else {
+                app.close_select_ir_battle();
+            }
+            let snapshot = app.select_snapshot();
+            assert_eq!(snapshot.skin_attempt.session_mode_index, expected, "{mode:?} open={open}");
+            assert_eq!(snapshot.battle.is_some(), open);
+            assert_eq!(app.select.session_mode, mode);
+            if open {
+                assert_eq!(app.select.ir_battle.cursor, 0);
+                assert_eq!(snapshot.battle.as_ref().unwrap().name, "BATTLE OFF");
+                assert_eq!(snapshot.assist, "G-BATTLE", "preserve legacy assist display");
+            }
+        }
+    }
+    app.set_session_mode(SessionMode::Normal);
+    app.select.double_option = DoubleOption::Battle;
+    assert_eq!(app.select_snapshot().skin_attempt.effective_key_mode, Some(KeyMode::K14));
+    assert_eq!(app.selected_arrange_option_lane(Lane::Key8), Lane::Key8);
+    app.open_select_ir_battle();
+    let snapshot = app.select_snapshot();
+    assert_eq!(snapshot.skin_attempt.session_mode_index, Some(0));
+    assert_eq!(snapshot.skin_attempt.effective_key_mode, Some(KeyMode::K7));
+    assert_eq!(snapshot.assist, "G-BATTLE");
+    assert_eq!(app.selected_arrange_option_lane(Lane::Key8), Lane::Key1);
+    app.execute_select_skin_event(SKIN_EVENT_SELECT_SESSION_MODE, -1);
+    assert_eq!(app.select.session_mode, SessionMode::GBattle);
+    assert_eq!(app.select_snapshot().skin_attempt.session_mode_index, Some(4));
+    app.close_select_ir_battle();
+    assert_eq!(app.select_snapshot().skin_attempt.session_mode_index, Some(4));
+
+    // An opponent does not rewrite the setting. Decide freezes the mode in its
+    // real entry path, even if the select setting subsequently changes.
+    app.select.double_option = DoubleOption::Off;
+    for (mode, index) in [(SessionMode::Normal, 0), (SessionMode::GBattle, 4)] {
+        app.set_session_mode(mode);
+        app.open_select_ir_battle();
+        let mut options = app.play_start_options();
+        options.battle_target = Some(crate::screens::play_start::BattleTarget {
+            provider: "test".into(),
+            score_id: "test".into(),
+            player_id: "test".into(),
+            player_name: "Opponent".into(),
+            rank: 1,
+            ex_score: 0,
+            gauge: None,
+            playback: crate::screens::play_start::BattleTargetPlayback::Seed {
+                arrange: ArrangeOption::Normal,
+                arrange_2p: ArrangeOption::Normal,
+                double_option: DoubleOption::Off,
+                packed_seed: None,
+            },
+        });
+        let chart = app.selected_chart_row().unwrap().chart.clone().unwrap();
+        app.begin_decide_for_chart_with_snapshot(
+            chart.chart_id,
+            options,
+            RenderSnapshot::default(),
+            None,
+            Some(chart),
+            DecideLaunch::Play,
+        );
+        app.advance_select_ir_battle_hold();
+        assert!(!app.select.ir_battle.active, "screen transition closes a pinned list");
+        assert_eq!(app.select.session_mode, mode);
+        app.set_session_mode(mode.cycle());
+        let decide = app.play.pending_decide.as_deref().unwrap();
+        assert_eq!(app.decide_snapshot(decide).skin_attempt.session_mode_index, Some(index));
+        app.play.pending_decide = None;
+        app.invalidate_play_preload();
+    }
+}
+
 #[test]
 fn session_mode_click_directions_keep_beatoraja_button_and_region_rules() {
     let rect = Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 };

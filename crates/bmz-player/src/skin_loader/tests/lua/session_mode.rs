@@ -22,11 +22,19 @@ fn lua_session_mode_refs_and_negative_acts_match_json_and_keep_custom_event_1970
             customEvents={
                 {id=1970,action=function(a,b) last = a .. ':' .. b end},
                 {id=1000,action=-10006}},
-            text={{id='last',size=10,value=function() return last end}},
+            text={{id='last',size=10,value=function() return last end},
+                {id='refs',size=10,value=function()
+                    return s.number(1970) .. ':' .. s.event_index(1970) .. ':' .. tostring(s.option(20200))
+                end}},
             destination={
                 {id='mode',dst={{x=0,y=0,w=20,h=20}}},
                 {id='set',dst={{x=20,y=0,w=20,h=20}}},
-                {id='last',dst={{x=0,y=50,w=20,h=10}}}}
+                {id='last',dst={{x=0,y=50,w=20,h=10}}},
+                {id='refs',dst={{x=0,y=60,w=80,h=10}}},
+                {id='refs',draw=function() return s.event_index(1970) == 0 end,
+                    dst={{x=0,y=70,w=80,h=10}}},
+                {id='refs',draw=function() return s.number(1970) == 0 and s.option(20200) end,
+                    dst={{x=0,y=80,w=80,h=10}}}}
         }
     "#,
     )
@@ -73,7 +81,44 @@ fn lua_session_mode_refs_and_negative_acts_match_json_and_keep_custom_event_1970
             .into_iter()
             .enumerate()
         {
-            let snapshot = SelectSnapshot { assist: session.into(), ..Default::default() };
+            let snapshot = SelectSnapshot {
+                assist: session.into(),
+                skin_attempt: bmz_render::snapshot::SkinAttemptState {
+                    session_mode_index: Some(index),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            // Exercise the shared frozen field with effective GBattle assist and
+            // BATTLE OFF. All Lua APIs/draw callbacks follow 1970, not assist.
+            for open in [false, true, false] {
+                let mut snapshot = snapshot.clone();
+                snapshot.assist = "G-BATTLE".into();
+                snapshot.battle = open.then(|| {
+                    Arc::new(bmz_render::scene::SelectBattleSnapshot {
+                        name: "BATTLE OFF".into(),
+                        ..Default::default()
+                    })
+                });
+                context.begin_frame();
+                let items = context.select_document_items(&snapshot);
+                let expected = format!("{index}:{index}:{open}");
+                assert!(
+                    items.iter().any(|item| matches!(item,
+                    SkinRenderItem::Text { text, .. } if text == &expected)),
+                    "{mode:?} {expected}; actual={items:?}"
+                );
+                assert_eq!(
+                    items
+                        .iter()
+                        .filter(|item| matches!(item,
+                    SkinRenderItem::Text { text, .. } if text == &expected))
+                        .count(),
+                    1 + usize::from(index == 0) + usize::from(index == 0 && open)
+                );
+                assert!(matches!(items.first(), Some(SkinRenderItem::Image {uv, ..})
+                    if (uv.y - index as f32 / 5.0).abs() < 0.0001));
+            }
             context.begin_frame();
             let items = context.select_document_items(&snapshot);
             assert!(matches!(items.first(), Some(SkinRenderItem::Image {uv, ..})

@@ -13,6 +13,8 @@ pub(super) struct SelectIrBattleRuntime {
     pub(super) cursor: usize,
     pub(super) source_chart_id: Option<i64>,
     pub(super) source_sha256: Option<[u8; 32]>,
+    // Pending holds and temporary lists belong to one physical input source.
+    // A pinned (Tab) list has no hold owner; resync must never synthesize gestures.
     pub(super) hold_started_at: Option<Instant>,
     pub(super) hold_control: Option<InputSource>,
     pub(super) hold_short_action: Option<SelectAction>,
@@ -81,6 +83,16 @@ impl WinitApp {
     }
 
     fn select_ir_battle_is_available(&self) -> bool {
+        self.ui.focused
+            && matches!(self.view_state(), AppViewState::Select)
+            && !self.viewer_waiting
+            && self.jobs.profile_change.is_none()
+            && !self.ui.egui.as_ref().is_some_and(|ui| ui.blocks_game_input(false))
+            && self.select.key_config_edit.is_none()
+            && self.select_ir_battle_list_is_available()
+    }
+
+    fn select_ir_battle_list_is_available(&self) -> bool {
         if self.select.select_option_panel != 0
             || self.select.search.is_active()
             || self.select.course_builder.is_some()
@@ -94,7 +106,7 @@ impl WinitApp {
         true
     }
 
-    /// KEY4 (9K: KEY8) press is deferred while a usable IR ranking is present.
+    /// KEY4 (9K: KEY8) press is deferred on an eligible chart row.
     /// A short press retains the key's normal action; a 120 ms hold temporarily swaps
     /// the song list for the ranking, matching LR2's interaction.
     pub(super) fn begin_select_ir_battle_hold(
@@ -105,7 +117,7 @@ impl WinitApp {
         if !self.select_ir_battle_is_available() {
             return false;
         }
-        if self.select.ir_battle.active {
+        if self.select.ir_battle.active || self.select.ir_battle.hold_control.is_some() {
             return true;
         }
         let Some((chart_id, sha256, _)) = self.select_ir_battle_source() else {
@@ -122,6 +134,12 @@ impl WinitApp {
     pub(super) fn finish_select_ir_battle_hold(&mut self, control: &InputSource) -> bool {
         if self.select.ir_battle.hold_control.as_ref() != Some(control) {
             return false;
+        }
+        // Match the recorded source before consulting the current bindings. A rebind
+        // invalidates the gesture; it must not turn its release into a short press.
+        if !self.select_ir_battle_hold_context_is_valid() {
+            self.cancel_select_ir_battle_hold();
+            return true;
         }
         let held_long_enough = self
             .select
@@ -143,20 +161,77 @@ impl WinitApp {
         true
     }
 
-    pub(super) fn advance_select_ir_battle_hold(&mut self) {
-        if !self.ui.focused || !matches!(self.view_state(), AppViewState::Select) {
+    /// Runs before panel/modal routing and before pressed-state repair. Only an
+    /// accepted real release may execute the deferred short action.
+    pub(super) fn release_select_ir_battle_hold(
+        &mut self,
+        input: &ResolvedInput,
+        event: Option<DeviceInputEvent>,
+    ) -> bool {
+        if input.pressed()
+            || input.source() != self.select.ir_battle.hold_control.as_ref()
+            || self.select.ir_battle.hold_control.is_none()
+        {
+            return false;
+        }
+        if event.is_none_or(|event| self.filter_app_input_bounce(event).is_some()) {
+            self.finish_select_ir_battle_hold(input.source().unwrap())
+        } else {
+            self.cancel_select_ir_battle_hold();
+            true
+        }
+    }
+
+    pub(super) fn cancel_select_ir_battle_hold(&mut self) {
+        if self.select.ir_battle.hold_control.is_none() {
+            return;
+        }
+        if self.select.ir_battle.pinned {
+            self.select.ir_battle.hold_started_at = None;
+            self.select.ir_battle.hold_control = None;
+            self.select.ir_battle.hold_short_action = None;
+        } else {
+            self.close_select_ir_battle_with_sound(self.select.ir_battle.active);
+        }
+    }
+
+    fn select_ir_battle_hold_context_is_valid(&self) -> bool {
+        self.select_ir_battle_is_available()
+            && self.select.ir_battle.hold_control.as_ref().is_some_and(|source| {
+                self.resolve_scene_source(source.device, &source.control).is_ir_battle_hold()
+            })
+            && self.select_ir_battle_source().is_some_and(|(chart_id, sha256, _)| {
+                self.select.ir_battle.source_chart_id == Some(chart_id)
+                    && self.select.ir_battle.source_sha256 == Some(sha256)
+            })
+    }
+
+    /// Repair only: never start a hold, execute a short action, or pin a list.
+    pub(super) fn reconcile_select_ir_battle_hold(&mut self) {
+        // Keep the existing lifetime of pinned lists. A blocking UI cancels an
+        // input-owned gesture, but does not itself close a Tab-pinned list.
+        if !self.ui.focused
+            || !matches!(self.view_state(), AppViewState::Select)
+            || !self.select_ir_battle_list_is_available()
+        {
             if self.select.ir_battle.active
                 || self.select.ir_battle.hold_started_at.is_some()
                 || self.select.ir_battle.pending.is_some()
             {
-                self.close_select_ir_battle();
+                self.close_select_ir_battle_with_sound(self.select.ir_battle.active);
             }
             return;
         }
-        if self.select.ir_battle.active && !self.select_ir_battle_is_available() {
-            self.close_select_ir_battle();
-            return;
+        if let Some(source) = &self.select.ir_battle.hold_control
+            && (!self.input.source_held(source.device, &source.control)
+                || !self.select_ir_battle_hold_context_is_valid())
+        {
+            self.cancel_select_ir_battle_hold();
         }
+    }
+
+    pub(super) fn advance_select_ir_battle_hold(&mut self) {
+        self.reconcile_select_ir_battle_hold();
         if self.select.ir_battle.active {
             return;
         }
@@ -190,6 +265,7 @@ impl WinitApp {
         let Some((chart_id, sha256, _)) = self.select_ir_battle_source() else {
             return true;
         };
+        self.cancel_select_ir_battle_hold();
         self.select.ir_battle.source_chart_id = Some(chart_id);
         self.select.ir_battle.source_sha256 = Some(sha256);
         self.select.ir_battle.cursor = 0;

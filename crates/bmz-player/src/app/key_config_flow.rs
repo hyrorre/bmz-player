@@ -153,6 +153,7 @@ impl WinitApp {
             return false;
         }
 
+        self.cancel_select_ir_battle_hold();
         self.select.select_keys = SceneInputResolver::from_profile(&self.boot.profile_config.input);
         // 押したままの入力元も新しい設定で解決し直し、E1〜E4 の保持状態を揃える。
         self.clear_select_hold();

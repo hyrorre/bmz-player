@@ -16,11 +16,15 @@ impl WinitApp {
         let event = &event;
         let control_event = ControlInputEvent::keyboard(event);
         self.input.track_control(&control_event);
+        let input = self.resolve_control_event(control_event);
+        let released = self.release_select_ir_battle_hold(&input, key_event_to_device_input(event));
         // Repeat suppression only applies to actions, never physical holds.
         self.sync_select_holds_from_pressed_controls();
         self.sync_play_control_holds_from_pressed_controls();
         // 以降の操作判定は、デバイスとキーコンフィグを解決した入力だけを見る。
-        let input = self.resolve_control_event(control_event);
+        if released {
+            return;
+        }
         if self.detail_options_blocks_held_input(&input) {
             return;
         }
@@ -344,17 +348,13 @@ impl WinitApp {
         }
         if matches!(self.view_state(), AppViewState::Select)
             && self.select.select_option_panel == 0
+            && pressed
+            && !repeat
             && control.is_ir_battle_hold()
             && let Some(source) = input.source()
+            && self.begin_select_ir_battle_hold(source.clone(), scene_select_action(input))
         {
-            if pressed && !repeat {
-                let short_action = scene_select_action(input);
-                if self.begin_select_ir_battle_hold(source.clone(), short_action) {
-                    return;
-                }
-            } else if !pressed && self.finish_select_ir_battle_hold(source) {
-                return;
-            }
+            return;
         }
 
         if matches!(self.view_state(), AppViewState::Select)

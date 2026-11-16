@@ -148,6 +148,10 @@ destinationの`clip_x` / `clip_y` / `clip_w` / `clip_h`は、継承・補間・o
 GPU scissorへ反映します。notes・songlist・judgeの外枠、Ambient合成後の制限にも対応します。
 子部品と検索入力overlayの適用範囲は[Destinationのクリッピング](skin.md#destinationのクリッピング)を参照してください。
 
+選曲のSESSION MODE ref `1970`は内部の設定値を返し、G-BATTLEの相手一覧の開閉とは独立です。
+一覧の表示にはoption `20200`を使います。相手一覧中の実効キーモード・assist ref `73`・LR2 BATTLE表示は
+従来どおりで、相手決定時もSESSION MODE設定は変更しません。決定／プレイ／リザルトでは試行開始時の値を維持します。
+
 ### Luaの推論とruntime
 
 `auto`はfunctionを宣言的なref / expr / draw条件等へ変換できる場合に推論を使い、

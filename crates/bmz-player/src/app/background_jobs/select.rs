@@ -24,6 +24,10 @@ impl WinitApp {
     }
 
     pub(in crate::app) fn change_select_list(&mut self, action: SelectListAction) -> bool {
+        self.cancel_select_ir_battle_hold();
+        if matches!(action, SelectListAction::Enter(_) | SelectListAction::Exit) {
+            self.close_select_ir_battle();
+        }
         if !self.select_list_load_allowed() {
             self.select.list_loader.defer(action);
             return true;

@@ -2012,8 +2012,11 @@ beatoraja互換のassist `ref` / `event_index` `73`はbeatorajaと同じ2値を�
 BMZ対応skinで5種類を区別する場合は、BMZ拡張ref `1970`を使います。
 `number(1970)` / `event_index(1970)` / `image.ref=1970` / `imageset.ref=1970`は
 次の同じインデックスを返します。BMZデフォルトスキンのplay mode panelもこのrefを使用します。
-選曲画面ではこれから開始するモードを返します。
+選曲画面では、選択中のSESSION MODE設定を返します。G-BATTLEの相手一覧を開いても1970の値は変わりません。
+相手一覧の表示状態はoption `20200`を使います（BATTLE OFF行でもtrue）。
 決定画面 / プレイ画面 / リザルト画面では試行開始時に固定したモードを返します。
+相手を決定してもSESSION MODE設定は変わりません。内部NORMALで相手を選ぶと試行中も`0`、
+明示的にG-BATTLEを設定して開始すると`4`です。Luaの対応する`main_state` APIと描画条件も同じ値を参照します。
 
 | 値 | SESSION MODE |
 | ---: | --- |

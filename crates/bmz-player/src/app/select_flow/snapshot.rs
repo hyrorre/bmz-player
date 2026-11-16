@@ -177,7 +177,11 @@ impl WinitApp {
             seven_to_nine_type: self.boot.profile_config.play.seven_to_nine_type.value(),
             source_ln_profile_bits: source_ln_profile
                 .map(crate::skin_extension::source_ln_profile_bits),
-            session_mode_index: Some(crate::skin_extension::session_mode_index(session_mode)),
+            // 1970 reports the selected setting. Keep the effective GBattle mode
+            // above for key mode, assist and legacy LR2 compatibility.
+            session_mode_index: Some(crate::skin_extension::session_mode_index(
+                self.select.session_mode,
+            )),
             double_option_index: Some(crate::skin_extension::double_option_index(
                 applied_double_option,
             )),

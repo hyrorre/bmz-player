@@ -9,6 +9,11 @@ fn select_snapshot() -> SelectSnapshot {
         time: TimeUs(3_000_000),
         selection_time: TimeUs(3_000_000),
         assist: "G-BATTLE".into(),
+        // NORMAL setting while retaining the effective battle assist display.
+        skin_attempt: bmz_render::snapshot::SkinAttemptState {
+            session_mode_index: Some(0),
+            ..Default::default()
+        },
         arrange: "S-RANDOM".into(),
         chart_replication_mode: "RIVALCHART".into(),
         rival_selected: true,

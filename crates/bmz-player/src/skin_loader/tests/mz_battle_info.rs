@@ -54,6 +54,10 @@ fn mz_battle_info_switches_all_three_bodies_and_keeps_player_options_separate() 
         time: TimeUs(3_000_000),
         selection_time: TimeUs(3_000_000),
         assist: "G-BATTLE".into(),
+        skin_attempt: bmz_render::snapshot::SkinAttemptState {
+            session_mode_index: Some(0),
+            ..Default::default()
+        },
         arrange: "S-RANDOM".into(),
         chart_replication_mode: "RIVALCHART".into(),
         rival_selected: true,

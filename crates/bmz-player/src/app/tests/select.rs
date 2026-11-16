@@ -12,6 +12,9 @@ mod cases_03;
 mod cases_04;
 #[path = "select/cases_05.rs"]
 mod cases_05;
+#[cfg(target_os = "linux")]
+#[path = "select/ir_battle.rs"]
+mod ir_battle;
 #[path = "select/lr2_buttons.rs"]
 mod lr2_buttons;
 #[path = "select/navigation.rs"]
