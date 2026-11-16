@@ -338,7 +338,7 @@ impl WinitApp {
             // 通常終了だけはSelectと同じ操作として残す。
             if standard == Some(StandardKey::Escape) {
                 if pressed && !repeat && self.boot.profile_config.select.exit_hold_ms == 0 {
-                    self.select.select_exit_requested = true;
+                    self.select.select_exit_requested = self.select.select_option_panel == 0;
                     return;
                 }
                 update_select_exit_hold(
@@ -435,7 +435,8 @@ impl WinitApp {
                     }
                     SelectEscapePress::ArmExitHold => {
                         if self.boot.profile_config.select.exit_hold_ms == 0 {
-                            self.select.select_exit_requested = true;
+                            self.select.select_exit_requested =
+                                self.select.select_option_panel == 0;
                             return;
                         }
                     }

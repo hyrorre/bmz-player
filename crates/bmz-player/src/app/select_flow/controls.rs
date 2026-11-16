@@ -2,15 +2,13 @@ use super::*;
 
 impl WinitApp {
     pub(super) fn should_exit_via_select_hold(&mut self) -> bool {
-        if std::mem::take(&mut self.select.select_exit_requested) {
-            return true;
-        }
-        let allowed = matches!(self.view_state(), AppViewState::Select)
-            && self.select.select_option_panel == 0
-            && self.input.keyboard_key_held("Escape");
-        select_exit_hold_due_after(
+        let view = self.view_state();
+        select_exit_due(
+            &mut self.select.select_exit_requested,
             &mut self.select.select_exit_hold_started_at,
-            allowed,
+            view,
+            self.select.select_option_panel,
+            self.input.keyboard_key_held("Escape"),
             Instant::now(),
             Duration::from_millis(u64::from(self.boot.profile_config.select.exit_hold_ms)),
         )
@@ -990,6 +988,82 @@ impl WinitApp {
                 self.begin_result_exit(ResultExitAction::RetryCourseSameArrange)
             }
             (_, ResultAction::Leave) => self.begin_result_exit(ResultExitAction::Leave),
+        }
+    }
+}
+
+fn select_exit_due(
+    requested: &mut bool,
+    started_at: &mut Option<Instant>,
+    view: AppViewState,
+    option_panel: u8,
+    escape_held: bool,
+    now: Instant,
+    duration: Duration,
+) -> bool {
+    let allowed = matches!(view, AppViewState::Select) && option_panel == 0;
+    let requested = std::mem::take(requested);
+    let hold_due = select_exit_hold_due_after(started_at, allowed && escape_held, now, duration);
+    (allowed && requested) || hold_due
+}
+
+#[cfg(test)]
+mod exit_tests {
+    use super::*;
+
+    #[test]
+    fn zero_duration_requests_are_discarded_while_a_panel_or_other_scene_is_open() {
+        let now = Instant::now();
+        for (view, panel) in [
+            (AppViewState::Select, 1),
+            (AppViewState::Select, 2),
+            (AppViewState::Select, 3),
+            (AppViewState::Decide, 0),
+            (AppViewState::Play, 0),
+            (AppViewState::Result, 0),
+        ] {
+            let mut requested = true;
+            let mut started = Some(now);
+            assert!(!select_exit_due(
+                &mut requested,
+                &mut started,
+                view,
+                panel,
+                true,
+                now,
+                Duration::ZERO,
+            ));
+            assert!(!requested);
+            assert!(started.is_none());
+            assert!(!select_exit_due(
+                &mut requested,
+                &mut started,
+                AppViewState::Select,
+                0,
+                false,
+                now,
+                Duration::ZERO,
+            ));
+        }
+    }
+
+    #[test]
+    fn zero_duration_root_press_survives_release_and_is_consumed_once() {
+        let mut requested = true;
+        let mut started = None;
+        for expected in [true, false] {
+            assert_eq!(
+                select_exit_due(
+                    &mut requested,
+                    &mut started,
+                    AppViewState::Select,
+                    0,
+                    false,
+                    Instant::now(),
+                    Duration::ZERO,
+                ),
+                expected,
+            );
         }
     }
 }
