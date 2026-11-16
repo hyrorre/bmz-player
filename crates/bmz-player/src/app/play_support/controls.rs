@@ -72,16 +72,25 @@ pub(in crate::app) fn transition_select_option_panel(
     true
 }
 
+#[cfg(test)]
 pub(in crate::app) fn select_exit_hold_due(
     started_at: &mut Option<Instant>,
     allowed: bool,
     now: Instant,
 ) -> bool {
+    select_exit_hold_due_after(started_at, allowed, now, SELECT_EXIT_HOLD_DURATION)
+}
+
+pub(in crate::app) fn select_exit_hold_due_after(
+    started_at: &mut Option<Instant>,
+    allowed: bool,
+    now: Instant,
+    duration: Duration,
+) -> bool {
     if !allowed {
         *started_at = None;
     }
-    started_at
-        .is_some_and(|started| now.saturating_duration_since(started) >= SELECT_EXIT_HOLD_DURATION)
+    started_at.is_some_and(|started| now.saturating_duration_since(started) >= duration)
 }
 
 /// 選曲画面で ESC を押したときの動作。

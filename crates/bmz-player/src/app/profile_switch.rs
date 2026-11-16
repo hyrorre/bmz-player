@@ -383,6 +383,7 @@ impl WinitApp {
         self.clear_result_ir_scroll_input();
         self.clear_play_control_holds();
         self.select.select_exit_hold_started_at = None;
+        self.select.select_exit_requested = false;
         self.select.select_slider_dragging_type = None;
         self.select.ir_battle.hold_started_at = None;
         self.select.ir_battle.hold_control = None;

@@ -86,6 +86,7 @@ pub(super) struct SelectRuntimeState {
     pub(super) detail_options: super::select_flow_detail_options::DetailOptionsState,
     /// 選曲画面でESCを長押し中の開始時刻。離されたり画面を抜けると None になる。
     pub(super) select_exit_hold_started_at: Option<Instant>,
+    pub(super) select_exit_requested: bool,
     /// 選曲画面のメタ画像・試聴音源のキャッシュと非同期ロード状態。
     pub(super) select_assets: SelectAssetRuntime,
     /// 設定画面で編集中の項目。`None` なら一覧操作モード。

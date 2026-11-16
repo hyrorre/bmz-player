@@ -376,6 +376,7 @@ fn select_state_uses_defaults_for_old_profiles() {
 #[test]
 fn select_state_roundtrips_through_toml() {
     let select = SelectStateConfig {
+        exit_hold_ms: 0,
         mode_filter: "7K".to_string(),
         difficulty_filter: "HYPER".to_string(),
         sort: "LEVEL".to_string(),
@@ -404,6 +405,7 @@ fn select_state_roundtrips_through_toml() {
     let parsed: SelectStateConfig = toml::from_str(&toml).unwrap();
 
     assert_eq!(parsed.mode_filter, "7K");
+    assert_eq!(parsed.exit_hold_ms, 0);
     assert_eq!(parsed.difficulty_filter, "HYPER");
     assert_eq!(parsed.sort, "LEVEL");
     assert_eq!(parsed.new_title_hours, 48);
@@ -412,6 +414,12 @@ fn select_state_roundtrips_through_toml() {
     assert_eq!(parsed.random_select_flags(), [true; 8]);
     assert_eq!(parsed.random_mix.target_level, 12);
     assert_eq!(parsed.random_mix.stages, 4);
+}
+
+#[test]
+fn missing_select_exit_duration_defaults_to_1200ms() {
+    let config: SelectStateConfig = toml::from_str("").unwrap();
+    assert_eq!(config.exit_hold_ms, 1_200);
 }
 
 #[test]

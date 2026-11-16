@@ -1,5 +1,26 @@
 //! Logical panel lifetime is independent of the physical E1/E2 holds.
 use super::*;
+
+#[cfg(test)]
+#[test]
+fn select_exit_uses_the_configured_duration_and_cancels_when_blocked() {
+    let base = Instant::now();
+    for duration in [0, 250, 1200, 5000] {
+        let duration = Duration::from_millis(duration);
+        let mut started = Some(base);
+        assert!(select_exit_hold_due_after(&mut started, true, base + duration, duration));
+        if !duration.is_zero() {
+            assert!(!select_exit_hold_due_after(
+                &mut started,
+                true,
+                base + duration - Duration::from_millis(1),
+                duration
+            ));
+        }
+        assert!(!select_exit_hold_due_after(&mut started, false, base + duration, duration));
+        assert!(started.is_none());
+    }
+}
 use bmz_gameplay::input::backend::{DeviceTimestamp, monotonic_timestamp_ns};
 use bmz_gameplay::input::bounce::InputBounceConfig;
 
