@@ -15,7 +15,9 @@ use bmz_render::scene::{
     SelectRivalJudgeCounts, SelectRivalSnapshot,
 };
 
-use crate::config::profile_config::{IrConfig, ProfileConfig, RivalSourceConfig};
+use crate::config::profile_config::{
+    IrConfig, IrProviderConfig, ProfileConfig, RivalEntry, RivalSourceConfig,
+};
 use crate::ir::ranking::ChartRankingQuery as ResultIrQuery;
 use crate::ir::types::{IrCourseRankingResult, IrRankingResult, IrRankingScope};
 use crate::ln_policy::LnScorePolicy;
@@ -98,28 +100,15 @@ impl From<&SelectRivalFetchTarget> for SelectRivalFetchKey {
 
 impl SelectRivalFetchTarget {
     pub fn from_profile(profile: &ProfileConfig) -> Option<Self> {
-        let provider = crate::ir::provider_key::primary_provider_config(&profile.ir)?;
-        if !crate::ir::rian_ir::is_rian_ir_config(provider)
-            && !crate::ir::bms_ir::is_bms_ir_config(provider)
-        {
-            return None;
-        }
-        if crate::ir::bms_ir::is_bms_ir_config(provider) && profile.play.rule_mode == RuleMode::Dx {
-            return None;
-        }
-        let provider_key = crate::ir::provider_key::configured_provider_key(provider)?.to_string();
+        let provider = select_rival_provider(profile)?;
+        let provider_key = crate::ir::provider_key::configured_provider_key(provider)?;
         let active = profile.rival.active_rival.trim();
         if active.is_empty() {
             return None;
         }
-        let rival = profile.rival.entries.iter().find(|entry| {
-            entry.id == active
-                && matches!(entry.source, RivalSourceConfig::Ir)
-                && entry.ir_service == provider_key
-                && !entry.ir_user_id.is_empty()
-        })?;
+        let rival = selectable_rivals(profile, provider_key).find(|entry| entry.id == active)?;
         Some(Self {
-            provider: provider_key,
+            provider: provider_key.to_string(),
             base_url: provider.base_url.clone(),
             rival_id: rival.ir_user_id.clone(),
             display_name: rival.display_name.clone(),
@@ -127,6 +116,44 @@ impl SelectRivalFetchTarget {
             rule_mode: profile.play.rule_mode,
         })
     }
+}
+
+fn select_rival_provider(profile: &ProfileConfig) -> Option<&IrProviderConfig> {
+    let provider = crate::ir::provider_key::primary_provider_config(&profile.ir)?;
+    let supported = if crate::ir::bms_ir::is_bms_ir_config(provider) {
+        profile.play.rule_mode != RuleMode::Dx
+    } else {
+        crate::ir::rian_ir::is_rian_ir_config(provider)
+    };
+    supported.then_some(provider)
+}
+
+fn selectable_rivals<'a>(
+    profile: &'a ProfileConfig,
+    provider_key: &'a str,
+) -> impl Iterator<Item = &'a RivalEntry> {
+    profile.rival.entries.iter().filter(move |entry| {
+        matches!(entry.source, RivalSourceConfig::Ir)
+            && entry.ir_service == provider_key
+            && !entry.ir_user_id.is_empty()
+    })
+}
+
+/// The empty ID represents NONE. No ID is returned if there is nothing to cycle.
+pub fn next_select_rival_id(profile: &ProfileConfig, forward: bool) -> Option<String> {
+    let provider = select_rival_provider(profile)?;
+    let provider_key = crate::ir::provider_key::configured_provider_key(provider)?;
+    let ids: Vec<&str> =
+        selectable_rivals(profile, provider_key).map(|entry| entry.id.as_str()).collect();
+    if ids.is_empty() {
+        return None;
+    }
+
+    let active = profile.rival.active_rival.trim();
+    let position = ids.iter().position(|id| *id == active).map_or(0, |index| index + 1);
+    let count = ids.len() + 1;
+    let next = if forward { (position + 1) % count } else { (position + count - 1) % count };
+    Some(if next == 0 { String::new() } else { ids[next - 1].to_string() })
 }
 
 pub fn rian_ln_mode_for_chart(
@@ -263,13 +290,12 @@ use fetch::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::profile_config::{
-        IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
-    };
+    use crate::config::profile_config::{IrProviderRoleConfig, IrSendPolicyConfig};
     use crate::ir::types::{
         IrCourseRankingBody, IrCourseRankingCourseRef, IrCourseRankingEntry, IrCourseRankingResult,
         IrCourseRankingScore, IrJudgePayload, IrJudgeSidePayload, IrRankingBody, IrRankingChartRef,
         IrRankingEntry, IrRankingPagination, IrRankingPlayer, IrRankingScore, IrRankingSelfRef,
+        IrRivalEntry, IrRivalProfile,
     };
     use crate::screens::result_ir::ResultIrRankingEntry;
 
@@ -818,6 +844,120 @@ mod tests {
         assert_eq!(view::rival_clear_index(-1), 0);
         assert_eq!(view::rival_clear_index(6), 6);
         assert_eq!(view::rival_clear_index(11), 10);
+    }
+
+    #[test]
+    fn bms_ir_rival_cycle_uses_only_the_selected_player_and_ignores_late_scores_after_none() {
+        let mut profile = ProfileConfig::new_default("test", "Test", 0);
+        let bms_ir = crate::ir::bms_ir::BMS_IR_PROVIDER;
+        profile.ir.primary_provider = bms_ir.to_string();
+        let provider =
+            profile.ir.providers.iter_mut().find(|provider| provider.provider == bms_ir).unwrap();
+        provider.provider_key = bms_ir.to_string();
+        provider.enabled = true;
+        provider.account_id = "123".to_string();
+        profile.play.rule_mode = RuleMode::Beatoraja;
+        let rival = |id: &str, name: &str| IrRivalEntry {
+            player_id: id.to_string(),
+            relation_type: "rival".to_string(),
+            profile: Some(IrRivalProfile { display_name: name.to_string(), bio: None }),
+        };
+        crate::ir_cmd::sync_ir_rivals_into_profile(
+            &mut profile,
+            bms_ir,
+            &[rival("1", "A"), rival("2", "B")],
+        );
+        crate::ir_cmd::sync_ir_rivals_into_profile(&mut profile, "rian-ir", &[rival("3", "C")]);
+
+        let (_temp, root) = missing_profile_root("bms-rival-cycle");
+        let mut select_ir = SelectIrRanking::default();
+        let sha = [7; 32];
+        let context = "bms-rival-cycle";
+        let requested_at = Instant::now();
+        select_ir.context = context.to_string();
+        select_ir.in_flight = Some((context.to_string(), sha, requested_at));
+        let mut rivals = raw_global_ranking(sha, 1, 1700, 1);
+        rivals.ranking.scope = IrRankingScope::Rivals;
+        select_ir
+            .sender
+            .send((
+                context.to_string(),
+                sha,
+                requested_at,
+                Ok((raw_global_ranking(sha, 1, 1700, 1), None, Some(rivals))),
+            ))
+            .unwrap();
+        select_ir.update(
+            &profile.ir,
+            &root,
+            context,
+            LnScorePolicy::ForceLn,
+            DoubleOptionScoreBucket::Off,
+            profile.play.rule_mode,
+            Some(sha),
+            None,
+        );
+        assert!(select_ir.active_rival_display_name().is_none());
+        assert!(select_ir.rival_for(&profile.ir, Some(sha)).is_none());
+        assert_eq!(
+            select_ir.target_ex_score_for(&profile.ir, Some(sha), TargetOption::RivalTop, None),
+            Some(1700)
+        );
+
+        let cycle_forward = |profile: &mut ProfileConfig, select_ir: &mut SelectIrRanking| {
+            profile.rival.active_rival = next_select_rival_id(profile, true).unwrap();
+            let target = SelectRivalFetchTarget::from_profile(profile);
+            select_ir.update_rival(target.clone(), &root);
+            target
+        };
+        let first = cycle_forward(&mut profile, &mut select_ir).unwrap();
+        assert_eq!(first.rival_id, "1");
+        assert_eq!(select_ir.active_rival_display_name(), Some("A"));
+        assert!(select_ir.active_rival_snapshot(sha, 0).is_none());
+
+        let score = IrRivalScoreRecord {
+            chart_sha256: sha,
+            ln_mode: 0,
+            ex_score: 1500,
+            clear_type: 6,
+            max_combo: 700,
+            min_bp: 12,
+            play_option: 0,
+            arrange_1p: String::new(),
+            arrange_2p: String::new(),
+            double_option: String::new(),
+            play_seed: None,
+        };
+        select_ir.rival_in_flight = Some((first.clone(), requested_at));
+        select_ir
+            .rival_sender
+            .send((first.clone(), requested_at, Ok(vec![score.clone()])))
+            .unwrap();
+        select_ir.update_rival(Some(first), &root);
+        let snapshot = select_ir.active_rival_snapshot(sha, 0).unwrap();
+        assert_eq!(snapshot.display_name, "A");
+        assert_eq!(snapshot.ex_score, 1500);
+        assert!(select_ir.active_rival_snapshot([8; 32], 0).is_none());
+        assert_eq!(select_ir.active_rival_display_name(), Some("A"));
+
+        let second = cycle_forward(&mut profile, &mut select_ir).unwrap();
+        assert_eq!(second.rival_id, "2");
+        assert_eq!(select_ir.active_rival_display_name(), Some("B"));
+        assert!(select_ir.active_rival_snapshot(sha, 0).is_none());
+        select_ir.rival_in_flight = Some((second.clone(), requested_at));
+        assert!(cycle_forward(&mut profile, &mut select_ir).is_none());
+        assert!(profile.rival.active_rival.is_empty());
+        select_ir.rival_sender.send((second, requested_at, Ok(vec![score]))).unwrap();
+        select_ir.update_rival(None, &root);
+        assert!(select_ir.active_rival_display_name().is_none());
+        assert!(select_ir.active_rival_score(sha, 0).is_none());
+        assert!(select_ir.rival_for(&profile.ir, Some(sha)).is_none());
+
+        profile.rival.active_rival = next_select_rival_id(&profile, false).unwrap();
+        assert_eq!(SelectRivalFetchTarget::from_profile(&profile).unwrap().rival_id, "2");
+        profile.play.rule_mode = RuleMode::Dx;
+        assert!(next_select_rival_id(&profile, true).is_none());
+        assert!(SelectRivalFetchTarget::from_profile(&profile).is_none());
     }
 
     #[test]

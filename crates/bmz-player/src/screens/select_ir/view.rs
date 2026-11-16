@@ -282,13 +282,13 @@ impl SelectIrRanking {
         snapshot_with_provider(snapshot, ir_config)
     }
 
-    /// 選択中譜面のライバルベスト (最上位 1 名)。未取得 / IR 未設定なら None。
+    /// 選択中のライバルのスコア。ランキング由来の比較表示を持つIRでは最上位を補う。
     pub fn rival_for(
         &self,
         ir_config: &IrConfig,
         selected: Option<[u8; 32]>,
     ) -> Option<SelectRivalSnapshot> {
-        enabled_provider(ir_config)?;
+        let provider = crate::ir::provider_key::primary_provider_config(ir_config)?;
         if self.active_rival.is_some() {
             let sha256 = selected?;
             let score = self
@@ -303,6 +303,11 @@ impl SelectIrRanking {
                 bp: score.min_bp.max(0) as u32,
                 judge_counts: None,
             });
+        }
+        // BMS-IR uses an explicit selection for comparison. Its Rivals ranking still feeds
+        // the ranking targets.
+        if crate::ir::bms_ir::is_bms_ir_config(provider) {
+            return None;
         }
         self.cache.get(&selected?).and_then(|entry| entry.rival.clone())
     }

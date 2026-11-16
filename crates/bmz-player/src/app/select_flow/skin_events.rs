@@ -326,47 +326,18 @@ impl WinitApp {
     }
 
     pub(super) fn cycle_active_rival(&mut self, arg: i32) {
-        let Some(provider) =
-            crate::ir::provider_key::primary_provider_config(&self.boot.profile_config.ir)
+        let Some(next) =
+            crate::screens::select_ir::next_select_rival_id(&self.boot.profile_config, arg >= 0)
         else {
             return;
         };
-        if !crate::ir::rian_ir::is_rian_ir_provider(&provider.provider) {
-            return;
-        }
-        let Some(provider_key) = crate::ir::provider_key::configured_provider_key(provider) else {
-            return;
-        };
-        let ids: Vec<String> = self
-            .boot
-            .profile_config
-            .rival
-            .entries
-            .iter()
-            .filter(|entry| {
-                matches!(entry.source, RivalSourceConfig::Ir)
-                    && entry.ir_service == provider_key
-                    && !entry.ir_user_id.is_empty()
-            })
-            .map(|entry| entry.id.clone())
-            .collect();
-        if ids.is_empty() {
-            return;
-        }
 
-        let current = self.boot.profile_config.rival.active_rival.clone();
-        let position = if current.is_empty() {
-            0
-        } else {
-            ids.iter().position(|id| id == &current).map(|index| index + 1).unwrap_or(0)
-        };
-        let count = ids.len() + 1;
-        let next = if arg >= 0 { (position + 1) % count } else { (position + count - 1) % count };
-        self.boot.profile_config.rival.active_rival =
-            if next == 0 { String::new() } else { ids[next - 1].clone() };
+        let current = std::mem::replace(&mut self.boot.profile_config.rival.active_rival, next);
+        let previous_updated_at = self.boot.profile_config.updated_at;
         self.boot.profile_config.updated_at = now_unix_seconds();
         if let Err(error) = self.save_profile_config_now() {
             self.boot.profile_config.rival.active_rival = current;
+            self.boot.profile_config.updated_at = previous_updated_at;
             tracing::error!(%error, "failed to save active rival");
             return;
         }
