@@ -228,6 +228,10 @@ pub(super) fn lua_table_to_json(
     entries.sort_by(|left, right| left.key.compare(&right.key));
 
     if entries.is_empty() {
+        // Skins can initialize an empty songlist even on screens without a list.
+        if path == "$.songlist" {
+            return Ok(JsonValue::Object(JsonMap::new()));
+        }
         return Ok(JsonValue::Array(Vec::new()));
     }
 

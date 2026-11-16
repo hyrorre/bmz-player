@@ -3,6 +3,9 @@
 
 use super::*;
 
+#[path = "tests/songlist_diagnostics.rs"]
+mod songlist_diagnostics;
+
 #[test]
 fn lua_numeric_normalization_preserves_singleton_offset_definitions() {
     for count in 0..=2 {

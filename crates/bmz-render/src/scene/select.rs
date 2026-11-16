@@ -383,6 +383,14 @@ impl Default for SelectSnapshot {
     }
 }
 
+/// A shared thumbnail texture; no paths, file I/O, or CPU pixels reach rendering.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectRowBannerSnapshot {
+    pub texture: crate::skin::SkinTextureId,
+    pub size: SkinImageSize,
+    pub lease: Arc<()>,
+}
+
 /// One chart row's download progress bar.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SelectRowDownloadProgress {
@@ -395,6 +403,9 @@ pub struct SelectRowDownloadProgress {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectRowSnapshot {
+    /// Prepared per-row banner. The lease keeps its GPU resource alive with the
+    /// renderer's retained scene and draw plan, including loading transitions.
+    pub banner: Option<SelectRowBannerSnapshot>,
     pub index: u32,
     pub chart_md5: Option<[u8; 16]>,
     pub chart_sha256: Option<[u8; 32]>,
@@ -432,6 +443,9 @@ pub struct SelectRowSnapshot {
     /// Recently added chart: use LR2 BAR_TITLE 1.
     pub lr2_new_title: bool,
     pub ex_score: Option<u32>,
+    /// False for a clear-only record whose numeric columns are neutral zeroes.
+    /// Kept separate so legacy selected-song refs retain their behavior.
+    pub numeric_score_available: bool,
     pub max_combo: Option<u32>,
     pub gauge_value: Option<f32>,
     pub bp: Option<u32>,
@@ -519,6 +533,7 @@ impl SelectRowSnapshot {
 impl Default for SelectRowSnapshot {
     fn default() -> Self {
         Self {
+            banner: None,
             chart_md5: None,
             chart_sha256: None,
             index: 0,
@@ -546,6 +561,7 @@ impl Default for SelectRowSnapshot {
             rival_ex_score: None,
             lr2_new_title: false,
             ex_score: None,
+            numeric_score_available: true,
             max_combo: None,
             gauge_value: None,
             bp: None,

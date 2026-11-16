@@ -159,7 +159,17 @@ impl ScoreDatabase {
                     b.replay_path,
                     h.arrange,
                     h.arrange_2p,
-                    h.applied_double_option
+                    h.applied_double_option,
+                    CASE WHEN b.best_score_history_id IS NOT NULL
+                    OR b.ex_score != 0 OR b.bp != 0 OR b.cb != 0 OR b.max_combo != 0
+                    THEN 1 ELSE EXISTS (
+                        SELECT 1 FROM score_history AS prior
+                        WHERE prior.chart_sha256 = b.chart_sha256
+                          AND prior.ln_policy = b.ln_policy
+                          AND prior.double_option = b.double_option
+                          AND CASE prior.rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
+                              WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = b.rule_mode
+                    ) END
                 FROM score_best b
                 LEFT JOIN score_history h ON h.id = b.best_score_history_id
                 WHERE (b.chart_sha256, b.ln_policy, b.double_option, b.rule_mode)

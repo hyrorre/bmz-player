@@ -97,7 +97,7 @@ impl WinitApp {
             .update_preview_selection(self.select.selection_generation, chart_id);
         let restart = selection_changed && mode == SongPreviewMode::Once;
         if self.selected_chart_needs_generated_preview_distribution() {
-            self.ensure_visible_select_chart_distributions(25);
+            self.ensure_visible_select_chart_distributions(SELECT_VISIBLE_ROWS);
         }
         let selected_cache_key = self.selected_select_preview_cache_key();
         let cache_key = select_preview_key_after_delay(

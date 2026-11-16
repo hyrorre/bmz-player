@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn selected_entry_memory_limit_does_not_reject_unselected_larger_assets() {
+    let temp = Temp::new();
+    let path = temp.path("bounded.zip");
+    zip(
+        &path,
+        &[(b"banner.png", b"small", 0o100644), (b"audio.wav", b"much larger audio", 0o100644)],
+    );
+    let pick = |entry: &ArchiveEntry| entry.name == "banner.png";
+    let (_, entries) =
+        read_entries_limited(&path, None, &Default::default(), &pick, Some(5)).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].1, b"small");
+    assert!(read_entries_limited(&path, None, &Default::default(), &pick, Some(4)).is_err());
+    let first = inspect_shared(&path, &Default::default()).unwrap();
+    let second = inspect_shared(&path, &Default::default()).unwrap();
+    assert!(Arc::ptr_eq(&first, &second), "row refreshes share all archive entry names");
+}
+
+#[test]
 fn bmc_archive_entries_are_scanned_with_the_same_hidden_file_rules() {
     for (name, accepted) in
         [("song/chart.BMC", true), ("__MACOSX/chart.bmc", false), ("song/._chart.bmc", false)]

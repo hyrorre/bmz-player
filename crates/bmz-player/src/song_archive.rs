@@ -259,6 +259,21 @@ pub fn inspect(path: &Path, control: &ArchiveControl) -> Result<ArchiveIndex> {
     Ok(inspect_canonical(path, current, control)?.1)
 }
 
+/// Many visible rows may refer to one pack. Reuse its bounded index cache
+/// without copying every entry name for each periodic source refresh.
+pub(crate) fn inspect_shared(path: &Path, control: &ArchiveControl) -> Result<Arc<ArchiveIndex>> {
+    control.check()?;
+    let path = std::fs::canonicalize(path)?;
+    let current = metadata_stamp(&path)?;
+    if let Some(index) = cache::cached_shared_index(&path, &current, &control.limits) {
+        return Ok(index);
+    }
+    let (stamp, index) = inspect_canonical(path.clone(), current, control)?;
+    // inspect_canonical populated the cache unless this index alone exceeds it.
+    Ok(cache::cached_shared_index(&path, &stamp, &control.limits)
+        .unwrap_or_else(|| Arc::new(index)))
+}
+
 /// The index of a canonical `path` whose stamp is `current`, with the stamp it was read at.
 fn inspect_canonical(
     path: PathBuf,
@@ -364,15 +379,29 @@ pub fn read_entries(
     control: &ArchiveControl,
     pick: &dyn Fn(&ArchiveEntry) -> bool,
 ) -> Result<(ArchiveIndex, Vec<(String, Vec<u8>)>)> {
+    read_entries_limited(path, expected, control, pick, None)
+}
+
+/// Bound both allocation and actual bytes emitted by the selected entry reader.
+pub(crate) fn read_entries_limited(
+    path: &Path,
+    expected: Option<&ArchiveGeneration>,
+    control: &ArchiveControl,
+    pick: &dyn Fn(&ArchiveEntry) -> bool,
+    max_entry_bytes: Option<usize>,
+) -> Result<(ArchiveIndex, Vec<(String, Vec<u8>)>)> {
     let mut opened = Opened::new(path, control)?;
     if let Some(expected) = expected {
         ensure!(opened.index.generation == *expected, "song archive generation changed");
     }
     let collected = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
     opened.extract(control, Selection::Pick(pick), &mut |entry| {
+        if let Some(limit) = max_entry_bytes {
+            ensure!(entry.size <= limit as u64, "selected archive entry exceeds byte limit");
+        }
         let capacity = entry.size.min(control.limits.chart_bytes) as usize;
         collected.lock().unwrap().push((entry.name.clone(), Vec::with_capacity(capacity)));
-        Ok(Box::new(EntryWriter(collected.clone())))
+        Ok(Box::new(EntryWriter(collected.clone(), max_entry_bytes)))
     })?;
     opened.verify_unchanged(path, control)?;
     let canonical = std::fs::canonicalize(path)?;
@@ -382,11 +411,14 @@ pub fn read_entries(
 }
 
 /// Appends to the entry most recently opened by [`read_entries`].
-struct EntryWriter(Arc<Mutex<Vec<(String, Vec<u8>)>>>);
+struct EntryWriter(Arc<Mutex<Vec<(String, Vec<u8>)>>>, Option<usize>);
 impl Write for EntryWriter {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         let mut entries = self.0.lock().unwrap();
         let (_, current) = entries.last_mut().expect("entry opened before writing");
+        if self.1.is_some_and(|limit| current.len().saturating_add(bytes.len()) > limit) {
+            return Err(std::io::Error::other("selected archive entry exceeds byte limit"));
+        }
         current.extend_from_slice(bytes);
         Ok(bytes.len())
     }

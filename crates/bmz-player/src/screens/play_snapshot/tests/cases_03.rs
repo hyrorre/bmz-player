@@ -257,9 +257,13 @@ fn update_render_snapshot_play_options_refreshes_ready_snapshot_values() {
     session.lanecover_enabled = true;
     session.lane_cover_visible = true;
     session.lane_cover_changing = true;
+    session.offsets.visual_offset_us = -12_000;
+    session.input_offset_auto_adjust_enabled = true;
     update_render_snapshot_play_options(&mut snapshot, &session, TimeUs(0));
 
     assert_eq!(snapshot.hispeed, 2.0);
+    assert_eq!(snapshot.judge_timing_offset_ms, -12);
+    assert!(snapshot.judge_timing_auto_adjust);
     assert_eq!(snapshot.lane_cover, 0.25);
     assert!(snapshot.lane_cover_changing);
     assert_eq!(snapshot.note_display_duration_ms, 750);

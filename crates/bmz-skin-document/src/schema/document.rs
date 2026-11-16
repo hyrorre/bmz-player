@@ -268,46 +268,45 @@ fn default_practice_visible_items() -> i32 {
     10
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SkinSongListDef {
     /// LR2 child coordinates are relative to the bottom-left of each bar.
-    #[serde(default, rename = "lr2BottomOrigin")]
     pub lr2_bottom_origin: bool,
-    #[serde(default)]
     pub flash: Vec<DestinationListEntry>,
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
     pub id: String,
-    #[serde(default)]
     pub center: i32,
-    #[serde(default)]
     pub clickable: Vec<i32>,
-    #[serde(default)]
     pub listoff: Vec<DestinationListEntry>,
-    #[serde(default)]
     pub liston: Vec<DestinationListEntry>,
-    #[serde(default)]
     pub text: Vec<DestinationListEntry>,
-    #[serde(default)]
     pub level: Vec<DestinationListEntry>,
-    #[serde(default)]
     pub lamp: Vec<DestinationListEntry>,
-    #[serde(default)]
     pub playerlamp: Vec<DestinationListEntry>,
-    #[serde(default)]
     pub rivallamp: Vec<DestinationListEntry>,
     /// Native LR2 BAR_RIVAL slots; 0..3 are win, lose, draw, and no player score.
-    #[serde(default)]
     pub lr2rival: Vec<DestinationListEntry>,
-    #[serde(default, deserialize_with = "deserialize_destination_entries")]
     pub trophy: Vec<DestinationListEntry>,
-    #[serde(default, deserialize_with = "deserialize_destination_entries")]
     pub graph: Vec<DestinationListEntry>,
-    #[serde(default, deserialize_with = "deserialize_destination_entries")]
     pub label: Vec<DestinationListEntry>,
-    #[serde(default)]
     pub judgegraph: Vec<DestinationListEntry>,
-    #[serde(default)]
     pub bpmgraph: Vec<DestinationListEntry>,
+    /// Per-row #BANNER destinations; materials come from the row snapshot.
+    pub banner: Vec<SkinDestinationDef>,
+    pub scorerank: Vec<SkinSongListFieldDef>,
+    pub exscore: Vec<SkinSongListFieldDef>,
+    pub scorerate: Vec<SkinSongListFieldDef>,
+    pub minbp: Vec<SkinSongListFieldDef>,
+    pub mincb: Vec<SkinSongListFieldDef>,
+    pub maxcombo: Vec<SkinSongListFieldDef>,
+    pub nextrank: Vec<SkinSongListFieldDef>,
+    pub nextrankdiff: Vec<SkinSongListFieldDef>,
+    pub nearestrank: Vec<SkinSongListFieldDef>,
+    pub nearestrankdiff: Vec<SkinSongListFieldDef>,
+    pub rivalscorerank: Vec<SkinSongListFieldDef>,
+    pub rivaldiff: Vec<SkinSongListFieldDef>,
+    pub favorite: Vec<SkinSongListFieldDef>,
+    /// Source declaration order. Lua skins can supply this explicitly.
+    pub score_order: Vec<SongListField>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -316,6 +315,375 @@ pub struct SkinCategoryDef {
     pub name: String,
     #[serde(default)]
     pub item: Vec<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum SongListField {
+    #[serde(rename = "scorerank")]
+    Scorerank,
+    #[serde(rename = "exscore")]
+    Exscore,
+    #[serde(rename = "scorerate")]
+    Scorerate,
+    #[serde(rename = "minbp")]
+    Minbp,
+    #[serde(rename = "mincb")]
+    Mincb,
+    #[serde(rename = "maxcombo")]
+    Maxcombo,
+    #[serde(rename = "nextrank")]
+    Nextrank,
+    #[serde(rename = "nextrankdiff")]
+    Nextrankdiff,
+    #[serde(rename = "nearestrank")]
+    Nearestrank,
+    #[serde(rename = "nearestrankdiff")]
+    Nearestrankdiff,
+    #[serde(rename = "rivalscorerank")]
+    Rivalscorerank,
+    #[serde(rename = "rivaldiff")]
+    Rivaldiff,
+    #[serde(rename = "favorite")]
+    Favorite,
+}
+
+impl SkinSongListDef {
+    pub fn all_score_fields(&self) -> impl Iterator<Item = &SkinSongListFieldDef> {
+        [
+            &self.scorerank,
+            &self.exscore,
+            &self.scorerate,
+            &self.minbp,
+            &self.mincb,
+            &self.maxcombo,
+            &self.nextrank,
+            &self.nextrankdiff,
+            &self.nearestrank,
+            &self.nearestrankdiff,
+            &self.rivalscorerank,
+            &self.rivaldiff,
+            &self.favorite,
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    pub fn all_score_fields_mut(&mut self) -> impl Iterator<Item = &mut SkinSongListFieldDef> {
+        [
+            &mut self.scorerank,
+            &mut self.exscore,
+            &mut self.scorerate,
+            &mut self.minbp,
+            &mut self.mincb,
+            &mut self.maxcombo,
+            &mut self.nextrank,
+            &mut self.nextrankdiff,
+            &mut self.nearestrank,
+            &mut self.nearestrankdiff,
+            &mut self.rivalscorerank,
+            &mut self.rivaldiff,
+            &mut self.favorite,
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    pub fn score_fields(&self, field: SongListField) -> &[SkinSongListFieldDef] {
+        match field {
+            SongListField::Scorerank => &self.scorerank,
+            SongListField::Exscore => &self.exscore,
+            SongListField::Scorerate => &self.scorerate,
+            SongListField::Minbp => &self.minbp,
+            SongListField::Mincb => &self.mincb,
+            SongListField::Maxcombo => &self.maxcombo,
+            SongListField::Nextrank => &self.nextrank,
+            SongListField::Nextrankdiff => &self.nextrankdiff,
+            SongListField::Nearestrank => &self.nearestrank,
+            SongListField::Nearestrankdiff => &self.nearestrankdiff,
+            SongListField::Rivalscorerank => &self.rivalscorerank,
+            SongListField::Rivaldiff => &self.rivaldiff,
+            SongListField::Favorite => &self.favorite,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SkinSongListDef {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::{MapAccess, Visitor};
+        struct SongListVisitor;
+        impl<'de> Visitor<'de> for SongListVisitor {
+            type Value = SkinSongListDef;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a songlist object")
+            }
+            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+                #[derive(Deserialize)]
+                struct Id(#[serde(deserialize_with = "deserialize_skin_id")] String);
+                #[derive(Deserialize)]
+                struct Entries(
+                    #[serde(deserialize_with = "deserialize_destination_entries")]
+                    Vec<DestinationListEntry>,
+                );
+                let mut list = SkinSongListDef::default();
+                let mut explicit_order: Option<Vec<SongListField>> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "id" => list.id = map.next_value::<Id>()?.0,
+                        "lr2BottomOrigin" => list.lr2_bottom_origin = map.next_value()?,
+                        "flash" => list.flash = map.next_value()?,
+                        "center" => list.center = map.next_value()?,
+                        "clickable" => list.clickable = map.next_value()?,
+                        "listoff" => list.listoff = map.next_value()?,
+                        "liston" => list.liston = map.next_value()?,
+                        "text" => list.text = map.next_value()?,
+                        "level" => list.level = map.next_value()?,
+                        "lamp" => list.lamp = map.next_value()?,
+                        "playerlamp" => list.playerlamp = map.next_value()?,
+                        "rivallamp" => list.rivallamp = map.next_value()?,
+                        "lr2rival" => list.lr2rival = map.next_value()?,
+                        "judgegraph" => list.judgegraph = map.next_value()?,
+                        "bpmgraph" => list.bpmgraph = map.next_value()?,
+                        "banner" => {
+                            list.banner = deserialize_songlist_fields::<
+                                SkinDestinationDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
+                        }
+                        "trophy" => list.trophy = map.next_value::<Entries>()?.0,
+                        "graph" => list.graph = map.next_value::<Entries>()?.0,
+                        "label" => list.label = map.next_value::<Entries>()?.0,
+                        "scoreOrder" => {
+                            explicit_order = Some(deserialize_songlist_score_order::<M::Error>(
+                                map.next_value()?,
+                            )?);
+                        }
+                        "scorerank" => {
+                            list.score_order.push(SongListField::Scorerank);
+                            list.scorerank = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
+                        }
+                        "exscore" => {
+                            list.score_order.push(SongListField::Exscore);
+                            list.exscore = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
+                        }
+                        "scorerate" => {
+                            list.score_order.push(SongListField::Scorerate);
+                            list.scorerate = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
+                        }
+                        "minbp" => {
+                            list.score_order.push(SongListField::Minbp);
+                            list.minbp = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
+                        }
+                        "mincb" => {
+                            list.score_order.push(SongListField::Mincb);
+                            list.mincb = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
+                        }
+                        "maxcombo" => {
+                            list.score_order.push(SongListField::Maxcombo);
+                            list.maxcombo = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
+                        }
+                        "nextrank" => {
+                            list.score_order.push(SongListField::Nextrank);
+                            list.nextrank = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
+                        }
+                        "nextrankdiff" => {
+                            list.score_order.push(SongListField::Nextrankdiff);
+                            list.nextrankdiff =
+                                deserialize_songlist_fields::<SkinSongListFieldDef, M::Error>(
+                                    map.next_value()?,
+                                    &key,
+                                )?;
+                        }
+                        "nearestrank" => {
+                            list.score_order.push(SongListField::Nearestrank);
+                            list.nearestrank =
+                                deserialize_songlist_fields::<SkinSongListFieldDef, M::Error>(
+                                    map.next_value()?,
+                                    &key,
+                                )?;
+                        }
+                        "nearestrankdiff" => {
+                            list.score_order.push(SongListField::Nearestrankdiff);
+                            list.nearestrankdiff =
+                                deserialize_songlist_fields::<SkinSongListFieldDef, M::Error>(
+                                    map.next_value()?,
+                                    &key,
+                                )?;
+                        }
+                        "rivalscorerank" => {
+                            list.score_order.push(SongListField::Rivalscorerank);
+                            list.rivalscorerank =
+                                deserialize_songlist_fields::<SkinSongListFieldDef, M::Error>(
+                                    map.next_value()?,
+                                    &key,
+                                )?;
+                        }
+                        "rivaldiff" => {
+                            list.score_order.push(SongListField::Rivaldiff);
+                            list.rivaldiff = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
+                        }
+                        "favorite" => {
+                            list.score_order.push(SongListField::Favorite);
+                            list.favorite = deserialize_songlist_fields::<
+                                SkinSongListFieldDef,
+                                M::Error,
+                            >(map.next_value()?, &key)?;
+                        }
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                if let Some(order) = explicit_order {
+                    let mut complete = Vec::new();
+                    for field in order.into_iter().chain(list.score_order) {
+                        if !complete.contains(&field) {
+                            complete.push(field);
+                        }
+                    }
+                    list.score_order = complete;
+                }
+                Ok(list)
+            }
+        }
+        deserializer.deserialize_map(SongListVisitor)
+    }
+}
+
+fn deserialize_songlist_entry<T: serde::de::DeserializeOwned, E: serde::de::Error>(
+    value: JsonValue,
+    path: &str,
+) -> Result<T, E> {
+    serde_json::from_value(value).map_err(|error| E::custom(format!("{path}: {error}")))
+}
+
+fn deserialize_songlist_fields<T: serde::de::DeserializeOwned, E: serde::de::Error>(
+    value: JsonValue,
+    field: &str,
+) -> Result<Vec<T>, E> {
+    let path = format!("songlist.{field}");
+    match value {
+        JsonValue::Object(_) => deserialize_songlist_entry(value, &path).map(|entry| vec![entry]),
+        JsonValue::Array(entries) => entries
+            .into_iter()
+            .enumerate()
+            .map(|(index, entry)| deserialize_songlist_entry(entry, &format!("{path}[{index}]")))
+            .collect(),
+        _ => Err(E::custom(format!("{path}: expected an object or array"))),
+    }
+}
+
+fn deserialize_songlist_score_order<E: serde::de::Error>(
+    value: JsonValue,
+) -> Result<Vec<SongListField>, E> {
+    let JsonValue::Array(entries) = value else {
+        return Err(E::custom("songlist.scoreOrder: expected an array"));
+    };
+    entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            deserialize_songlist_entry(entry, &format!("songlist.scoreOrder[{index}]"))
+        })
+        .collect()
+}
+
+/// Inline materials use the same definitions as root text/value objects.
+/// The destination is flattened so op/draw/timer/dst retain their usual meaning.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkinSongListFieldDef {
+    #[serde(flatten)]
+    pub render: SongListFieldRender,
+    #[serde(flatten)]
+    pub destination: SkinDestinationDef,
+    #[serde(default, deserialize_with = "deserialize_songlist_table")]
+    pub format: SongListFieldFormat,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+pub enum SongListFieldRender {
+    Image {
+        #[serde(deserialize_with = "deserialize_skin_id_vec")]
+        images: Vec<String>,
+    },
+    Text {
+        #[serde(default, deserialize_with = "deserialize_songlist_table")]
+        text: SkinTextDef,
+        #[serde(default)]
+        labels: Vec<String>,
+    },
+    Digits {
+        #[serde(deserialize_with = "deserialize_songlist_table")]
+        digits: SkinValueDef,
+        #[serde(default, deserialize_with = "deserialize_songlist_table")]
+        glyphs: SongListDigitGlyphs,
+    },
+}
+
+/// Lua's empty table is represented as an empty JSON array by the converter.
+fn deserialize_songlist_table<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = JsonValue::deserialize(deserializer)?;
+    if value.as_array().is_some_and(Vec::is_empty) {
+        return Ok(T::default());
+    }
+    serde_json::from_value(value).map_err(serde::de::Error::custom)
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct SongListFieldFormat {
+    /// None chooses 2 for scorerate, 0 otherwise; bounded to 6 at evaluation.
+    #[serde(default)]
+    pub decimals: Option<u8>,
+    #[serde(default, rename = "showPlus")]
+    pub show_plus: bool,
+    /// None chooses true for scorerate, false otherwise.
+    #[serde(default)]
+    pub percent: Option<bool>,
+    #[serde(default)]
+    pub prefix: String,
+    #[serde(default)]
+    pub suffix: String,
+}
+
+/// Cell indices inside one number frame. Missing required glyph hides the
+/// entire value, never just the sign or decimal point.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct SongListDigitGlyphs {
+    #[serde(default)]
+    pub plus: Option<u32>,
+    #[serde(default)]
+    pub minus: Option<u32>,
+    #[serde(default)]
+    pub decimal: Option<u32>,
+    #[serde(default)]
+    pub percent: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

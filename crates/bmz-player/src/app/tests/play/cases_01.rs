@@ -47,6 +47,81 @@ fn active_play_visual_offset_sync_preserves_auto_adjusted_value() {
     assert_eq!(profile.judge.visual_offset_us, 1_000);
 }
 
+fn adjust_visual_offset_ms_for_test(profile: &mut ProfileConfig, key_mode: KeyMode, delta: i32) {
+    profile.activate_play_mode(key_mode);
+    assert!(crate::config::settings_registry::adjust_settings_value(
+        profile,
+        crate::config::settings_registry::SettingsEntryId::VisualOffsetMs,
+        delta,
+    ));
+    profile.sync_active_play_mode();
+}
+
+#[test]
+fn pending_play_visual_offset_change_updates_load_snapshot_through_realtime_sync() {
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    let mut last_play_snapshot = Some(RenderSnapshot::default());
+
+    adjust_visual_offset_ms_for_test(&mut profile, KeyMode::K14, 8);
+    sync_play_realtime_profile_settings(
+        None,
+        Some(KeyMode::K14),
+        &mut last_play_snapshot,
+        &profile,
+    );
+    let snapshot = last_play_snapshot.as_ref().unwrap();
+    assert_eq!(snapshot.judge_timing_offset_ms, 8);
+    assert!(!snapshot.judge_timing_auto_adjust);
+
+    for enabled in [true, false] {
+        profile.judge.visual_offset_auto_adjust = !profile.judge.visual_offset_auto_adjust;
+        sync_play_realtime_profile_settings(
+            None,
+            Some(KeyMode::K14),
+            &mut last_play_snapshot,
+            &profile,
+        );
+        assert_eq!(last_play_snapshot.as_ref().unwrap().judge_timing_auto_adjust, enabled);
+    }
+}
+
+#[test]
+fn prepared_play_visual_offset_change_updates_session_and_snapshot_before_worker_start() {
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    let session = crate::screens::play_session::build_game_session(
+        std::sync::Arc::new(app_test_chart()),
+        &profile,
+        crate::screens::play_session::PlaySessionOptions::default(),
+    );
+    let key_mode = session.play_config_key_mode;
+    let mut gameplay = crate::gameplay_runtime::GameplayClient::new(session);
+    let applied_arrange = crate::screens::play_session::AppliedArrange::default();
+    let mut last_play_snapshot = Some(RenderSnapshot::default());
+
+    adjust_visual_offset_ms_for_test(&mut profile, key_mode, 5);
+    sync_play_realtime_profile_settings(
+        Some((&mut gameplay, &applied_arrange)),
+        None,
+        &mut last_play_snapshot,
+        &profile,
+    );
+    assert_eq!(gameplay.prepared_session().unwrap().offsets.visual_offset_us, 5_000);
+    assert_eq!(last_play_snapshot.as_ref().unwrap().judge_timing_offset_ms, 5);
+
+    for enabled in [true, false] {
+        profile.judge.visual_offset_auto_adjust = !profile.judge.visual_offset_auto_adjust;
+        sync_play_realtime_profile_settings(
+            Some((&mut gameplay, &applied_arrange)),
+            None,
+            &mut last_play_snapshot,
+            &profile,
+        );
+        let session = gameplay.prepared_session().unwrap();
+        assert_eq!(session.input_offset_auto_adjust_enabled, enabled);
+        assert_eq!(last_play_snapshot.as_ref().unwrap().judge_timing_auto_adjust, enabled);
+    }
+}
+
 #[test]
 fn pending_play_uses_preload_input_before_session_install() {
     use bmz_core::input::InputKind;

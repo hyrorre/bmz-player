@@ -29,6 +29,7 @@ pub(super) fn best_score_summary_from_row(
     );
 
     Ok(BestScoreSummary {
+        numeric_score_available: row.get(31)?,
         play_options,
         chart_sha256,
         ln_policy,

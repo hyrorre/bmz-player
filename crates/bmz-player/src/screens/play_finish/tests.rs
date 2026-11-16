@@ -126,6 +126,7 @@ fn bokutachi_stage_complete_song_uses_completion_and_update_uses_real_metrics() 
     assert!(!should_send_bokutachi_stage(CompleteSong, &result, ClearType::FullCombo, false, None));
     assert!(should_send_bokutachi_stage(Always, &result, ClearType::NoPlay, false, None));
     let mut best = crate::storage::score_db::BestScoreSummary {
+        numeric_score_available: true,
         play_options: None,
         chart_sha256: [7; 32],
         ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
@@ -478,6 +479,7 @@ fn should_send_ir_score_follows_policy() {
     assert!(should_send_ir_score(IrSendPolicyConfig::UpdateScore, &result, false, None));
 
     let best = BestScoreSummary {
+        numeric_score_available: true,
         play_options: None,
         chart_sha256: [0; 32],
         ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,

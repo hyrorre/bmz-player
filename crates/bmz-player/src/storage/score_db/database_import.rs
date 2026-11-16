@@ -243,7 +243,15 @@ impl ScoreDatabase {
             // cleanup recompute from surviving contributions, even after a later
             // source DB reports a worse value or no value at all.
             tx.execute(
-                "UPDATE score_best SET bp = MIN(bp, ?1)
+                "UPDATE score_best SET bp = CASE WHEN ?6 THEN (
+                    SELECT MIN(CASE WHEN h.source_min_bp IS NULL THEN h.bp
+                        WHEN h.source_kind = 'Lr2' THEN h.source_min_bp
+                        ELSE MIN(h.bp, h.source_min_bp) END)
+                    FROM score_history AS h
+                    WHERE h.chart_sha256 = ?2 AND h.ln_policy = ?3
+                      AND h.double_option = ?4 AND h.rule_mode = ?5
+                      AND h.normal_best_eligible = 1
+                ) ELSE MIN(bp, ?1) END
                  WHERE chart_sha256 = ?2 AND ln_policy = ?3
                    AND double_option = ?4 AND rule_mode = ?5",
                 params![
@@ -252,6 +260,7 @@ impl ScoreDatabase {
                     record.ln_policy.as_str(),
                     record.double_option.as_str(),
                     record_rule_mode(record).as_str(),
+                    record.source_kind == ScoreSourceKind::Lr2,
                 ],
             )?;
             corrected = true;

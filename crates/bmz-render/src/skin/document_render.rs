@@ -1,5 +1,8 @@
 use super::*;
 
+mod number_cells;
+mod songlist_banner;
+mod songlist_fields;
 mod songlist_parts;
 pub(in crate::skin) use songlist_parts::SongListBarParts;
 
@@ -637,6 +640,15 @@ pub(super) trait SkinDocumentRenderInternal {
         frame: ResolvedSkinFrame,
         draw_state: Option<&SkinDrawState>,
         state: &SkinTextState<'_>,
+    ) -> Option<SkinRenderItem>;
+
+    fn text_content_render_item(
+        &self,
+        text: &SkinTextDef,
+        frame: ResolvedSkinFrame,
+        draw_state: Option<&SkinDrawState>,
+        state: &SkinTextState<'_>,
+        content: String,
     ) -> Option<SkinRenderItem>;
 
     fn hiterror_visualizer_render_items(

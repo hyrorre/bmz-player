@@ -2207,6 +2207,248 @@ NEARESTは現在側までの距離が次側以下なら現在側を選ぶため�
 削除済みの表示設定で使っていた1971〜1973は再利用しません。旧BMZ skin向けに
 `number(1971)=1`, `option(1972)=false`, `option(1973)=true`の固定NEXT値を返します。
 
+### BMZ Songlist Row Banners
+
+BMZ拡張の `songlist.banner` は、各曲バーの譜面に指定された `#BANNER` / BMSONのbanner画像を描きます。
+1個のdestinationオブジェクト、またはdestinationの配列を指定します。
+`source` / `image` の定義、`id` / `src` / `ref` は不要です。画像は各行のSnapshotから取得します。
+選択中の譜面の画像を描く既存の `image.src=102` / `-102` とは独立しています。
+
+JSONでは既存のsonglistに次のフィールドを追加します。バー本体の `liston` / `listoff` と、
+外側の `destination: [{"id":"list"}]` は従来どおり必要です。
+
+```json
+{
+  "songlist": {
+    "id": "list",
+    "banner": {
+      "filter": 1,
+      "stretch": 1,
+      "dst": [{"x": 48, "y": 4, "w": 160, "h": 40, "a": 255}]
+    }
+  }
+}
+```
+
+Luaも同じ構造です。配列にすると同じバナーを複数の位置・設定で描けます。
+配列の順に描画し、次の例では2個目だけ位置と透明度をアニメーションさせます。
+
+```lua
+skin.songlist.banner = {
+    {filter = 1, stretch = 1,
+     dst = {{x = 48, y = 4, w = 160, h = 40}}},
+    {filter = 0, loop = 0,
+     dst = {{time = 0,   x = 216, y = 4, w = 80, h = 20, a = 96},
+            {time = 800, x = 220, y = 4, w = 80, h = 20, a = 192}}},
+}
+```
+
+- 座標は各バーの原点からの相対位置です。選択・非選択バーと、慣性スクロール中の物理的な表示行へ追従します。
+  バー本体の直後、既存のflash・lamp・level・text等より前に描きます。既存部品同士の順序は維持します。
+- 通常画像と共通の `dst`、`op`、`draw`（Lua functionを含む）、`timer`、`loop`、`offset`、
+  色・透明度・回転・`blend`・`filter`・`stretch`・clipを使用できます。
+  行ごとの描画条件は既存songlistと同じ行の状態で評価します。`scoreOrder`には含めません。
+- 未定義・空配列では描画せず、専用ワーカーも起動しません。
+  未指定・未読込・欠損・デコード失敗の画像も描画しません。別の曲のバナーへの代替は行いません。
+  フォルダ・設定・コース・G-BATTLEの相手一覧・未導入譜面等は対象外です。スコアの有無には依存しません。
+- PNG / JPEG / BMP / GIF / WebPに対応します。アニメーション画像は先頭／既定の静止画像のみ使用します。
+  素材のフレームアニメーション、動画、CIMは対象外です。destinationによるアニメーションは利用できます。
+  大文字小文字や拡張子代替は通常の譜面画像と同じ探索規則を使用します。
+- ファイルまたは書庫エントリーは16 MiBまで、デコード前の寸法は各辺8192pxまで、
+  RGBA換算16 MiBまでです。縦横比を保ち、拡大せず最大1024×256pxへ縮小します。
+  元画像の縦横比がこの縮小でわずかに丸められることがあります。
+
+読み込みとキャッシュは本体が管理します。表示中の25行と前後2行、選択行を対象に、
+最大2ワーカーでファイル解決・デコードを行います。先読み行はCPUキャッシュまでとし、
+GPUへの登録は表示行のみ、1フレーム最大2枚・2 MiBです。描画評価ではファイル・DB・IRへアクセスしません。
+同じ実ファイル／書庫世代とエントリーは、譜面が異なってもCPU画像とGPUテクスチャを共有します。
+
+CPU画像とGPUテクスチャはそれぞれ32 MiB・256枚のLRU上限を持ちます。
+容量はRGBA8の画素バイト数です。デコード中の作業領域、書庫の辞書、GPUドライバー内部の管理領域は別です。
+表示中のSnapshotが参照するGPU画像は
+解放せず、解放待ちの画像も上限に含めます。上限に達した間は新しい表示を待ちます。
+選曲を離れた際はGPU画像を解放し、上限内のCPU画像を保持します。スキンの切替・再読込や
+ライブラリ再スキャンでも古い行へ画像を誤適用しません。画像参照元と失敗情報の保持数は各256件までです。
+成功した参照元は最短1秒間隔で更新を確認し、欠損・失敗は30秒後に再試行します。
+書庫の更新stampが前回と同じ場合は解決済みのentryを再利用し、indexの再列挙を省略します。
+GPUキャッシュのアップロード用ロックは、表示行の画像がCPUにあり、GPU未登録で再試行待ちでない場合だけ取得します。
+書庫はエントリーをメモリへ読み、バナー用の展開ファイルをディスクへ蓄積しません。
+solid書庫等で必要となる読み取りの制約は[書庫仕様](archive-songs.md)に従います。
+
+### BMZ Songlist Score Fields
+
+選曲の各曲バーに、次の専用フィールドを追加できます。BMZ拡張であり、beatorajaの
+既存 `SongList` / `SkinBar` の部品は変更しません。
+
+| songlistフィールド | 内容 | mode |
+| --- | --- | --- |
+| scorerank | 自己ベストEX SCOREの到達済みDJ LEVEL（1974相当） | image / text |
+| exscore | 自己ベストEX SCORE | text / digits |
+| scorerate | `EX SCORE / (total_notes × 2) × 100` | text / digits |
+| minbp | 独立して保存された最小BP | text / digits |
+| mincb | 独立して保存された最小CB | text / digits |
+| maxcombo | 独立して保存された最大コンボ | text / digits |
+| nextrank | 次の正式なDJ LEVEL（1975相当） | image / text |
+| nextrankdiff | `EX SCORE - next border`（1978相当） | text / digits |
+| nearestrank | 最寄りのDJ LEVEL（1976相当） | image / text |
+| nearestrankdiff | `EX SCORE - nearest border`（1979相当） | text / digits |
+| rivalscorerank | 選択ライバルの、その行のDJ LEVEL | image / text |
+| rivaldiff | `自己EX SCORE - ライバルEX SCORE` | text / digits |
+| favorite | 譜面・楽曲のお気に入り状態 | image / text |
+
+ランクindexは `0=F, 1=E, 2=D, 3=C, 4=B, 5=A, 6=AA, 7=AAA, 8=MAX`。
+境界・NEXT・NEARESTの計算は[BMZ Score Grade Refs](#bmz-score-grade-refs)と共通です。
+完全一致では次の異なる境界へ進み、短い譜面の重複境界も飛ばします。NEARESTは同距離で現在側、
+MAXではNEXTもMAXで差分0です。`nextrankdiff`は通常負であり、正値のref=154とは符号が逆です。
+
+お気に入りindexは `0=なし, 1=譜面のみ, 2=楽曲のみ, 3=両方`。
+スコアがなくても表示します。`text`の既定ラベルは順に `""`, `CHART`, `SONG`,
+`CHART+SONG`で、`labels`配列で置換できます。
+
+値は選択中の曲へのref経由ではなく、スクロール用の行も含む各 `SelectRowSnapshot`から取得します。
+自己スコアが未記録ならその値・ランク・レート・差分を描きません。記録済みのEX SCORE 0は
+`0` / `F` / `0.00%`として表示します。BP/CB/コンボは個別の値がなければ非表示であり、
+ベストEX SCOREを出したプレイの内訳から補完しません。
+ランプのみ保存した行の中立値0も、数値記録としては表示しません。
+総ノーツ0ではランクとレートが非表示で、EX SCOREなど他の記録は表示可能です。
+ライバル未選択・未取得・その譜面の記録なしは非表示で、
+取得済み0点や同点差分0と区別します。ライバルランクは自己記録がなくても表示できます。
+フォルダ、設定行、コースなどSong以外の行には追加フィールドを描きません。
+未導入譜面はお気に入りだけが表示対象です。
+
+LN設定、rule mode、ScoreKey、IRの更新・プレイ後のスコア再取得には通常の選曲行の処理を使います。
+描画中のDB/IR問い合わせや素材の再読み込みはありません。フォントは通常のatlas・fallbackキャッシュを使います。
+
+#### 定義と描画順
+
+各フィールドは単一オブジェクト、または同じ形式のオブジェクト配列です。配列は記載順に描き、
+同じ値を画像と文字などで複数回表示できます。未定義フィールドは描画しません。
+追加部品は各行の従来のtext部品の後に描画し、従来のlamp / level / trophy / text等の順序と動作を保ちます。
+JSONはフィールドの宣言順を保持します。Luaのテーブルキーには宣言順がないため、複数フィールドの
+重なり順が必要なら `songlist.scoreOrder={"scorerank","exscore",...}` を指定します。
+JSONでも同じ配列を指定でき、省略したフィールドはその後に続きます。重複指定は1回にまとめます。
+LuaでscoreOrderを省略した場合は既存変換器のキー順（辞書順）です。
+
+定義エラーには `songlist.rivaldiff[1]` や `songlist.scoreOrder[1]` のように、
+フィールド名と配列位置を含めます。診断の配列位置はJSON/Luaとも0始まりです。
+
+`mode`は必須です。`dst`, `op`, `draw`, `timer`, `loop`, `offset(s)`, `filter`,
+`blend`, `stretch`, clip等は通常のdestinationと同じ意味です。
+座標はそのバー原点からの相対座標で、選択・非選択バーともスクロールに追従します。
+バー全体のdestinationでのclipも従来どおり適用します。
+`id`、通常のvalueオブジェクト、値取得用の`ref`はいりません。
+
+- `mode:"image"`: `images`に通常の`image.id`をランク順9個、またはお気に入り順4個指定。
+  該当indexに画像がない場合は非表示。各画像のアニメーション・画像素材設定を再利用します。
+- `mode:"text"`: `text`に通常のtext定義と同じフォント・size・align・overflow・wrapping・
+  outline・shadow・prefix/suffix等を指定。`font`は通常のroot `font.id`を参照し、
+  TTF/OTF/TTC、.fnt/.lr2font、fallbackに対応します。値取得用のref/value/numberRef等は使用しません。
+  ランクは `AAA`, `AA`, `MAX`等のラベル、お気に入りは `labels`で描きます。
+- `mode:"digits"`: `digits`に通常のvalueと同じsrc・x/y/w/h・divx/divy・timer/cycle・
+  digit・space・align・padding/zeropaddingを指定します。srcはroot sourceのIDです。
+  値取得用のref/value/exprは使用しません。これは画像フォントとは別方式です。
+
+`format`は両数値描画で共通です。`showPlus`（既定false）は正数と0にも `+`を付け、
+負数には常に `-`を付けます。`decimals`はレートの小数桁数（既定2、最大6）、
+`percent`は%付加（既定はscorerateだけtrue）、`prefix`/`suffix`は追加文字列（既定空）。
+レートは整数演算で指定桁まで切り捨てます。`75.00%`が標準形です。
+文字色・透明度はdstのr/g/b/a、文字揃えは通常text同様 `0=左,1=中央,2=右`です。
+
+#### JSON: ランク画像、TTFとビットマップフォント
+
+次は既存songlistへ加える部品例です。画像・フォントのパスとバー本体のliston/listoffは
+使用するスキンに合わせて定義します。`rank-F`〜`rank-MAX`はroot imageのIDです。
+
+```json
+{
+  "font": [
+    { "id": "ui", "path": "font/ui.ttf", "fallback": ["font/fallback.otf"] },
+    { "id": "bitmap", "path": "font/score.fnt" }
+  ],
+  "songlist": {
+    "id": "songs",
+    "scorerank": [
+      {
+        "mode": "image",
+        "images": ["rank-F", "rank-E", "rank-D", "rank-C", "rank-B",
+                   "rank-A", "rank-AA", "rank-AAA", "rank-MAX"],
+        "filter": 1,
+        "dst": [{ "x": 320, "y": 4, "w": 48, "h": 20 }]
+      },
+      {
+        "mode": "text", "text": { "font": "ui", "size": 20, "overflow": 2 },
+        "dst": [{ "x": 380, "y": 4, "w": 60, "h": 20, "a": 220 }]
+      }
+    ],
+    "exscore": {
+      "mode": "text",
+      "text": { "font": "bitmap", "size": 20, "align": 2, "prefix": "EX " },
+      "dst": [{ "x": 530, "y": 4, "w": 100, "h": 20 }]
+    },
+    "scorerate": {
+      "mode": "text", "text": { "font": "ui", "size": 18 },
+      "dst": [{ "x": 540, "y": 4, "w": 100, "h": 18 }]
+    },
+    "favorite": {
+      "mode": "text", "text": { "font": "ui", "size": 18 },
+      "labels": ["", "譜面★", "楽曲★", "両方★"],
+      "dst": [{ "x": 650, "y": 4, "w": 100, "h": 18 }]
+    }
+  },
+  "destination": [{ "id": "songs" }]
+}
+```
+
+#### Lua: 符号付き数字画像と小数点・%
+
+```lua
+return {
+    type = 5,
+    source = {{ id = "numbers", path = "number-14.png" }},
+    songlist = {
+        id = "songs",
+        scoreOrder = {"rivaldiff", "scorerate"},
+        rivaldiff = {
+            mode = "digits",
+            digits = { src = "numbers", w = 140, h = 20,
+                       divx = 14, divy = 1, digit = 7, space = 1, align = 0 },
+            glyphs = { plus = 10, minus = 11, decimal = 12, percent = 13 },
+            format = { showPlus = true },
+            dst = {{ x = 300, y = 4, w = 10, h = 20 }}
+        },
+        scorerate = {
+            mode = "digits",
+            digits = { src = "numbers", w = 140, h = 20,
+                       divx = 14, divy = 1, digit = 7, align = 1 },
+            glyphs = { plus = 10, minus = 11, decimal = 12, percent = 13 },
+            format = { decimals = 2, percent = true },
+            dst = {{ x = 400, y = 4, w = 10, h = 20 }}
+        }
+        -- 通常のliston/listoff等もここへ定義
+    },
+    destination = {{ id = "songs" }}
+}
+```
+
+上記素材は0〜9、+、-、小数点、%の14セルです。`glyphs`のindexは0始まりのセル番号です。
+通常valueと同様に `digit`は表示枠数、dst.wは1セル幅、`space`はセル間隔、
+数字の `align`は `0=右,1=左,2=中央`（textのalignとは異なる）です。
+ゼロ埋めは通常の `zeropadding:1`等を使い、符号直後へ0を挿入します。
+符号・小数点・%もdigit枠数に数えます。
+
+10セル・11セル素材は0〜9を使用でき、11セルの10番は通常の空欄セルです。
+24セル素材は通常valueと同じ正負12セル形式で、11番=+、23番=-、
+負数の数字は12〜21番が既定です。`glyphs.plus/minus`でこれを上書きできます。
+LR2の連続フレーム形式は通常value同様 `lr2Number:true`で指定でき、10/11/24セルとcycleを使います。
+通常JSON形式のUV・アニメーションも既存valueと共通です。
+
+必要な符号、小数点、%のglyphが未定義・範囲外なら、その数値全体を描きません。
+符号を落として正の数に見せたり、小数点を落として整数に見せたりしません。
+digit不足でも切り詰めず全体非表示です。digitsのprefix/suffixは、数字または対応する
+`+ - . %`だけを使用でき、それ以外の文字は全体非表示になります。
+任意の文字列装飾にはtextモードや別の通常text/imageを使ってください。
+
+
 ### First Play Compatibility and BMZ Option
 
 Play / Result skinの初回プレイ値はbeatoraja互換として扱います。保存済みスコアが無い場合、

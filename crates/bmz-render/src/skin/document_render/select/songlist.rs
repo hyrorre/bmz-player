@@ -141,6 +141,18 @@ macro_rules! skin_document_render_select_songlist_methods {
                         ));
                     }
                 }
+                items.extend(
+                    songlist_banner::render(
+                        self,
+                        songlist,
+                        row,
+                        row_origin,
+                        enabled_options,
+                        &row_state,
+                    )
+                    .into_iter()
+                    .map(tag("banner", usize::MAX, &row_state)),
+                );
                 if selected {
                     items.extend(
                         self.select_songlist_child_items_by_index(
@@ -355,6 +367,21 @@ macro_rules! skin_document_render_select_songlist_methods {
                     )
                     .into_iter()
                     .map(tag("text", usize::from(row.lr2_new_title), &row_state)),
+                );
+                items.extend(
+                    songlist_fields::render_fields(
+                        self,
+                        songlist,
+                        row,
+                        row_origin,
+                        snapshot.rival_selected,
+                        sources,
+                        images,
+                        enabled_options,
+                        &row_state,
+                    )
+                    .into_iter()
+                    .map(tag("score", usize::MAX, &row_state)),
                 );
             }
             items

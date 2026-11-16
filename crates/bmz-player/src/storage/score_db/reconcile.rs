@@ -330,9 +330,14 @@ pub(super) fn rebuild_score_aggregates(conn: &Connection) -> Result<()> {
             ex_score = score_value("ex_score"),
             bp = aggregate(
                 "MIN(CASE WHEN h.source_min_bp IS NULL THEN h.bp
+                WHEN h.source_kind = 'Lr2' THEN h.source_min_bp
                 ELSE MIN(h.bp, h.source_min_bp) END)"
             ),
-            cb = aggregate("MIN(h.cb)"),
+            cb = aggregate(
+                "MIN(CASE WHEN h.normal_best_eligible = 1
+                    AND h.source_kind IN ('Lr2', 'Beatoraja', 'Lr2Oraja', 'Lr2OrajaDx')
+                    AND h.clear_type IN ('FullCombo', 'Perfect', 'Max') THEN 0 ELSE h.cb END)"
+            ),
             max_combo = aggregate("MAX(h.max_combo)"),
             fast_pgreat = score_value("fast_pgreat"),
             slow_pgreat = score_value("slow_pgreat"),

@@ -272,6 +272,8 @@ mod select_assets;
 #[path = "app/select_course_builder.rs"]
 mod select_course_builder;
 mod select_distribution;
+#[path = "app/select_flow/banners.rs"]
+mod select_flow_banners;
 #[path = "app/select_flow/controls.rs"]
 mod select_flow_controls;
 #[path = "app/select_flow/detail_options.rs"]
@@ -305,6 +307,7 @@ mod select_list_loader;
 mod select_lr2_skin_settings;
 #[path = "app/select_random_mix.rs"]
 mod select_random_mix;
+mod select_row_banners;
 mod select_same_folder;
 mod select_search;
 mod select_support;

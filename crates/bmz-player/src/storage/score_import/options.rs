@@ -268,7 +268,8 @@ pub(super) fn imported_score_record(
         total_notes,
         playtime_seconds: 0,
         score,
-        count_unprocessed_notes: clear_type == ClearType::Failed,
+        // Aggregate lamps can come from a different, completed attempt.
+        count_unprocessed_notes: true,
         random_seed,
         seed_scheme: crate::storage::replay::SEED_SCHEME_LEGACY_SHARED_V3.to_string(),
         arrange: "Normal".to_string(),

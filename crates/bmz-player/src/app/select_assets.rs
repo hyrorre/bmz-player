@@ -156,6 +156,7 @@ struct SelectMetaImageState {
 /// GPU texture upload、profile 音量の解釈、audio stream 起動は `WinitApp` に残す。
 /// worker、CPU cache、ロードキュー、選択変更とfadeの状態遷移は本runtimeが所有する。
 pub(super) struct SelectAssetRuntime {
+    pub(super) row_banners: super::select_row_banners::RowBannerRuntime,
     source_stamp: stamp::SelectedArchiveStamp,
     pub(super) archive_preload: super::select_archive_preload::SelectArchivePreload,
     stage: SelectMetaImageState,
@@ -213,9 +214,13 @@ impl SelectAssetRuntime {
 
     pub(super) fn invalidate_library(&mut self) {
         self.stop_preview();
+        // Keep the bounded worker pool alive; old generations are discarded.
+        let mut row_banners = std::mem::take(&mut self.row_banners);
+        row_banners.invalidate();
         // Drop old worker receivers too, so stale results cannot refill the caches.
         *self =
             Self::new(self.preview.take(), self.library_db_path.clone(), self.cache_dir.clone());
+        self.row_banners = row_banners;
     }
 
     pub(super) fn new(
@@ -226,6 +231,7 @@ impl SelectAssetRuntime {
         let (meta_image_tx, meta_image_rx) = mpsc::channel();
         let (preview_tx, preview_rx) = mpsc::channel();
         Self {
+            row_banners: Default::default(),
             source_stamp: Default::default(),
             archive_preload: Default::default(),
             stage: SelectMetaImageState::default(),

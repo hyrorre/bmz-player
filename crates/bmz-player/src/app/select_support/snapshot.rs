@@ -1,6 +1,9 @@
 use super::*;
 use crate::screens::select_model::{SelectCourseRow, SelectFolderSummary};
 
+/// Shared physical row window for snapshots, chart analysis, and row assets.
+pub(in crate::app) const SELECT_VISIBLE_ROWS: usize = 25;
+
 #[derive(Default)]
 pub(in crate::app) struct CachedSelectChartDistribution {
     pub notes: Vec<ChartDistributionSecond>,
@@ -74,14 +77,20 @@ pub(in crate::app) fn select_visible_item_indices(
     selected_index: usize,
     visible_limit: usize,
 ) -> Vec<usize> {
-    if item_len == 0 || visible_limit == 0 {
-        return Vec::new();
-    }
+    select_visible_indices_iter(item_len, selected_index, visible_limit).collect()
+}
 
+pub(in crate::app) fn select_visible_indices_iter(
+    item_len: usize,
+    selected_index: usize,
+    visible_limit: usize,
+) -> impl Iterator<Item = usize> + Clone {
+    let count = if item_len == 0 { 0 } else { visible_limit };
+    let item_len = item_len.max(1);
     let selected_index = selected_index.min(item_len - 1);
     let half_window = visible_limit / 2;
     let start = (selected_index + item_len - (half_window % item_len)) % item_len;
-    (0..visible_limit).map(|offset| (start + offset) % item_len).collect()
+    (0..count).map(move |offset| (start + offset) % item_len)
 }
 
 struct SelectSnapshotRowContext<'a> {
@@ -342,6 +351,7 @@ fn select_chart_snapshot(
         clear_type: score.map(|score| score.clear_type.clone()).unwrap_or_default(),
         rival_clear_index,
         ex_score: score.map(|score| score.ex_score),
+        numeric_score_available: score.is_some_and(|score| score.numeric_score_available),
         max_combo: score.map(|score| score.max_combo),
         gauge_value: score.and_then(|score| score.gauge_value),
         bp: score.map(|score| score.bp),

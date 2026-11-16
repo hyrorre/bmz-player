@@ -31,6 +31,45 @@ fn numeric_best(db: &ScoreDatabase) -> (u32, u32, u32, u32) {
         .unwrap()
 }
 
+#[test]
+fn imported_zero_bests_stay_available_with_a_reference_or_matching_history() {
+    for import in ["beatoraja", "lr2", "download"] {
+        let mut db = database();
+        let mut zero = play(0, 0, 0, 0);
+        zero.source_kind =
+            if import == "lr2" { ScoreSourceKind::Lr2 } else { ScoreSourceKind::Beatoraja };
+        match import {
+            "beatoraja" => {
+                db.insert_imported_aggregate_score(&zero).unwrap();
+            }
+            "lr2" => {
+                db.insert_score(&zero).unwrap();
+            }
+            "download" => {
+                assert!(matches!(
+                    db.insert_score_with_source(&zero, &ir_source()).unwrap(),
+                    ScoreSourceInsertOutcome::Inserted { .. }
+                ));
+            }
+            _ => unreachable!(),
+        }
+        let available = |db: &ScoreDatabase| {
+            db.best_scores_for_charts(&[key(zero.chart_sha256)]).unwrap()[0].numeric_score_available
+        };
+        assert_eq!(numeric_best(&db), (0, 0, 0, 0));
+        assert!(available(&db), "{import}: imported zero is a numeric record");
+
+        db.conn.execute("UPDATE score_best SET best_score_history_id = NULL", []).unwrap();
+        assert!(available(&db), "{import}: matching history preserves the zero record");
+
+        db.conn.execute("DELETE FROM score_history", []).unwrap();
+        assert!(
+            !available(&db),
+            "{import}: without provenance, all-zero metrics cannot distinguish a clear-only record"
+        );
+    }
+}
+
 fn ir_source() -> ScoreHistorySourceRecord {
     ScoreHistorySourceRecord {
         key: ScoreHistorySourceKey {
@@ -169,6 +208,10 @@ fn first_numeric_play_after_clear_only_initializes_even_zero_ex() {
         let mut db = database();
         let assisted = record(2200, ClearType::AssistEasy);
         db.update_score_clear_only(&assisted).unwrap();
+        assert!(
+            !db.best_scores_for_charts(&[key(assisted.chart_sha256)]).unwrap()[0]
+                .numeric_score_available
+        );
         assert_eq!(numeric_best(&db), (0, 0, 0, 0));
         let mut first = play(ex, 20, 12, ex / 2);
         first.clear_type = ClearType::Failed;
@@ -176,6 +219,7 @@ fn first_numeric_play_after_clear_only_initializes_even_zero_ex() {
         let id = db.insert_score(&first).unwrap();
         assert_eq!(numeric_best(&db), (ex, 20, 12, ex / 2));
         let saved = db.best_scores_for_charts(&[key(first.chart_sha256)]).unwrap().remove(0);
+        assert!(saved.numeric_score_available);
         assert_eq!(saved.clear_type, "AssistEasy");
         assert_eq!((saved.play_count, saved.clear_count), (2, 1));
         assert_eq!(

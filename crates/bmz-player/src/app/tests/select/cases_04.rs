@@ -454,6 +454,7 @@ fn select_snapshot_rows_centers_selection_and_copies_score_summary() {
     assert_eq!(snapshot_rows[3].title, "Title 5");
     assert_eq!(snapshot_rows[3].clear_type, "Normal");
     assert_eq!(snapshot_rows[3].ex_score, Some(1234));
+    assert!(snapshot_rows[3].numeric_score_available);
     assert_eq!(snapshot_rows[3].bp, Some(12));
     assert_eq!(snapshot_rows[3].cb, Some(8));
     assert_eq!(snapshot_rows[3].max_combo, Some(345));
