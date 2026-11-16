@@ -1062,3 +1062,8 @@ downloads-state-validating = 正在检查压缩包
 
 profile-select-exit-hold = ESC退出等待时间（毫秒）
 profile-select-exit-hold-help = 在选曲根目录生效。设为0时，按一次ESC即可退出。
+profile-rivals-title = 对手
+profile-rivals-help = 勾选要比较成绩的其他个人档案。不会修改对方数据。按F5重新读取。
+profile-rivals-active = 当前对手
+profile-rivals-none = 无
+local-rival-load-failed = 无法读取对手成绩。请检查所选的来源个人档案。

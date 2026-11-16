@@ -1062,3 +1062,8 @@ downloads-state-validating = 압축 파일 확인 중
 
 profile-select-exit-hold = ESC 종료 대기 시간(ms)
 profile-select-exit-hold-help = 선곡 화면의 최상위 폴더에서 적용됩니다. 0으로 설정하면 ESC를 한 번 눌러 종료합니다.
+profile-rivals-title = 라이벌
+profile-rivals-help = 점수를 비교할 다른 프로필을 선택합니다. 원본 점수는 변경되지 않습니다. F5로 다시 불러옵니다.
+profile-rivals-active = 선택한 라이벌
+profile-rivals-none = 없음
+local-rival-load-failed = 라이벌 점수를 불러오지 못했습니다. 선택한 원본 프로필을 확인해 주세요.

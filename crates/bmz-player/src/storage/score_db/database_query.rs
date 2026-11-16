@@ -1,6 +1,29 @@
 use super::*;
 
 impl ScoreDatabase {
+    /// Read a consistent snapshot for local rivals without modifying the source DB.
+    pub fn all_best_scores(&self) -> Result<Vec<BestScoreSummary>> {
+        let transaction = self.conn.unchecked_transaction()?;
+        let keys = {
+            let mut statement = transaction.prepare(
+                "SELECT chart_sha256, ln_policy, double_option, rule_mode FROM score_best",
+            )?;
+            statement
+                .query_map([], |row| {
+                    Ok(ScoreKey::with_options(
+                        hex_to_hash::<32>(&row.get::<_, String>(0)?)?,
+                        ln_policy_from_row(row, 1)?,
+                        double_option_from_row(row, 2)?,
+                        rule_mode_from_row(row, 3)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let scores = self.best_scores_for_charts(&keys)?;
+        transaction.commit()?;
+        Ok(scores)
+    }
+
     /// Latest saved attempt, independent of the EX-score source. Batch this at
     /// list loading time; callbacks/rendering must never query score.db.
     pub fn last_played_times_for_charts(

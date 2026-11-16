@@ -1068,3 +1068,8 @@ downloads-state-validating = Checking archive
 
 profile-select-exit-hold = ESC exit hold time (ms)
 profile-select-exit-hold-help = Applies at the music select root. Set to 0 to exit with one ESC press.
+profile-rivals-title = Rivals
+profile-rivals-help = Check other profiles to compare their scores. Their data stays unchanged. Press F5 to reload.
+profile-rivals-active = Active rival
+profile-rivals-none = None
+local-rival-load-failed = Could not load rival scores. Check the selected source profile.

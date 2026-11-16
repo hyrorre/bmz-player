@@ -291,10 +291,20 @@ fn select_chart_snapshot(
         let key_mode =
             chart.and_then(|chart| KeyMode::from_str_opt(&chart.mode)).unwrap_or_default();
         let double_option = double_option.normalize_for_key_mode(key_mode).score_bucket();
-        select_ir.active_rival_score(chart_sha256, ln_mode, policy, double_option)
+        let key = ScoreKey::with_options(
+            chart_sha256,
+            policy,
+            double_option,
+            context.profile.play.rule_mode,
+        );
+        Some((
+            select_ir.rival_snapshot_for(key, ln_mode)?,
+            select_ir.rival_ex_score_for(key, ln_mode),
+        ))
     });
     let rival_clear_index = rival_score
-        .map(|score| i64::from(score.clear_type).clamp(0, ClearType::Max as i64) as usize)
+        .as_ref()
+        .map(|(score, _)| score.clear_index.clamp(0, ClearType::Max as i64) as usize)
         .unwrap_or(0);
     let level_display_override = context.in_difficulty_table_level.then(|| {
         if context.profile.select.difficulty_table_level_display
@@ -326,7 +336,7 @@ fn select_chart_snapshot(
             .filter(|chart| !chart.subtitle.is_empty())
             .map(|chart| format!("{} {}", row.display_title(), chart.subtitle))
             .unwrap_or_default(),
-        rival_ex_score: rival_score.map(|score| score.ex_score),
+        rival_ex_score: rival_score.as_ref().and_then(|(_, ex_score)| *ex_score),
         lr2_new_title: lr2_new_title(
             row.lr2_added_at,
             context.profile.select.new_title_hours,

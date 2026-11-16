@@ -11,6 +11,7 @@ pub(super) struct ProfileSettingsSnapshot {
     ir_primary: Option<(String, String, String)>,
     show_fps: bool,
     song_preview_mode: SongPreviewMode,
+    rival: crate::config::profile_config::RivalConfig,
 }
 
 impl ProfileSettingsSnapshot {
@@ -24,6 +25,7 @@ impl ProfileSettingsSnapshot {
             ir_primary: ir_primary_identity(profile),
             show_fps: profile.ui.show_fps,
             song_preview_mode: profile.audio_mix.song_preview_mode,
+            rival: profile.rival.clone(),
         }
     }
 
@@ -52,6 +54,16 @@ impl WinitApp {
             self.select.select_ir.clear();
             self.jobs.startup_rival_sync =
                 RianRivalSyncRequest::from_profile(&self.boot.profile_config);
+        }
+        if before.rival != self.boot.profile_config.rival {
+            let target = crate::screens::select_ir::SelectRivalFetchTarget::from_profile(
+                &self.boot.profile_config,
+            );
+            self.select.select_ir.update_rival(target, &self.boot.profile_paths.root_dir);
+            let _ = self
+                .select
+                .select_ir
+                .update_local_rival(&self.boot.profile_config, &self.boot.app_paths);
         }
         self.renderer.set_default_font_coverage(locale.font_coverage());
         let locale_changed = locale != before.locale;

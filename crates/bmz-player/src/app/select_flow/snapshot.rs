@@ -28,13 +28,17 @@ impl WinitApp {
                         .as_ref()
                         .and_then(|chart| KeyMode::from_str_opt(&chart.mode))
                         .unwrap_or_default();
-                    let double_option =
-                        self.select.double_option.normalize_for_key_mode(key_mode).score_bucket();
-                    self.select.select_ir.active_rival_snapshot(
-                        sha256,
+                    self.select.select_ir.rival_snapshot_for(
+                        ScoreKey::with_options(
+                            sha256,
+                            policy,
+                            self.select
+                                .double_option
+                                .normalize_for_key_mode(key_mode)
+                                .score_bucket(),
+                            self.boot.profile_config.play.rule_mode,
+                        ),
                         ln_mode,
-                        policy,
-                        double_option,
                     )
                 })
             }

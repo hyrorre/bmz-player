@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::profile_config::RivalSourceConfig;
 
 use sha2::{Digest, Sha256};
 use std::sync::mpsc::TryRecvError;
@@ -53,6 +54,7 @@ impl WinitApp {
             .entries
             .iter()
             .find(|entry| entry.id == self.boot.profile_config.rival.active_rival)
+            .filter(|entry| matches!(entry.source, RivalSourceConfig::Ir))
             .map(|entry| entry.display_name.clone())
             .filter(|name| !name.is_empty());
         let mut choices =

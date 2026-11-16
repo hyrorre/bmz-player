@@ -86,6 +86,15 @@ impl WinitApp {
         );
         let ln_mode = crate::screens::select_ir::rian_ln_mode_for_chart(chart.ln_profile, policy);
         let double_option = options.double_option.normalize_for_key_mode(key_mode).score_bucket();
+        if let Some(target) = self.select.select_ir.local_rival_target_for(ScoreKey::with_options(
+            chart.sha256,
+            policy,
+            double_option,
+            self.boot.profile_config.play.rule_mode,
+        )) {
+            options.resolved_target = Some(target);
+            return;
+        }
         let Some(score) = self
             .select
             .select_ir
