@@ -6,10 +6,15 @@ use bmz_core::time::{ChartTick, TimeUs};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum JudgeAlgorithm {
+    // Keep the serialized names stable for saved replays.
     #[default]
+    #[serde(rename = "Combo")]
     Combo,
+    #[serde(rename = "Duration")]
     Duration,
+    #[serde(rename = "Lowest")]
     Lowest,
+    #[serde(rename = "Score")]
     Score,
 }
 

@@ -711,6 +711,24 @@ events = []
     }
 
     #[test]
+    fn replay_judge_algorithm_uses_stable_serialized_names() {
+        let mut replay =
+            ReplayFile::new([1; 32], 1, None, ArrangeOption::Normal, None, None, Vec::new());
+        for (algorithm, name) in [
+            (JudgeAlgorithm::Combo, "Combo"),
+            (JudgeAlgorithm::Duration, "Duration"),
+            (JudgeAlgorithm::Lowest, "Lowest"),
+            (JudgeAlgorithm::Score, "Score"),
+        ] {
+            replay.judge_algorithm = Some(algorithm);
+            let text = toml::to_string(&replay).unwrap();
+            let serialized = format!("judge_algorithm = \"{name}\"");
+            assert!(text.lines().any(|line| line == serialized));
+            assert_eq!(parse_replay(&text).unwrap().judge_algorithm, Some(algorithm));
+        }
+    }
+
+    #[test]
     fn replay_records_nonzero_freq_and_omits_freq_zero() {
         let replay =
             ReplayFile::new([1; 32], 1, None, ArrangeOption::Normal, None, None, Vec::new());
