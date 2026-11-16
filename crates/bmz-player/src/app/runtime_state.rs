@@ -6,7 +6,8 @@ pub(super) enum SkinSliderDrag {
     Idle,
     /// The left button is down, with the target set on the first slider hit.
     Select(Option<SkinSliderHit>),
-    Result(i32),
+    /// The result slider captured on the press.
+    Result(SkinSliderHit),
 }
 
 #[derive(Default)]
@@ -104,7 +105,7 @@ pub(super) struct SelectRuntimeState {
     pub(super) key_config_edit: Option<KeyConfigEditSession>,
     /// 選曲画面の検索文字列、IME、cursor、履歴、feedback状態。
     pub(super) search: SelectSearchRuntime,
-    /// ドラッグ中の select skin slider type。
+    /// 左ボタンを押している間の Select / Result スキンのスライダー操作。
     pub(super) slider_drag: SkinSliderDrag,
 }
 

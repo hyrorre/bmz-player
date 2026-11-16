@@ -1509,6 +1509,7 @@ Select / Resultの`slider[].event`のLua関数はFloatWriterとして扱い、�
 判定し、同じ`type`を持つ複数のLua sliderもドラッグ開始時の関数を区別します。
 Selectでは左ボタンを押したまま判定範囲に入るとドラッグを開始します。
 開始後は同じ表示先のsliderを操作し、範囲外でも移動方向の座標から値を求めて0.0〜1.0に収めます。
+Resultでは判定範囲内で押した時点でドラッグを開始し、開始後はSelectと同じく範囲外でも追従します。
 
 `timer_util` / `event_util`はbeatorajaの`TimerUtility` / `EventUtility`相当です。
 `new_passive_timer`の`turn_on` / `turn_on_reset` / `turn_off`はtrueを返します。

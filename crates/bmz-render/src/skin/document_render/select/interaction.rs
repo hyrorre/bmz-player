@@ -41,30 +41,17 @@ macro_rules! skin_document_render_select_interaction_public_methods {
             x: f32,
             y: f32,
         ) -> Option<SkinSliderHit> {
-            let enabled_options = self.enabled_options();
-            let destinations = self.all_destinations(&enabled_options);
-            destinations
-                .into_iter()
-                .enumerate()
-                .filter(|(_, destination)| {
-                    destination_ops_match(destination, &enabled_options, state)
-                        && eval_skin_draw_condition(&destination.draw, state)
-                })
-                .filter_map(|(destination_index, destination)| {
-                    let slider = self.slider.iter().find(|slider| slider.id == destination.id)?;
-                    (slider.slider_type == 8 || slider.event.is_some()).then_some(())?;
-                    self.destination_slider_hit(
-                        slider,
-                        destination,
-                        destination_index,
-                        &enabled_options,
-                        state,
-                        x,
-                        y,
-                        false,
-                    )
-                })
-                .next_back()
+            self.result_slider_value(state, None, x, y)
+        }
+
+        fn result_slider_drag(
+            &self,
+            state: &SkinDrawState,
+            target: SkinSliderHit,
+            x: f32,
+            y: f32,
+        ) -> Option<SkinSliderHit> {
+            self.result_slider_value(state, Some(target), x, y)
         }
 
         fn select_slider_hit(
@@ -177,8 +164,48 @@ pub(in crate::skin::document_render) use skin_document_render_select_interaction
 
 macro_rules! skin_document_render_select_interaction_methods {
     () => {
-        /// `dragging` names the slider type held since the press. LR2 keeps
-        /// moving it with the cursor outside its track, clamped to the ends.
+        /// `dragging` is the slider captured at the start of a drag. It keeps
+        /// moving with the cursor outside its track, clamped to the ends.
+        fn result_slider_value(
+            &self,
+            state: &SkinDrawState,
+            dragging: Option<SkinSliderHit>,
+            x: f32,
+            y: f32,
+        ) -> Option<SkinSliderHit> {
+            let enabled_options = self.enabled_options();
+            self.all_destinations(&enabled_options)
+                .into_iter()
+                .enumerate()
+                .filter(|(destination_index, destination)| {
+                    dragging.is_none_or(|target| target.destination_index == *destination_index)
+                        && destination_ops_match(destination, &enabled_options, state)
+                        && eval_skin_draw_condition(&destination.draw, state)
+                })
+                .filter_map(|(destination_index, destination)| {
+                    let slider = self.slider.iter().find(|slider| slider.id == destination.id)?;
+                    (slider.slider_type == 8 || slider.event.is_some()).then_some(())?;
+                    if dragging.is_some_and(|target| {
+                        target.slider_type != slider.event.unwrap_or(slider.slider_type)
+                    }) {
+                        return None;
+                    }
+                    self.destination_slider_hit(
+                        slider,
+                        destination,
+                        destination_index,
+                        &enabled_options,
+                        state,
+                        x,
+                        y,
+                        dragging.is_some(),
+                    )
+                })
+                .next_back()
+        }
+
+        /// `dragging` is the slider captured at the start of a drag. It keeps
+        /// moving with the cursor outside its track, clamped to the ends.
         fn select_slider_value(
             &self,
             snapshot: &SelectSnapshot,

@@ -237,6 +237,16 @@ fn result_ir_slider_hit_and_rate_use_ranking_scroll_position() {
     let hit = document.result_slider_hit(&state, 0.15, 0.55).unwrap();
     assert_eq!(hit.slider_type, 8);
     assert!(approx_eq(hit.value, 0.5));
+
+    // A captured drag follows the cursor outside the track and stops at the ends.
+    assert!(document.result_slider_hit(&state, 0.9, 0.9).is_none());
+    for (x, y, expected) in [(0.9, 0.9, 1.0), (0.9, 0.1, 0.0), (0.9, 0.55, 0.5)] {
+        let dragged = document.result_slider_drag(&state, hit, x, y).unwrap();
+        assert_eq!(dragged.slider_type, 8);
+        assert!(approx_eq(dragged.value, expected), "{x},{y}");
+    }
+    let hidden = SkinDrawState { result_panel: Some(0), ..state.clone() };
+    assert!(document.result_slider_drag(&hidden, hit, 0.15, 0.55).is_none());
 }
 
 #[test]

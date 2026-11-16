@@ -119,7 +119,7 @@ fn result_mouse_route_delivers_lua_buttons_and_preserves_left_only_controls() {
     press(&mut app, MouseButton::Right, 0.05, 0.4);
     assert_eq!(app.select.slider_drag, SkinSliderDrag::Idle);
     press(&mut app, MouseButton::Left, 0.05, 0.4);
-    assert_eq!(app.select.slider_drag, SkinSliderDrag::Result(8));
+    assert!(matches!(app.select.slider_drag, SkinSliderDrag::Result(hit) if hit.slider_type == 8));
     app.result.result_exit = Some(ResultExit {
         started_at: Instant::now(),
         action: ResultExitAction::Leave,

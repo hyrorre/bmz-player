@@ -645,6 +645,23 @@ impl Renderer {
         self.result_skin_context.result_slider_hit(&state, x, y)
     }
 
+    /// Moves the captured result slider. Outside the canvas the cursor is
+    /// clamped to its edge so the slider reaches its ends.
+    pub fn result_skin_slider_drag(
+        &self,
+        snapshot: &crate::scene::ResultSnapshot,
+        target: SkinSliderHit,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit> {
+        let (x, y) = self.result_skin_canvas_point_clamped(x, y);
+        let document = self.result_skin_context.document()?;
+        let mut state = crate::plan::result_skin_draw_state_for_document(snapshot, document);
+        state.start_input_ms =
+            crate::skin::skin_start_input_elapsed_ms(state.elapsed_ms, document.input);
+        self.result_skin_context.result_slider_drag(&state, target, x, y)
+    }
+
     pub fn select_skin_slider_hit(
         &self,
         snapshot: &crate::scene::SelectSnapshot,
@@ -1150,6 +1167,15 @@ impl Renderer {
         };
         let viewport =
             CanvasViewport::from_policy(surface, self.select_skin_canvas_render_policy());
+        viewport.surface_to_canvas_point_clamped(x, y)
+    }
+
+    fn result_skin_canvas_point_clamped(&self, x: f32, y: f32) -> (f32, f32) {
+        let Some(surface) = self.gpu.as_ref().map(WgpuRenderer::surface_size) else {
+            return (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
+        };
+        let viewport =
+            CanvasViewport::from_policy(surface, self.result_skin_canvas_render_policy());
         viewport.surface_to_canvas_point_clamped(x, y)
     }
 

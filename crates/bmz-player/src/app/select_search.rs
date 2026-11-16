@@ -8,6 +8,8 @@ use crate::screens::select_model::MAX_SEARCH_HISTORY;
 
 const PLACEHOLDER_ALPHA: f32 = 0.45;
 const MESSAGE_ALPHA: f32 = 0.6;
+/// A paste never grows the query past this many characters.
+const MAX_SEARCH_PASTE_QUERY_CHARS: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SearchInputAction {
@@ -138,6 +140,7 @@ impl SelectSearchRuntime {
         if !self.active || !self.preedit.is_empty() {
             return false;
         }
+        let room = MAX_SEARCH_PASTE_QUERY_CHARS.saturating_sub(self.query.chars().count());
         let text: String = text
             .replace("\r\n", "\n")
             .chars()
@@ -146,6 +149,7 @@ impl SelectSearchRuntime {
                 ch if ch.is_control() => None,
                 ch => Some(ch),
             })
+            .take(room)
             .collect();
         if text.trim().is_empty() {
             return false;
@@ -380,6 +384,20 @@ mod tests {
         assert_eq!(search.trimmed_query(), "音楽 祭 2026曲");
         assert_eq!(search.cursor, "音楽 祭 2026".len());
         assert!(search.message.is_none());
+    }
+
+    #[test]
+    fn search_paste_stops_at_the_query_length_limit() {
+        let mut search = SelectSearchRuntime::new(Instant::now());
+        search.set_active(true);
+        search.apply_ime(&Ime::Commit("音".into()));
+
+        assert!(search.paste(&"楽".repeat(MAX_SEARCH_PASTE_QUERY_CHARS * 4)));
+        assert_eq!(search.trimmed_query().chars().count(), MAX_SEARCH_PASTE_QUERY_CHARS);
+        assert!(search.trimmed_query().starts_with("音楽"));
+        assert_eq!(search.cursor, search.trimmed_query().len());
+        assert!(!search.paste("曲"), "a full query takes no more pasted text");
+        assert_eq!(search.trimmed_query().chars().count(), MAX_SEARCH_PASTE_QUERY_CHARS);
     }
 
     #[test]

@@ -93,7 +93,7 @@ impl WinitApp {
                     return;
                 };
                 if let Some(hit) = self.renderer.result_skin_slider_hit(&snapshot, x, y) {
-                    self.select.slider_drag = SkinSliderDrag::Result(hit.slider_type);
+                    self.select.slider_drag = SkinSliderDrag::Result(hit);
                     self.apply_result_slider_hit(hit);
                     return;
                 }
@@ -266,12 +266,13 @@ impl WinitApp {
             return;
         };
         match (self.view_state(), self.select.slider_drag) {
-            (AppViewState::Result, SkinSliderDrag::Result(slider_type)) => {
+            (AppViewState::Result, SkinSliderDrag::Result(target)) => {
                 if self.result.result_exit.is_none()
                     && let AppSceneSnapshot::Result(snapshot) = self.scene_snapshot()
-                    && let Some(hit) = self.renderer.result_skin_slider_hit(&snapshot, x, y)
-                    && hit.slider_type == slider_type
+                    && let Some(hit) =
+                        self.renderer.result_skin_slider_drag(&snapshot, target, x, y)
                 {
+                    self.select.slider_drag = SkinSliderDrag::Result(hit);
                     self.apply_result_slider_hit(hit);
                 }
             }

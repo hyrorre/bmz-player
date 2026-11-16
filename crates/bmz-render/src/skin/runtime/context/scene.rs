@@ -386,6 +386,21 @@ impl SkinContext {
         document.result_slider_hit(&state, x, y)
     }
 
+    pub fn result_slider_drag(
+        &self,
+        state: &SkinDrawState,
+        target: SkinSliderHit,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit> {
+        let document = self.document.as_ref()?;
+        let mut state = state.clone();
+        if let Some(runtime) = &self.lua_draw_runtime {
+            apply_last_frame_lua(&mut state, runtime);
+        }
+        document.result_slider_drag(&state, target, x, y)
+    }
+
     pub fn select_slider_hit(
         &self,
         snapshot: &SelectSnapshot,

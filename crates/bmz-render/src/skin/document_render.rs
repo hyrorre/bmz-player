@@ -76,6 +76,15 @@ pub trait SkinDocumentRenderExt {
 
     fn result_slider_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinSliderHit>;
 
+    /// The value of the result slider captured at the start of a drag.
+    fn result_slider_drag(
+        &self,
+        state: &SkinDrawState,
+        target: SkinSliderHit,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit>;
+
     fn select_slider_hit(
         &self,
         snapshot: &SelectSnapshot,
@@ -335,6 +344,14 @@ pub(super) trait SkinDocumentRenderInternal {
         x: f32,
         y: f32,
         dragging: bool,
+    ) -> Option<SkinSliderHit>;
+
+    fn result_slider_value(
+        &self,
+        state: &SkinDrawState,
+        dragging: Option<SkinSliderHit>,
+        x: f32,
+        y: f32,
     ) -> Option<SkinSliderHit>;
 
     fn select_slider_value(
