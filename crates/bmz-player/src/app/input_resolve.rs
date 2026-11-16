@@ -221,6 +221,7 @@ impl StandardKey {
 
 /// 設定可能な単発ショートカット。ビット集合で保持する。
 const SHORTCUT_ACTIONS: &[InputActionConfig] = &[
+    InputActionConfig::OpenRandomTrainer,
     InputActionConfig::SelectOpenFolder,
     InputActionConfig::SelectReload,
     InputActionConfig::SelectAutoplayFolder,

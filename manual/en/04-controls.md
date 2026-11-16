@@ -13,6 +13,8 @@ By default, KEY1 to KEY7 are **Z S X D C F V**, and E1 to E4 are **Q W E R**.
 | F1 | Open or close the BMZ Menu (settings and tools) |
 | F12 | Save a screenshot |
 
+Assign a shortcut in Key Config → Common → RANDOM TRAINER to open the tool directly. No key is assigned by default.
+
 Screenshot filenames start with the capture date and time. Decide and Play add the song title and
 subtitle; Result also adds the current clear type, such as `Hard` or `FullCombo`.
 The overall course Result uses the course title, while course Decide uses the stage's song title.

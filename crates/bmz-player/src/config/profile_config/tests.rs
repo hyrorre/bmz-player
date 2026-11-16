@@ -904,6 +904,10 @@ fn input_normalization_migrates_shortcuts_once_and_preserves_later_clears() {
 
     assert_eq!(input.ui.version, UI_INPUT_BINDING_VERSION);
     for &action in CONFIGURABLE_SHORTCUT_ACTIONS {
+        if action == InputActionConfig::OpenRandomTrainer {
+            assert!(!input.ui.bindings.iter().any(|entry| entry.action == Some(action)));
+            continue;
+        }
         assert!(input.ui.bindings.iter().any(|entry| entry.action == Some(action)));
     }
 

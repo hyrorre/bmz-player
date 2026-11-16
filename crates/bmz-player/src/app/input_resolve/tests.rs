@@ -33,6 +33,21 @@ fn profile() -> ProfileConfig {
     ProfileConfig::new_default("input-test", "Input Test", 0)
 }
 
+#[test]
+fn random_trainer_resolves_assigned_keyboard_and_controller_shortcuts_during_play() {
+    let mut profile = profile();
+    let action = InputActionConfig::OpenRandomTrainer;
+    set_action(&mut profile.input, action, KeyBindingSlot::KeyboardPrimary, "F2");
+    set_action(&mut profile.input, action, KeyBindingSlot::Controller1P, "Button22");
+    let mut pipeline = Pipeline::new(profile.input, both_slots());
+    assert!(pipeline.press(key(KeyCode::F2, true)).has_shortcut(action));
+    assert!(pipeline.press(pad(LEFT, "Button22", true)).has_shortcut(action));
+    assert!(!pipeline.press(pad(RIGHT, "Button22", true)).has_shortcut(action));
+    pipeline.start_play(KeyMode::K7);
+    assert!(pipeline.press(key(KeyCode::F2, true)).has_shortcut(action));
+    assert!(pipeline.press(pad(LEFT, "Button22", true)).has_shortcut(action));
+}
+
 fn both_slots() -> GamepadSlotMap {
     GamepadSlotMap::from_device_ids([Some(LEFT), Some(RIGHT)])
 }

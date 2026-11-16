@@ -187,6 +187,7 @@ pub const COMMON_ACTIONS: &[InputActionConfig] = &[
     InputActionConfig::E3,
     InputActionConfig::E4,
     InputActionConfig::Screenshot,
+    InputActionConfig::OpenRandomTrainer,
     InputActionConfig::SelectOpenIr,
     InputActionConfig::SelectFavoriteSong,
     InputActionConfig::SelectFavoriteChart,
@@ -330,7 +331,9 @@ enum BindingContext {
 
 fn binding_context_for_action(action: InputActionConfig) -> BindingContext {
     match action {
-        InputActionConfig::Screenshot => BindingContext::Common,
+        InputActionConfig::Screenshot | InputActionConfig::OpenRandomTrainer => {
+            BindingContext::Common
+        }
         InputActionConfig::SelectOpenIr
         | InputActionConfig::SelectFavoriteSong
         | InputActionConfig::SelectFavoriteChart => BindingContext::SelectAndResult,
@@ -607,6 +610,7 @@ pub fn action_label(action: InputActionConfig) -> &'static str {
         InputActionConfig::SelectOpenIr => "OPEN IR",
         InputActionConfig::SelectOpenKeyConfig => "KEY CONFIG",
         InputActionConfig::Screenshot => "SCREENSHOT",
+        InputActionConfig::OpenRandomTrainer => "RANDOM TRAINER",
         InputActionConfig::SelectRivalCycle => "RIVAL CYCLE",
         InputActionConfig::SelectOpenDocuments => "OPEN SONG TEXT",
         InputActionConfig::SelectFavoriteSong => "FAVORITE SONG",

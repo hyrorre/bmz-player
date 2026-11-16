@@ -18,6 +18,31 @@ fn action_target(action: InputActionConfig, slot: KeyBindingSlot) -> KeyBindingT
 }
 
 #[test]
+fn random_trainer_is_configurable_and_remains_unassigned_after_normalization() {
+    let mut profile = ProfileConfig::new_default("default", "Player", 0);
+    let action = InputActionConfig::OpenRandomTrainer;
+    crate::config::play_input::normalize_profile_input(&mut profile.input);
+    assert!(!profile.input.ui.bindings.iter().any(|binding| binding.action == Some(action)));
+    assert!(COMMON_ACTIONS.contains(&action));
+    apply_play_binding(
+        &mut profile.input,
+        KeyMode::K7,
+        action_target(action, KeyBindingSlot::KeyboardPrimary),
+        "F2",
+    )
+    .unwrap();
+    crate::config::play_input::normalize_profile_input(&mut profile.input);
+    assert!(
+        profile
+            .input
+            .ui
+            .bindings
+            .iter()
+            .any(|binding| binding.action == Some(action) && binding.control == "F2")
+    );
+}
+
+#[test]
 fn lane_label_names_double_play_keys_by_side() {
     assert_eq!(lane_label(LaneConfig::Key1), "KEY 1");
     assert_eq!(lane_label(LaneConfig::Key7), "KEY 7");

@@ -106,6 +106,11 @@ impl EguiLayer {
         tracing::info!("egui skin settings opened from select");
     }
 
+    pub fn open_random_trainer(&mut self) {
+        self.visible = true;
+        SettingsNavigation::select(&self.ctx, SettingsPage::RandomTrainer);
+    }
+
     /// profile側からFPS表示設定が変更されたとき、eguiのcheckbox状態も揃える。
     pub fn set_show_fps(&mut self, show_fps: bool) {
         self.show_fps = show_fps;

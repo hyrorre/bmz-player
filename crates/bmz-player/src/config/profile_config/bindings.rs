@@ -54,6 +54,7 @@ pub const CONFIGURABLE_SHORTCUT_MIGRATIONS: &[(u32, &[InputActionConfig])] = &[
 ];
 
 pub const CONFIGURABLE_SHORTCUT_ACTIONS: &[InputActionConfig] = &[
+    InputActionConfig::OpenRandomTrainer,
     InputActionConfig::PlayHispeedDown,
     InputActionConfig::PlayHispeedUp,
     InputActionConfig::PlayLaneCoverUp,

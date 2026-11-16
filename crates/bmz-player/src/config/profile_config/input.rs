@@ -236,6 +236,7 @@ pub enum InputActionConfig {
     #[serde(rename = "OpenKeyConfig")]
     SelectOpenKeyConfig,
     Screenshot,
+    OpenRandomTrainer,
     #[serde(rename = "RivalCycle")]
     SelectRivalCycle,
     #[serde(rename = "OpenDocuments")]
