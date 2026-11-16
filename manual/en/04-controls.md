@@ -18,6 +18,7 @@ Assign a shortcut in Key Config → Common → RANDOM TRAINER to open the tool d
 Screenshot filenames start with the capture date and time. Decide and Play add the song title and
 subtitle; Result also adds the current clear type, such as `Hard` or `FullCombo`.
 The overall course Result uses the course title, while course Decide uses the stage's song title.
+Songs in a difficulty table add the table symbol and level (such as `s15`) before the song title, except on the overall course Result.
 Music Select adds the open folder's display name, omitted at the root.
 Empty subtitles are omitted. Invalid characters and long names are adjusted, and duplicate names get a number.
 Example: `20261105_203045_123_Song_[ANOTHER]_Hard.png`.

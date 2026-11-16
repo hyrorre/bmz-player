@@ -102,16 +102,48 @@ fn screenshot_name(
         }
         AppSceneSnapshot::Decide(snapshot) => {
             let chart = decide_chart.unwrap_or(snapshot);
-            (format!("Decide_{}", screenshot_title(&chart.title, &chart.subtitle)), None)
+            (
+                format!(
+                    "Decide_{}",
+                    screenshot_chart_title(
+                        &chart.title,
+                        &chart.subtitle,
+                        &chart.table_text_secondary
+                    )
+                ),
+                None,
+            )
         }
-        AppSceneSnapshot::Play(snapshot) => {
-            (format!("Play_{}", screenshot_title(&snapshot.title, &snapshot.subtitle)), None)
-        }
+        AppSceneSnapshot::Play(snapshot) => (
+            format!(
+                "Play_{}",
+                screenshot_chart_title(
+                    &snapshot.title,
+                    &snapshot.subtitle,
+                    &snapshot.table_text_secondary
+                )
+            ),
+            None,
+        ),
         AppSceneSnapshot::Result(snapshot) => {
-            (screenshot_title(&snapshot.title, &snapshot.subtitle), Some(snapshot.clear_type))
+            let table = if snapshot.course_result.stage_count > 0 {
+                ""
+            } else {
+                &snapshot.table_text_secondary
+            };
+            (
+                screenshot_chart_title(&snapshot.title, &snapshot.subtitle, table),
+                Some(snapshot.clear_type),
+            )
         }
     };
     ScreenshotName { body, clear_type }
+}
+
+fn screenshot_chart_title(title: &str, subtitle: &str, table: &str) -> String {
+    let title = screenshot_title(title, subtitle);
+    let table = sanitize_component(table);
+    if table.is_empty() { title } else { format!("{table}_{title}") }
 }
 
 fn screenshot_title(title: &str, subtitle: &str) -> String {

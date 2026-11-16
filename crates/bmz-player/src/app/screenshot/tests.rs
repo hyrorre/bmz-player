@@ -2,6 +2,37 @@ use super::*;
 
 const STAMP: &str = "20261105_203045_123";
 
+#[test]
+fn screenshot_uses_frame_table_level_and_omits_it_for_course_totals() {
+    let mut scene = bmz_render::sample::sample_result_scene();
+    let AppSceneSnapshot::Result(snapshot) = &mut scene else { unreachable!() };
+    snapshot.title = "四十五年ノ雪桜".into();
+    snapshot.subtitle = "[Blossoms]".into();
+    snapshot.table_text_primary = "Satellite".into();
+    snapshot.table_text_secondary = "s15".into();
+    snapshot.clear_type = ClearType::ExHard;
+    assert_eq!(filename(&scene), format!("{STAMP}_s15_四十五年ノ雪桜_[Blossoms]_ExHard.png"));
+    let AppSceneSnapshot::Result(snapshot) = &mut scene else { unreachable!() };
+    snapshot.course_result.stage_count = 4;
+    assert_eq!(filename(&scene), format!("{STAMP}_四十五年ノ雪桜_[Blossoms]_ExHard.png"));
+    for decide in [false, true] {
+        let snapshot = RenderSnapshot {
+            title: "曲".into(),
+            table_text_secondary: "★12".into(),
+            ..Default::default()
+        };
+        let scene = if decide {
+            AppSceneSnapshot::Decide(snapshot)
+        } else {
+            AppSceneSnapshot::Play(snapshot)
+        };
+        assert_eq!(
+            filename(&scene),
+            format!("{STAMP}_{}_★12_曲.png", if decide { "Decide" } else { "Play" })
+        );
+    }
+}
+
 fn filename(scene: &AppSceneSnapshot) -> String {
     screenshot_filename(STAMP, &screenshot_name(scene, None), 0)
 }
