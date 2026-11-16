@@ -111,14 +111,23 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
             WindowEvent::Ime(_) => play_owns_keyboard_input,
             _ => false,
         };
-        let egui_consumed = if suppress_egui_event {
-            false
+        let (egui_consumed, search_paste) = if suppress_egui_event {
+            (false, None)
         } else {
+            let search_active = self.select.search.is_active()
+                && self.ui.focused
+                && self.jobs.profile_change.is_none()
+                && matches!(self.view_state(), AppViewState::Select)
+                && !in_settings_stack(&self.select.folder_stack);
             match (self.window.clone(), self.ui.egui.as_mut()) {
-                (Some(window), Some(egui)) => {
-                    egui.on_window_event(&window, &event, practice_overlay, select_course_builder)
-                }
-                _ => false,
+                (Some(window), Some(egui)) => egui.on_window_event(
+                    &window,
+                    &event,
+                    practice_overlay,
+                    select_course_builder,
+                    search_active,
+                ),
+                _ => (false, None),
             }
         };
 
@@ -181,6 +190,10 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     self.input.track_control(&control);
                     self.sync_select_holds_from_pressed_controls();
                     self.reset_detail_options_input();
+                    return;
+                }
+                if let Some(text) = search_paste {
+                    self.paste_select_search(&text);
                     return;
                 }
                 if !egui_consumed

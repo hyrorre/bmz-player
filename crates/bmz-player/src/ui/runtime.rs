@@ -1,4 +1,6 @@
 use super::*;
+use winit::event::ElementState;
+use winit::keyboard::{Key, KeyCode, PhysicalKey};
 
 /// 設定パネルの出力デバイス選択 ComboBox 用キャッシュ。
 #[derive(Default)]
@@ -187,16 +189,44 @@ impl EguiLayer {
         event: &WindowEvent,
         practice_overlay: bool,
         select_course_builder: bool,
-    ) -> bool {
+        search_active: bool,
+    ) -> (bool, Option<String>) {
+        let first_new_event = self.state.egui_input().events.len();
         let response = self.state.on_window_event(window, event);
-        egui_consumed_game_input(
+        let consumed = egui_consumed_game_input(
             self.visible,
             practice_overlay,
             select_course_builder,
             self.update_dialog_active,
             self.profile_manager.busy,
             response.consumed,
-        )
+        );
+        let paste = if search_active
+            && !consumed
+            && !self.blocks_game_input(practice_overlay)
+            && let WindowEvent::KeyboardInput { event, is_synthetic: false, .. } = event
+            && event.state == ElementState::Pressed
+        {
+            let input = self.state.egui_input_mut();
+            if input.modifiers.alt {
+                // AltGr can appear as Ctrl+Alt and still be ordinary text input.
+                None
+            } else {
+                take_paste_event(&mut input.events, first_new_event).or_else(|| {
+                    // egui-winit emits no event when the clipboard has no text.
+                    // Consume Ctrl/Cmd+V even if winit supplies a literal "v".
+                    (input.events.len() == first_new_event
+                        && input.modifiers.command
+                        && (event.physical_key == PhysicalKey::Code(KeyCode::KeyV)
+                            || matches!(&event.logical_key, Key::Character(key)
+                                if key.eq_ignore_ascii_case("v"))))
+                    .then(String::new)
+                })
+            }
+        } else {
+            None
+        };
+        (consumed, paste)
     }
 
     /// egui のモーダル状態が、画面側の入力を専有するか。
@@ -584,6 +614,27 @@ impl EguiLayer {
             select_course_builder_action,
         }
     }
+}
+
+fn take_paste_event(events: &mut Vec<egui::Event>, first_new_event: usize) -> Option<String> {
+    let offset = events[first_new_event..]
+        .iter()
+        .position(|event| matches!(event, egui::Event::Paste(_)))?;
+    match events.remove(first_new_event + offset) {
+        egui::Event::Paste(text) => Some(text),
+        _ => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn search_takes_only_the_paste_for_the_current_key() {
+    let earlier = vec![egui::Event::Paste("menu text".into()), egui::Event::Copy];
+    let mut events = earlier.clone();
+    assert_eq!(take_paste_event(&mut events, earlier.len()), None);
+    events.push(egui::Event::Paste("楽曲".into()));
+    assert_eq!(take_paste_event(&mut events, earlier.len()).as_deref(), Some("楽曲"));
+    assert_eq!(events, earlier);
 }
 
 pub(super) fn egui_consumed_game_input(

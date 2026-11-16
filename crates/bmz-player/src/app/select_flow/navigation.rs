@@ -947,6 +947,9 @@ impl WinitApp {
             return;
         }
         self.select.search.set_active(enabled);
+        if enabled {
+            self.clear_select_hold();
+        }
         self.reconcile_select_ir_battle_hold();
         if let Some(window) = self.window.as_ref() {
             window.set_ime_allowed(enabled);
@@ -1015,6 +1018,12 @@ impl WinitApp {
         }
     }
 
+    pub(super) fn paste_select_search(&mut self, text: &str) {
+        if self.select.search.paste(text) {
+            self.update_search_ime_cursor_area();
+        }
+    }
+
     /// Runs the current `search_query` against the library DB. On hit: appends
     /// to history (dedupe + bounded), pushes a virtual folder onto the stack,
     /// and exits search mode. On miss: clears the query and updates the feedback
@@ -1040,6 +1049,64 @@ impl WinitApp {
             self.cancel_select_course_builder();
         }
     }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+#[test]
+#[ignore = "creates an isolated Winit event loop; run alone with --ignored"]
+fn search_mode_cancels_held_ctrl_scratch_scroll() {
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+
+    let event_loop =
+        EventLoop::<AppUserEvent>::with_user_event().with_any_thread(true).build().unwrap();
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    let mut boot = data.boot();
+    boot.app_config.input.gamepad_enabled = false;
+    let (maintenance_tx, _) = tokio::sync::watch::channel(false);
+    let mut app = WinitApp::new(
+        boot,
+        AppOptions { viewer_play: true, ..Default::default() },
+        Instant::now(),
+        None,
+        None,
+        Arc::new(AtomicBool::new(false)),
+        event_loop.create_proxy(),
+        LogBuffer::default(),
+        maintenance_tx,
+        None,
+    )
+    .unwrap();
+    app.viewer_mode = false;
+    app.ui.focused = true;
+    app.select.select_items = (0..3)
+        .map(|index| SelectItem::Folder {
+            path: format!("folder-{index}"),
+            name: format!("Folder {index}"),
+            kind: bmz_render::scene::SelectRowKind::Folder,
+            summary: None,
+        })
+        .collect();
+
+    let ctrl = ControlInputEvent::keyboard_parts(
+        PhysicalKey::Code(KeyCode::ControlLeft),
+        ElementState::Pressed,
+        false,
+    );
+    app.input.track_control(&ctrl);
+    let input = app.resolve_control_event(ctrl);
+    let action = scene_select_action(&input).expect("Ctrl is bound to Scratch Down");
+    assert_eq!(action, SelectAction::Move(SelectMove::Next));
+    app.apply_select_action(action, input.source());
+    assert_eq!(app.select.selected_index, 1);
+    assert!(app.select.select_hold_move.is_some());
+    let earlier = Instant::now() - Duration::from_secs(5);
+    app.select.select_hold_started_at = Some(earlier);
+    app.select.select_hold_last_trigger_at = Some(earlier);
+
+    app.set_search_mode(true);
+    app.advance_select_hold_move();
+    assert_eq!(app.select.selected_index, 1);
+    assert!(app.select.select_hold_move.is_none());
 }
 
 /// Returns the folder path and log description opened by SAME FOLDER.

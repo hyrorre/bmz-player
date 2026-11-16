@@ -134,6 +134,28 @@ impl SelectSearchRuntime {
         }
     }
 
+    pub(super) fn paste(&mut self, text: &str) -> bool {
+        if !self.active || !self.preedit.is_empty() {
+            return false;
+        }
+        let text: String = text
+            .replace("\r\n", "\n")
+            .chars()
+            .filter_map(|ch| match ch {
+                '\r' | '\n' | '\t' | '\u{2028}' | '\u{2029}' => Some(' '),
+                ch if ch.is_control() => None,
+                ch => Some(ch),
+            })
+            .collect();
+        if text.trim().is_empty() {
+            return false;
+        }
+        search_insert_text(&mut self.query, &mut self.cursor, &text);
+        self.reset_caret_blink();
+        self.clear_message();
+        true
+    }
+
     pub(super) fn handle_key(
         &mut self,
         event: &KeyEvent,
@@ -344,6 +366,36 @@ mod tests {
         let mut edited = query;
         search_delete_backward(&mut edited, &mut cursor);
         assert_eq!((&edited, cursor), (&"ab".to_string(), "a".len()));
+    }
+
+    #[test]
+    fn search_paste_inserts_single_line_at_utf8_cursor() {
+        let mut search = SelectSearchRuntime::new(Instant::now());
+        search.set_active(true);
+        search.apply_ime(&Ime::Commit("音曲".into()));
+        search.cursor_action("音".len());
+        search.set_message("no results".into());
+
+        assert!(search.paste("楽\r\n祭\t2026\u{0000}"));
+        assert_eq!(search.trimmed_query(), "音楽 祭 2026曲");
+        assert_eq!(search.cursor, "音楽 祭 2026".len());
+        assert!(search.message.is_none());
+    }
+
+    #[test]
+    fn search_paste_preserves_state_without_text_or_during_composition() {
+        let mut search = SelectSearchRuntime::new(Instant::now());
+        assert!(!search.paste("outside the search field"));
+        search.set_active(true);
+        search.apply_ime(&Ime::Commit("音".into()));
+        search.set_message("no results".into());
+        assert!(!search.paste(""));
+        assert!(!search.paste("\r\n\t"));
+        search.apply_ime(&Ime::Preedit("がく".into(), None));
+        assert!(!search.paste("楽"));
+        assert_eq!(search.display_word(false, String::new()).0, "音がく");
+        assert_eq!(search.cursor, "音".len());
+        assert_eq!(search.message.as_deref(), Some("no results"));
     }
 
     #[test]
