@@ -31,6 +31,8 @@ Open Settings → **Data import** → **Import Scores**.
 
 The number of imported scores and the number that could not be imported are shown.
 
+If your beatoraja or LR2oraja ED `score.db` contains cumulative statistics, BMZ Player imports totals such as play count and time. Your BMZ Player totals are added to the most recently imported totals. Import the original `score.db` again to refresh them.
+
 To put imported scores on IR as well, log in as described in [Join the internet ranking (IR)](02-setup.md), then use "Upload all local scores" in Settings → **IR**.
 
 ### If imported scores do not appear

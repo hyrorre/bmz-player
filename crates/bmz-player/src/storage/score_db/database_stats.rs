@@ -1,5 +1,9 @@
 use super::*;
 
+const PLAYER_STATS_COLUMNS: &str = "play_count, clear_count, playtime_seconds, max_combo,
+    fast_pgreat, slow_pgreat, fast_great, slow_great, fast_good, slow_good, fast_bad, slow_bad,
+    fast_poor, slow_poor, fast_empty_poor, slow_empty_poor, updated_at";
+
 impl ScoreDatabase {
     /// Returns local-calendar day ranges, newest first.
     ///
@@ -107,32 +111,58 @@ impl ScoreDatabase {
     }
 
     pub fn player_stats(&self) -> Result<PlayerStats> {
-        self.conn
-            .query_row(
-                "SELECT
-                    play_count,
-                    clear_count,
-                    playtime_seconds,
-                    max_combo,
-                    fast_pgreat,
-                    slow_pgreat,
-                    fast_great,
-                    slow_great,
-                    fast_good,
-                    slow_good,
-                    fast_bad,
-                    slow_bad,
-                    fast_poor,
-                    slow_poor,
-                    fast_empty_poor,
-                    slow_empty_poor,
-                    updated_at
-                 FROM player_stats
-                 WHERE id = 1",
-                [],
-                player_stats_from_row,
-            )
-            .map_err(Into::into)
+        // Read the counters and both sides of the replacement in one SQLite
+        // snapshot. Without imported totals the history scan is skipped.
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT {PLAYER_STATS_COLUMNS}, 0 AS part FROM player_stats WHERE id = 1
+             UNION ALL
+             SELECT {PLAYER_STATS_COLUMNS}, 1 FROM imported_player_stats WHERE id = 1
+             UNION ALL
+             SELECT COUNT(*),
+                    COUNT(CASE WHEN clear_type NOT IN ('NoPlay', 'Failed') THEN 1 END),
+                    0, 0,
+                    COALESCE(SUM(fast_pgreat), 0), COALESCE(SUM(slow_pgreat), 0),
+                    COALESCE(SUM(fast_great), 0), COALESCE(SUM(slow_great), 0),
+                    COALESCE(SUM(fast_good), 0), COALESCE(SUM(slow_good), 0),
+                    COALESCE(SUM(fast_bad), 0), COALESCE(SUM(slow_bad), 0),
+                    COALESCE(SUM(fast_poor), 0), COALESCE(SUM(slow_poor), 0),
+                    COALESCE(SUM(fast_empty_poor), 0), COALESCE(SUM(slow_empty_poor), 0),
+                    0, 2
+             FROM score_history
+             WHERE EXISTS (SELECT 1 FROM imported_player_stats WHERE id = 1)
+               AND source_kind IN ('Beatoraja', 'Lr2Oraja', 'Lr2OrajaDx')
+               AND normal_best_eligible = 1
+             HAVING EXISTS (SELECT 1 FROM imported_player_stats WHERE id = 1)
+             ORDER BY part"
+        ))?;
+        let mut rows = stmt.query_map([], player_stats_from_row)?;
+        let mut stats = rows.next().ok_or(rusqlite::Error::QueryReturnedNoRows)??;
+        if let Some(imported) = rows.next() {
+            let imported = imported?;
+            let covered = rows.next().ok_or(rusqlite::Error::QueryReturnedNoRows)??;
+            stats.apply_imported_totals(&imported, &covered);
+        }
+        Ok(stats)
+    }
+
+    pub(in crate::storage) fn store_imported_player_stats(
+        &mut self,
+        stats: &PlayerStats,
+    ) -> Result<()> {
+        self.conn.execute(
+            &format!(
+                "INSERT OR REPLACE INTO imported_player_stats (id, {PLAYER_STATS_COLUMNS})
+                 VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)"
+            ),
+            params![
+                stats.play_count, stats.clear_count, stats.playtime_seconds, stats.max_combo,
+                stats.fast_pgreat, stats.slow_pgreat, stats.fast_great, stats.slow_great,
+                stats.fast_good, stats.slow_good, stats.fast_bad, stats.slow_bad,
+                stats.fast_poor, stats.slow_poor, stats.fast_empty_poor, stats.slow_empty_poor,
+                stats.updated_at,
+            ],
+        )?;
+        Ok(())
     }
 
     /// Aggregate locally played score history inside `[start_at, end_at)`.
@@ -253,5 +283,33 @@ impl ScoreDatabase {
             hashes.push(hex_to_hash::<32>(&hex)?);
         }
         Ok(hashes)
+    }
+}
+
+impl PlayerStats {
+    fn apply_imported_totals(&mut self, imported: &Self, covered: &Self) {
+        fn replace(total: &mut u64, covered: u64, imported: u64) {
+            *total = total.saturating_sub(covered).saturating_add(imported);
+        }
+
+        replace(&mut self.play_count, covered.play_count, imported.play_count);
+        replace(&mut self.clear_count, covered.clear_count, imported.clear_count);
+        replace(&mut self.fast_pgreat, covered.fast_pgreat, imported.fast_pgreat);
+        replace(&mut self.slow_pgreat, covered.slow_pgreat, imported.slow_pgreat);
+        replace(&mut self.fast_great, covered.fast_great, imported.fast_great);
+        replace(&mut self.slow_great, covered.slow_great, imported.slow_great);
+        replace(&mut self.fast_good, covered.fast_good, imported.fast_good);
+        replace(&mut self.slow_good, covered.slow_good, imported.slow_good);
+        replace(&mut self.fast_bad, covered.fast_bad, imported.fast_bad);
+        replace(&mut self.slow_bad, covered.slow_bad, imported.slow_bad);
+        replace(&mut self.fast_poor, covered.fast_poor, imported.fast_poor);
+        replace(&mut self.slow_poor, covered.slow_poor, imported.slow_poor);
+        replace(&mut self.fast_empty_poor, covered.fast_empty_poor, imported.fast_empty_poor);
+        replace(&mut self.slow_empty_poor, covered.slow_empty_poor, imported.slow_empty_poor);
+        // File imports of individual scores have never added play time. A BMZ
+        // maximum may belong to a clear-only play without its own history row.
+        self.playtime_seconds = self.playtime_seconds.saturating_add(imported.playtime_seconds);
+        self.max_combo = self.max_combo.max(imported.max_combo);
+        self.updated_at = self.updated_at.max(imported.updated_at);
     }
 }

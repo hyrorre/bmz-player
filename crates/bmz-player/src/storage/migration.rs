@@ -239,13 +239,13 @@ mod tests {
 
     #[test]
     fn pre_merge_kaleid_databases_keep_data_and_gain_main_columns() {
-        for (migrations, before, old_version, new_version, table, column) in [
-            (LIBRARY_MIGRATIONS, 36, 37, 38, "chart_files", "failed_import_version"),
-            (SCORE_MIGRATIONS, 34, 35, 36, "score_history", "normal_best_eligible"),
+        for (migrations, before, old_version, kaleid_version, final_version, table, column) in [
+            (LIBRARY_MIGRATIONS, 36, 37, 38, 38, "chart_files", "failed_import_version"),
+            (SCORE_MIGRATIONS, 34, 35, 36, 37, "score_history", "normal_best_eligible"),
         ] {
             let mut conn = Connection::open_in_memory().unwrap();
             run_migrations(&mut conn, &migrations[..before]).unwrap();
-            let kaleid = migrations.last().unwrap();
+            let kaleid = migrations.iter().find(|m| m.version == kaleid_version).unwrap();
             run_migrations(
                 &mut conn,
                 &[Migration { version: old_version, statements: kaleid.statements }],
@@ -260,7 +260,7 @@ mod tests {
             assert!(column_exists(&conn, table, column).unwrap());
             assert_eq!(
                 conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0)).unwrap(),
-                new_version
+                final_version
             );
             if old_version == 37 {
                 assert_eq!(

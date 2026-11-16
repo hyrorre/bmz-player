@@ -9,13 +9,13 @@ use bmz_core::course::{
 use bmz_core::input::InputDeviceKind;
 use bmz_gameplay::rule::RuleMode;
 use bmz_gameplay::score::{JudgeCounts, ScoreState};
-use rusqlite::{Connection, OpenFlags, Row};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Row};
 
 use super::common::hex_to_hash;
 use super::library_db::{CHART_IMPORT_VERSION, ChartListItem, ChartSource, LibraryDatabase};
 use super::score_db::{
-    CourseScoreInsert, ImportedScoreReconciliation, ScoreDatabase, ScoreRecord, ScoreSourceKind,
-    decode_beatoraja_ghost,
+    CourseScoreInsert, ImportedScoreReconciliation, PlayerStats, ScoreDatabase, ScoreRecord,
+    ScoreSourceKind, decode_beatoraja_ghost, player_stats_from_row,
 };
 use crate::ln_policy::{LnPolicySetting, LnScorePolicy, score_ln_policy};
 use crate::select_options::{ArrangeOption, DoubleOption};
@@ -86,6 +86,8 @@ pub struct ScoreImportReport {
     pub skipped: u32,
     pub failed: u32,
     pub issues: Vec<ScoreImportIssue>,
+    pub player_stats_imported: bool,
+    pub player_stats_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,6 +135,10 @@ pub struct ScoreImportIssue {
 }
 
 impl ScoreImportReport {
+    pub fn has_errors(&self) -> bool {
+        self.failed > 0 || self.player_stats_error.is_some()
+    }
+
     pub fn summary_for_locale(&self, locale: crate::i18n::AppLocale) -> String {
         use crate::i18n::{FluentArgs, Localizer};
         let text = Localizer::new(locale);
@@ -155,6 +161,16 @@ impl ScoreImportReport {
                 issue.count,
                 issue.example
             ));
+        }
+        if self.player_stats_imported {
+            summary.push('\n');
+            summary.push_str(&text.text("score-import-player-stats-imported"));
+        }
+        if let Some(error) = &self.player_stats_error {
+            let mut args = FluentArgs::new();
+            args.set("error", error.as_str());
+            summary.push('\n');
+            summary.push_str(&text.format("score-import-player-stats-failed", &args));
         }
         summary
     }
@@ -179,6 +195,12 @@ impl ScoreImportReport {
                 issue.count,
                 issue.example
             ));
+        }
+        if self.player_stats_imported {
+            summary.push_str("\nimported cumulative player statistics");
+        }
+        if let Some(error) = &self.player_stats_error {
+            summary.push_str(&format!("\nfailed to import cumulative player statistics: {error}"));
         }
         summary
     }
@@ -453,14 +475,19 @@ fn import_beatoraja_scores_with_device_type(
     imported_at: i64,
     device_type: InputDeviceKind,
 ) -> Result<ScoreImportReport> {
-    let table = if table_exists(source, "score")? {
+    // Use the same source snapshot for the per-chart scores and the cumulative
+    // totals, even if the original client is still writing to the database.
+    let source = source.unchecked_transaction()?;
+    let table = if table_exists(&source, "score")? {
         "score"
-    } else if table_exists(source, "scoredatalog")? {
+    } else if table_exists(&source, "scoredatalog")? {
         "scoredatalog"
     } else {
         bail!("beatoraja score database must contain score or scoredatalog table");
     };
 
+    let player_stats =
+        if table == "score" { read_beatoraja_player_stats(&source) } else { Ok(None) };
     let mut report = ScoreImportReport::default();
     let mut chart_cache: HashMap<[u8; 32], ChartSource> = HashMap::new();
     let sql = format!(
@@ -639,7 +666,43 @@ fn import_beatoraja_scores_with_device_type(
         }
         report.imported += 1;
     }
+    let stats_result = player_stats.and_then(|stats| {
+        if let Some(stats) = stats {
+            score_db.store_imported_player_stats(&stats)?;
+            report.player_stats_imported = true;
+        }
+        Ok(())
+    });
+    if let Err(error) = stats_result {
+        tracing::warn!(%error, "failed to import cumulative player statistics");
+        report.player_stats_error = Some(error.to_string());
+    }
     Ok(report)
+}
+
+fn read_beatoraja_player_stats(source: &Connection) -> Result<Option<PlayerStats>> {
+    if !table_exists(source, "player")? {
+        return Ok(None);
+    }
+    // beatoraja reads the latest cumulative row. NULL numeric fields map to
+    // zero in its PlayerData Java bean.
+    let stats = source
+        .query_row(
+            "SELECT COALESCE(playcount, 0), COALESCE(clear, 0), COALESCE(playtime, 0),
+                COALESCE(maxcombo, 0),
+                COALESCE(epg, 0), COALESCE(lpg, 0), COALESCE(egr, 0), COALESCE(lgr, 0),
+                COALESCE(egd, 0), COALESCE(lgd, 0), COALESCE(ebd, 0), COALESCE(lbd, 0),
+                COALESCE(epr, 0), COALESCE(lpr, 0), COALESCE(ems, 0), COALESCE(lms, 0),
+                COALESCE(date, 0)
+         FROM player ORDER BY date DESC LIMIT 1",
+            [],
+            player_stats_from_row,
+        )
+        .optional()?;
+    if stats.as_ref().is_some_and(|stats| stats.clear_count > stats.play_count) {
+        bail!("player.clear exceeds player.playcount");
+    }
+    Ok(stats)
 }
 
 mod course;

@@ -850,6 +850,8 @@ toast-everything-fallback = { $count ->
   }
 toast-chart-unavailable = Chart unavailable: { $error }
 score-import-summary = scanned { $scanned }, matched { $matched }, imported { $imported }, corrected { $corrected }, skipped { $skipped }, failed { $failed }
+score-import-player-stats-imported = Imported cumulative player statistics.
+score-import-player-stats-failed = Could not import cumulative player statistics. { $error }
 score-import-reason-missing = Missing chart
 score-import-reason-duplicate = Duplicate
 score-import-reason-notes = Note-count mismatch
