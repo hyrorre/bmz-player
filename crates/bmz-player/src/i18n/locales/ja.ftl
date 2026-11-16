@@ -1062,3 +1062,8 @@ downloads-state-validating = 書庫を確認中
 
 profile-select-exit-hold = ESCで終了するまでの時間（ms）
 profile-select-exit-hold-help = 選曲画面のルートで使います。0にすると、ESCを1回押すと終了します。
+profile-rivals-title = ライバル
+profile-rivals-help = 比較したい別プロファイルにチェックを入れます。参照先のスコアは変更しません。F5で読み直せます。
+profile-rivals-active = 選択中のライバル
+profile-rivals-none = なし
+local-rival-load-failed = ライバルのスコアを読み込めませんでした。参照先のプロファイルを確認してください。

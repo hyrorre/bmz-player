@@ -8,7 +8,7 @@ pub enum HispeedDirectionConfig {
     Up,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RivalConfig {
     pub active_rival: String,
     #[serde(default)]
@@ -57,7 +57,7 @@ impl ChartReplicationModeConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RivalEntry {
     pub id: String,
     pub display_name: String,
@@ -68,7 +68,7 @@ pub struct RivalEntry {
     pub ir_user_id: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum RivalSourceConfig {
     None,

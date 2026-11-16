@@ -69,6 +69,7 @@ impl WinitApp {
     }
 
     pub(in crate::app) fn reload_from_select_context(&mut self) {
+        self.select.select_ir.refresh_local_rival();
         let selected = self.select.select_items.get(self.select.selected_index);
         if let Some(url) = table_source_url_from_context(&self.select.folder_stack, selected) {
             if is_rian_table_source(&url) {

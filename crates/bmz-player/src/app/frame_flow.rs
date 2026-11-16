@@ -732,6 +732,17 @@ impl WinitApp {
         if scene_kind != AppSceneKind::Select || self.jobs.profile_change.is_some() {
             return;
         }
+        if let Some(error) = self
+            .select
+            .select_ir
+            .update_local_rival(&self.boot.profile_config, &self.boot.app_paths)
+        {
+            tracing::warn!(%error, "failed to load local rival scores");
+            self.show_left_overlay_toast(
+                Localizer::new(self.boot.profile_config.ui.locale())
+                    .text("local-rival-load-failed"),
+            );
+        }
         let rival_target = crate::screens::select_ir::SelectRivalFetchTarget::from_profile(
             &self.boot.profile_config,
         );

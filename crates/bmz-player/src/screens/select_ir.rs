@@ -154,19 +154,16 @@ fn selectable_rivals<'a>(
 
 /// The empty ID represents NONE. No ID is returned if there is nothing to cycle.
 pub fn next_select_rival_id(profile: &ProfileConfig, forward: bool) -> Option<String> {
-    let provider = select_rival_provider(profile)?;
-    let provider_key = crate::ir::provider_key::configured_provider_key(provider)?;
-    let ids: Vec<&str> =
-        selectable_rivals(profile, provider_key).map(|entry| entry.id.as_str()).collect();
+    let ids = selectable_rival_ids(profile);
     if ids.is_empty() {
         return None;
     }
 
     let active = profile.rival.active_rival.trim();
-    let position = ids.iter().position(|id| *id == active).map_or(0, |index| index + 1);
+    let position = ids.iter().position(|id| id == active).map_or(0, |index| index + 1);
     let count = ids.len() + 1;
     let next = if forward { (position + 1) % count } else { (position + count - 1) % count };
-    Some(if next == 0 { String::new() } else { ids[next - 1].to_string() })
+    Some(if next == 0 { String::new() } else { ids[next - 1].clone() })
 }
 
 pub fn rian_ln_mode_for_chart(
@@ -183,6 +180,28 @@ pub fn rian_ln_mode_for_chart(
 }
 
 pub use crate::ir::ranking::CourseRankingTarget as SelectCourseIrTarget;
+
+/// Local rivals work without an IR account; IR entries belong to the primary provider.
+pub fn selectable_rival_ids(profile: &ProfileConfig) -> Vec<String> {
+    let provider =
+        select_rival_provider(profile).and_then(crate::ir::provider_key::configured_provider_key);
+    profile
+        .rival
+        .entries
+        .iter()
+        .filter(|entry| match entry.source {
+            RivalSourceConfig::LocalProfile => {
+                entry.profile_id != profile.id
+                    && crate::paths::validate_profile_id(&entry.profile_id).is_ok()
+            }
+            RivalSourceConfig::Ir => {
+                provider == Some(entry.ir_service.as_str()) && !entry.ir_user_id.is_empty()
+            }
+            _ => false,
+        })
+        .map(|entry| entry.id.clone())
+        .collect()
+}
 
 /// カーソル譜面ごとのキャッシュ済み IR 表示データ。
 #[derive(Debug, Clone)]
@@ -243,6 +262,7 @@ struct CachedCourseIr {
 }
 
 pub struct SelectIrRanking {
+    local_rival: local_rival::LocalRivalState,
     cache: HashMap<[u8; 32], CachedChartIr>,
     in_flight: Option<(String, [u8; 32], Instant)>,
     pending: Option<([u8; 32], Instant)>,
@@ -272,6 +292,7 @@ impl Default for SelectIrRanking {
         let (course_sender, course_receiver) = channel();
         let (rival_sender, rival_receiver) = channel();
         Self {
+            local_rival: Default::default(),
             cache: HashMap::new(),
             in_flight: None,
             pending: None,
@@ -296,6 +317,7 @@ impl Default for SelectIrRanking {
 }
 
 mod fetch;
+mod local_rival;
 mod update;
 mod view;
 

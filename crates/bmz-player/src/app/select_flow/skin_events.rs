@@ -345,6 +345,10 @@ impl WinitApp {
             &self.boot.profile_config,
         );
         self.select.select_ir.update_rival(target, &self.boot.profile_paths.root_dir);
+        let _ = self
+            .select
+            .select_ir
+            .update_local_rival(&self.boot.profile_config, &self.boot.app_paths);
         tracing::info!(
             rival = %self.boot.profile_config.rival.active_rival,
             "active rival changed"

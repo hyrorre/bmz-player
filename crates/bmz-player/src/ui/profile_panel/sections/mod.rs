@@ -5,6 +5,7 @@ mod display;
 mod ir;
 mod key_config;
 mod play;
+mod rivals;
 mod select;
 mod ui;
 
@@ -13,6 +14,7 @@ pub(super) use display::*;
 pub(super) use ir::*;
 pub(super) use key_config::*;
 pub(super) use play::*;
+pub(super) use rivals::*;
 pub(super) use select::*;
 pub(super) use ui::*;
 

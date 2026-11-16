@@ -1063,3 +1063,8 @@ downloads-state-validating = 正在檢查壓縮檔
 
 profile-select-exit-hold = ESC結束等待時間（毫秒）
 profile-select-exit-hold-help = 在選曲根目錄生效。設為0時，按一次ESC即可結束。
+profile-rivals-title = 對手
+profile-rivals-help = 勾選要比較成績的其他個人檔案。不會修改對方資料。按F5重新讀取。
+profile-rivals-active = 目前對手
+profile-rivals-none = 無
+local-rival-load-failed = 無法讀取對手成績。請檢查所選的來源個人檔案。

@@ -337,7 +337,7 @@ impl SelectIrRanking {
     }
 
     pub fn active_rival_display_name(&self) -> Option<&str> {
-        self.active_rival_name()
+        self.local_rival.name().or_else(|| self.active_rival_name())
     }
 
     pub fn resolved_target_for(
