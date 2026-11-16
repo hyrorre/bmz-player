@@ -93,6 +93,8 @@ const chartsIndexHandler = (await import('../../api/v1/charts/index.get')).defau
 const chartDetailHandler = (await import('../../api/v1/charts/[sha256]/index.get'))
   .default as Handler
 const playersIndexHandler = (await import('../../api/v1/players/index.get')).default as Handler
+const rivalScoresHandler = (await import('../../api/v1/rivals/[playerId]/scores.get'))
+  .default as Handler
 const playerDetailHandler = (await import('../../api/v1/players/[id]/index.get')).default as Handler
 const scoreDetailHandler = (await import('../../api/v1/scores/[id]/index.get')).default as Handler
 const replayHandler = (await import('../../api/v1/scores/[id]/replay/index.get')).default as Handler
@@ -184,6 +186,55 @@ async function expectHttpError(promise: Promise<unknown>, statusCode: number, co
   }
   throw new Error(`expected HTTP ${statusCode}`)
 }
+
+test('rival best scores page through identities, protect visibility, and use the EX best seed', async () => {
+  const path = '/api/v1/rivals/alice/scores?rule_mode=Beatoraja&limit=1'
+  const params = { playerId: 'alice' }
+  await expectHttpError(rivalScoresHandler(event({ path, params })), 401)
+  const { accessToken: token } = await createAuthTokens('bob')
+  await expectHttpError(rivalScoresHandler(event({ path, params, token })), 404)
+  await db
+    .insert(schema.rivalRelationships)
+    .values({ ownerPlayerId: 'bob', targetPlayerId: 'alice' })
+
+  const exBest = submission({ key: 'ex-best', clear: 'Normal' })
+  exBest.play_options = {
+    arrange_1p: 'random',
+    seed: '12345',
+    seed_scheme: 'beatoraja_24bit_v1',
+  }
+  await submitScore({ id: 'alice' }, exBest, [], 10)
+  const clearBest = submission({ key: 'clear-best', clear: 'Hard', exScore: 180 })
+  clearBest.play_options = { arrange_1p: 'mirror' }
+  await submitScore({ id: 'alice' }, clearBest, [], 10)
+  const cn = submission({ key: 'cn' })
+  cn.rule.ln_policy = 'ForceCn'
+  cn.rule.effective_ln_mode = 'cn'
+  await submitScore({ id: 'alice' }, cn, [], 10)
+  await submitScore({ id: 'alice' }, submission({ sha256: CHART_B, key: 'hidden' }), [], 10)
+  await setChartStatus(CHART_B, 'hidden')
+
+  const first = await rivalScoresHandler(event({ path, params, token }))
+  expect(first.scores).toHaveLength(1)
+  expect(first.scores[0]).toMatchObject({ chart_sha256: CHART_A, ln_policy: 'ForceCn' })
+  const second = await rivalScoresHandler(
+    event({ path: `${path}&cursor=${encodeURIComponent(first.next_cursor)}`, params, token }),
+  )
+  expect(second.scores).toHaveLength(1)
+  expect(second.scores[0]).toMatchObject({
+    chart_sha256: CHART_A,
+    ln_policy: 'ForceLn',
+    clear_type: 'Hard',
+    ex_score: 200,
+    arrange_1p: 'random',
+    play_seed: 12345,
+  })
+  expect(second.next_cursor).toBeNull()
+  await expectHttpError(
+    rivalScoresHandler(event({ path: `${path}&cursor=invalid`, params, token })),
+    400,
+  )
+})
 
 function submission(
   overrides: { sha256?: string; md5?: string; exScore?: number; key?: string; clear?: string } = {},
@@ -1616,7 +1667,8 @@ describe('course visibility with several courses', () => {
 
   function bestCourseCount(players: { players: Array<{ id: string }> }, id: string) {
     return (players.players.find((player) => player.id === id) as
-      { best_course_score_count: number } | undefined)!.best_course_score_count
+      | { best_course_score_count: number }
+      | undefined)!.best_course_score_count
   }
 
   test('a blocked chart hides only the courses that contain it', async () => {

@@ -1,13 +1,22 @@
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/sqlite-core'
 import { db, schema } from 'hub:db'
-import type { IrRivalComparison, IrRivalsResponse, LnScorePolicy } from '../../shared/types/ir'
+import type {
+  IrRivalBestScoresPage,
+  IrRivalComparison,
+  IrRivalsResponse,
+  IrRuleMode,
+  LnScorePolicy,
+} from '../../shared/types/ir'
 import { lookupDifficultyLabels } from './difficulty_tables'
+import { arrangeOptionsFromPlayOptions } from './ir/common'
 import { publicChartCondition, publicPlayerCondition } from './moderation/visibility'
 import {
   buildRivalComparisonRow,
+  packedRivalSeed,
   type RivalComparisonScoreRow,
   type RivalMutation,
+  type RivalScoreCursor,
 } from './rivals_core'
 
 const selfBestScores = alias(schema.bestScores, 'self_best_scores')
@@ -97,12 +106,7 @@ export async function loadRivalLists(playerId: string): Promise<IrRivalsResponse
   }
 }
 
-export async function loadRivalComparison(
-  ownerPlayerId: string,
-  targetPlayerId: string,
-  limit: number,
-  offset: number,
-): Promise<IrRivalComparison | null> {
+async function isRegisteredRival(ownerPlayerId: string, targetPlayerId: string): Promise<boolean> {
   const relation = await db
     .select({ targetPlayerId: schema.rivalRelationships.targetPlayerId })
     .from(schema.rivalRelationships)
@@ -115,7 +119,72 @@ export async function loadRivalComparison(
       ),
     )
     .limit(1)
-  if (relation.length === 0) return null
+  return relation.length > 0
+}
+
+export async function loadRivalBestScores(
+  ownerPlayerId: string,
+  targetPlayerId: string,
+  ruleMode: IrRuleMode,
+  limit: number,
+  cursor: RivalScoreCursor | null,
+): Promise<IrRivalBestScoresPage | null> {
+  if (!(await isRegisteredRival(ownerPlayerId, targetPlayerId))) return null
+
+  const best = schema.bestScores
+  const score = schema.scores
+  const rows = await db
+    .select({
+      chart_sha256: best.chartSha256,
+      ln_policy: best.lnPolicy,
+      double_option: best.doubleOption,
+      ex_score: best.exScore,
+      clear_type: best.clearType,
+      max_combo: best.maxCombo,
+      min_bp: best.minBp,
+      applied_double_option: score.appliedDoubleOption,
+      play_options: score.playOptions,
+    })
+    .from(best)
+    .leftJoin(score, eq(score.id, sql`coalesce(${best.bestExScoreId}, ${best.scoreId})`))
+    .where(
+      and(
+        eq(best.playerId, targetPlayerId),
+        eq(best.ruleMode, ruleMode),
+        eq(best.scoring, 'bms_ex_score_v1'),
+        publicChartCondition(best.chartSha256),
+        cursor
+          ? sql`(${best.chartSha256}, ${best.lnPolicy}, ${best.doubleOption}) >
+                (${cursor.chartSha256}, ${cursor.lnPolicy}, ${cursor.doubleOption})`
+          : undefined,
+      ),
+    )
+    .orderBy(asc(best.chartSha256), asc(best.lnPolicy), asc(best.doubleOption))
+    .limit(limit + 1)
+
+  const page = rows.slice(0, limit)
+  const last = page.at(-1)
+  return {
+    scores: page.map(({ play_options, ...row }) => ({
+      ...row,
+      ln_policy: row.ln_policy as LnScorePolicy,
+      ...arrangeOptionsFromPlayOptions(play_options),
+      play_seed: packedRivalSeed(play_options),
+    })),
+    next_cursor:
+      rows.length > limit && last
+        ? `${last.chart_sha256}:${last.ln_policy}:${last.double_option}`
+        : null,
+  }
+}
+
+export async function loadRivalComparison(
+  ownerPlayerId: string,
+  targetPlayerId: string,
+  limit: number,
+  offset: number,
+): Promise<IrRivalComparison | null> {
+  if (!(await isRegisteredRival(ownerPlayerId, targetPlayerId))) return null
 
   const [ownerProfile, targetProfile, summaryRows, pagedScores] = await Promise.all([
     loadProfile(ownerPlayerId),
