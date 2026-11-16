@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use bmz_core::clear::GaugeType;
 use bmz_core::replay::ReplayEvent;
+use bmz_gameplay::judge::model::JudgeAlgorithm;
 use bmz_gameplay::replay::ReplayPlayer;
 use bmz_gameplay::rule::RuleMode;
 use serde::{Deserialize, Serialize};
@@ -52,6 +53,11 @@ pub struct ReplayFile {
     /// from before FREQ and FREQ 0 plays share one layout and play at 100%.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub freq_semitones: Option<i8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge_algorithm: Option<JudgeAlgorithm>,
+    /// beatoraja input timestamps omit the chart's runtime start-note margin.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub input_excludes_start_margin: bool,
     #[serde(default)]
     pub arrange_seed: Option<i64>,
     #[serde(default)]
@@ -84,6 +90,8 @@ impl ReplayFile {
         ReplayPlayer {
             kaleid: self.kaleid.clone(),
             events: self.events.clone(),
+            judge_algorithm: self.judge_algorithm,
+            input_excludes_start_margin: self.input_excludes_start_margin,
             branch_decisions: self.branch_decisions.clone(),
             next_index: 0,
             next_scoring_time: None,
@@ -158,6 +166,8 @@ impl ReplayFile {
             gauge_type: String::new(),
             h_random_threshold_ms: None,
             freq_semitones: None,
+            judge_algorithm: None,
+            input_excludes_start_margin: false,
             arrange_seed,
             arrange_seed_2p: None,
             bms_random_choices: Some(Vec::new()),
@@ -698,6 +708,24 @@ events = []
         assert_eq!(replay.h_random_threshold_ms, None);
         assert_eq!(replay.freq_semitones, None);
         assert_eq!(replay.recorded_freq_semitones(), 0);
+    }
+
+    #[test]
+    fn replay_judge_algorithm_uses_stable_serialized_names() {
+        let mut replay =
+            ReplayFile::new([1; 32], 1, None, ArrangeOption::Normal, None, None, Vec::new());
+        for (algorithm, name) in [
+            (JudgeAlgorithm::Combo, "Combo"),
+            (JudgeAlgorithm::Duration, "Duration"),
+            (JudgeAlgorithm::Lowest, "Lowest"),
+            (JudgeAlgorithm::Score, "Score"),
+        ] {
+            replay.judge_algorithm = Some(algorithm);
+            let text = toml::to_string(&replay).unwrap();
+            let serialized = format!("judge_algorithm = \"{name}\"");
+            assert!(text.lines().any(|line| line == serialized));
+            assert_eq!(parse_replay(&text).unwrap().judge_algorithm, Some(algorithm));
+        }
     }
 
     #[test]

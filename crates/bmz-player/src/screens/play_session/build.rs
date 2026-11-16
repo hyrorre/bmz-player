@@ -314,7 +314,15 @@ pub fn build_game_session_with_input_backend(
     let initial_gauge_value = options.initial_gauge_value;
     let initial_gauge_values = options.initial_gauge_values.clone();
     let initial_course_combo = options.initial_course_combo.unwrap_or(0);
-    let replay_player = options.replay_player;
+    let mut replay_player = options.replay_player;
+    if let Some(player) = &mut replay_player {
+        player.apply_chart_start_margin(chart.metadata.start_note_margin);
+    }
+    let profile_judge_algorithm = judge_algorithm_from_config(profile.judge.judge_algorithm);
+    let judge_algorithm = replay_player
+        .as_ref()
+        .and_then(|player| player.judge_algorithm)
+        .unwrap_or(profile_judge_algorithm);
     let is_replay = replay_player.is_some();
     let is_full_replay = is_replay && replay_lane_mask.is_none();
     let autoplay_enabled = !is_replay
@@ -479,7 +487,15 @@ pub fn build_game_session_with_input_backend(
     let opponent_score =
         battle_presentation.then(|| ScoreState::for_rule_mode(primary_key_mode, rule_mode));
     let battle_opponent =
-        battle_opponent_options.zip(battle_opponent_chart).map(|(opponent, chart)| {
+        battle_opponent_options.zip(battle_opponent_chart).map(|(mut opponent, chart)| {
+            if let Some(player) = &mut opponent.replay_player {
+                player.apply_chart_start_margin(chart.metadata.start_note_margin);
+            }
+            let judge_algorithm = opponent
+                .replay_player
+                .as_ref()
+                .and_then(|player| player.judge_algorithm)
+                .unwrap_or(profile_judge_algorithm);
             let key_mode = chart.metadata.key_mode;
             let scored_total_notes = scored_note_count(&chart);
             let base_judge_windows = judge_windows_for_keymode_and_rule_mode(key_mode, rule_mode);
@@ -522,7 +538,7 @@ pub fn build_game_session_with_input_backend(
                         judge_rate,
                     ),
                     rule_mode,
-                    judge_algorithm_from_config(profile.judge.judge_algorithm),
+                    judge_algorithm,
                     key_mode,
                 )
                 .with_chart_index(chart.clone()),
@@ -574,7 +590,7 @@ pub fn build_game_session_with_input_backend(
             options.playback_rate_percent,
         ),
         rule_mode,
-        judge_algorithm_from_config(profile.judge.judge_algorithm),
+        judge_algorithm,
         primary_key_mode,
     )
     .with_chart_index(chart.clone());

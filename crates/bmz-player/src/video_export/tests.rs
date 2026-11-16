@@ -566,6 +566,77 @@ fn saved_replay_reproduces_judgements_without_modifying_score_database() {
 }
 
 #[test]
+fn video_export_restores_beatoraja_replay_timing_and_judge_algorithm() {
+    use std::io::Write;
+
+    use bmz_gameplay::judge::model::JudgeAlgorithm;
+    use flate2::{Compression, write::GzEncoder};
+    use serde_json::json;
+
+    use crate::storage::{
+        import::import_chart_file,
+        library_db::LibraryDatabase,
+        migration::{LIBRARY_MIGRATIONS, SCORE_MIGRATIONS, run_migrations},
+        replay_import::{ImportBeatorajaReplaysRequest, import_beatoraja_replays},
+        score_db::ScoreDatabase,
+    };
+
+    let mut fixture = Fixture::new();
+    fs::write(
+        &fixture.options.chart,
+        "#TITLE Imported Replay\n#BPM 240\n#TOTAL 300\n#WAV01 click.wav\n#00011:00010000\n#00119:01\n",
+    )
+    .unwrap();
+    let mut library = LibraryDatabase::open(Path::new(":memory:")).unwrap();
+    run_migrations(library.conn_mut(), LIBRARY_MIGRATIONS).unwrap();
+    let chart =
+        import_chart_file(&mut library, &fixture.options.chart, None, Some(42), 0).unwrap().chart;
+    let sha = crate::storage::common::hash_to_hex(&chart.identity.file_sha256);
+    let source = fixture.root.join(format!("{sha}.brd"));
+    let mut brd = GzEncoder::new(fs::File::create(&source).unwrap(), Compression::fast());
+    write!(
+        brd,
+        "{}",
+        json!({
+            "sha256": sha,
+            "gauge": 2,
+            "randomoptionseed": 42,
+            "config": { "judgetype": "Duration" },
+            "keylog": [
+                { "presstime": 250_000, "keycode": 0, "pressed": true },
+                { "presstime": 270_000, "keycode": 0, "pressed": false },
+                { "presstime": 1_000_000, "keycode": 6, "pressed": true }
+            ]
+        })
+    )
+    .unwrap();
+    brd.finish().unwrap();
+    let profile_paths = crate::paths::resolve_profile_paths(&fixture.paths, "default").unwrap();
+    let mut scores = ScoreDatabase::open(&profile_paths.score_db).unwrap();
+    run_migrations(scores.conn_mut(), SCORE_MIGRATIONS).unwrap();
+    let report = import_beatoraja_replays(
+        &library,
+        &mut scores,
+        &profile_paths,
+        &ImportBeatorajaReplaysRequest::new(&source),
+    )
+    .unwrap();
+    assert_eq!(report.imported, 1, "{report:?}");
+    drop(scores);
+
+    fixture.options.replay_slot = Some(0);
+    let mut simulation = fixture.simulation();
+    let session = &simulation.prepared.play.session;
+    assert_eq!(session.judge.algorithm, JudgeAlgorithm::Duration);
+    assert_eq!(session.chart.metadata.start_note_margin, TimeUs(750_000));
+    assert_eq!(session.replay_player.as_ref().unwrap().events[0].time, TimeUs(1_000_000));
+    simulation.advance_to(5 * 48_000, |_| Ok(())).unwrap();
+    let session = &simulation.prepared.play.session;
+    assert_eq!(session.score.ex_score(), 4);
+    assert_eq!(session.score.bp(), 0);
+}
+
+#[test]
 #[ignore = "requires a working GPU and BMZ_TEST_FFMPEG with libx264/AAC"]
 fn generates_complete_mp4_and_metadata_without_persistence() {
     let mut fixture = Fixture::new();

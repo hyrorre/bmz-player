@@ -39,6 +39,8 @@ pub struct PlayableChart {
 #[derive(Debug, Clone)]
 pub struct ChartMetadata {
     pub kaleid: crate::kaleid::KaleidProvenance,
+    /// Amount already added to the source timeline to make room for the first note.
+    pub start_note_margin: TimeUs,
     pub free_zones: Vec<FreeZone>,
     /// Isolated voices retain their original resource identity even when BMSON slices retime.
     pub isolated_sound_sources: std::collections::BTreeMap<u32, u32>,
@@ -140,6 +142,7 @@ impl Default for ChartMetadata {
     fn default() -> Self {
         Self {
             kaleid: Default::default(),
+            start_note_margin: TimeUs(0),
             free_zones: Vec::new(),
             isolated_sound_sources: Default::default(),
             conditional: None,

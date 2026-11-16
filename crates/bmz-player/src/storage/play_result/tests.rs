@@ -54,6 +54,7 @@ fn store_play_result_writes_replay_and_score() {
         &config,
         &result,
         StorePlayResultRequest {
+            judge_algorithm: JudgeAlgorithm::Duration,
             ln_policy: LnScorePolicy::ForceLn,
             double_option: DoubleOptionScoreBucket::Off,
             applied_double_option: DoubleOption::Flip,
@@ -106,6 +107,11 @@ fn store_play_result_writes_replay_and_score() {
     );
     assert_eq!(replay.double_option(), DoubleOption::Flip);
     assert_eq!(replay.recorded_gauge_type(), Some(result.gauge_type));
+    assert_eq!(replay.player().judge_algorithm, Some(JudgeAlgorithm::Duration));
+    assert!(!replay.input_excludes_start_margin);
+    let slot_path = stored.slot_paths[0].as_ref().unwrap();
+    let slot = crate::storage::replay::load_replay(&root.join(slot_path)).unwrap();
+    assert_eq!(slot.judge_algorithm, Some(JudgeAlgorithm::Duration));
     assert_eq!(score_db.recent_history(1, 0).unwrap()[0].applied_double_option, DoubleOption::Flip);
     assert_eq!(
         score_db
@@ -145,6 +151,7 @@ fn store_play_result_skips_autoplay_replay_by_default() {
         &config,
         &result,
         StorePlayResultRequest {
+            judge_algorithm: JudgeAlgorithm::Combo,
             ln_policy: LnScorePolicy::ForceLn,
             double_option: DoubleOptionScoreBucket::Off,
             applied_double_option: DoubleOption::Off,
@@ -208,6 +215,7 @@ fn save_existing_replay_to_slot_overwrites_requested_slot() {
         &config,
         &result,
         StorePlayResultRequest {
+            judge_algorithm: JudgeAlgorithm::Combo,
             ln_policy: LnScorePolicy::ForceLn,
             double_option: DoubleOptionScoreBucket::Off,
             applied_double_option: DoubleOption::Off,
@@ -297,6 +305,7 @@ fn store_play_result_saves_failed_replay_for_non_autoplay() {
         &config,
         &result,
         StorePlayResultRequest {
+            judge_algorithm: JudgeAlgorithm::Combo,
             ln_policy: LnScorePolicy::ForceLn,
             double_option: DoubleOptionScoreBucket::Off,
             applied_double_option: DoubleOption::Off,
@@ -362,6 +371,7 @@ fn store_play_result_course_stage_updates_single_best_with_rounded_clear() {
         &config,
         &result,
         StorePlayResultRequest {
+            judge_algorithm: JudgeAlgorithm::Combo,
             ln_policy: LnScorePolicy::ForceLn,
             double_option: DoubleOptionScoreBucket::Off,
             applied_double_option: DoubleOption::Off,
@@ -459,6 +469,7 @@ fn store_play_result_writes_history_and_default_slot_files() {
         &config,
         &result,
         StorePlayResultRequest {
+            judge_algorithm: JudgeAlgorithm::Combo,
             ln_policy: LnScorePolicy::ForceLn,
             double_option: DoubleOptionScoreBucket::Off,
             applied_double_option: DoubleOption::Off,
@@ -503,6 +514,7 @@ fn store_play_result_writes_history_and_default_slot_files() {
         &config,
         &result,
         StorePlayResultRequest {
+            judge_algorithm: JudgeAlgorithm::Combo,
             ln_policy: LnScorePolicy::ForceLn,
             double_option: DoubleOptionScoreBucket::Off,
             applied_double_option: DoubleOption::Off,
@@ -571,6 +583,7 @@ fn store_play_result_skips_slots_for_autoplay_when_disabled() {
         &config,
         &result,
         StorePlayResultRequest {
+            judge_algorithm: JudgeAlgorithm::Combo,
             ln_policy: LnScorePolicy::ForceLn,
             double_option: DoubleOptionScoreBucket::Off,
             applied_double_option: DoubleOption::Off,

@@ -13,6 +13,7 @@ use bmz_core::lane::KeyMode;
 use bmz_core::replay::ReplayEvent;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::gauge::{GaugeCarryValue, GaugeState};
+use bmz_gameplay::judge::model::JudgeAlgorithm;
 #[cfg(test)]
 use bmz_gameplay::judge::model::JudgeWindows;
 use bmz_gameplay::result::PlayResult;
@@ -254,6 +255,7 @@ pub struct FinishSessionSnapshot {
     result: PlayResult,
     primary_key_mode: KeyMode,
     replay_events: Vec<ReplayEvent>,
+    judge_algorithm: JudgeAlgorithm,
     branch_decisions: Option<Vec<bmz_core::replay::BranchDecision>>,
     reference_total: Option<u32>,
     kaleid: bmz_chart::kaleid::KaleidPlayEvidence,
@@ -388,6 +390,7 @@ impl FinishSessionSnapshot {
             result: play_result_from_session(session),
             primary_key_mode: session.primary_key_mode,
             replay_events: session.replay_recorder.events.clone(),
+            judge_algorithm: session.judge.algorithm,
             branch_decisions: session
                 .chart
                 .metadata
@@ -574,6 +577,7 @@ fn finish_session_snapshot_result(
                     rule_mode: snapshot.rule_mode.as_str().to_string(),
                     assist_mask: crate::assist::recorded_mask(snapshot.assist),
                     replay_events: snapshot.replay_events.clone(),
+                    judge_algorithm: snapshot.judge_algorithm,
                     branch_decisions: snapshot.branch_decisions.clone(),
                     kaleid: Some(snapshot.kaleid.clone()),
                     arrange,
