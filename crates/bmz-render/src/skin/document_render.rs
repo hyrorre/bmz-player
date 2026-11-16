@@ -95,12 +95,12 @@ pub trait SkinDocumentRenderExt {
         y: f32,
     ) -> bool;
 
-    /// The value of a slider held since the press, with the cursor anywhere.
+    /// The value of the slider captured at the start of a drag.
     fn select_slider_drag(
         &self,
         snapshot: &SelectSnapshot,
         settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
-        slider_type: i32,
+        target: SkinSliderHit,
         x: f32,
         y: f32,
     ) -> Option<SkinSliderHit>;
@@ -329,6 +329,7 @@ pub(super) trait SkinDocumentRenderInternal {
         &self,
         slider: &SkinSliderDef,
         destination: &SkinDestinationDef,
+        destination_index: usize,
         enabled_options: &[i32],
         state: &SkinDrawState,
         x: f32,
@@ -340,7 +341,7 @@ pub(super) trait SkinDocumentRenderInternal {
         &self,
         snapshot: &SelectSnapshot,
         settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
-        dragging: Option<i32>,
+        dragging: Option<SkinSliderHit>,
         lua_draw_runtime: Option<&Arc<dyn SkinLuaDrawRuntime>>,
         x: f32,
         y: f32,

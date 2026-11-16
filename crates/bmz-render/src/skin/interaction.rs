@@ -108,6 +108,7 @@ pub(super) fn slider_value_at(
     frame: ResolvedSkinFrame,
     x: f32,
     y: f32,
+    dragging: bool,
 ) -> Option<f32> {
     // beatoraja SkinSlider.mousePressed: hit track is based on destination origin +
     // range along the movement axis (not the thumb center / half size).
@@ -119,22 +120,17 @@ pub(super) fn slider_value_at(
     let frame_y = frame.y as f32;
     let frame_w = frame.w as f32;
     let frame_h = frame.h as f32;
-    let value = match slider.angle {
-        0 if frame_x <= x && x <= frame_x + frame_w && frame_y <= y && y <= frame_y + range => {
-            (y - frame_y) / range
-        }
-        1 if frame_x <= x && x <= frame_x + range && frame_y <= y && y <= frame_y + frame_h => {
-            (x - frame_x) / range
-        }
-        2 if frame_x <= x && x <= frame_x + frame_w && frame_y - range <= y && y <= frame_y => {
-            (frame_y - y) / range
-        }
-        3 if frame_x - range <= x && x <= frame_x && frame_y <= y && y <= frame_y + frame_h => {
-            (frame_x - x) / range
-        }
+    let within_width = frame_x <= x && x <= frame_x + frame_w;
+    let within_height = frame_y <= y && y <= frame_y + frame_h;
+    let (within_cross_axis, distance) = match slider.angle {
+        0 => (within_width, y - frame_y),
+        1 => (within_height, x - frame_x),
+        2 => (within_width, frame_y - y),
+        3 => (within_height, frame_x - x),
         _ => return None,
     };
-    Some(value.clamp(0.0, 1.0))
+    (dragging || (within_cross_axis && (0.0..=range).contains(&distance)))
+        .then(|| (distance / range).clamp(0.0, 1.0))
 }
 
 /// LR2 `SliderByTime`: the hit area is the handle plus its travel, and the value
@@ -161,13 +157,4 @@ pub(super) fn lr2_slider_value_at(
         _ => return None,
     };
     (dragging || inside).then(|| (value / range).clamp(0.0, 1.0))
-}
-
-pub(super) fn scroll_slider_value_at(
-    slider: &SkinSliderDef,
-    frame: ResolvedSkinFrame,
-    x: f32,
-    y: f32,
-) -> Option<f32> {
-    slider_value_at(slider, frame, x, y)
 }

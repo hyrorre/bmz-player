@@ -58,12 +58,13 @@ fn lr2_skin_settings_slider_rows_and_area_follow_lr2() {
     assert_eq!(hit(point(744.0, 428.0)), Some((7, 1.0)));
     assert_eq!(hit(point(744.0, 440.0)), None);
     // A held slider follows the cursor outside its track, clamped to the ends.
+    let (x, y) = point(744.0, 259.0 + 77.0);
+    let target = document.select_slider_hit(&snapshot, &index, x, y).unwrap();
     let drag = |(x, y): (f32, f32)| {
-        document.select_slider_drag(&snapshot, &index, 7, x, y).map(|hit| hit.value)
+        document.select_slider_drag(&snapshot, &index, target, x, y).map(|hit| hit.value)
     };
     assert_eq!(drag(point(100.0, 700.0)), Some(1.0));
     assert_eq!(drag(point(100.0, 10.0)), Some(0.0));
-    assert_eq!(document.select_slider_drag(&snapshot, &index, 1, 0.5, 0.5), None);
 
     // The settings area joins the rows and the slider's travel.
     let contains =

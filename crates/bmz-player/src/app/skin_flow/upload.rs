@@ -741,6 +741,9 @@ impl WinitApp {
         let preserve_dynamic_timers =
             (kind == SkinKind::Play && self.play.active_play.is_some()) || result_refresh;
         let installed_sources = document_textures.len();
+        if kind == SkinKind::Select {
+            self.select.slider_drag = SkinSliderDrag::Idle;
+        }
         set_decoded_skin_context(
             &mut self.renderer,
             kind,

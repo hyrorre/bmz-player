@@ -659,17 +659,17 @@ impl Renderer {
         self.select_skin_context.select_slider_hit(closed.as_ref().unwrap_or(snapshot), x, y)
     }
 
-    /// Moves a slider held since the press. Outside the canvas the cursor is
+    /// Moves the captured slider. Outside the canvas the cursor is
     /// clamped to its edge so the slider reaches its ends.
     pub fn select_skin_slider_drag(
         &self,
         snapshot: &crate::scene::SelectSnapshot,
-        slider_type: i32,
+        target: SkinSliderHit,
         x: f32,
         y: f32,
     ) -> Option<SkinSliderHit> {
         let (x, y) = self.select_skin_canvas_point_clamped(x, y);
-        self.select_skin_context.select_slider_drag(snapshot, slider_type, x, y)
+        self.select_skin_context.select_slider_drag(snapshot, target, x, y)
     }
 
     /// Whether the point is over the embedded skin settings of an LR2 select skin

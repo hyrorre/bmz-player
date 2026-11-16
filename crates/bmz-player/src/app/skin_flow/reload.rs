@@ -15,6 +15,7 @@ impl WinitApp {
             self.audio.skin_lua_audio = Default::default();
             self.result.result_skin_audio = None;
             // Revocation drops installed Lua VMs even if the replacement fails.
+            self.select.slider_drag = SkinSliderDrag::Idle;
             self.renderer.set_select_skin_context(SkinContext::default());
             self.renderer.set_decide_skin_context(SkinContext::default());
             self.renderer.set_play_skin_context(SkinContext::default(), false);

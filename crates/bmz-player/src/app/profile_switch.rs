@@ -384,7 +384,7 @@ impl WinitApp {
         self.clear_play_control_holds();
         self.select.select_exit_hold_started_at = None;
         self.select.select_exit_requested = false;
-        self.select.select_slider_dragging_type = None;
+        self.select.slider_drag = SkinSliderDrag::Idle;
         self.select.ir_battle.hold_started_at = None;
         self.select.ir_battle.hold_control = None;
         self.select.ir_battle.hold_short_action = None;

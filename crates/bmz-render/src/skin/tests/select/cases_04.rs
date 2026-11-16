@@ -205,7 +205,7 @@ fn select_slider_hit_resolves_song_scroll_slider() {
 #[test]
 fn select_slider_hit_matches_mz_select_songlist_scroll_collision() {
     // mz-select default_songlistscroll2 collision:
-    // parts_position=(1888,270), dst x=1864 y=790 w=64 h=64, angle=2 range=500
+    // parts_position=(1888,270), thumb center starts at y=779 and travels 478.
     let document: SkinDocument = serde_json::from_str(
         r#"
             {
@@ -221,14 +221,14 @@ fn select_slider_hit_matches_mz_select_songlist_scroll_collision() {
                         "w": 64,
                         "h": 64,
                         "angle": 2,
-                        "range": 500,
+                        "range": 478,
                         "type": 1
                     }
                 ],
                 "destination": [
                     {
                         "id": "default_songlistscroll2_collision",
-                        "dst": [{ "x": 1864, "y": 790, "w": 64, "h": 64 }]
+                        "dst": [{ "x": 1864, "y": 779, "w": 64, "h": 64 }]
                     }
                 ]
             }
@@ -239,7 +239,7 @@ fn select_slider_hit_matches_mz_select_songlist_scroll_collision() {
     let settings = crate::select_settings_dest::SelectSettingsDestIndex::default();
     let x = (1864.0 + 32.0) / 1920.0;
 
-    let top = document.select_slider_hit(&snapshot, &settings, x, 1.0 - 790.0 / 1080.0).unwrap();
+    let top = document.select_slider_hit(&snapshot, &settings, x, 1.0 - 779.0 / 1080.0).unwrap();
     assert_eq!(top.slider_type, 1);
     assert!(approx_eq(top.value, 0.0));
 
@@ -247,12 +247,13 @@ fn select_slider_hit_matches_mz_select_songlist_scroll_collision() {
     assert_eq!(mid.slider_type, 1);
     assert!(approx_eq(mid.value, 0.5));
 
-    let bottom = document.select_slider_hit(&snapshot, &settings, x, 1.0 - 290.0 / 1080.0).unwrap();
+    let bottom = document.select_slider_hit(&snapshot, &settings, x, 1.0 - 301.0 / 1080.0).unwrap();
     assert_eq!(bottom.slider_type, 1);
     assert!(approx_eq(bottom.value, 1.0));
 
     // Clicks above destination y must miss (beatoraja uses region.y as the upper edge).
-    assert!(document.select_slider_hit(&snapshot, &settings, x, 1.0 - 822.0 / 1080.0).is_none());
+    assert!(document.select_slider_hit(&snapshot, &settings, x, 1.0 - 790.0 / 1080.0).is_none());
+    assert!(document.select_slider_hit(&snapshot, &settings, x, 1.0 - 290.0 / 1080.0).is_none());
 }
 
 #[test]

@@ -56,12 +56,12 @@ fn winit_app_stack_size_stays_bounded() {
 #[test]
 fn cursor_leave_clears_hover_position_and_slider_drag() {
     let mut position = Some(PhysicalPosition::new(320.0, 180.0));
-    let mut dragging_slider_type = Some(17);
+    let mut slider_drag = SkinSliderDrag::Select(None);
 
-    clear_window_cursor_state(&mut position, &mut dragging_slider_type);
+    clear_window_cursor_state(&mut position, &mut slider_drag);
 
     assert_eq!(position, None);
-    assert_eq!(dragging_slider_type, None);
+    assert_eq!(slider_drag, SkinSliderDrag::Idle);
 }
 
 #[test]

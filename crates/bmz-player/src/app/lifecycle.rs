@@ -2,10 +2,10 @@ use super::*;
 
 pub(super) fn clear_window_cursor_state(
     position: &mut Option<PhysicalPosition<f64>>,
-    dragging_slider_type: &mut Option<i32>,
+    slider_drag: &mut SkinSliderDrag,
 ) {
     *position = None;
-    *dragging_slider_type = None;
+    *slider_drag = SkinSliderDrag::Idle;
 }
 
 impl ApplicationHandler<AppUserEvent> for WinitApp {
@@ -241,7 +241,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
             WindowEvent::CursorLeft { .. } => {
                 clear_window_cursor_state(
                     &mut self.ui.last_cursor_position,
-                    &mut self.select.select_slider_dragging_type,
+                    &mut self.select.slider_drag,
                 );
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -252,10 +252,11 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     }
                     self.ui.cursor_visible = true;
                 }
-                if egui_consumed {
-                    return;
+                if !egui_consumed
+                    || (state == ElementState::Released && button == MouseButton::Left)
+                {
+                    self.route_mouse_input(state, button);
                 }
-                self.route_mouse_input(state, button);
             }
             WindowEvent::Ime(ime) => {
                 if self.jobs.profile_change.is_some()
@@ -326,6 +327,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     );
                 }
                 if focus_update.focus_lost {
+                    self.select.slider_drag = SkinSliderDrag::Idle;
                     if let Some(egui) = self.ui.egui.as_mut() {
                         egui.cancel_key_config_listening();
                     }

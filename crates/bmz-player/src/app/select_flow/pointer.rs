@@ -67,29 +67,24 @@ impl WinitApp {
     }
 
     pub(super) fn route_mouse_input(&mut self, state: ElementState, button: MouseButton) {
-        if self.ui.egui.as_ref().is_some_and(|ui| ui.blocks_game_input(false)) {
-            self.select.select_slider_dragging_type = None;
-            return;
-        }
-        if self.jobs.profile_change.is_some() {
-            return;
-        }
-        if self.viewer_waiting {
-            self.select.select_slider_dragging_type = None;
-            return;
+        if button == MouseButton::Left {
+            self.select.slider_drag = SkinSliderDrag::Idle;
         }
         if state == ElementState::Released {
-            self.select.select_slider_dragging_type = None;
             return;
         }
-        if state != ElementState::Pressed {
+        if self.ui.egui.as_ref().is_some_and(|ui| ui.blocks_game_input(false)) {
+            self.select.slider_drag = SkinSliderDrag::Idle;
+            return;
+        }
+        if self.jobs.profile_change.is_some() || self.viewer_waiting {
             return;
         }
         let Some((x, y)) = self.cursor_position_normalized() else {
             return;
         };
         if matches!(self.view_state(), AppViewState::Result) {
-            self.select.select_slider_dragging_type = None;
+            self.select.slider_drag = SkinSliderDrag::Idle;
             if self.result.result_exit.is_some() {
                 return;
             }
@@ -98,7 +93,7 @@ impl WinitApp {
                     return;
                 };
                 if let Some(hit) = self.renderer.result_skin_slider_hit(&snapshot, x, y) {
-                    self.select.select_slider_dragging_type = Some(hit.slider_type);
+                    self.select.slider_drag = SkinSliderDrag::Result(hit.slider_type);
                     self.apply_result_slider_hit(hit);
                     return;
                 }
@@ -111,12 +106,12 @@ impl WinitApp {
             AppViewState::Play => Some(SkinRuntimeScene::Play),
             AppViewState::Select | AppViewState::Result => None,
         } {
-            self.select.select_slider_dragging_type = None;
+            self.select.slider_drag = SkinSliderDrag::Idle;
             self.handle_skin_lua_act_click(scene, button, x, y);
             return;
         }
         if !matches!(self.view_state(), AppViewState::Select) {
-            self.select.select_slider_dragging_type = None;
+            self.select.slider_drag = SkinSliderDrag::Idle;
             return;
         }
         if self.detail_options_active() {
@@ -161,12 +156,13 @@ impl WinitApp {
             return;
         }
         let snapshot = self.select_snapshot();
-        if button == MouseButton::Left
-            && let Some(hit) = self.renderer.select_skin_slider_hit(&snapshot, x, y)
-        {
-            self.select.select_slider_dragging_type = Some(hit.slider_type);
-            self.apply_select_slider_hit(hit);
-            return;
+        if button == MouseButton::Left {
+            if let Some(hit) = self.renderer.select_skin_slider_hit(&snapshot, x, y) {
+                self.select.slider_drag = SkinSliderDrag::Select(Some(hit));
+                self.apply_select_slider_hit(hit);
+                return;
+            }
+            self.select.slider_drag = SkinSliderDrag::Select(None);
         }
         let Some(hit) = self.renderer.select_skin_click_hit(&snapshot, x, y) else {
             return;
@@ -256,39 +252,44 @@ impl WinitApp {
     }
 
     pub(super) fn route_select_slider_drag(&mut self) {
-        if self.viewer_waiting {
-            self.select.select_slider_dragging_type = None;
+        if self.select.slider_drag == SkinSliderDrag::Idle {
             return;
         }
-        if self.select.select_slider_dragging_type.is_none() {
+        if self.viewer_waiting
+            || self.jobs.profile_change.is_some()
+            || self.ui.egui.as_ref().is_some_and(|ui| ui.blocks_game_input(false))
+        {
+            self.select.slider_drag = SkinSliderDrag::Idle;
             return;
         }
         let Some((x, y)) = self.cursor_position_normalized() else {
             return;
         };
-        if matches!(self.view_state(), AppViewState::Result) {
-            if self.result.result_exit.is_some() {
-                return;
+        match (self.view_state(), self.select.slider_drag) {
+            (AppViewState::Result, SkinSliderDrag::Result(slider_type)) => {
+                if self.result.result_exit.is_none()
+                    && let AppSceneSnapshot::Result(snapshot) = self.scene_snapshot()
+                    && let Some(hit) = self.renderer.result_skin_slider_hit(&snapshot, x, y)
+                    && hit.slider_type == slider_type
+                {
+                    self.apply_result_slider_hit(hit);
+                }
             }
-            let AppSceneSnapshot::Result(snapshot) = self.scene_snapshot() else {
-                return;
-            };
-            if let Some(hit) = self.renderer.result_skin_slider_hit(&snapshot, x, y)
-                && Some(hit.slider_type) == self.select.select_slider_dragging_type
+            (AppViewState::Select, SkinSliderDrag::Select(target))
+                if !self.detail_options_active()
+                    && !(self.detail_options_enabled() && self.select.select_option_panel == 1) =>
             {
-                self.apply_result_slider_hit(hit);
+                let snapshot = self.select_snapshot();
+                let hit = match target {
+                    None => self.renderer.select_skin_slider_hit(&snapshot, x, y),
+                    Some(target) => self.renderer.select_skin_slider_drag(&snapshot, target, x, y),
+                };
+                if let Some(hit) = hit {
+                    self.select.slider_drag = SkinSliderDrag::Select(Some(hit));
+                    self.apply_select_slider_hit(hit);
+                }
             }
-            return;
-        }
-        if !matches!(self.view_state(), AppViewState::Select) {
-            return;
-        }
-        let Some(slider_type) = self.select.select_slider_dragging_type else {
-            return;
-        };
-        let snapshot = self.select_snapshot();
-        if let Some(hit) = self.renderer.select_skin_slider_drag(&snapshot, slider_type, x, y) {
-            self.apply_select_slider_hit(hit);
+            _ => self.select.slider_drag = SkinSliderDrag::Idle,
         }
     }
 
@@ -522,6 +523,86 @@ impl WinitApp {
 mod tests {
     use super::*;
     use winit::platform::windows::EventLoopBuilderExtWindows;
+
+    #[test]
+    #[ignore = "creates an isolated Winit event loop and hidden window; run alone"]
+    fn select_slider_drag_starts_on_entry_and_keeps_the_same_target_outside() {
+        let event_loop =
+            EventLoop::<AppUserEvent>::with_user_event().with_any_thread(true).build().unwrap();
+        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+        let mut boot = data.boot();
+        boot.app_config.input.gamepad_enabled = false;
+        boot.profile_config.audio_mix.master_volume = 20;
+        let (maintenance_tx, _) = tokio::sync::watch::channel(false);
+        let mut app = WinitApp::new(
+            boot,
+            AppOptions { viewer_play: true, ..Default::default() },
+            Instant::now(),
+            None,
+            None,
+            Arc::new(AtomicBool::new(false)),
+            event_loop.create_proxy(),
+            LogBuffer::default(),
+            maintenance_tx,
+            None,
+        )
+        .unwrap();
+        #[allow(deprecated)]
+        let window = event_loop
+            .create_window(
+                Window::default_attributes()
+                    .with_visible(false)
+                    .with_inner_size(PhysicalSize::new(200, 200)),
+            )
+            .unwrap();
+        let size = window.inner_size();
+        app.window = Some(Arc::new(window));
+        app.viewer_mode = false;
+        app.viewer_waiting = false;
+        crate::skin_loader::set_decoded_skin_context(
+            &mut app.renderer,
+            SkinKind::Select,
+            bmz_render::skin::default_skin_manifest(),
+            serde_json::from_value(serde_json::json!({
+                "type": 5, "w": 100, "h": 100,
+                "slider": [
+                    {"id": "first", "angle": 2, "range": 40, "type": 17, "changeable": true},
+                    {"id": "second", "angle": 2, "range": 20, "type": 17, "changeable": true}
+                ],
+                "destination": [
+                    {"id": "first", "dst": [{"x": 10, "y": 70, "w": 10, "h": 10}]},
+                    {"id": "second", "dst": [{"x": 50, "y": 50, "w": 10, "h": 10}]}
+                ]
+            }))
+            .unwrap(),
+            None,
+            vec![],
+            false,
+        );
+        let move_cursor = |app: &mut WinitApp, x, y| {
+            app.ui.last_cursor_position =
+                Some(PhysicalPosition::new(x * f64::from(size.width), y * f64::from(size.height)));
+            app.route_select_slider_drag();
+        };
+        let volume = |app: &WinitApp| app.boot.profile_config.audio_mix.master_volume;
+
+        move_cursor(&mut app, 0.15, 0.50);
+        assert_eq!(volume(&app), 20, "hover alone does not operate the slider");
+        move_cursor(&mut app, 0.15, 0.20);
+        app.route_mouse_input(ElementState::Pressed, MouseButton::Left);
+        assert_eq!(volume(&app), 20, "the button was pressed outside the track");
+        move_cursor(&mut app, 0.15, 0.50);
+        assert_eq!(volume(&app), 50, "entering the track starts the drag");
+        move_cursor(&mut app, 0.55, 0.60);
+        assert_eq!(volume(&app), 75, "the drag stays on the first slider");
+        move_cursor(&mut app, 0.90, 0.80);
+        assert_eq!(volume(&app), 100, "past the end the value is clamped");
+        move_cursor(&mut app, 0.15, 0.40);
+        assert_eq!(volume(&app), 25, "the same drag continues after re-entry");
+        app.route_mouse_input(ElementState::Released, MouseButton::Left);
+        move_cursor(&mut app, 0.15, 0.60);
+        assert_eq!(volume(&app), 25, "release ends the drag");
+    }
 
     #[test]
     #[ignore = "creates an isolated Winit event loop; run alone with --ignored"]

@@ -45,16 +45,18 @@ macro_rules! skin_document_render_select_interaction_public_methods {
             let destinations = self.all_destinations(&enabled_options);
             destinations
                 .into_iter()
-                .filter(|destination| {
+                .enumerate()
+                .filter(|(_, destination)| {
                     destination_ops_match(destination, &enabled_options, state)
                         && eval_skin_draw_condition(&destination.draw, state)
                 })
-                .filter_map(|destination| {
+                .filter_map(|(destination_index, destination)| {
                     let slider = self.slider.iter().find(|slider| slider.id == destination.id)?;
                     (slider.slider_type == 8 || slider.event.is_some()).then_some(())?;
                     self.destination_slider_hit(
                         slider,
                         destination,
+                        destination_index,
                         &enabled_options,
                         state,
                         x,
@@ -79,11 +81,11 @@ macro_rules! skin_document_render_select_interaction_public_methods {
             &self,
             snapshot: &SelectSnapshot,
             settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
-            slider_type: i32,
+            target: SkinSliderHit,
             x: f32,
             y: f32,
         ) -> Option<SkinSliderHit> {
-            self.select_slider_value(snapshot, settings_dest_index, Some(slider_type), None, x, y)
+            self.select_slider_value(snapshot, settings_dest_index, Some(target), None, x, y)
         }
 
         fn select_lr2_skin_settings_contains(
@@ -181,7 +183,7 @@ macro_rules! skin_document_render_select_interaction_methods {
             &self,
             snapshot: &SelectSnapshot,
             settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
-            dragging: Option<i32>,
+            dragging: Option<SkinSliderHit>,
             lua_draw_runtime: Option<&Arc<dyn SkinLuaDrawRuntime>>,
             x: f32,
             y: f32,
@@ -193,7 +195,12 @@ macro_rules! skin_document_render_select_interaction_methods {
             let enabled_options = self.enabled_options();
             self.all_destinations(&enabled_options)
                 .into_iter()
-                .filter_map(|destination| {
+                .enumerate()
+                .filter_map(|(destination_index, destination)| {
+                    if dragging.is_some_and(|target| target.destination_index != destination_index)
+                    {
+                        return None;
+                    }
                     if !crate::select_settings_dest::test_select_destination_visible(
                         settings_dest_index,
                         destination,
@@ -207,14 +214,15 @@ macro_rules! skin_document_render_select_interaction_methods {
                         return None;
                     }
                     let slider = self.slider.iter().find(|slider| slider.id == destination.id)?;
-                    if dragging.is_some_and(|slider_type| {
-                        slider_type != slider.event.unwrap_or(slider.slider_type)
+                    if dragging.is_some_and(|target| {
+                        target.slider_type != slider.event.unwrap_or(slider.slider_type)
                     }) {
                         return None;
                     }
                     self.destination_slider_hit(
                         slider,
                         destination,
+                        destination_index,
                         &enabled_options,
                         &state,
                         x,
@@ -471,6 +479,7 @@ macro_rules! skin_document_render_select_interaction_methods {
             &self,
             slider: &SkinSliderDef,
             destination: &SkinDestinationDef,
+            destination_index: usize,
             enabled_options: &[i32],
             state: &SkinDrawState,
             x: f32,
@@ -495,12 +504,10 @@ macro_rules! skin_document_render_select_interaction_methods {
             let mouse_y = (1.0 - y.clamp(0.0, 1.0)) * self.h as f32;
             let value = if self.lr2 {
                 lr2_slider_value_at(slider, frame, mouse_x, mouse_y, dragging)?
-            } else if writer == 1 {
-                scroll_slider_value_at(slider, frame, mouse_x, mouse_y)?
             } else {
-                slider_value_at(slider, frame, mouse_x, mouse_y)?
+                slider_value_at(slider, frame, mouse_x, mouse_y, dragging)?
             };
-            Some(SkinSliderHit { slider_type: writer, value })
+            Some(SkinSliderHit { slider_type: writer, value, destination_index })
         }
     };
 }

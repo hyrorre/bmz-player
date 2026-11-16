@@ -406,7 +406,7 @@ impl SkinContext {
     pub fn select_slider_drag(
         &self,
         snapshot: &SelectSnapshot,
-        slider_type: i32,
+        target: SkinSliderHit,
         x: f32,
         y: f32,
     ) -> Option<SkinSliderHit> {
@@ -414,7 +414,7 @@ impl SkinContext {
         document.select_slider_value(
             snapshot,
             &self.select_settings_dest_index,
-            Some(slider_type),
+            Some(target),
             self.lua_draw_runtime.as_ref(),
             x,
             y,

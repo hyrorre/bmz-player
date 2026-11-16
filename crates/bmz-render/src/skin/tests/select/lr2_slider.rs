@@ -50,7 +50,7 @@ fn lr2_scroll_slider_blend_zero_stays_visible_and_tracks_clicks_after_looping() 
             assert!(approx_eq(hit.value, progress));
             for (mouse_y, expected) in [(-1.0, 0.0), (2.0, 1.0)] {
                 let dragged =
-                    doc.select_slider_drag(&snapshot, &settings, 1, 0.0, mouse_y).unwrap();
+                    doc.select_slider_drag(&snapshot, &settings, hit, 0.0, mouse_y).unwrap();
                 assert_eq!(dragged.value, expected);
             }
         }

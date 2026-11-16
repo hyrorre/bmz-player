@@ -1,5 +1,14 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(super) enum SkinSliderDrag {
+    #[default]
+    Idle,
+    /// The left button is down, with the target set on the first slider hit.
+    Select(Option<SkinSliderHit>),
+    Result(i32),
+}
+
 #[derive(Default)]
 pub(super) struct SelectScoreRefreshState {
     dirty: bool,
@@ -96,7 +105,7 @@ pub(super) struct SelectRuntimeState {
     /// 選曲画面の検索文字列、IME、cursor、履歴、feedback状態。
     pub(super) search: SelectSearchRuntime,
     /// ドラッグ中の select skin slider type。
-    pub(super) select_slider_dragging_type: Option<i32>,
+    pub(super) slider_drag: SkinSliderDrag,
 }
 
 pub(super) struct SelectCourseBuilderState {

@@ -400,7 +400,7 @@ impl WinitApp {
                 settings_edit: None,
                 key_config_edit: None,
                 search: SelectSearchRuntime::new(now),
-                select_slider_dragging_type: None,
+                slider_drag: SkinSliderDrag::Idle,
             },
             play: PlayRuntimeState {
                 active_play: None,

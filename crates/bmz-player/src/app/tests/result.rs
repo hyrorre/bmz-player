@@ -117,9 +117,9 @@ fn result_mouse_route_delivers_lua_buttons_and_preserves_left_only_controls() {
     press(&mut app, MouseButton::Left, 0.7, 0.9);
     assert!(draw(&mut app).iter().any(|s| s == "BUILTIN"));
     press(&mut app, MouseButton::Right, 0.05, 0.4);
-    assert_eq!(app.select.select_slider_dragging_type, None);
+    assert_eq!(app.select.slider_drag, SkinSliderDrag::Idle);
     press(&mut app, MouseButton::Left, 0.05, 0.4);
-    assert_eq!(app.select.select_slider_dragging_type, Some(8));
+    assert_eq!(app.select.slider_drag, SkinSliderDrag::Result(8));
     app.result.result_exit = Some(ResultExit {
         started_at: Instant::now(),
         action: ResultExitAction::Leave,

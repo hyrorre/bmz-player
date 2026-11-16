@@ -251,7 +251,7 @@ impl WinitApp {
             .collect();
         self.clear_select_hold();
         self.reset_select_analog_scroll();
-        self.select.select_slider_dragging_type = None;
+        self.select.slider_drag = SkinSliderDrag::Idle;
     }
 
     pub(super) fn detail_options_blocks_held_input(&mut self, input: &ResolvedInput) -> bool {
@@ -402,7 +402,7 @@ impl WinitApp {
         let in_select = self.current_scene_kind() == AppSceneKind::Select;
         if !lr2_freq_slider_save_due(
             self.select.detail_options.freq_slider_changed_at,
-            self.select.select_slider_dragging_type == Some(26),
+            matches!(self.select.slider_drag, SkinSliderDrag::Select(Some(hit)) if hit.slider_type == 26),
             in_select,
             Instant::now(),
         ) {

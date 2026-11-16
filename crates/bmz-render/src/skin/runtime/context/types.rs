@@ -260,6 +260,8 @@ pub struct SkinSliderHit {
     /// Built-in writer type, or encoded Lua FloatWriter callback ID.
     pub slider_type: i32,
     pub value: f32,
+    // Index in the installed document's enabled destinations.
+    pub(in crate::skin) destination_index: usize,
 }
 
 #[derive(Debug, Clone)]

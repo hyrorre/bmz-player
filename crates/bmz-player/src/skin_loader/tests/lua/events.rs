@@ -172,17 +172,18 @@ fn lua_slider_events_drag_the_selected_writer_with_last_frame_visibility() {
     assert!((first.value - 0.25).abs() < 0.0001);
     assert!(context.queue_lua_float_writer(first.slider_type, first.value));
     assert_eq!(frame(), "0.25:0.00");
-    assert!(
-        context.select_slider_drag(&snapshot, first.slider_type, 0.70, 0.75).is_none(),
-        "dragging one writer must not target another slider with the same type"
-    );
+    let dragged = context.select_slider_drag(&snapshot, first, 0.70, 0.75).unwrap();
+    assert_eq!(dragged.slider_type, first.slider_type);
+    assert!(context.queue_lua_float_writer(dragged.slider_type, dragged.value));
+    assert_eq!(frame(), "0.75:0.00");
     let second = context.select_slider_hit(&snapshot, 0.70, 0.75).unwrap();
     assert_ne!(first.slider_type, second.slider_type);
     assert!(context.queue_lua_float_writer(second.slider_type, second.value));
-    assert_eq!(frame(), "0.25:0.75");
+    assert_eq!(frame(), "0.75:0.75");
     assert!(context.queue_lua_act(document.image[0].act.unwrap(), 1, 0));
     frame();
     assert!(context.select_slider_hit(&snapshot, 0.70, 0.75).is_none());
+    assert!(context.select_slider_drag(&snapshot, first, 0.70, 0.75).is_none());
 }
 
 fn install_lua_skin(path: &Path, source: &str) -> (SkinContext, SkinDocument) {

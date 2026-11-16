@@ -1507,6 +1507,8 @@ Select / Resultの`slider[].event`のLua関数はFloatWriterとして扱い、�
 ドラッグ位置（0.0〜1.0のfloat）を次のフレームのcustom timer更新前に渡します。
 関数はactと同じ永続VMで動き、入力順序を維持します。表示条件とtimerは最後の描画結果で
 判定し、同じ`type`を持つ複数のLua sliderもドラッグ開始時の関数を区別します。
+Selectでは左ボタンを押したまま判定範囲に入るとドラッグを開始します。
+開始後は同じ表示先のsliderを操作し、範囲外でも移動方向の座標から値を求めて0.0〜1.0に収めます。
 
 `timer_util` / `event_util`はbeatorajaの`TimerUtility` / `EventUtility`相当です。
 `new_passive_timer`の`turn_on` / `turn_on_reset` / `turn_off`はtrueを返します。
