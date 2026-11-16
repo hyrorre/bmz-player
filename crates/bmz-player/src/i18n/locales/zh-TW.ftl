@@ -564,6 +564,7 @@ profile-input-keyboard-release-bounce-ms = 鍵盤放開回彈過濾（毫秒）
 profile-input-controller-release-bounce-ms = 控制器放開回彈過濾（毫秒）
 profile-input-release-bounce-help = 設為 0 時不使用。若放開後立刻被誤判為再次按下，請增大數值。
 profile-key-config-title = 按鍵設定
+profile-key-config-common-select = 共用／選曲
 profile-key-config-empty = 此分類沒有可設定的項目。
 profile-key-config-mode = 對象
 profile-key-config-slot = 輸入欄位

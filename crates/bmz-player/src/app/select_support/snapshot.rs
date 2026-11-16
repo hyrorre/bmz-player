@@ -211,6 +211,12 @@ fn select_snapshot_row(
             let description = row.description_text(context.profile);
             select_config_snapshot(index, row.label(), value, description)
         }
+        SelectItem::SettingsHeader(label_key) => SelectRowSnapshot {
+            index: index as u32,
+            title: Localizer::new(context.profile.ui.locale()).text(label_key),
+            kind: bmz_render::scene::SelectRowKind::Config,
+            ..SelectRowSnapshot::default()
+        },
         SelectItem::SettingsBack => select_navigation_snapshot(
             index,
             context.profile,

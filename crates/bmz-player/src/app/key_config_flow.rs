@@ -104,44 +104,22 @@ impl WinitApp {
                 }
             }
             EguiKeyConfigAction::RestoreDefaults { section, slot } => match section {
-                EguiKeyConfigSection::Common => {
-                    crate::config::key_config::restore_action_group_defaults(
-                        &mut self.boot.profile_config.input,
-                        crate::config::key_config::KeyBindingGroup::Common,
-                        slot,
-                    );
-                    Ok(())
-                }
-                EguiKeyConfigSection::Select => {
-                    crate::config::key_config::restore_action_group_defaults(
-                        &mut self.boot.profile_config.input,
-                        crate::config::key_config::KeyBindingGroup::Select,
-                        slot,
-                    );
-                    Ok(())
-                }
-                EguiKeyConfigSection::Play => {
-                    crate::config::key_config::restore_action_group_defaults(
-                        &mut self.boot.profile_config.input,
-                        crate::config::key_config::KeyBindingGroup::Play,
-                        slot,
-                    );
-                    Ok(())
-                }
-                EguiKeyConfigSection::Result => {
-                    crate::config::key_config::restore_action_group_defaults(
-                        &mut self.boot.profile_config.input,
-                        crate::config::key_config::KeyBindingGroup::Result,
-                        slot,
-                    );
-                    Ok(())
-                }
                 EguiKeyConfigSection::KeyMode(key_mode) => {
                     crate::config::key_config::restore_key_mode_defaults(
                         &mut self.boot.profile_config.input,
                         key_mode,
                         slot,
                     )
+                }
+                _ => {
+                    for &group in section.action_groups() {
+                        crate::config::key_config::restore_action_group_defaults(
+                            &mut self.boot.profile_config.input,
+                            group,
+                            slot,
+                        );
+                    }
+                    Ok(())
                 }
             },
         };

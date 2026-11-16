@@ -156,14 +156,17 @@ pub fn clear_play_binding(
     persist_bindings(input, key_mode, bindings)
 }
 
-/// 現在表示中の共通グループだけをデフォルトへ戻す。
+/// 現在表示中のグループとスロットの行をデフォルトへ戻す。
 pub fn restore_action_group_defaults(
     input: &mut ProfileInputConfig,
     group: KeyBindingGroup,
     slot: KeyBindingSlot,
 ) {
     let defaults = crate::config::profile_config::default_ui_bindings();
-    for &action in actions_for_group(group) {
+    for target in key_binding_targets_for_group(group, slot) {
+        let KeyBindingTarget::Action { action, .. } = target else {
+            unreachable!("group targets are action bindings");
+        };
         // 1P / 2P の個別設定は既定値が無いので、個別設定を消して共通設定の継承へ戻す。
         if is_side_specific_gamepad_device(slot.device()) {
             remove_action_exact_device_bindings(input, action, slot.device());
@@ -185,7 +188,6 @@ pub fn restore_action_group_defaults(
                 | KeyBindingSlot::Controller2P => Some(entry.control.clone()),
             }
         });
-        let target = KeyBindingTarget::Action { action, slot };
         match default_control {
             Some(control) => apply_play_binding(input, KeyMode::K7, target, &control)
                 .expect("default action binding is valid"),
@@ -223,15 +225,6 @@ pub fn restore_key_mode_defaults(
         }
     }
     Ok(())
-}
-
-fn actions_for_group(group: KeyBindingGroup) -> &'static [InputActionConfig] {
-    match group {
-        KeyBindingGroup::Common => COMMON_ACTIONS,
-        KeyBindingGroup::Select => SELECT_ACTIONS,
-        KeyBindingGroup::Play => PLAY_ACTIONS,
-        KeyBindingGroup::Result => RESULT_ACTIONS,
-    }
 }
 
 fn default_control_for_target(

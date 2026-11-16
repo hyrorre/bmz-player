@@ -566,6 +566,7 @@ profile-input-keyboard-release-bounce-ms = Keyboard release bounce filter (ms)
 profile-input-controller-release-bounce-ms = Controller release bounce filter (ms)
 profile-input-release-bounce-help = 0 turns this off. Increase it if a key or button is detected as pressed again right after you release it.
 profile-key-config-title = Key Config
+profile-key-config-common-select = Common / Song Selection
 profile-key-config-empty = This category has no configurable actions.
 profile-key-config-mode = Target
 profile-key-config-slot = Input Slot

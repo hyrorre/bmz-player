@@ -326,6 +326,7 @@ impl WinitApp {
             | SelectItem::Config(_)
             | SelectItem::AppConfig(_)
             | SelectItem::KeyBinding(_)
+            | SelectItem::SettingsHeader(_)
             | SelectItem::SettingsBack
             | SelectItem::SettingsClose
             | SelectItem::AdvancedSettings
@@ -342,6 +343,7 @@ impl WinitApp {
             | SelectItem::Config(_)
             | SelectItem::AppConfig(_)
             | SelectItem::KeyBinding(_)
+            | SelectItem::SettingsHeader(_)
             | SelectItem::SettingsBack
             | SelectItem::SettingsClose
             | SelectItem::AdvancedSettings

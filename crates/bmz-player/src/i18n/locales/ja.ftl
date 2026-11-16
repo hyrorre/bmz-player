@@ -563,6 +563,7 @@ profile-input-keyboard-release-bounce-ms = キーボード リリース後バウ
 profile-input-controller-release-bounce-ms = コントローラー リリース後バウンス除去 (ms)
 profile-input-release-bounce-help = 0 で無効です。離した直後に同じキーやボタンが押されたと誤って認識される場合に、値を大きくしてください。
 profile-key-config-title = キーコンフィグ
+profile-key-config-common-select = 共通・選曲
 profile-key-config-empty = このカテゴリには設定可能な項目がありません。
 profile-key-config-mode = 対象
 profile-key-config-slot = 入力スロット

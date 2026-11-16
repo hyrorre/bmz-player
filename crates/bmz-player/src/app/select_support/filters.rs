@@ -133,6 +133,7 @@ pub(in crate::app) enum SelectItemKey {
     Config(SettingsEntryId),
     AppConfig(AppSettingsEntryId),
     KeyBinding { key_mode: KeyMode, target: KeyBindingTarget },
+    SettingsHeader(&'static str),
     SettingsBack,
     SettingsClose,
     AdvancedSettings,
@@ -161,6 +162,7 @@ pub(in crate::app) fn select_item_key(item: &SelectItem) -> SelectItemKey {
         SelectItem::KeyBinding(row) => {
             SelectItemKey::KeyBinding { key_mode: row.key_mode, target: row.target }
         }
+        SelectItem::SettingsHeader(label_key) => SelectItemKey::SettingsHeader(label_key),
         SelectItem::SettingsBack => SelectItemKey::SettingsBack,
         SelectItem::SettingsClose => SelectItemKey::SettingsClose,
         SelectItem::AdvancedSettings => SelectItemKey::AdvancedSettings,

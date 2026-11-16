@@ -563,6 +563,7 @@ profile-input-keyboard-release-bounce-ms = 키보드 릴리스 바운스 제거 
 profile-input-controller-release-bounce-ms = 컨트롤러 릴리스 바운스 제거 (ms)
 profile-input-release-bounce-help = 0이면 사용하지 않습니다. 뗀 직후 같은 키나 버튼이 눌린 것으로 잘못 인식된다면 값을 크게 하세요.
 profile-key-config-title = 키 구성
+profile-key-config-common-select = 공통 / 곡 선택
 profile-key-config-empty = 이 범주에는 설정 가능한 항목이 없습니다.
 profile-key-config-mode = 대상
 profile-key-config-slot = 입력 슬롯

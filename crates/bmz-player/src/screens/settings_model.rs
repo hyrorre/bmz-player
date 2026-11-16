@@ -4,8 +4,8 @@ use bmz_render::scene::SelectRowKind;
 use crate::config::app_config::{AppConfig, AudioBackend, AudioBufferSizeMode};
 use crate::config::app_settings_registry::{AppSettingsEntryId, format_app_settings_value};
 use crate::config::key_config::{
-    KEY_BINDING_SLOTS, KEY_CONFIG_MODES, KeyBindingGroup, KeyBindingTarget, binding_row_label,
-    binding_slots_for_group, format_play_binding, key_binding_targets_for_group,
+    COMMON_SELECT_GROUPS, KEY_BINDING_SLOTS, KEY_CONFIG_MODES, KeyBindingGroup, KeyBindingTarget,
+    binding_row_label, binding_slots_for_group, format_play_binding, key_binding_targets_for_group,
     key_mode_binding_targets, key_mode_settings_path,
 };
 use crate::config::profile_config::ProfileConfig;
@@ -29,8 +29,7 @@ const CONFIG_SELECT_PATH: &str = "bmz-settings:select";
 const CONFIG_REPLAY_PATH: &str = "bmz-settings:replay";
 const CONFIG_UI_PATH: &str = "bmz-settings:ui";
 pub const CONFIG_KEYS_PATH: &str = "bmz-settings:keys";
-const CONFIG_KEYS_COMMON_PATH: &str = "bmz-settings:keys:common";
-const CONFIG_KEYS_SELECT_PATH: &str = "bmz-settings:keys:select";
+const CONFIG_KEYS_COMMON_SELECT_PATH: &str = "bmz-settings:keys:common";
 const CONFIG_KEYS_PLAY_PATH: &str = "bmz-settings:keys:play";
 const CONFIG_KEYS_RESULT_PATH: &str = "bmz-settings:keys:result";
 
@@ -52,8 +51,7 @@ pub enum SettingsPath<'a> {
     Replay,
     Ui,
     KeysRoot,
-    KeysCommon,
-    KeysSelect,
+    KeysCommonSelect,
     KeysPlay,
     KeysResult,
     KeysMode(KeyMode),
@@ -79,8 +77,7 @@ pub fn parse_settings_path(path: &str) -> Option<SettingsPath<'_>> {
         "replay" => Some(SettingsPath::Replay),
         "ui" => Some(SettingsPath::Ui),
         "keys" => Some(SettingsPath::KeysRoot),
-        "keys:common" => Some(SettingsPath::KeysCommon),
-        "keys:select" => Some(SettingsPath::KeysSelect),
+        "keys:common" | "keys:select" => Some(SettingsPath::KeysCommonSelect),
         "keys:play" => Some(SettingsPath::KeysPlay),
         "keys:result" => Some(SettingsPath::KeysResult),
         _ if let Some(mode_key) = rest.strip_prefix("keys:") => {
@@ -132,17 +129,11 @@ pub fn settings_breadcrumb_for_locale(path: &str, locale: AppLocale) -> String {
         Some(SettingsPath::Replay) => breadcrumb(&root, &text.text("settings-category-replay")),
         Some(SettingsPath::Ui) => breadcrumb(&root, &text.text("settings-category-ui")),
         Some(SettingsPath::KeysRoot) => breadcrumb(&root, &text.text("settings-category-keys")),
-        Some(SettingsPath::KeysCommon) => format!(
+        Some(SettingsPath::KeysCommonSelect) => format!(
             "{} > {} > {}",
             root,
             text.text("settings-category-keys"),
-            text.text("settings-category-common")
-        ),
-        Some(SettingsPath::KeysSelect) => format!(
-            "{} > {} > {}",
-            root,
-            text.text("settings-category-keys"),
-            text.text("settings-nav-select")
+            text.text("profile-key-config-common-select")
         ),
         Some(SettingsPath::KeysPlay) => format!(
             "{} > {} > {}",
@@ -354,8 +345,14 @@ pub fn load_settings_items_for_config(
         Some(SettingsPath::Replay) => config_items(SettingsEntryId::REPLAY_ENTRIES),
         Some(SettingsPath::Ui) => config_items(SettingsEntryId::UI_ENTRIES),
         Some(SettingsPath::KeysRoot) => key_mode_folder_items(locale),
-        Some(SettingsPath::KeysCommon) => key_group_binding_items(KeyBindingGroup::Common),
-        Some(SettingsPath::KeysSelect) => key_group_binding_items(KeyBindingGroup::Select),
+        Some(SettingsPath::KeysCommonSelect) => COMMON_SELECT_GROUPS
+            .iter()
+            .copied()
+            .flat_map(|group| {
+                std::iter::once(SelectItem::SettingsHeader(group.label_key()))
+                    .chain(key_group_binding_items(group))
+            })
+            .collect(),
         Some(SettingsPath::KeysPlay) => key_group_binding_items(KeyBindingGroup::Play),
         Some(SettingsPath::KeysResult) => key_group_binding_items(KeyBindingGroup::Result),
         Some(SettingsPath::KeysMode(key_mode)) => key_binding_items(key_mode),
@@ -438,8 +435,7 @@ fn assist_items(locale: AppLocale) -> Vec<SelectItem> {
 fn key_mode_folder_items(locale: AppLocale) -> Vec<SelectItem> {
     let text = Localizer::new(locale);
     [
-        (CONFIG_KEYS_COMMON_PATH, "settings-category-common"),
-        (CONFIG_KEYS_SELECT_PATH, "settings-nav-select"),
+        (CONFIG_KEYS_COMMON_SELECT_PATH, "profile-key-config-common-select"),
         (CONFIG_KEYS_PLAY_PATH, "settings-nav-play"),
         (CONFIG_KEYS_RESULT_PATH, "settings-nav-result"),
     ]
@@ -515,9 +511,7 @@ fn app_config_items(entries: &[AppSettingsEntryId]) -> Vec<SelectItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::key_config::{
-        COMMON_ACTIONS, COMMON_KEY_BINDING_SLOTS, KeyBindingSlot, ScratchDirection,
-    };
+    use crate::config::key_config::{KeyBindingSlot, ScratchDirection};
     use crate::config::profile_config::{InputActionConfig, LaneConfig};
 
     #[test]
@@ -547,7 +541,14 @@ mod tests {
         assert_eq!(parse_settings_path(CONFIG_REPLAY_PATH), Some(SettingsPath::Replay));
         assert_eq!(parse_settings_path(CONFIG_UI_PATH), Some(SettingsPath::Ui));
         assert_eq!(parse_settings_path(CONFIG_KEYS_PATH), Some(SettingsPath::KeysRoot));
-        assert_eq!(parse_settings_path(CONFIG_KEYS_COMMON_PATH), Some(SettingsPath::KeysCommon));
+        assert_eq!(
+            parse_settings_path(CONFIG_KEYS_COMMON_SELECT_PATH),
+            Some(SettingsPath::KeysCommonSelect)
+        );
+        assert_eq!(
+            parse_settings_path("bmz-settings:keys:select"),
+            Some(SettingsPath::KeysCommonSelect)
+        );
         assert_eq!(
             parse_settings_path("bmz-settings:keys:7k"),
             Some(SettingsPath::KeysMode(KeyMode::K7))
@@ -576,8 +577,8 @@ mod tests {
             SelectItem::Folder { name, .. } if name == "Volume"
         ));
         assert_eq!(
-            settings_breadcrumb_for_locale(CONFIG_KEYS_COMMON_PATH, AppLocale::Ko),
-            "설정 > 키 설정 > 공통"
+            settings_breadcrumb_for_locale(CONFIG_KEYS_COMMON_SELECT_PATH, AppLocale::Ko),
+            "설정 > 키 설정 > 공통 / 곡 선택"
         );
     }
 
@@ -668,30 +669,25 @@ mod tests {
     #[test]
     fn settings_keys_lists_key_mode_folders() {
         let items = load_settings_items(CONFIG_KEYS_PATH);
-        assert_eq!(items.len(), KEY_CONFIG_MODES.len() + 5);
+        assert_eq!(items.len(), KEY_CONFIG_MODES.len() + 4);
         assert!(matches!(items.first(), Some(SelectItem::SettingsBack)));
         assert!(matches!(
             &items[1],
             SelectItem::Folder { name, path, .. }
-                if name == "共通" && path == CONFIG_KEYS_COMMON_PATH
+                if name == "共通・選曲" && path == CONFIG_KEYS_COMMON_SELECT_PATH
         ));
         assert!(matches!(
             &items[2],
             SelectItem::Folder { name, path, .. }
-                if name == "選曲" && path == CONFIG_KEYS_SELECT_PATH
+                if name == "プレイ" && path == CONFIG_KEYS_PLAY_PATH
         ));
         assert!(matches!(
             &items[3],
             SelectItem::Folder { name, path, .. }
-                if name == "プレイ" && path == CONFIG_KEYS_PLAY_PATH
-        ));
-        assert!(matches!(
-            &items[4],
-            SelectItem::Folder { name, path, .. }
                 if name == "リザルト" && path == CONFIG_KEYS_RESULT_PATH
         ));
         assert!(matches!(
-            &items[5],
+            &items[4],
             SelectItem::Folder { name, path, .. }
                 if name == "4K" && path == "bmz-settings:keys:4k"
         ));
@@ -706,35 +702,34 @@ mod tests {
     }
 
     #[test]
-    fn settings_keys_common_lists_configurable_actions() {
-        let items = load_settings_items(CONFIG_KEYS_COMMON_PATH);
-        assert_eq!(items.len(), COMMON_ACTIONS.len() * COMMON_KEY_BINDING_SLOTS.len() + 1);
+    fn settings_keys_common_select_lists_both_groups_in_order() {
+        let items = load_settings_items(CONFIG_KEYS_COMMON_SELECT_PATH);
         assert!(matches!(items.first(), Some(SelectItem::SettingsBack)));
-        assert!(matches!(
-            &items[1],
-            SelectItem::KeyBinding(row)
-                if row.target == KeyBindingTarget::Action {
-                    action: InputActionConfig::E1,
-                    slot: KeyBindingSlot::KeyboardPrimary,
-                }
-        ));
-        assert!(items.iter().any(|item| matches!(
-            item,
-            SelectItem::KeyBinding(row)
-                if row.target == KeyBindingTarget::Action {
-                    action: InputActionConfig::E4,
-                    slot: KeyBindingSlot::Controller,
-                }
-        )));
-        let select_items = load_settings_items(CONFIG_KEYS_SELECT_PATH);
-        assert!(select_items.iter().any(|item| matches!(
-            item,
-            SelectItem::KeyBinding(row)
-                if row.target == KeyBindingTarget::Action {
-                    action: InputActionConfig::Screenshot,
-                    slot: KeyBindingSlot::KeyboardPrimary,
-                }
-        )));
+        assert!(matches!(&items[1], SelectItem::SettingsHeader("settings-category-common")));
+        let select_index = items
+            .iter()
+            .position(|item| matches!(item, SelectItem::SettingsHeader("settings-nav-select")))
+            .unwrap();
+        let keyboard_row = |action| {
+            SelectItem::KeyBinding(KeyBindingSelectRow {
+                key_mode: KeyMode::K7,
+                target: KeyBindingTarget::Action { action, slot: KeyBindingSlot::KeyboardPrimary },
+            })
+        };
+        for action in [
+            InputActionConfig::E1,
+            InputActionConfig::Screenshot,
+            InputActionConfig::SelectOpenIr,
+            InputActionConfig::SelectFavoriteSong,
+            InputActionConfig::SelectFavoriteChart,
+        ] {
+            let row = keyboard_row(action);
+            assert!(items[2..select_index].contains(&row));
+            assert!(!items[select_index + 1..].contains(&row));
+        }
+        assert!(
+            items[select_index + 1..].contains(&keyboard_row(InputActionConfig::SelectOpenFolder))
+        );
         assert!(!items.iter().any(|item| matches!(
             item,
             SelectItem::KeyBinding(row)

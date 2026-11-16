@@ -563,6 +563,7 @@ profile-input-keyboard-release-bounce-ms = 键盘释放回弹过滤（毫秒）
 profile-input-controller-release-bounce-ms = 控制器释放回弹过滤（毫秒）
 profile-input-release-bounce-help = 设为 0 时不使用。若松开后立刻被误判为再次按下，请增大数值。
 profile-key-config-title = 按键配置
+profile-key-config-common-select = 通用 / 选曲
 profile-key-config-empty = 此类别没有可配置的项目。
 profile-key-config-mode = 对象
 profile-key-config-slot = 输入槽位

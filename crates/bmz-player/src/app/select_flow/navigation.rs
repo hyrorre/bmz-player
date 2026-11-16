@@ -624,6 +624,7 @@ impl WinitApp {
                     self.begin_key_config_edit(row.key_mode, row.target);
                 }
             }
+            Some(SelectItem::SettingsHeader(_)) => {}
             Some(SelectItem::SettingsBack | SelectItem::SettingsClose) => {
                 self.exit_folder();
             }
