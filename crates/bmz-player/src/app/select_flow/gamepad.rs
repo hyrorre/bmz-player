@@ -129,6 +129,17 @@ impl WinitApp {
         if self.capture_egui_key_config_gamepad(&event.name, event.pressed) {
             return;
         }
+        if event.pressed
+            && self.select.key_config_edit.is_none()
+            && input.scene().has_shortcut(InputActionConfig::OpenRandomTrainer)
+        {
+            if let Some(egui) = self.ui.egui.as_mut() {
+                egui.open_random_trainer();
+            }
+            self.select.select_exit_hold_started_at = None;
+            self.update_select_option_panel();
+            return;
+        }
         if in_settings_stack(&self.select.folder_stack)
             && self.select.key_config_edit.as_ref().is_some_and(|session| session.listening)
         {

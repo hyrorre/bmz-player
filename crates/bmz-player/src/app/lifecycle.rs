@@ -183,6 +183,22 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     self.reset_detail_options_input();
                     return;
                 }
+                if !egui_consumed
+                    && self.select.key_config_edit.is_none()
+                    && event.state == ElementState::Pressed
+                    && !event.repeat
+                    && self
+                        .resolve_control_event(ControlInputEvent::keyboard(&event))
+                        .scene()
+                        .has_shortcut(InputActionConfig::OpenRandomTrainer)
+                {
+                    if let Some(egui) = self.ui.egui.as_mut() {
+                        egui.open_random_trainer();
+                    }
+                    self.select.select_exit_hold_started_at = None;
+                    self.update_select_option_panel();
+                    return;
+                }
                 if self.select.key_config_edit.is_none()
                     && event.state == ElementState::Pressed
                     && !event.repeat
