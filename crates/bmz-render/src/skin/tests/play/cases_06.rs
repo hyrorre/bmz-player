@@ -541,7 +541,7 @@ fn skin_document_shifts_judge_combo_numbers_beatoraja_style() {
                         { "id": "judgef-pg", "dst": [{ "time": 0, "x": 30, "y": 20, "w": 20, "h": 10 }, { "time": 500 }] }
                     ],
                     "numbers": [
-                        { "id": "judgen-pg", "dst": [{ "time": 0, "x": 20, "y": 5, "w": 5, "h": 10 }, { "time": 500 }] }
+                        { "id": "judgen-pg", "filter": 1, "dst": [{ "time": 0, "x": 20, "y": 5, "w": 5, "h": 10 }, { "time": 500 }] }
                     ]
                 }],
                 "destination": [
@@ -570,19 +570,23 @@ fn skin_document_shifts_judge_combo_numbers_beatoraja_style() {
     assert_eq!(items.len(), 4);
     assert!(matches!(items[0], SkinRenderItem::Image {
                 rect: Rect { x, .. },
+                linear_filter: false,
                 ..
             } if approx_eq(x, 0.23)));
     // dst x 20 - w*6/2 = 5, align=2, shiftbase=3, judge x 30 - length/2 = 23
     assert!(matches!(items[1], SkinRenderItem::Image {
                 rect: Rect { x, .. },
+                linear_filter: true,
                 ..
             } if approx_eq(x, 0.43)));
     assert!(matches!(items[2], SkinRenderItem::Image {
                 rect: Rect { x, .. },
+                linear_filter: true,
                 ..
             } if approx_eq(x, 0.48)));
     assert!(matches!(items[3], SkinRenderItem::Image {
                 rect: Rect { x, .. },
+                linear_filter: true,
                 ..
             } if approx_eq(x, 0.53)));
 }

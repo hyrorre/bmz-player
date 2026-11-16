@@ -299,6 +299,7 @@ macro_rules! skin_document_render_core_resolve_methods {
                             frame,
                             elapsed,
                             sources,
+                            destination.filter != 0,
                             signed_render,
                         ));
                     }
@@ -309,7 +310,7 @@ macro_rules! skin_document_render_core_resolve_methods {
                         frame,
                         elapsed,
                         sources,
-                        false,
+                        destination.filter != 0,
                         None,
                         signed_render,
                     ));
@@ -738,7 +739,7 @@ macro_rules! skin_document_render_core_resolve_methods {
                     frame,
                     elapsed,
                     sources,
-                    false,
+                    destination.filter != 0,
                     None,
                     signed_render,
                 ));

@@ -596,7 +596,7 @@ pub(super) trait SkinDocumentRenderInternal {
         frame: ResolvedSkinFrame,
         elapsed_ms: i32,
         sources: &HashMap<String, SkinDocumentTexture>,
-        compact_digits: bool,
+        linear_filter: bool,
         align_override: Option<i32>,
         signed_render: SignedNumberRender,
     ) -> Vec<SkinRenderItem>;

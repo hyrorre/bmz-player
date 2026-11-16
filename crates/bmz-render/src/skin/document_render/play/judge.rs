@@ -186,7 +186,7 @@ macro_rules! skin_document_render_play_judge_public_methods {
                     number_frame,
                     source_elapsed,
                     sources,
-                    false,
+                    number_destination.filter != 0,
                     Some(judge_align),
                     signed_render,
                 ));
@@ -277,7 +277,7 @@ macro_rules! skin_document_render_play_judge_methods {
             frame: ResolvedSkinFrame,
             elapsed_ms: i32,
             sources: &HashMap<String, SkinDocumentTexture>,
-            compact_digits: bool,
+            linear_filter: bool,
             align_override: Option<i32>,
             signed_render: SignedNumberRender,
         ) -> Vec<SkinRenderItem> {
@@ -313,7 +313,7 @@ macro_rules! skin_document_render_play_judge_methods {
             let padding = number_padding(value);
             let max_digits = value.digit.max(0) as usize;
             let align = align_override.unwrap_or(value.align);
-            let mut digits = if value.lr2_number {
+            let digits = if value.lr2_number {
                 let Some(digits) = lr2_number_digits(value, number, align) else {
                     return Vec::new();
                 };
@@ -334,9 +334,6 @@ macro_rules! skin_document_render_play_judge_methods {
                     }
                 }
             };
-            if value.lr2_number && compact_digits {
-                digits.retain(|digit| !matches!(*digit, 10 | 22 | u8::MAX));
-            }
             // 桁間スペース (space フィールド、px 単位)
             let digit_step = frame.w + value.space;
             // 先頭の空き桁数 (align のためのオフセット計算に使用)
@@ -347,7 +344,7 @@ macro_rules! skin_document_render_play_judge_methods {
                 2 => digit_step * shiftbase as i32 / 2,
                 _ => 0,
             };
-            let lr2_center_shift = if value.lr2_number && !compact_digits && align == 2 {
+            let lr2_center_shift = if value.lr2_number && align == 2 {
                 digit_step
                     * digits.iter().filter(|digit| matches!(**digit, 10 | 22 | u8::MAX)).count()
                         as i32
@@ -361,8 +358,7 @@ macro_rules! skin_document_render_play_judge_methods {
                 .enumerate()
                 .filter(|(_, digit)| *digit != u8::MAX)
                 .map(|(index, digit)| {
-                    let digit_position =
-                        if compact_digits { index } else { shiftbase + index } as i32;
+                    let digit_position = (shiftbase + index) as i32;
                     let enlarge = value.qwilight_animation.as_ref().map_or(0, |a| {
                         (f64::from(a.enlarge)
                             * (1.0
@@ -402,7 +398,7 @@ macro_rules! skin_document_render_play_judge_methods {
                         0,
                         BlendMode::Normal,
                         Some(source.source_size),
-                        false,
+                        linear_filter,
                     )
                 })
                 .collect()

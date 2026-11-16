@@ -558,7 +558,7 @@ fn skin_document_resolves_static_value_destinations() {
                     { "id": "unknown", "src": 1, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 3, "ref": 9999 }
                 ],
                 "destination": [
-                    { "id": "combo", "dst": [{ "x": 10, "y": 20, "w": 5, "h": 10 }] },
+                    { "id": "combo", "filter": 1, "dst": [{ "x": 10, "y": 20, "w": 5, "h": 10 }] },
                     { "id": "remain", "dst": [{ "x": 10, "y": 30, "w": 5, "h": 10 }] },
                     { "id": "unknown", "dst": [{ "x": 10, "y": 40, "w": 5, "h": 10 }] }
                 ]
@@ -594,21 +594,25 @@ fn skin_document_resolves_static_value_destinations() {
     assert!(matches!(items[0], SkinRenderItem::Image {
                 rect: Rect { x, y, .. },
                 uv: TextureRegion { x: u, .. },
+                linear_filter: true,
                 ..
             } if approx_eq(x, 0.15) && approx_eq(y, 0.7) && approx_eq(u, 0.4)));
     assert!(matches!(items[1], SkinRenderItem::Image {
                 rect: Rect { x, .. },
                 uv: TextureRegion { x: u, .. },
+                linear_filter: true,
                 ..
             } if approx_eq(x, 0.20) && approx_eq(u, 0.5)));
     assert!(matches!(items[2], SkinRenderItem::Image {
                 rect: Rect { x, y, .. },
                 uv: TextureRegion { x: u, .. },
+                linear_filter: false,
                 ..
             } if approx_eq(x, 0.15) && approx_eq(y, 0.6) && approx_eq(u, 0.5)));
     assert!(matches!(items[3], SkinRenderItem::Image {
                 rect: Rect { x, .. },
                 uv: TextureRegion { x: u, .. },
+                linear_filter: false,
                 ..
             } if approx_eq(x, 0.20) && approx_eq(u, 0.0)));
 }
