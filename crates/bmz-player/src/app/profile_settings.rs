@@ -50,6 +50,8 @@ impl WinitApp {
         let locale = self.boot.profile_config.ui.locale();
         if before.ir_primary != ir_primary_identity(&self.boot.profile_config) {
             self.select.select_ir.clear();
+            self.jobs.startup_rival_sync =
+                RianRivalSyncRequest::from_profile(&self.boot.profile_config);
         }
         self.renderer.set_default_font_coverage(locale.font_coverage());
         let locale_changed = locale != before.locale;

@@ -85,7 +85,12 @@ impl WinitApp {
             chart.ln_profile,
         );
         let ln_mode = crate::screens::select_ir::rian_ln_mode_for_chart(chart.ln_profile, policy);
-        let Some(score) = self.select.select_ir.active_rival_score(chart.sha256, ln_mode).cloned()
+        let double_option = options.double_option.normalize_for_key_mode(key_mode).score_bucket();
+        let Some(score) = self
+            .select
+            .select_ir
+            .active_rival_score(chart.sha256, ln_mode, policy, double_option)
+            .cloned()
         else {
             // beatoraja: 選択ライバルが未プレイなら通常ターゲットへ戻す。
             return;
@@ -820,6 +825,9 @@ fn apply_rival_score_replication(
     if replication == ChartReplicationModeConfig::None {
         return;
     }
+    if score.bmz_identity.is_some() && score.arrange_1p.trim().is_empty() {
+        return;
+    }
     let (arrange, arrange_2p, double_option) = rival_arrange_options(score);
     options.arrange = arrange;
     options.arrange_2p = arrange_2p;
@@ -1050,6 +1058,7 @@ mod rival_replication_tests {
         IrRivalScoreRecord {
             chart_sha256: [7; 32],
             ln_mode: 1,
+            bmz_identity: None,
             ex_score: 1234,
             clear_type: 5,
             max_combo: 600,

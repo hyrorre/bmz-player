@@ -100,8 +100,14 @@ impl WinitApp {
                 );
                 let ln_mode =
                     crate::screens::select_ir::rian_ln_mode_for_chart(chart.ln_profile, policy);
-                if let Some(score) = self.select.select_ir.active_rival_score(chart.sha256, ln_mode)
-                {
+                let double_option =
+                    self.select.double_option.normalize_for_key_mode(key_mode).score_bucket();
+                if let Some(score) = self.select.select_ir.active_rival_score(
+                    chart.sha256,
+                    ln_mode,
+                    policy,
+                    double_option,
+                ) {
                     let (arrange, arrange_2p, double_option) =
                         super::play_flow_launch_preload::rival_arrange_options(score);
                     let arrangement = BattleTargetPlayback::Seed {

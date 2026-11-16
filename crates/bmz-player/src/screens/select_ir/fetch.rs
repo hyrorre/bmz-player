@@ -89,7 +89,7 @@ pub(super) fn spawn_rival_fetch(
                 &target.rival_id,
                 &target.body,
             )?;
-            let response = if crate::ir::bms_ir::is_bms_ir_provider(&target.provider) {
+            let (scores, etag) = if let Some(account_id) = &target.bmz_account_id {
                 let credentials = crate::ir::sync::ensure_fresh_credentials(
                     &profile_root,
                     &target.provider,
@@ -97,32 +97,52 @@ pub(super) fn spawn_rival_fetch(
                     now_unix_seconds(),
                 )
                 .await?;
-                crate::ir::bms_ir::BmsIrClient::new(&target.base_url)?
-                    .fetch_rival_scores(
-                        &target.rival_id,
-                        target.rule_mode,
-                        (!cache.etag.is_empty()).then_some(cache.etag.as_str()),
-                        &credentials.account_id,
-                        &credentials.access_token,
-                    )
+                anyhow::ensure!(credentials.account_id == *account_id, "BMZ IR account changed");
+                let client = crate::ir::bmz_official::BmzOfficialIrClient::new(
+                    &target.base_url,
+                    credentials.access_token,
+                )?;
+                let scores = client
+                    .fetch_rival_best_scores(&target.rival_id, target.rule_mode)
                     .await?
+                    .into_iter()
+                    .map(convert_bmz_rival_score)
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                (scores, String::new())
             } else {
-                crate::ir::rian_ir::RianIrClient::new(&target.base_url)?
-                    .fetch_rival_scores(
-                        &target.rival_id,
-                        &target.body,
-                        (!cache.etag.is_empty()).then_some(cache.etag.as_str()),
+                let etag = (!cache.etag.is_empty()).then_some(cache.etag.as_str());
+                let response = if crate::ir::bms_ir::is_bms_ir_provider(&target.provider) {
+                    let credentials = crate::ir::sync::ensure_fresh_credentials(
+                        &profile_root,
+                        &target.provider,
+                        &target.base_url,
+                        now_unix_seconds(),
                     )
-                    .await?
+                    .await?;
+                    crate::ir::bms_ir::BmsIrClient::new(&target.base_url)?
+                        .fetch_rival_scores(
+                            &target.rival_id,
+                            target.rule_mode,
+                            etag,
+                            &credentials.account_id,
+                            &credentials.access_token,
+                        )
+                        .await?
+                } else {
+                    crate::ir::rian_ir::RianIrClient::new(&target.base_url)?
+                        .fetch_rival_scores(&target.rival_id, &target.body, etag)
+                        .await?
+                };
+                if response.not_modified {
+                    return database.rival_scores(&target.provider, &target.rival_id, &target.body);
+                }
+                let scores = response
+                    .scores
+                    .into_iter()
+                    .map(convert_rival_score)
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                (scores, response.etag)
             };
-            if response.not_modified {
-                return database.rival_scores(&target.provider, &target.rival_id, &target.body);
-            }
-            let scores = response
-                .scores
-                .into_iter()
-                .map(convert_rival_score)
-                .collect::<anyhow::Result<Vec<_>>>()?;
             let fetched_at = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
@@ -132,7 +152,7 @@ pub(super) fn spawn_rival_fetch(
                 &target.rival_id,
                 &target.body,
                 &scores,
-                &response.etag,
+                &etag,
                 fetched_at,
             )?;
             anyhow::Ok(scores)
@@ -150,6 +170,7 @@ fn convert_rival_score(
         chart_sha256: hex_to_hash::<32>(&score.sha256)
             .with_context(|| format!("invalid rival score SHA-256: {}", score.sha256))?,
         ln_mode: score.ln_mode,
+        bmz_identity: None,
         ex_score: score.ex_score,
         clear_type: score.clear_type,
         max_combo: score.max_combo,
@@ -158,6 +179,42 @@ fn convert_rival_score(
         arrange_1p: score.arrange_1p,
         arrange_2p: score.arrange_2p,
         double_option: score.double_option,
+        play_seed: score.play_seed,
+    })
+}
+
+pub(super) fn convert_bmz_rival_score(
+    score: crate::ir::bmz_official::BmzRivalBestScore,
+) -> anyhow::Result<IrRivalScoreRecord> {
+    let identity = BmzRivalScoreIdentity::from_values(&score.ln_policy, &score.double_option)
+        .context("invalid BMZ IR rival score identity")?;
+    // BMZ IR also accepts the legacy clear labels used by older score submissions.
+    let clear_label = match score.clear_type.as_str() {
+        "no_play" => "NoPlay",
+        "failed" => "Failed",
+        "assisted_easy_clear" => "AssistEasy",
+        "easy_clear" => "Easy",
+        "clear" => "Normal",
+        "hard_clear" => "Hard",
+        "ex_hard_clear" => "ExHard",
+        "full_combo" => "FullCombo",
+        "perfect" => "Perfect",
+        label => label,
+    };
+    let clear = bmz_core::clear::ClearType::from_label(clear_label)
+        .context("invalid BMZ IR rival clear type")?;
+    Ok(IrRivalScoreRecord {
+        chart_sha256: hex_to_hash::<32>(&score.chart_sha256)?,
+        ln_mode: 0,
+        bmz_identity: Some(identity),
+        ex_score: score.ex_score,
+        clear_type: clear as i32,
+        max_combo: score.max_combo,
+        min_bp: score.min_bp,
+        play_option: 0,
+        arrange_1p: score.arrange_1p.unwrap_or_default(),
+        arrange_2p: score.arrange_2p.unwrap_or_default(),
+        double_option: score.applied_double_option.unwrap_or(score.double_option),
         play_seed: score.play_seed,
     })
 }

@@ -282,31 +282,17 @@ impl SelectIrRanking {
         snapshot_with_provider(snapshot, ir_config)
     }
 
-    /// 選択中のライバルのスコア。ランキング由来の比較表示を持つIRでは最上位を補う。
+    /// ランキング由来の比較表示を持つIRの最上位ライバル。
     pub fn rival_for(
         &self,
         ir_config: &IrConfig,
         selected: Option<[u8; 32]>,
     ) -> Option<SelectRivalSnapshot> {
         let provider = crate::ir::provider_key::primary_provider_config(ir_config)?;
-        if self.active_rival.is_some() {
-            let sha256 = selected?;
-            let score = self
-                .active_rival_scores
-                .iter()
-                .find_map(|((hash, _), score)| (*hash == sha256).then_some(score))?;
-            return Some(SelectRivalSnapshot {
-                display_name: self.active_rival.as_ref()?.display_name.clone(),
-                ex_score: score.ex_score,
-                clear_index: rival_clear_index(score.clear_type),
-                max_combo: score.max_combo,
-                bp: score.min_bp.max(0) as u32,
-                judge_counts: None,
-            });
-        }
-        // BMS-IR uses an explicit selection for comparison. Its Rivals ranking still feeds
-        // the ranking targets.
-        if crate::ir::bms_ir::is_bms_ir_config(provider) {
+        if self.active_rival.is_some()
+            || crate::ir::bms_ir::is_bms_ir_config(provider)
+            || crate::ir::bmz_official::is_bmz_rival_provider(provider)
+        {
             return None;
         }
         self.cache.get(&selected?).and_then(|entry| entry.rival.clone())
@@ -320,16 +306,26 @@ impl SelectIrRanking {
         &self,
         chart_sha256: [u8; 32],
         ln_mode: u8,
+        ln_policy: LnScorePolicy,
+        double_option: DoubleOptionScoreBucket,
     ) -> Option<&IrRivalScoreRecord> {
-        self.active_rival_scores.get(&(chart_sha256, ln_mode))
+        let rival = self.active_rival.as_ref()?;
+        let key = if rival.bmz_account_id.is_some() {
+            (chart_sha256, 0, Some(BmzRivalScoreIdentity { ln_policy, double_option }))
+        } else {
+            (chart_sha256, ln_mode, None)
+        };
+        self.active_rival_scores.get(&key)
     }
 
     pub fn active_rival_snapshot(
         &self,
         chart_sha256: [u8; 32],
         ln_mode: u8,
+        ln_policy: LnScorePolicy,
+        double_option: DoubleOptionScoreBucket,
     ) -> Option<SelectRivalSnapshot> {
-        let score = self.active_rival_score(chart_sha256, ln_mode)?;
+        let score = self.active_rival_score(chart_sha256, ln_mode, ln_policy, double_option)?;
         Some(SelectRivalSnapshot {
             display_name: self.active_rival.as_ref()?.display_name.clone(),
             ex_score: score.ex_score,

@@ -17,6 +17,12 @@ use super::types::{
 
 pub const BMZ_IR_PROVIDER: &str = "bmz";
 pub const BMZ_IR_DEFAULT_BASE_URL: &str = "https://bmz-player.hyrorre.workers.dev/";
+
+pub(crate) fn is_bmz_rival_provider(
+    config: &crate::config::profile_config::IrProviderConfig,
+) -> bool {
+    matches!(config.provider.trim().to_ascii_lowercase().as_str(), "bmz" | "bmz-official")
+}
 // Keep in sync with MAX_REPLAY_BYTES in bmz-ir-web/shared/constants/ir.ts.
 const MAX_REPLAY_BYTES: usize = 4 * 1024 * 1024;
 
@@ -49,6 +55,27 @@ pub struct IrOwnScoreHistoryRequest {
     pub limit: u32,
     pub offset: u32,
     pub cursor: Option<IrOwnScoreHistoryCursor>,
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct BmzRivalBestScore {
+    pub chart_sha256: String,
+    pub ln_policy: String,
+    pub double_option: String,
+    pub ex_score: u32,
+    pub clear_type: String,
+    pub max_combo: u32,
+    pub min_bp: i32,
+    pub arrange_1p: Option<String>,
+    pub arrange_2p: Option<String>,
+    pub applied_double_option: Option<String>,
+    pub play_seed: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+struct BmzRivalBestScoresPage {
+    scores: Vec<BmzRivalBestScore>,
+    next_cursor: Option<String>,
 }
 
 impl BmzOfficialIrClient {
@@ -375,6 +402,48 @@ impl BmzOfficialIrClient {
         decode_response(response, "BMZ IR rivals fetch").await
     }
 
+    pub(crate) async fn fetch_rival_best_scores(
+        &self,
+        rival_id: &str,
+        rule_mode: RuleMode,
+    ) -> Result<Vec<BmzRivalBestScore>> {
+        let mut base = self.base_url.join("/api/v1/rivals/")?;
+        base.path_segments_mut()
+            .map_err(|_| anyhow::anyhow!("invalid BMZ IR base URL"))?
+            .pop_if_empty()
+            .extend([rival_id, "scores"]);
+        base.query_pairs_mut().append_pair("rule_mode", rule_mode.as_str());
+        let mut cursor = None::<String>;
+        let mut scores = Vec::new();
+        loop {
+            let mut url = base.clone();
+            if let Some(cursor) = &cursor {
+                url.query_pairs_mut().append_pair("cursor", cursor);
+            }
+            let response = self
+                .http
+                .get(url)
+                .bearer_auth(self.require_token()?)
+                .send()
+                .await
+                .context("failed to send BMZ IR rival scores request")?;
+            let page: BmzRivalBestScoresPage =
+                decode_response(response, "BMZ IR rival scores fetch").await?;
+            let Some(next) = page.next_cursor else {
+                scores.extend(page.scores);
+                return Ok(scores);
+            };
+            if page.scores.is_empty()
+                || next.is_empty()
+                || cursor.as_ref().is_some_and(|previous| next <= *previous)
+            {
+                bail!("BMZ IR rival scores cursor did not advance");
+            }
+            scores.extend(page.scores);
+            cursor = Some(next);
+        }
+    }
+
     pub async fn set_rival(&self, target_player_id: &str, add: bool) -> Result<()> {
         let url = self.base_url.join("/api/v1/rivals")?;
         let action = if add { "add" } else { "remove" };
@@ -576,6 +645,45 @@ mod tests {
             body.len()
         );
         stream.write_all(reply.as_bytes()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rival_scores_fetches_every_cursor_page() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let first = "/api/v1/rivals/rival/scores?rule_mode=Beatoraja";
+            for (path, ln_policy, next_cursor) in [
+                (first.to_string(), "ForceCn", Some("page-2")),
+                (format!("{first}&cursor=page-2"), "ForceLn", None),
+            ] {
+                let mut stream = replay_request(&listener, &path).await;
+                let body = serde_json::json!({"scores":[{
+                    "chart_sha256": "aa".repeat(32), "ln_policy": ln_policy,
+                    "double_option": "off", "ex_score": 1800, "clear_type": "Hard",
+                    "max_combo": 900, "min_bp": 3, "play_seed": 42
+                }], "next_cursor":next_cursor})
+                .to_string();
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(reply.as_bytes()).await.unwrap();
+            }
+        });
+        let client = BmzOfficialIrClient::new(&base, "token").unwrap();
+        let scores = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.fetch_rival_best_scores("rival", RuleMode::Beatoraja),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(scores.len(), 2);
+        assert_eq!(scores[0].ln_policy, "ForceCn");
+        assert_eq!(scores[1].ln_policy, "ForceLn");
+        assert_eq!(scores[1].play_seed, Some(42));
+        server.await.unwrap();
     }
 
     #[tokio::test]

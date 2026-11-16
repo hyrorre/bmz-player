@@ -474,7 +474,14 @@ impl WinitApp {
             chart.ln_profile,
         );
         let ln_mode = crate::screens::select_ir::rian_ln_mode_for_chart(chart.ln_profile, policy);
-        let Some(score) = self.select.select_ir.active_rival_score(chart.sha256, ln_mode).cloned()
+        let key_mode = KeyMode::from_str_opt(&chart.mode).unwrap_or_default();
+        let double_option =
+            self.select.double_option.normalize_for_key_mode(key_mode).score_bucket();
+        let Some(score) = self
+            .select
+            .select_ir
+            .active_rival_score(chart.sha256, ln_mode, policy, double_option)
+            .cloned()
         else {
             let Some(rival) = configured_rival else {
                 return false;
@@ -502,7 +509,12 @@ impl WinitApp {
         let (arrange, arrange_2p, double_option) =
             super::play_flow_launch_preload::rival_arrange_options(&score);
         let target = crate::screens::play_start::BattleTarget {
-            provider: "rianIR".to_string(),
+            provider: crate::ir::provider_key::primary_provider_config(
+                &self.boot.profile_config.ir,
+            )
+            .and_then(crate::ir::provider_key::configured_provider_key)
+            .unwrap_or_default()
+            .to_string(),
             score_id: String::new(),
             player_id: String::new(),
             player_name: name,

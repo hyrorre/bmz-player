@@ -23,7 +23,19 @@ impl WinitApp {
                         row.chart.as_ref().map(|chart| chart.ln_profile).unwrap_or_default(),
                         policy,
                     );
-                    self.select.select_ir.active_rival_snapshot(sha256, ln_mode)
+                    let key_mode = row
+                        .chart
+                        .as_ref()
+                        .and_then(|chart| KeyMode::from_str_opt(&chart.mode))
+                        .unwrap_or_default();
+                    let double_option =
+                        self.select.double_option.normalize_for_key_mode(key_mode).score_bucket();
+                    self.select.select_ir.active_rival_snapshot(
+                        sha256,
+                        ln_mode,
+                        policy,
+                        double_option,
+                    )
                 })
             }
             _ => self
@@ -228,7 +240,7 @@ impl WinitApp {
                 in_difficulty_table_level,
                 self.select.key_config_edit.as_ref(),
                 &chart_distributions,
-                Some(&self.select.select_ir),
+                Some((&self.select.select_ir, self.select.double_option)),
             )
             .into_iter()
             .next()
@@ -252,7 +264,7 @@ impl WinitApp {
                 in_difficulty_table_level,
                 self.select.key_config_edit.as_ref(),
                 &chart_distributions,
-                Some(&self.select.select_ir),
+                Some((&self.select.select_ir, self.select.double_option)),
             )
         };
         if !self.select.ir_battle.active {
@@ -296,7 +308,7 @@ impl WinitApp {
                 in_difficulty_table_level,
                 self.select.key_config_edit.as_ref(),
                 &chart_distributions,
-                Some(&self.select.select_ir),
+                Some((&self.select.select_ir, self.select.double_option)),
             );
             self.apply_select_download_progress(&mut displayed_rows);
             // Preserve selection-only replay/history metadata where windows overlap.
