@@ -2,10 +2,18 @@ use super::*;
 
 impl WinitApp {
     pub(super) fn should_exit_via_select_hold(&mut self) -> bool {
+        if std::mem::take(&mut self.select.select_exit_requested) {
+            return true;
+        }
         let allowed = matches!(self.view_state(), AppViewState::Select)
             && self.select.select_option_panel == 0
             && self.input.keyboard_key_held("Escape");
-        select_exit_hold_due(&mut self.select.select_exit_hold_started_at, allowed, Instant::now())
+        select_exit_hold_due_after(
+            &mut self.select.select_exit_hold_started_at,
+            allowed,
+            Instant::now(),
+            Duration::from_millis(u64::from(self.boot.profile_config.select.exit_hold_ms)),
+        )
     }
 
     pub(super) fn select_exit_hold_snapshot(&self) -> ExitHoldSnapshot {
@@ -14,7 +22,7 @@ impl WinitApp {
                 .select
                 .select_exit_hold_started_at
                 .map(|started| started.elapsed().as_millis().min(i32::MAX as u128) as i32),
-            duration_ms: SELECT_EXIT_HOLD_DURATION.as_millis() as i32,
+            duration_ms: self.boot.profile_config.select.exit_hold_ms.min(i32::MAX as u32) as i32,
         }
     }
 

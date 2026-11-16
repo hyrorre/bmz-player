@@ -1065,3 +1065,6 @@ settings-obs-command-incomplete = Enter a scene name and, when required, a sourc
 settings-downloads-keep-archive = Register HTTP archives without extracting
 settings-downloads-keep-archive-help = Save and play ZIP / RAR / 7z / tar.gz / LZH archives directly. Applies to newly queued downloads. IPFS downloads are extracted.
 downloads-state-validating = Checking archive
+
+profile-select-exit-hold = ESC exit hold time (ms)
+profile-select-exit-hold-help = Applies at the music select root. Set to 0 to exit with one ESC press.

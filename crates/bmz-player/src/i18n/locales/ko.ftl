@@ -1059,3 +1059,6 @@ settings-obs-command-incomplete = 장면 이름과 필요한 경우 소스 이�
 settings-downloads-keep-archive = HTTP로 받은 압축 파일을 풀지 않고 등록
 settings-downloads-keep-archive-help = ZIP / RAR / 7z / tar.gz / LZH 파일을 그대로 저장하고 재생합니다. 새로 대기열에 추가하는 다운로드부터 적용합니다. IPFS 다운로드는 압축을 풉니다.
 downloads-state-validating = 압축 파일 확인 중
+
+profile-select-exit-hold = ESC 종료 대기 시간(ms)
+profile-select-exit-hold-help = 선곡 화면의 최상위 폴더에서 적용됩니다. 0으로 설정하면 ESC를 한 번 눌러 종료합니다.

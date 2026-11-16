@@ -1059,3 +1059,6 @@ settings-obs-command-incomplete = 请输入场景名称，并在需要时输入�
 settings-downloads-keep-archive = 不解压，直接注册 HTTP 下载的压缩包
 settings-downloads-keep-archive-help = 直接保存并播放 ZIP / RAR / 7z / tar.gz / LZH 压缩包。对新加入队列的下载生效。IPFS 下载仍会解压。
 downloads-state-validating = 正在检查压缩包
+
+profile-select-exit-hold = ESC退出等待时间（毫秒）
+profile-select-exit-hold-help = 在选曲根目录生效。设为0时，按一次ESC即可退出。

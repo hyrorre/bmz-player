@@ -1059,3 +1059,6 @@ settings-obs-command-incomplete = シーン名と、必要な場合はソース�
 settings-downloads-keep-archive = HTTPで取得した書庫を展開せず登録する
 settings-downloads-keep-archive-help = ZIP / RAR / 7z / tar.gz / LZHをそのまま保存して再生します。次にキューへ追加する取得から反映します。IPFSは展開します。
 downloads-state-validating = 書庫を確認中
+
+profile-select-exit-hold = ESCで終了するまでの時間（ms）
+profile-select-exit-hold-help = 選曲画面のルートで使います。0にすると、ESCを1回押すと終了します。

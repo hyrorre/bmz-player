@@ -50,6 +50,9 @@ pub struct StatisticsConfig {
 /// 読込時に未知の値なら既定へフォールバックする。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectStateConfig {
+    /// Zero exits on a fresh ESC press at the select root.
+    #[serde(default = "default_select_exit_hold_ms")]
+    pub exit_hold_ms: u32,
     #[serde(default = "default_select_mode_filter")]
     pub mode_filter: String,
     #[serde(default = "default_select_difficulty_filter")]
@@ -168,6 +171,7 @@ impl SelectStateConfig {
 impl Default for SelectStateConfig {
     fn default() -> Self {
         Self {
+            exit_hold_ms: default_select_exit_hold_ms(),
             mode_filter: default_select_mode_filter(),
             difficulty_filter: default_select_difficulty_filter(),
             sort: default_select_sort(),
@@ -184,6 +188,10 @@ impl Default for SelectStateConfig {
             random_mix: RandomMixConfig::default(),
         }
     }
+}
+
+pub const fn default_select_exit_hold_ms() -> u32 {
+    1_200
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

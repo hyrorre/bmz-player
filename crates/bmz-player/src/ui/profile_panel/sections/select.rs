@@ -31,6 +31,11 @@ pub(in crate::ui::profile_panel) fn build_profile_select_section(
                 );
             });
             ui.small(tr!(text, "settings-entry-description-random-select"));
+            ui.add(
+                egui::Slider::new(&mut profile.select.exit_hold_ms, 0..=5000)
+                    .text(tr!(text, "profile-select-exit-hold")),
+            );
+            ui.small(tr!(text, "profile-select-exit-hold-help"));
             ui.add_space(8.0);
             egui::ComboBox::new(
                 "profile_select_difficulty_table_level_display",

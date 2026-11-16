@@ -337,6 +337,10 @@ impl WinitApp {
             // 待機中はエディタからのIPCだけを再生入口にする。Escape長押しによる
             // 通常終了だけはSelectと同じ操作として残す。
             if standard == Some(StandardKey::Escape) {
+                if pressed && !repeat && self.boot.profile_config.select.exit_hold_ms == 0 {
+                    self.select.select_exit_requested = true;
+                    return;
+                }
                 update_select_exit_hold(
                     &mut self.select.select_exit_hold_started_at,
                     event.state,
@@ -429,7 +433,12 @@ impl WinitApp {
                         self.apply_select_action(SelectAction::ExitFolder, None);
                         return;
                     }
-                    SelectEscapePress::ArmExitHold => {}
+                    SelectEscapePress::ArmExitHold => {
+                        if self.boot.profile_config.select.exit_hold_ms == 0 {
+                            self.select.select_exit_requested = true;
+                            return;
+                        }
+                    }
                 }
             }
             update_select_exit_hold(

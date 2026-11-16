@@ -529,7 +529,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     );
                 }
                 if self.should_exit_via_select_hold() {
-                    tracing::info!("escape held for 2s on select screen; exiting app");
+                    tracing::info!("select escape exit requested; exiting app");
                     self.save_configs_for_exit(self.active_hispeed(), "select exit hold");
                     event_loop.exit();
                     return;

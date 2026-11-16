@@ -223,6 +223,7 @@ pub(super) enum RetryPreloadKind {
     ReimportedChartWithFreshAudio,
 }
 
+#[cfg(test)]
 pub(super) const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
 pub(super) const FALLBACK_RESULT_SCENE_DURATION: Duration = Duration::from_secs(10);
 /// プレイ中の Start ボタンを「2回連続押し」と判定する間隔上限。

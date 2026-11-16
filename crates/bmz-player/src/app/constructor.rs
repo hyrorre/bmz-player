@@ -395,6 +395,7 @@ impl WinitApp {
                 option_session: Default::default(),
                 detail_options: Default::default(),
                 select_exit_hold_started_at: None,
+                select_exit_requested: false,
                 select_assets,
                 settings_edit: None,
                 key_config_edit: None,
