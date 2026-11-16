@@ -68,6 +68,7 @@ impl WinitApp {
         if self.select.selected_index != previous_index
             || (rows != 0 && self.select.select_items.len() > 1)
         {
+            self.cancel_select_ir_battle_hold();
             self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
             self.sync_selected_play_mode();
             self.reset_selected_replay_slot();
@@ -945,6 +946,7 @@ impl WinitApp {
             return;
         }
         self.select.search.set_active(enabled);
+        self.reconcile_select_ir_battle_hold();
         if let Some(window) = self.window.as_ref() {
             window.set_ime_allowed(enabled);
         }

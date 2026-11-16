@@ -82,6 +82,7 @@ impl WinitApp {
             return;
         }
         self.input.gamepad_slots = slots;
+        self.cancel_select_ir_battle_hold();
         // 旧割り当てで始めた長押しは、新しい割り当てへ Release だけを送らないよう破棄する。
         self.clear_select_hold();
         self.reset_select_analog_scroll();
@@ -102,10 +103,21 @@ impl WinitApp {
         }
         let control_event = ControlInputEvent::gamepad_button(event);
         self.input.track_control(&control_event);
+        let input = self.resolve_control_event(control_event);
+        let mut device_event = crate::input::gamepad::to_device_input_event(event);
+        if should_bypass_analog_scratch_bounce(
+            event,
+            self.play.play_option_input.as_ref().map(|input| &input.binding),
+        ) {
+            device_event.bounce_policy = InputBouncePolicy::Bypass;
+        }
+        let released = self.release_select_ir_battle_hold(&input, Some(device_event.clone()));
         // holdは物理状態を正とする。2回押しなどの単発操作はこの後のフィルターを通す。
         self.sync_select_holds_from_pressed_controls();
         self.sync_play_control_holds_from_pressed_controls();
-        let input = self.resolve_control_event(control_event);
+        if released {
+            return;
+        }
         if self.detail_options_blocks_held_input(&input) {
             return;
         }
@@ -130,13 +142,6 @@ impl WinitApp {
         {
             self.reset_detail_options_input();
             return;
-        }
-        let mut device_event = crate::input::gamepad::to_device_input_event(event);
-        if should_bypass_analog_scratch_bounce(
-            event,
-            self.play.play_option_input.as_ref().map(|input| &input.binding),
-        ) {
-            device_event.bounce_policy = InputBouncePolicy::Bypass;
         }
         let device_event = self.filter_app_input_bounce(device_event);
         if self.route_select_option_session_event(&input, device_event.is_some()) {
@@ -172,7 +177,7 @@ impl WinitApp {
         self.route_gamepad_button(&input);
     }
 
-    fn resync_gamepad_pressed_controls(
+    pub(super) fn resync_gamepad_pressed_controls(
         &mut self,
         pressed_buttons: &[crate::input::gamepad::GamepadPressedButton],
     ) {
@@ -548,13 +553,6 @@ impl WinitApp {
             }
         }
         if !pressed {
-            if matches!(self.view_state(), AppViewState::Select)
-                && self.select.select_option_panel == 0
-                && let Some(source) = input.source()
-                && self.finish_select_ir_battle_hold(source)
-            {
-                return;
-            }
             if let Some(source) = input.source() {
                 self.clear_select_hold_control(source);
             }

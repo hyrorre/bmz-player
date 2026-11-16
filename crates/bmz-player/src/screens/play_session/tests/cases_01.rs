@@ -130,7 +130,13 @@ fn g_battle_keeps_primary_input_offset_auto_adjust_enabled() {
 }
 
 #[test]
-fn battle_target_uses_battle_presentation_while_session_mode_stays_normal() {
+fn battle_target_uses_battle_presentation_while_preserving_session_mode() {
+    for (mode, index) in [(SessionMode::Normal, 0), (SessionMode::GBattle, 4)] {
+        assert_battle_target_session_mode(mode, index);
+    }
+}
+
+fn assert_battle_target_session_mode(mode: SessionMode, index: u8) {
     let profile = ProfileConfig::new_default("default", "Default", 1);
     let mut primary = chart();
     primary.metadata.key_mode = KeyMode::K14;
@@ -146,7 +152,7 @@ fn battle_target_uses_battle_presentation_while_session_mode_stays_normal() {
         &profile,
         PlaySessionOptions {
             play_config_key_mode: Some(KeyMode::K7),
-            session_mode: SessionMode::Normal,
+            session_mode: mode,
             battle_opponent: Some(BattleOpponentOptions {
                 replay_player: Some(ReplayPlayer::default()),
                 replay_judge_rate_percent: 100,
@@ -170,12 +176,15 @@ fn battle_target_uses_battle_presentation_while_session_mode_stays_normal() {
         },
     );
 
-    assert_eq!(session.session_mode_index, 0);
+    assert_eq!(session.session_mode_index, index);
     assert_eq!(session.primary_key_mode, KeyMode::K7);
     assert!(session.display_only_lane_mask[Lane::Key8.index()]);
     assert!(session.opponent.independent.is_some());
     assert_eq!(session.scored_total_notes, 1);
-    assert!(!session.opponent.independent.as_ref().unwrap().publish_display_judgements);
+    assert_eq!(
+        session.opponent.independent.as_ref().unwrap().publish_display_judgements,
+        mode == SessionMode::GBattle
+    );
 }
 
 #[test]

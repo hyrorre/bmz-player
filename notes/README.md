@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-16 | [選曲G-BATTLEの保持解除とSESSION MODE ref](2026/2026-11-16-select-battle-hold-session-mode.md) |
 | 2026-11-15 | [選曲バーごとのバナーと非同期サムネイルキャッシュ](2026/2026-11-15-songlist-row-banners.md) |
 | 2026-11-15 | [途中終了した外部スコアのBP・CB（#105）](2026/2026-11-15-import-unprocessed-bp.md) |
 | 2026-11-15 | [EXTRA NOTEを16段階の追加量に変更](2026/2026-11-15-extra-note-depth.md) |

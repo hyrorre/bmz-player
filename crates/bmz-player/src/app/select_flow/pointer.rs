@@ -393,6 +393,7 @@ impl WinitApp {
             return;
         };
         if self.select.selected_index != next {
+            self.cancel_select_ir_battle_hold();
             self.select.selection_generation = self.select.selection_generation.wrapping_add(1);
             self.select.selected_index = next;
             self.sync_selected_play_mode();

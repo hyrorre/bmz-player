@@ -1,6 +1,38 @@
 use super::*;
 
 #[test]
+fn session_mode_and_battle_panel_refs_are_independent_in_select_snapshots() {
+    let document: SkinDocument = serde_json::from_str(r#"{"type":5}"#).unwrap();
+    for index in 0..5 {
+        for open in [false, true, false] {
+            // The app keeps effective GBattle assist while 1970 uses the setting.
+            let snapshot = SelectSnapshot {
+                assist: "G-BATTLE".into(),
+                skin_attempt: SkinAttemptState {
+                    session_mode_index: Some(index),
+                    ..Default::default()
+                },
+                battle: open.then(|| {
+                    Arc::new(crate::scene::SelectBattleSnapshot {
+                        name: "BATTLE OFF".into(),
+                        ..Default::default()
+                    })
+                }),
+                ..Default::default()
+            };
+            let (state, _) = document.select_draw_state(&snapshot, None);
+            assert_eq!(skin_state_number(1970, &state), Some(index as i64));
+            assert_eq!(skin_state_event_index(1970, &state), index as i32);
+            assert_eq!(skin_image_ref_number(1970, &state), Some(index as i64));
+            assert_eq!(skin_state_imageset_index(1970, &state), Some(index));
+            assert_eq!(test_skin_op(20200, &[], &state), open);
+            assert_eq!(skin_state_event_index(73, &state), 0, "legacy assist stays off");
+            assert_eq!(state.lr2_select_battle_index, 4, "legacy LR2 BATTLE stays G-BATTLE");
+        }
+    }
+}
+
+#[test]
 fn session_mode_image_refs_match_numbers_and_events_in_every_scene() {
     let image: SkinImageDef = serde_json::from_value(serde_json::json!({
         "id": "mode", "w": 210, "h": 250, "divy": 5, "len": 5, "ref": 1970

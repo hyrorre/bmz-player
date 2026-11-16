@@ -316,6 +316,15 @@ CPU時間とGPU・surface・presentを含む実ウィンドウの時間は別に
 
 ## テストの一時リソースと並列実行
 
+選曲のG-BATTLE保持・SESSION MODE snapshot回帰は、LinuxのX11環境で次のように単独実行できます。
+Winitの非公開platform fieldを持つキーイベントを1件取得するため、`Xvfb`・`xauth`・`xdotool`が必要です。
+テスト本体は隔離したprofile / DBを使い、キーボードとGamepadのapp入力ルートを呼びます。
+音声・GPU・物理コントローラーは使いません。
+
+```bash
+RUST_MIN_STACK=33554432 xvfb-run -a cargo test -p bmz-player --locked --lib select_battle_input_and_snapshot_regressions -- --ignored --test-threads=1
+```
+
 `cargo test`は1つのテストバイナリの中で全テストを並列に動かします。さらに別のworktree、
 CIジョブ、IDEとターミナルなど、別のテストプロセスが同時に動くことがあります。
 テスト同士・テストプロセス同士が干渉しないよう、次の規則に従います。

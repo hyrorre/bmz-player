@@ -192,6 +192,7 @@ impl WinitApp {
             }
         }
         self.select.detail_options.closing = closing;
+        self.reconcile_select_ir_battle_hold();
     }
 
     pub(super) fn begin_settings_edit(&mut self, entry_id: SettingsEntryId) {
@@ -507,6 +508,7 @@ impl WinitApp {
     }
 
     fn rebuild_select_key_bindings(&mut self) {
+        self.cancel_select_ir_battle_hold();
         self.select.select_keys = SceneInputResolver::from_profile(&self.boot.profile_config.input);
         self.sync_select_holds_from_pressed_controls();
     }
