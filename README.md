@@ -14,11 +14,11 @@ Supported Format
 - Base 62 BMS (62進数BMS)
 - BMSON
 
-
 Supported Skin
 - beatoraja json skin
 - beatoraja lua skin
-- beatoraja csv skin
+- LR2 csv skin
+- Qwilight play skin
 
 Features
 - score database migration from LR2 / beatoraja
@@ -96,7 +96,7 @@ Currently bundled submodules:
 
 - `data/skins/Rmz-skin` — BMZ bundled fork of Rm-skin. See the skin repository's README and `_license/` directory for license details.
 - `data/skins/mz-select` — BMZ bundled copy of m-select. See the skin repository's `readme.txt` and `license/` directory for license details.
-- `data/skins/Luxez-Flat` — BMZ bundled fork of Luxez-Flat. See the skin repository's `readme.txt` and `font_license/` directory for license details.
+- `data/skins/Luxez-Flat` — BMZ bundled fork of Luxe Flat. See the skin repository's `readme.txt` and `font_license/` directory for license details.
 
 ## System Requirements
 
@@ -189,10 +189,10 @@ Ubuntu 22.04 limitations, and building without PipeWire.
 - [x] battle mode
 - [x] rec mode (譜面動画作成モード)
 - [x] ギミック系BMSへの対応
-- [ ] LR2-style csv skin (WIP)
-- [ ] Arena Mode
-- [ ] マニュアルの整備
+- [x] LR2-style csv skin
+- [x] マニュアルの整備
 - [ ] デフォルトスキンの改善
+- [ ] Arena Mode
 - [ ] 正式版(v1)リリース？
 
 ## Out of Scope (but welcome your contributions)
