@@ -20,6 +20,7 @@ impl WinitApp {
             self.shuffle_system_sound_sets();
         }
         self.audio.select_enter_pending = scene_kind == AppSceneKind::Select;
+        self.audio.select_bgm_pending = scene_kind == AppSceneKind::Select;
         self.fire_scene_transition_sounds(scene_kind);
         if let Some(window) = &self.window {
             if crate::cli::latency_validation_enabled() {
@@ -187,16 +188,7 @@ impl WinitApp {
             self.play_pending_select_enter();
         }
         match scene_kind {
-            AppSceneKind::Select if self.viewer_waiting => {}
-            AppSceneKind::Select
-                if should_play_select_bgm_on_enter(
-                    self.select.select_assets.preview_playing(),
-                    self.audio.pending_system_sound.is_some(),
-                ) =>
-            {
-                self.play_system_sound(SoundType::Select);
-            }
-            AppSceneKind::Select => {}
+            AppSceneKind::Select => self.play_pending_select_bgm(),
             AppSceneKind::Decide => self.play_system_sound(SoundType::Decide),
             AppSceneKind::Play => {}
             AppSceneKind::Result => {
@@ -223,6 +215,20 @@ impl WinitApp {
                     self.play_system_sound(sound);
                 }
             }
+        }
+    }
+
+    pub(super) fn play_pending_select_bgm(&mut self) {
+        if self.audio.select_bgm_pending
+            && matches!(self.view_state(), AppViewState::Select)
+            && !self.viewer_waiting
+            && should_play_select_bgm_on_enter(
+                self.select.select_assets.preview_playing(),
+                self.audio.pending_system_sound.is_some(),
+            )
+        {
+            self.audio.select_bgm_pending = false;
+            self.play_system_sound(crate::system_sound::SoundType::Select);
         }
     }
 

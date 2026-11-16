@@ -672,6 +672,7 @@ impl ProfileConfig {
                 auto_keysound_mine: true,
                 bgm_volume: 50,
                 preview_volume: 50,
+                song_preview_mode: SongPreviewMode::default(),
                 system_bgm_volume: default_system_bgm_volume(),
                 system_se_volume: default_system_se_volume(),
             },

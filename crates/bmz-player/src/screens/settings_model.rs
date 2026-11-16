@@ -660,6 +660,9 @@ mod tests {
         assert!(
             matches!(&items[3], SelectItem::Config(row) if row.entry_id == SettingsEntryId::MasterVolume)
         );
+        assert!(matches!(
+            items.last(), Some(SelectItem::Config(row)) if row.entry_id == SettingsEntryId::SongPreviewMode
+        ));
     }
 
     #[test]

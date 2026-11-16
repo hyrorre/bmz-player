@@ -139,6 +139,19 @@ define_settings! {
         },
         format: |profile| format!("{}", profile.audio_mix.system_se_volume),
     }
+    SongPreviewMode(SongPreviewMode) {
+        value: [field audio_mix.song_preview_mode],
+        adjust: |profile, delta| {
+            let mode = &mut profile.audio_mix.song_preview_mode;
+            *mode = cycle_in_slice(&SongPreviewMode::ORDER, *mode, delta > 0);
+            true
+        },
+        format: |profile| match profile.audio_mix.song_preview_mode {
+            SongPreviewMode::Loop => "LOOP".to_owned(),
+            SongPreviewMode::Once => "ONCE".to_owned(),
+            SongPreviewMode::Off => "OFF".to_owned(),
+        },
+    }
     InputOffsetMs(i64) {
         value: [field judge.input_offset_us],
         adjust: |profile, delta| {

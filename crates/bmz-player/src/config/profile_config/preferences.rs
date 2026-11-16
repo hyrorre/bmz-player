@@ -227,6 +227,27 @@ where
     serializer.serialize_str(AppLocale::profile_language(language).code())
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SongPreviewMode {
+    Loop,
+    #[default]
+    Once,
+    Off,
+}
+
+impl SongPreviewMode {
+    pub const ORDER: [Self; 3] = [Self::Loop, Self::Once, Self::Off];
+
+    pub const fn label_key(self) -> &'static str {
+        match self {
+            Self::Loop => "profile-preview-loop",
+            Self::Once => "profile-preview-once",
+            Self::Off => "profile-preview-off",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioMixConfig {
     #[serde(default)]
@@ -261,6 +282,8 @@ pub struct AudioMixConfig {
     /// システム SE のボリューム。0..=100 の整数。
     #[serde(default = "default_system_se_volume")]
     pub system_se_volume: u32,
+    #[serde(default)]
+    pub song_preview_mode: SongPreviewMode,
 }
 
 pub fn default_auto_keysound_mine() -> bool {

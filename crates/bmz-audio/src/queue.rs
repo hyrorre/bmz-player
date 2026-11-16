@@ -166,6 +166,10 @@ impl ScheduledSoundQueue {
         self.sounds.is_empty()
     }
 
+    pub(crate) fn contains_sound(&self, id: SoundId) -> bool {
+        self.sounds.iter().any(|entry| entry.sound.sound_id == id)
+    }
+
     pub fn clear(&mut self) {
         self.sounds.clear();
     }

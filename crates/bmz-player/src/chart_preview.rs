@@ -1,6 +1,6 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
-use bmz_audio::command::{AudioEngineCommand, AudioEngineHandle};
+use bmz_audio::command::{AudioEngineCommand, AudioEngineHandle, SoundPlaybackWatch};
 use bmz_audio::sample::DecodedSample;
 use bmz_core::ids::SoundId;
 
@@ -12,11 +12,12 @@ const CHART_PREVIEW_ATTACK_FADE_MS: u32 = 10;
 const CHART_PREVIEW_RELEASE_FADE_MS: u32 = 10;
 const VOLUME_EPSILON: f32 = 0.000_1;
 
-/// 選曲画面で `#PREVIEW` を system audio engine 上にループ再生する。
+/// 選曲画面のプレビュー音源を system audio engine 上で再生する。
 pub struct SelectChartPreview {
     engine: AudioEngineHandle,
     active_slot: Cell<Option<usize>>,
     last_volume: Cell<Option<f32>>,
+    playback_watch: RefCell<Option<SoundPlaybackWatch>>,
 }
 
 impl SelectChartPreview {
@@ -27,10 +28,18 @@ impl SelectChartPreview {
             .map(|id| AudioEngineCommand::ReserveSampleSlot { id })
             .collect::<Vec<_>>();
         engine.push_commands(commands);
-        Self { engine, active_slot: Cell::new(None), last_volume: Cell::new(None) }
+        Self {
+            engine,
+            active_slot: Cell::new(None),
+            last_volume: Cell::new(None),
+            playback_watch: RefCell::new(None),
+        }
     }
 
     pub fn stop(&self) {
+        if self.active_slot.get().is_none() {
+            return;
+        }
         let commands = CHART_PREVIEW_SOUND_IDS
             .iter()
             .copied()
@@ -39,7 +48,12 @@ impl SelectChartPreview {
         if self.engine.push_commands(commands) {
             self.active_slot.set(None);
             self.last_volume.set(None);
+            self.playback_watch.replace(None);
         }
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.playback_watch.borrow().as_ref().is_some_and(SoundPlaybackWatch::is_finished)
     }
 
     pub fn set_volume(&self, volume: f32) {
@@ -59,14 +73,14 @@ impl SelectChartPreview {
         self.engine.output_sample_rate()
     }
 
-    pub fn play_sample(&self, sample: DecodedSample, volume: f32) -> bool {
+    pub fn play_sample(&self, sample: DecodedSample, volume: f32, loop_playback: bool) -> bool {
         let output_sample_rate = self.engine.output_sample_rate();
         let sample = sample.resampled_to(output_sample_rate);
         let fade_in_frames = attack_fade_frames(output_sample_rate);
         let fade_out_frames = release_fade_frames(output_sample_rate);
         let next_slot = self.next_slot();
         let next_id = CHART_PREVIEW_SOUND_IDS[next_slot];
-        let mut commands = Vec::with_capacity(4);
+        let mut commands = Vec::with_capacity(5);
         if let Some(active_slot) = self.active_slot.get() {
             commands.push(AudioEngineCommand::StopSoundWithFadeOut {
                 id: CHART_PREVIEW_SOUND_IDS[active_slot],
@@ -79,13 +93,21 @@ impl SelectChartPreview {
             AudioEngineCommand::PlayNowWithFadeIn {
                 sound_id: next_id,
                 volume: normalize_volume(volume),
-                loop_playback: true,
+                loop_playback,
                 fade_in_frames,
             },
         ]);
+        let watch = if loop_playback {
+            None
+        } else {
+            let (command, watch) = AudioEngineCommand::watch_sound(next_id);
+            commands.push(command);
+            Some(watch)
+        };
         if self.engine.push_commands(commands) {
             self.active_slot.set(Some(next_slot));
             self.last_volume.set(Some(normalize_volume(volume)));
+            self.playback_watch.replace(watch);
             true
         } else {
             false
@@ -146,6 +168,7 @@ mod tests {
         assert!(preview.play_sample(
             DecodedSample { channels: 1, sample_rate: 1_000, frames: vec![1.0, 1.0] },
             1.0,
+            true,
         ));
 
         let mut output = vec![0.0; 2];
@@ -164,6 +187,7 @@ mod tests {
         assert!(preview.play_sample(
             DecodedSample { channels: 1, sample_rate: 1_000, frames: vec![1.0, 1.0] },
             0.5,
+            true,
         ));
 
         preview.set_volume(0.5);
@@ -180,6 +204,7 @@ mod tests {
         assert!(preview.play_sample(
             DecodedSample { channels: 1, sample_rate: 1_000, frames: vec![1.0, 1.0] },
             1.0,
+            true,
         ));
 
         let mut output = vec![0.0; 2];
@@ -199,6 +224,7 @@ mod tests {
         assert!(preview.play_sample(
             DecodedSample { channels: 1, sample_rate: 1_000, frames: vec![1.0; 32] },
             1.0,
+            true,
         ));
         let mut output = vec![0.0; 20];
         processor.render_stereo(0, &mut output);
@@ -206,6 +232,7 @@ mod tests {
         assert!(preview.play_sample(
             DecodedSample { channels: 1, sample_rate: 1_000, frames: vec![0.5; 32] },
             1.0,
+            true,
         ));
         let mut output = vec![0.0; 22];
         processor.render_stereo(10, &mut output);
@@ -226,6 +253,7 @@ mod tests {
         assert!(preview.play_sample(
             DecodedSample { channels: 1, sample_rate: 1_000, frames: vec![0.0, 1.0] },
             1.0,
+            true,
         ));
         processor.apply_pending_commands_for_tests();
 

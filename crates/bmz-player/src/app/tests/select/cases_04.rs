@@ -41,6 +41,87 @@ fn select_bgm_waits_for_preview_and_pending_system_sound_set() {
     assert!(!should_play_select_bgm_on_enter(false, true));
 }
 
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "creates a Winit event loop; run alone with --ignored"]
+fn song_preview_settings_take_effect_during_select() {
+    use bmz_audio::command::AudioEngineHandle;
+    use bmz_audio::engine::AudioEngine;
+    use bmz_core::ids::SoundId;
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+
+    use crate::app::select_assets::PreparedSelectPreview;
+    use crate::config::profile_config::SongPreviewMode;
+    use crate::system_sound::SoundType;
+
+    let event_loop =
+        EventLoop::<AppUserEvent>::with_user_event().with_any_thread(true).build().unwrap();
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    let mut boot = data.boot();
+    boot.app_config.input.gamepad_enabled = false;
+    boot.profile_config.audio_mix.normalize_system_bgm_volume = false;
+    let (maintenance_tx, _) = tokio::sync::watch::channel(false);
+    let mut app = WinitApp::new(
+        boot,
+        AppOptions { viewer_play: true, ..Default::default() },
+        Instant::now(),
+        None,
+        None,
+        Arc::new(AtomicBool::new(false)),
+        event_loop.create_proxy(),
+        LogBuffer::default(),
+        maintenance_tx,
+        None,
+    )
+    .unwrap();
+    app.viewer_mode = false;
+    app.viewer_waiting = false;
+    let bgm_id = SoundId(1);
+    let mut engine = AudioEngine::new(1_000);
+    engine.insert_sample(
+        bgm_id,
+        DecodedSample { channels: 2, sample_rate: 1_000, frames: [0.125, 0.0].repeat(32) },
+    );
+    let handle = AudioEngineHandle::new(engine);
+    let mut callback = handle.processor();
+    app.audio.system_sound = Some(crate::system_sound_manager::SystemSoundManager::with_id_map(
+        handle.clone(),
+        HashMap::from([(SoundType::Select, bgm_id)]),
+    ));
+    app.select.select_assets.install_preview(SelectChartPreview::new(handle));
+    let preview_sample = PreparedSelectPreview {
+        sample: DecodedSample { channels: 2, sample_rate: 1_000, frames: [0.0, 0.25].repeat(32) },
+        normalization_gain: 1.0,
+    };
+    let start = Instant::now() - SELECT_PREVIEW_FADE_DURATION;
+    assert!(app.select.select_assets.play_preview(preview_sample.clone(), 1.0, false, start));
+    app.audio.select_bgm_pending = true;
+    app.play_pending_select_bgm();
+    assert!(app.audio.select_bgm_pending);
+    assert!(callback.render_stereo(0, &mut [0.0; 64]));
+    app.update_select_preview_fade();
+    assert!(!app.audio.select_bgm_pending);
+    let mut pcm = [0.0; 2];
+    assert!(callback.render_stereo(32, &mut pcm));
+    assert!(pcm[0] > 0.0);
+    assert_eq!(pcm[1], 0.0);
+
+    // BMZメニューと同じ変更反映を通し、設定フォルダの編集・取り消しも確認する。
+    let before = ProfileSettingsSnapshot::capture(&app.boot.profile_config);
+    app.boot.profile_config.audio_mix.song_preview_mode = SongPreviewMode::Loop;
+    app.apply_profile_settings_changes(&before, None);
+    assert!(app.select.select_assets.play_preview(preview_sample, 1.0, true, start));
+    assert!(callback.render_stereo(33, &mut [0.0; 64]));
+    app.begin_settings_edit(SettingsEntryId::SongPreviewMode);
+    app.adjust_settings_edit(-1);
+    assert_eq!(app.boot.profile_config.audio_mix.song_preview_mode, SongPreviewMode::Off);
+    assert!(!app.select.select_assets.preview_playing());
+    assert!(callback.render_stereo(65, &mut pcm));
+    assert_eq!(pcm[1], 0.0);
+    app.cancel_settings_edit();
+    assert_eq!(app.boot.profile_config.audio_mix.song_preview_mode, SongPreviewMode::Loop);
+}
+
 #[test]
 fn select_preview_fade_factor_ramps_in_and_out() {
     let started_at = Instant::now();

@@ -394,8 +394,8 @@ use scene_input::{
     select_action as scene_select_action,
 };
 use select_assets::{
-    PreparedSelectPreview, SelectAssetRuntime, SelectMetaImage, SelectMetaImageSlot,
-    SelectPreviewFade, SelectPreviewSyncAction, select_preview_fade_factor,
+    SelectAssetRuntime, SelectMetaImage, SelectMetaImageSlot, SelectPreviewFade,
+    select_preview_fade_factor,
 };
 use select_folder_summary::SelectFolderSummaryRuntime;
 use select_search::{SearchInputAction, SelectSearchRuntime};

@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use bmz_core::ids::SoundId;
+
 use crate::mixer::MixerState;
 use crate::queue::{AudioScheduler, ScheduledSound, ScheduledSoundQueue};
 use crate::sample::{DecodedSample, SampleBank};
@@ -12,6 +14,7 @@ pub struct AudioEngine {
     spectrum: Arc<crate::spectrum::AudioSpectrum>,
     paused_at_output_frame: Option<u64>,
     paused_at_time: Option<std::time::Instant>,
+    watched_sound: Option<(SoundId, Arc<()>)>,
 }
 
 impl AudioEngine {
@@ -23,6 +26,7 @@ impl AudioEngine {
             spectrum: Arc::default(),
             paused_at_output_frame: None,
             paused_at_time: None,
+            watched_sound: None,
         }
     }
 
@@ -35,6 +39,7 @@ impl AudioEngine {
             spectrum: Arc::default(),
             paused_at_output_frame: None,
             paused_at_time: None,
+            watched_sound: None,
         }
     }
 
@@ -97,6 +102,9 @@ impl AudioEngine {
     pub fn stop_sound(&mut self, id: bmz_core::ids::SoundId) {
         self.queue.retain(|sound| sound.sound_id != id);
         self.mixer.voices.retain(|voice| voice.sound.sound_id != id);
+        if self.watched_sound.as_ref().is_some_and(|(watched_id, _)| *watched_id == id) {
+            self.watched_sound = None;
+        }
     }
 
     /// 指定 sound_id の再生待ち音を破棄し、再生中 voice は短い fade-out で停止する。
@@ -114,6 +122,7 @@ impl AudioEngine {
         self.spectrum.clear();
         self.queue.clear();
         self.mixer.voices.clear();
+        self.watched_sound = None;
         self.mixer.master_gain = 1.0;
     }
 
@@ -217,6 +226,10 @@ impl AudioEngine {
         self.queue.is_empty() && self.mixer.voices.is_empty()
     }
 
+    pub(crate) fn watch_sound(&mut self, id: SoundId, marker: Arc<()>) {
+        self.watched_sound = Some((id, marker));
+    }
+
     pub fn render_stereo(&mut self, output_start_frame: u64, output: &mut [f32]) {
         self.render_stereo_at(output_start_frame, output, None);
     }
@@ -243,6 +256,12 @@ impl AudioEngine {
         // 中間 Vec を確保せず、期日到来分を直接 mixer へ流し込む(RT 安全)。
         self.mixer.push_scheduled(self.queue.drain_due(output_end_frame));
         self.mixer.mix_stereo(&self.samples, output_start_frame, output);
+        if let Some((id, _)) = &self.watched_sound
+            && !self.mixer.voices.iter().any(|voice| voice.sound.sound_id == *id)
+            && !self.queue.contains_sound(*id)
+        {
+            self.watched_sound = None;
+        }
         self.spectrum.record(output, self.output_sample_rate());
     }
 

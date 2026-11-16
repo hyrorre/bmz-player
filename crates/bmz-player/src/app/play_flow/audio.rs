@@ -407,15 +407,8 @@ impl WinitApp {
         if !normalization_only && result.prepared.reused_existing_sound_set {
             tracing::info!(generation = result.generation, "reused unchanged system sound set");
             self.play_pending_select_enter();
-            if matches!(self.view_state(), AppViewState::Select)
-                && !self.viewer_waiting
-                && should_play_select_bgm_on_enter(
-                    self.select.select_assets.preview_playing(),
-                    self.audio.pending_system_sound.is_some(),
-                )
-            {
-                self.play_system_sound(crate::system_sound::SoundType::Select);
-            }
+            self.audio.select_bgm_pending = matches!(self.view_state(), AppViewState::Select);
+            self.play_pending_select_bgm();
             return;
         }
         let normalize_bgm_volume = self.boot.profile_config.audio_mix.normalize_system_bgm_volume;
@@ -464,15 +457,8 @@ impl WinitApp {
             ));
         self.sync_realtime_profile_settings();
         self.play_pending_select_enter();
-        if matches!(self.view_state(), AppViewState::Select)
-            && !self.viewer_waiting
-            && should_play_select_bgm_on_enter(
-                self.select.select_assets.preview_playing(),
-                self.audio.pending_system_sound.is_some(),
-            )
-        {
-            self.play_system_sound(crate::system_sound::SoundType::Select);
-        }
+        self.audio.select_bgm_pending = matches!(self.view_state(), AppViewState::Select);
+        self.play_pending_select_bgm();
         tracing::info!(
             generation = result.generation,
             startup_to_system_sound_ready_ms = self.smoke.startup_started_at.elapsed().as_millis(),

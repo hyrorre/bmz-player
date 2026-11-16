@@ -524,6 +524,7 @@ fn default_profile_uses_normalized_quieter_audio_and_prefetches_ir_rankings() {
     assert_eq!(profile.audio_mix.preview_volume, 50);
     assert_eq!(profile.audio_mix.system_bgm_volume, 50);
     assert_eq!(profile.audio_mix.system_se_volume, 50);
+    assert_eq!(profile.audio_mix.song_preview_mode, SongPreviewMode::Once);
     assert!(profile.ir.prefetch_global_ranking_on_score_submit);
     assert!(profile.ir.prefetch_rival_ranking_on_score_submit);
     assert_eq!(profile.ir.providers[0], IrProviderConfig::bmz_ir());
@@ -533,7 +534,7 @@ fn default_profile_uses_normalized_quieter_audio_and_prefetches_ir_rankings() {
 }
 
 #[test]
-fn existing_audio_mix_defaults_system_bgm_normalization_on() {
+fn existing_audio_mix_defaults_system_bgm_normalization_on_and_previews_once() {
     let audio_mix: AudioMixConfig = toml::from_str(
         r#"
         master_volume = 50
@@ -547,6 +548,15 @@ fn existing_audio_mix_defaults_system_bgm_normalization_on() {
     .unwrap();
 
     assert!(audio_mix.normalize_system_bgm_volume);
+    assert_eq!(audio_mix.song_preview_mode, SongPreviewMode::Once);
+
+    for mode in SongPreviewMode::ORDER {
+        let mut audio_mix = audio_mix.clone();
+        audio_mix.song_preview_mode = mode;
+        let encoded = toml::to_string(&audio_mix).unwrap();
+        let decoded: AudioMixConfig = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.song_preview_mode, mode);
+    }
 }
 
 #[test]

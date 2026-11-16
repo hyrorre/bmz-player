@@ -552,6 +552,7 @@ impl WinitApp {
                 system_sound_catalog,
                 system_sound: None,
                 select_enter_pending: false,
+                select_bgm_pending: false,
                 pending_system_sound: None,
                 pending_system_sound_normalization: None,
                 system_sound_generation: 0,
