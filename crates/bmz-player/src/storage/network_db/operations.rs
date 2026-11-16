@@ -96,7 +96,8 @@ impl NetworkDatabase {
     ) -> Result<Vec<IrRivalScoreRecord>> {
         let mut statement = self.conn.prepare(
             "SELECT chart_sha256, ln_mode, ex_score, clear_type, max_combo, min_bp,
-                    play_option, arrange_1p, arrange_2p, double_option, play_seed
+                    play_option, arrange_1p, arrange_2p, double_option, play_seed,
+                    ln_policy, double_option_bucket
              FROM ir_rival_scores
              WHERE provider = ?1 AND rival_id = ?2 AND body = ?3
              ORDER BY chart_sha256, ln_mode",
@@ -111,9 +112,20 @@ impl NetworkDatabase {
                         Box::new(error),
                     )
                 })?;
+                let ln_policy: String = row.get(11)?;
+                let double_option_bucket: String = row.get(12)?;
+                let bmz_identity = if ln_policy.is_empty() && double_option_bucket.is_empty() {
+                    None
+                } else {
+                    Some(
+                        BmzRivalScoreIdentity::from_values(&ln_policy, &double_option_bucket)
+                            .ok_or(rusqlite::Error::InvalidQuery)?,
+                    )
+                };
                 Ok(IrRivalScoreRecord {
                     chart_sha256,
                     ln_mode: row.get::<_, i64>(1)?.clamp(0, u8::MAX as i64) as u8,
+                    bmz_identity,
                     ex_score: row.get::<_, i64>(2)?.clamp(0, u32::MAX as i64) as u32,
                     clear_type: row.get(3)?,
                     max_combo: row.get::<_, i64>(4)?.clamp(0, u32::MAX as i64) as u32,
@@ -151,8 +163,8 @@ impl NetworkDatabase {
                 "INSERT INTO ir_rival_scores (
                     provider, rival_id, body, chart_sha256, ln_mode, ex_score,
                     clear_type, max_combo, min_bp, play_option, arrange_1p,
-                    arrange_2p, double_option, play_seed, fetched_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                    arrange_2p, double_option, play_seed, fetched_at, ln_policy, double_option_bucket
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             )?;
             for record in records {
                 insert.execute(params![
@@ -171,6 +183,8 @@ impl NetworkDatabase {
                     record.double_option,
                     record.play_seed,
                     fetched_at,
+                    record.bmz_identity.map_or("", |identity| identity.ln_policy.as_str()),
+                    record.bmz_identity.map_or("", |identity| identity.double_option.ir_value()),
                 ])?;
             }
         }

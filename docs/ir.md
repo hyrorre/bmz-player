@@ -105,6 +105,7 @@ GET    /api/v1/rivals
 POST   /api/v1/rivals                          # { target_player_id, action: add | remove }
 DELETE /api/v1/rivals/{player_id}
 GET    /api/v1/rivals/{player_id}/comparison   # score identityごとのEX / BP比較
+GET    /api/v1/rivals/{player_id}/scores       # 選んだライバル1人の譜面別ベスト
 POST   /api/v1/admin/difficulty-tables/sync    # 管理者による難易度表の即時同期
 GET    /api/v1/admin/moderation/users          # 管理者: ユーザー検索（?q=&status=&limit=&offset=）
 GET    /api/v1/admin/moderation/users/{id}     # 管理者: ユーザーの状態・直近の監査ログ
@@ -566,6 +567,9 @@ rank=7, scope_rank=2  ライバル
 - `POST /api/v1/rivals`の本文は`{ "target_player_id": "...", "action": "add" | "remove" }`です。自分自身は登録できません。
 - `GET /api/v1/rivals`は、登録したライバル（`rivals`）と、自分をライバルに登録しているプレイヤー（`reverse_rivals`）を返します。各行は`player_id` / `relation_type`（`rival`） / `created_at` / `profile`です。
 - 比較API（`/rivals/{player_id}/comparison`）は、score identity（`chart_sha256 + ln_policy + double_option + rule_mode + scoring`）が一致する共通の譜面だけを対象に、EX SCOREとMIN BPの勝敗・差分を返します。
+- `GET /api/v1/rivals/{player_id}/scores?rule_mode=Beatoraja`は、認証したプレイヤーが登録している相手1人の公開譜面のベストを返します。自分のプレイ履歴にない譜面も含みます。
+- `rule_mode`は必須で、集計は`bms_ex_score_v1`を対象にします。`limit`は1〜1,000（既定1,000）です。応答の`next_cursor`が文字列なら次の要求の`cursor`に渡し、`null`で完了します。
+- `scores`の各行は、`chart_sha256`・`ln_policy`・`double_option`で区別します。EX・クリア・最大コンボ・MIN BPは各指標のベストを返します。配置、実際に適用したDPオプション、`play_seed`はEXベストの元スコアから取ります。`play_seed`はサイド別24 bit方式（`beatoraja_24bit_v1`）の値が保存されている場合に返ります。
 
 ## コーススコア
 
@@ -884,6 +888,7 @@ payloadと署名は次のとおりです。
 - 既定では無効です。BMS-IRの数値IDとLR2のgame tokenを、秘密情報の保存先に保存します。
 - ログインした後はprimary providerに選べ、既存のqueueから単曲と、最後のコース / 段位のscoreを送ります。
 - ランキング、登録したライバルとbestの同期、BMS-IRの難易度表、サーバーからローカルへの自己スコアの同期を、providerごとのcacheで扱います。ライバルの追加・解除はWebで行います。
+- プライマリIRがBMS-IRの場合、選曲の数字キー`7`または対応スキンのライバル選択から、登録済みの相手を1人選べます。選択中の相手のベストを比較とプレイ目標に使います。`NONE`では通常のランプを表示します。DXルールはライバル選択の対象外です。
 - 選曲では、Kaleid解析情報が未記録の旧ライブラリでも、単曲・コースのランキングを取得できます。旧プレイのスコア送信には、プレイ時のKaleid解析情報が必要です。
 - オートプレイ・リプレイ再生のResultで選曲キャッシュを使えない場合は、コース中間の単曲Resultを含め、実際に再生した譜面のKaleid解析情報でランキング取得可否を判定します。
 - BMS / PMSはMD5、BMSONはBMS-IR互換のSHA hashで照合します。

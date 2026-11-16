@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, TryLockError};
+use std::sync::{Arc, Mutex, TryLockError, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bmz_core::ids::SoundId;
@@ -70,9 +70,32 @@ pub enum AudioEngineCommand {
         fade_in_frames: u32,
         fade_out_frames: u32,
     },
+    WatchSound {
+        sound_id: SoundId,
+        marker: Arc<()>,
+    },
+}
+
+/// Playback observation that can be read without locking the audio engine.
+#[derive(Debug)]
+pub struct SoundPlaybackWatch(Weak<()>);
+
+impl SoundPlaybackWatch {
+    pub fn is_finished(&self) -> bool {
+        self.0.strong_count() == 0
+    }
 }
 
 impl AudioEngineCommand {
+    /// Append this after the play command in the same batch. The watch stays
+    /// live while the batch is queued and until the sound drains, is stopped,
+    /// or is replaced by a newer watch in the same engine.
+    pub fn watch_sound(sound_id: SoundId) -> (Self, SoundPlaybackWatch) {
+        let marker = Arc::new(());
+        let watch = SoundPlaybackWatch(Arc::downgrade(&marker));
+        (Self::WatchSound { sound_id, marker }, watch)
+    }
+
     pub fn apply(self, engine: &mut AudioEngine, output_frame: u64) {
         match self {
             Self::InsertSample { id, sample } => engine.insert_sample(id, sample),
@@ -114,6 +137,7 @@ impl AudioEngineCommand {
                     fade_out_frames,
                 );
             }
+            Self::WatchSound { sound_id, marker } => engine.watch_sound(sound_id, marker),
         }
     }
 }

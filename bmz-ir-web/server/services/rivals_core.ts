@@ -1,4 +1,37 @@
 import type { IrDoubleOption, IrRuleMode, LnScorePolicy } from '../../shared/types/ir'
+import { asLnPolicy, normalizeDoubleOption } from './ir/common'
+
+export interface RivalScoreCursor {
+  chartSha256: string
+  lnPolicy: LnScorePolicy
+  doubleOption: IrDoubleOption
+}
+
+export function parseRivalScoreCursor(value: unknown): RivalScoreCursor | null {
+  if (value === undefined) return null
+  if (typeof value !== 'string') throw new Error('invalid rival score cursor')
+  const [chartSha256, lnPolicy, doubleOption, extra] = value.split(':')
+  if (
+    !chartSha256 ||
+    !/^[0-9a-f]{64}$/.test(chartSha256) ||
+    !lnPolicy ||
+    !doubleOption ||
+    normalizeDoubleOption(doubleOption) !== doubleOption ||
+    extra !== undefined
+  ) {
+    throw new Error('invalid rival score cursor')
+  }
+  return { chartSha256, lnPolicy: asLnPolicy(lnPolicy), doubleOption }
+}
+
+export function packedRivalSeed(options: Record<string, unknown> | null | undefined) {
+  if (options?.seed_scheme !== 'beatoraja_24bit_v1') return undefined
+  const value = options.seed ?? options.random_seed
+  const seed = typeof value === 'string' && /^\d{1,15}$/.test(value) ? Number(value) : value
+  return typeof seed === 'number' && Number.isSafeInteger(seed) && seed >= 0 && seed < 2 ** 48
+    ? seed
+    : undefined
+}
 
 export type RivalComparisonOutcome = 'win' | 'loss' | 'draw'
 

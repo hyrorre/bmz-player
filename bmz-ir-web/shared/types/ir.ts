@@ -1,6 +1,12 @@
 // ForceHln is a canonical native-HLN score bucket, not an additional player setting.
 export type LnScorePolicy =
-  'AutoLn' | 'AutoCn' | 'AutoHcn' | 'ForceLn' | 'ForceCn' | 'ForceHcn' | 'ForceHln'
+  | 'AutoLn'
+  | 'AutoCn'
+  | 'AutoHcn'
+  | 'ForceLn'
+  | 'ForceCn'
+  | 'ForceHcn'
+  | 'ForceHln'
 
 export type EffectiveLnMode = 'ln' | 'cn' | 'hcn' | 'hln'
 
@@ -452,6 +458,26 @@ export interface IrRivalEntry {
 export interface IrRivalsResponse {
   rivals: IrRivalEntry[]
   reverse_rivals: IrRivalEntry[]
+}
+
+export interface IrRivalBestScore {
+  chart_sha256: string
+  ln_policy: LnScorePolicy
+  double_option: IrDoubleOption
+  ex_score: number
+  clear_type: string
+  max_combo: number
+  min_bp: number
+  arrange_1p?: string
+  arrange_2p?: string
+  applied_double_option?: IrAppliedDoubleOption | null
+  /** Packed beatoraja_24bit_v1 seed. */
+  play_seed?: number
+}
+
+export interface IrRivalBestScoresPage {
+  scores: IrRivalBestScore[]
+  next_cursor: string | null
 }
 
 export type IrRivalComparisonOutcome = 'win' | 'loss' | 'draw'

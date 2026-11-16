@@ -186,7 +186,7 @@ macro_rules! skin_document_render_play_judge_public_methods {
                     number_frame,
                     source_elapsed,
                     sources,
-                    false,
+                    number_destination.filter != 0,
                     Some(judge_align),
                     signed_render,
                 ));
@@ -277,7 +277,7 @@ macro_rules! skin_document_render_play_judge_methods {
             frame: ResolvedSkinFrame,
             elapsed_ms: i32,
             sources: &HashMap<String, SkinDocumentTexture>,
-            compact_digits: bool,
+            linear_filter: bool,
             align_override: Option<i32>,
             signed_render: SignedNumberRender,
         ) -> Vec<SkinRenderItem> {
@@ -293,27 +293,17 @@ macro_rules! skin_document_render_play_judge_methods {
             let Some(source) = sources.get(&value.src) else {
                 return Vec::new();
             };
-            let divx = value.divx.max(1);
-            let divy = value.divy.max(1);
             if value.lr2_number
                 && (lr2_number_frame_cells(value).is_none()
                     || (number < 0 && !value_layout_is_signed(value)))
             {
                 return Vec::new();
             }
-            let source_width_px =
-                if value.w == -1 { source.source_size.width.round() as i32 } else { value.w };
-            let source_height_px =
-                if value.h == -1 { source.source_size.height.round() as i32 } else { value.h };
-            let cell_width_px = (source_width_px / divx) as f32;
-            let cell_height_px = (source_height_px / divy) as f32;
-            if cell_width_px <= 0.0 || cell_height_px <= 0.0 {
-                return Vec::new();
-            }
+            let divx = value.divx.max(1);
             let padding = number_padding(value);
             let max_digits = value.digit.max(0) as usize;
             let align = align_override.unwrap_or(value.align);
-            let mut digits = if value.lr2_number {
+            let digits = if value.lr2_number {
                 let Some(digits) = lr2_number_digits(value, number, align) else {
                     return Vec::new();
                 };
@@ -334,9 +324,6 @@ macro_rules! skin_document_render_play_judge_methods {
                     }
                 }
             };
-            if value.lr2_number && compact_digits {
-                digits.retain(|digit| !matches!(*digit, 10 | 22 | u8::MAX));
-            }
             number_cells::render(
                 self,
                 value,
@@ -344,10 +331,9 @@ macro_rules! skin_document_render_play_judge_methods {
                 number_cells::Layout {
                     max_digits,
                     align,
-                    compact_digits,
                     center: 0,
                     blend: BlendMode::Normal,
-                    filter: false,
+                    filter: linear_filter,
                     hidden_cell: Some(u32::from(u8::MAX)),
                 },
                 base_frame,

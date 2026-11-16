@@ -528,11 +528,23 @@ pub struct EguiLayer {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum EguiKeyConfigSection {
     #[default]
-    Common,
-    Select,
+    CommonSelect,
     Play,
     Result,
     KeyMode(KeyMode),
+}
+
+impl EguiKeyConfigSection {
+    pub(crate) fn action_groups(self) -> &'static [crate::config::key_config::KeyBindingGroup] {
+        use crate::config::key_config::{COMMON_SELECT_GROUPS, KeyBindingGroup};
+
+        match self {
+            Self::CommonSelect => COMMON_SELECT_GROUPS,
+            Self::Play => &[KeyBindingGroup::Play],
+            Self::Result => &[KeyBindingGroup::Result],
+            Self::KeyMode(_) => &[],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -558,7 +570,7 @@ pub(super) struct EguiKeyConfigUiState {
 impl Default for EguiKeyConfigUiState {
     fn default() -> Self {
         Self {
-            section: EguiKeyConfigSection::Common,
+            section: EguiKeyConfigSection::CommonSelect,
             slot: KeyBindingSlot::KeyboardPrimary,
             listening: None,
             status: None,

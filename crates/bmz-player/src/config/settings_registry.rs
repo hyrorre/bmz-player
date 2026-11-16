@@ -11,7 +11,8 @@ use super::profile_config::{
     HsFixConfig, JudgeAlgorithmConfig, KeyModeConversionConfig, LaneConfig, ProfileConfig,
     RELEASE_BOUNCE_MS_MAX, RandomOptionConfig, ReplaySlotRule, SRandomCorrectionConfig,
     SelectInputModeConfig, SevenToNinePattern, SevenToNineRuleMode, SevenToNineType,
-    TargetOptionConfig, normalize_classic_hispeed_step, normalize_floating_hispeed_step,
+    SongPreviewMode, TargetOptionConfig, normalize_classic_hispeed_step,
+    normalize_floating_hispeed_step,
 };
 use bmz_core::lane::KeyMode;
 use bmz_gameplay::rule::RuleMode;
@@ -30,6 +31,7 @@ impl SettingsEntryId {
         Self::PreviewVolume,
         Self::SystemBgmVolume,
         Self::SystemSeVolume,
+        Self::SongPreviewMode,
     ];
 
     pub const JUDGE_ENTRIES: &'static [Self] = &[
@@ -213,6 +215,7 @@ impl SettingsEntryId {
             Self::PreviewVolume => "PREVIEW",
             Self::SystemBgmVolume => "SYS BGM",
             Self::SystemSeVolume => "SYS SE",
+            Self::SongPreviewMode => "SONG PREVIEW",
             Self::InputOffsetMs => "INPUT OFFSET",
             Self::VisualOffsetMs => "VISUAL OFFSET",
             Self::VisualOffsetAutoAdjust => "AUTO ADJUST",
@@ -348,6 +351,7 @@ impl SettingsEntryId {
             Self::PreviewVolume => "settings-entry-description-preview-volume",
             Self::SystemBgmVolume => "settings-entry-description-system-bgm-volume",
             Self::SystemSeVolume => "settings-entry-description-system-se-volume",
+            Self::SongPreviewMode => "settings-entry-description-song-preview-mode",
             Self::InputOffsetMs => "settings-entry-description-input-offset",
             Self::VisualOffsetMs => "settings-entry-description-visual-offset",
             Self::VisualOffsetAutoAdjust => "settings-entry-description-visual-offset-auto-adjust",

@@ -39,6 +39,7 @@ mod write;
 
 pub use codec::{decode_beatoraja_ghost, encode_beatoraja_ghost};
 use reconcile::*;
+pub(super) use rows::player_stats_from_row;
 use rows::*;
 use write::*;
 

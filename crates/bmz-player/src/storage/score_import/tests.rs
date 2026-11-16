@@ -9,6 +9,8 @@ use bmz_core::time::{ChartTick, TimeUs};
 use rusqlite::params;
 
 use super::*;
+#[path = "tests/player_stats.rs"]
+mod player_stats;
 #[path = "tests/regressions.rs"]
 mod regressions;
 #[path = "tests/source_min_bp.rs"]

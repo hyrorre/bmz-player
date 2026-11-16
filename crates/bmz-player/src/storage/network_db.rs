@@ -42,10 +42,10 @@ mod operations;
 mod rows;
 
 pub use model::{
-    IrJobKind, IrJobRetryFilter, IrLocalScoreCleanupReport, IrRivalScoreCacheState,
-    IrRivalScoreRecord, IrScoreJobBacklog, IrScoreJobListFilter, IrScoreJobRecord,
-    IrScoreJobStatusCounts, IrScoreJobSummary, IrSubmittedScoreLink, NewIrScoreJob,
-    NewIrScoreSubmission,
+    BmzRivalScoreIdentity, IrJobKind, IrJobRetryFilter, IrLocalScoreCleanupReport,
+    IrRivalScoreCacheState, IrRivalScoreRecord, IrScoreJobBacklog, IrScoreJobListFilter,
+    IrScoreJobRecord, IrScoreJobStatusCounts, IrScoreJobSummary, IrSubmittedScoreLink,
+    NewIrScoreJob, NewIrScoreSubmission,
 };
 
 #[cfg(test)]

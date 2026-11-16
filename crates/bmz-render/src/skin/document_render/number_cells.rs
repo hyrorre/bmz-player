@@ -3,7 +3,6 @@ use super::*;
 pub(super) struct Layout {
     pub max_digits: usize,
     pub align: i32,
-    pub compact_digits: bool,
     pub center: i32,
     pub blend: BlendMode,
     pub filter: bool,
@@ -22,7 +21,7 @@ pub(super) fn render(
     elapsed_ms: i32,
     source: &SkinDocumentTexture,
 ) -> Vec<SkinRenderItem> {
-    let Layout { max_digits, align, compact_digits, center, blend, filter, hidden_cell } = layout;
+    let Layout { max_digits, align, center, blend, filter, hidden_cell } = layout;
     let divx = value.divx.max(1);
     let divy = value.divy.max(1);
     let width = if value.w == -1 { source.source_size.width.round() as i32 } else { value.w };
@@ -42,7 +41,7 @@ pub(super) fn render(
         2 => digit_step * shiftbase as i32 / 2,
         _ => 0,
     };
-    let lr2_center_shift = if value.lr2_number && !compact_digits && align == 2 {
+    let lr2_center_shift = if value.lr2_number && align == 2 {
         digit_step
             * digits
                 .iter()
@@ -62,7 +61,7 @@ pub(super) fn render(
         .enumerate()
         .filter(|(_, digit)| Some(*digit) != hidden_cell)
         .map(|(index, digit)| {
-            let digit_position = if compact_digits { index } else { shiftbase + index } as i32;
+            let digit_position = (shiftbase + index) as i32;
             let enlarge = value.qwilight_animation.as_ref().map_or(0, |a| {
                 (f64::from(a.enlarge)
                     * (1.0

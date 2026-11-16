@@ -1,4 +1,9 @@
 use super::*;
+use crate::config::key_config::{
+    COMMON_KEY_BINDING_SLOTS, KEY_BINDING_SLOTS, KEY_CONFIG_MODES, KeyBindingGroup, KeyBindingSlot,
+    KeyBindingTarget, binding_target_label, format_play_binding, key_binding_conflict_description,
+    key_binding_targets_for_group, key_mode_binding_targets,
+};
 
 pub(in crate::ui::profile_panel) fn build_profile_key_config_section(
     ui: &mut egui::Ui,
@@ -23,13 +28,8 @@ pub(in crate::ui::profile_panel) fn build_profile_key_config_section(
             .show_ui(ui, |ui| {
                 ui.selectable_value(
                     &mut section.key_config.section,
-                    EguiKeyConfigSection::Common,
-                    tr!(section.text, "settings-category-common"),
-                );
-                ui.selectable_value(
-                    &mut section.key_config.section,
-                    EguiKeyConfigSection::Select,
-                    tr!(section.text, "settings-nav-select"),
+                    EguiKeyConfigSection::CommonSelect,
+                    tr!(section.text, "profile-key-config-common-select"),
                 );
                 ui.selectable_value(
                     &mut section.key_config.section,
@@ -41,7 +41,7 @@ pub(in crate::ui::profile_panel) fn build_profile_key_config_section(
                     EguiKeyConfigSection::Result,
                     tr!(section.text, "settings-nav-result"),
                 );
-                for &key_mode in crate::config::key_config::KEY_CONFIG_MODES {
+                for &key_mode in KEY_CONFIG_MODES {
                     ui.selectable_value(
                         &mut section.key_config.section,
                         EguiKeyConfigSection::KeyMode(key_mode),
@@ -51,12 +51,12 @@ pub(in crate::ui::profile_panel) fn build_profile_key_config_section(
             });
 
             let slots = match section.key_config.section {
-                EguiKeyConfigSection::Common => crate::config::key_config::COMMON_KEY_BINDING_SLOTS,
-                _ => crate::config::key_config::KEY_BINDING_SLOTS,
+                EguiKeyConfigSection::CommonSelect => COMMON_KEY_BINDING_SLOTS,
+                _ => KEY_BINDING_SLOTS,
             };
             // 1P / 2P の個別スロットは共通操作だけにある。他の区分へ移ったら共通コントローラーへ戻す。
             if !slots.contains(&section.key_config.slot) {
-                section.key_config.slot = crate::config::key_config::KeyBindingSlot::Controller;
+                section.key_config.slot = KeyBindingSlot::Controller;
             }
             let previous_slot = section.key_config.slot;
             egui::ComboBox::new(
@@ -84,93 +84,28 @@ pub(in crate::ui::profile_panel) fn build_profile_key_config_section(
                 ui.separator();
             }
 
-            let (key_mode, targets) = match section.key_config.section {
-                EguiKeyConfigSection::Common
-                | EguiKeyConfigSection::Select
-                | EguiKeyConfigSection::Play
-                | EguiKeyConfigSection::Result => (
-                    KeyMode::K7,
-                    crate::config::key_config::key_binding_targets_for_group(
-                        match section.key_config.section {
-                            EguiKeyConfigSection::Common => {
-                                crate::config::key_config::KeyBindingGroup::Common
-                            }
-                            EguiKeyConfigSection::Select => {
-                                crate::config::key_config::KeyBindingGroup::Select
-                            }
-                            EguiKeyConfigSection::Play => {
-                                crate::config::key_config::KeyBindingGroup::Play
-                            }
-                            EguiKeyConfigSection::Result => {
-                                crate::config::key_config::KeyBindingGroup::Result
-                            }
-                            EguiKeyConfigSection::KeyMode(_) => unreachable!(),
-                        },
-                        section.key_config.slot,
-                    ),
-                ),
-                EguiKeyConfigSection::KeyMode(key_mode) => (
+            let slot = section.key_config.slot;
+            if let EguiKeyConfigSection::KeyMode(key_mode) = section.key_config.section {
+                build_key_binding_rows(
+                    ui,
+                    section,
                     key_mode,
-                    crate::config::key_config::key_mode_binding_targets(
-                        key_mode,
-                        section.key_config.slot,
-                    ),
-                ),
-            };
-
-            if targets.is_empty() {
-                ui.weak(tr!(section.text, "profile-key-config-empty"));
-            }
-
-            egui::Grid::new("profile_key_config_bindings")
-                .num_columns(4)
-                .striped(true)
-                .spacing([8.0, 4.0])
-                .show(ui, |ui| {
-                    for target in targets {
-                        ui.label(crate::config::key_config::binding_target_label(key_mode, target));
-                        if let Some(conflict) =
-                            crate::config::key_config::key_binding_conflict_description(
-                                section.profile,
-                                key_mode,
-                                target,
-                            )
-                        {
-                            ui.colored_label(egui::Color32::YELLOW, "⚠").on_hover_text(conflict);
-                        } else {
-                            ui.label("");
+                    None,
+                    key_mode_binding_targets(key_mode, slot),
+                );
+            } else {
+                let groups = section.key_config.section.action_groups();
+                for &group in groups {
+                    let targets = key_binding_targets_for_group(group, slot);
+                    if groups.len() > 1 {
+                        if targets.is_empty() {
+                            continue;
                         }
-                        let listening = section.key_config.listening.is_some_and(|active| {
-                            active.key_mode == key_mode && active.target == target
-                        });
-                        let value = if listening {
-                            if target.slot().is_controller() {
-                                tr!(section.text, "profile-key-config-listen-button")
-                            } else {
-                                tr!(section.text, "profile-key-config-listen-key")
-                            }
-                        } else {
-                            crate::config::key_config::format_play_binding(
-                                section.profile,
-                                key_mode,
-                                target,
-                            )
-                        };
-                        if ui.add_sized([150.0, 22.0], egui::Button::new(value)).clicked() {
-                            section.key_config.listening =
-                                Some(EguiKeyConfigListenTarget { key_mode, target });
-                            section.key_config.status = None;
-                        }
-                        if ui.small_button(tr!(section.text, "profile-key-config-clear")).clicked()
-                        {
-                            section.key_config.listening = None;
-                            section.key_config.status = None;
-                            section.key_config_action =
-                                Some(EguiKeyConfigAction::Clear { key_mode, target });
-                        }
-                        ui.end_row();
+                        ui.heading(section.text.text(group.label_key()));
                     }
-                });
+                    build_key_binding_rows(ui, section, KeyMode::K7, Some(group), targets);
+                }
+            }
 
             if ui.button(tr!(section.text, "profile-key-config-defaults")).clicked() {
                 section.key_config.listening = None;
@@ -194,12 +129,66 @@ pub(in crate::ui::profile_panel) fn build_profile_key_config_section(
 
 fn key_config_section_label(text: Localizer, section: EguiKeyConfigSection) -> String {
     match section {
-        EguiKeyConfigSection::Common => tr!(text, "settings-category-common"),
-        EguiKeyConfigSection::Select => tr!(text, "settings-nav-select"),
+        EguiKeyConfigSection::CommonSelect => tr!(text, "profile-key-config-common-select"),
         EguiKeyConfigSection::Play => tr!(text, "settings-nav-play"),
         EguiKeyConfigSection::Result => tr!(text, "settings-nav-result"),
         EguiKeyConfigSection::KeyMode(key_mode) => key_mode.as_str().to_string(),
     }
+}
+
+fn build_key_binding_rows(
+    ui: &mut egui::Ui,
+    section: &mut ProfileSectionContext<'_>,
+    key_mode: KeyMode,
+    group: Option<KeyBindingGroup>,
+    targets: Vec<KeyBindingTarget>,
+) {
+    if targets.is_empty() {
+        ui.weak(tr!(section.text, "profile-key-config-empty"));
+        return;
+    }
+
+    egui::Grid::new(("profile_key_config_bindings", group))
+        .num_columns(4)
+        .striped(true)
+        .spacing([8.0, 4.0])
+        .show(ui, |ui| {
+            for target in targets {
+                ui.label(binding_target_label(key_mode, target));
+                if let Some(conflict) =
+                    key_binding_conflict_description(section.profile, key_mode, target)
+                {
+                    ui.colored_label(egui::Color32::YELLOW, "⚠").on_hover_text(conflict);
+                } else {
+                    ui.label("");
+                }
+                let listening = section
+                    .key_config
+                    .listening
+                    .is_some_and(|active| active.key_mode == key_mode && active.target == target);
+                let value = if listening {
+                    if target.slot().is_controller() {
+                        tr!(section.text, "profile-key-config-listen-button")
+                    } else {
+                        tr!(section.text, "profile-key-config-listen-key")
+                    }
+                } else {
+                    format_play_binding(section.profile, key_mode, target)
+                };
+                if ui.add_sized([150.0, 22.0], egui::Button::new(value)).clicked() {
+                    section.key_config.listening =
+                        Some(EguiKeyConfigListenTarget { key_mode, target });
+                    section.key_config.status = None;
+                }
+                if ui.small_button(tr!(section.text, "profile-key-config-clear")).clicked() {
+                    section.key_config.listening = None;
+                    section.key_config.status = None;
+                    section.key_config_action =
+                        Some(EguiKeyConfigAction::Clear { key_mode, target });
+                }
+                ui.end_row();
+            }
+        });
 }
 
 fn build_eight_key_hispeed_rows(ui: &mut egui::Ui, section: &mut ProfileSectionContext<'_>) {

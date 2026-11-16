@@ -139,12 +139,6 @@ impl SelectPreviewLoadQueue {
     }
 }
 
-pub(super) enum SelectPreviewSyncAction {
-    None,
-    Play(PreparedSelectPreview),
-    ApplyMix,
-}
-
 pub(super) struct SelectMetaImageUpload {
     pub(super) slot: SelectMetaImageSlot,
     pub(super) image: SelectMetaImage,
@@ -169,7 +163,8 @@ pub(super) struct SelectAssetRuntime {
     backbmp: SelectMetaImageState,
     banner: SelectMetaImageState,
     preview_source: Option<String>,
-    preview_playing: bool,
+    preview_selection: Option<(u64, Option<i64>)>,
+    preview_played_once: bool,
     preview_fade: SelectPreviewFade,
     preview_normalization_gain: f32,
     preview: Option<SelectChartPreview>,
@@ -243,7 +238,8 @@ impl SelectAssetRuntime {
             backbmp: SelectMetaImageState::default(),
             banner: SelectMetaImageState::default(),
             preview_source: None,
-            preview_playing: false,
+            preview_selection: None,
+            preview_played_once: false,
             preview_fade: SelectPreviewFade::Silent,
             preview_normalization_gain: 1.0,
             preview,
@@ -264,11 +260,25 @@ impl SelectAssetRuntime {
     }
 
     pub(super) fn preview_playing(&self) -> bool {
-        self.preview_playing
+        self.preview_fade != SelectPreviewFade::Silent
     }
 
     pub(super) fn preview_source(&self) -> Option<&str> {
         self.preview_source.as_deref()
+    }
+
+    pub(super) fn update_preview_selection(
+        &mut self,
+        generation: u64,
+        chart_id: Option<i64>,
+    ) -> bool {
+        let selection = Some((generation, chart_id));
+        if self.preview_selection == selection {
+            return false;
+        }
+        self.preview_selection = selection;
+        self.preview_played_once = false;
+        true
     }
 
     pub(super) fn preview_fade(&self) -> SelectPreviewFade {
@@ -299,9 +309,7 @@ impl SelectAssetRuntime {
         matches!(self.preview_cache.get(key), Some(SelectPreviewCacheEntry::Missing))
     }
 
-    pub(super) fn poll_loads(
-        &mut self,
-    ) -> (Vec<SelectMetaImageUpload>, Vec<PreparedSelectPreview>) {
+    pub(super) fn poll_loads(&mut self) -> Vec<SelectMetaImageUpload> {
         let mut image_uploads = Vec::new();
         while let Ok(result) = self.meta_image_rx.try_recv() {
             let is_current =
@@ -337,17 +345,12 @@ impl SelectAssetRuntime {
             }
         }
 
-        let mut previews = Vec::new();
         while let Ok(result) = self.preview_rx.try_recv() {
             if parse_generated_preview_cache_key(&result.key).is_some() {
                 self.generated_preview_loading = false;
             }
-            let is_current = self.preview_source.as_deref() == Some(result.key.as_str());
             match result.result {
                 Ok(prepared) => {
-                    if is_current {
-                        previews.push(prepared.clone());
-                    }
                     self.insert_preview_cache(result.key, SelectPreviewCacheEntry::Ready(prepared));
                 }
                 Err(error) => {
@@ -356,9 +359,6 @@ impl SelectAssetRuntime {
                     } else {
                         tracing::debug!(%error, "skipping chart preview audio");
                     }
-                    if is_current {
-                        self.preview_playing = false;
-                    }
                     self.insert_preview_cache(result.key, SelectPreviewCacheEntry::Missing);
                 }
             }
@@ -366,7 +366,7 @@ impl SelectAssetRuntime {
                 self.start_preview_load(next);
             }
         }
-        (image_uploads, previews)
+        image_uploads
     }
 
     pub(super) fn sync_meta_image(
@@ -496,50 +496,34 @@ impl SelectAssetRuntime {
     pub(super) fn sync_preview(
         &mut self,
         cache_key: Option<String>,
+        restart: bool,
         now: Instant,
-    ) -> SelectPreviewSyncAction {
-        if cache_key.as_deref() == self.preview_source.as_deref() {
-            if !self.preview_playing
-                && let Some(key) = cache_key.as_deref()
-                && let Some(SelectPreviewCacheEntry::Ready(prepared)) = self.preview_cache.get(key)
-            {
-                return SelectPreviewSyncAction::Play(prepared.clone());
-            }
-            return SelectPreviewSyncAction::None;
+    ) -> Option<PreparedSelectPreview> {
+        if self.preview.is_none() || self.preview_played_once {
+            return None;
         }
-
-        let had_preview = self.preview_playing;
-        self.preview_source = cache_key.clone();
-        let action = match cache_key.as_deref() {
-            Some(_) if self.preview.is_none() => SelectPreviewSyncAction::None,
-            Some(key) => match self.preview_cache.get(key) {
-                Some(SelectPreviewCacheEntry::Ready(_)) if had_preview => {
-                    SelectPreviewSyncAction::ApplyMix
-                }
-                Some(SelectPreviewCacheEntry::Ready(prepared)) => {
-                    SelectPreviewSyncAction::Play(prepared.clone())
-                }
-                Some(SelectPreviewCacheEntry::Loading) | Some(SelectPreviewCacheEntry::Missing) => {
-                    SelectPreviewSyncAction::None
-                }
-                None => {
-                    self.request_preview_load(key.to_string());
-                    SelectPreviewSyncAction::None
-                }
-            },
-            None => SelectPreviewSyncAction::None,
-        };
-
-        if had_preview {
-            self.preview_fade = SelectPreviewFade::FadingOut { started_at: now };
-            self.preview_playing = true;
-            SelectPreviewSyncAction::ApplyMix
-        } else {
-            if !matches!(action, SelectPreviewSyncAction::Play(_)) {
-                self.stop_preview_voice();
+        if restart || cache_key != self.preview_source {
+            if cache_key != self.preview_load_queue.pending {
+                self.discard_pending_preview_load();
             }
-            self.preview_playing = false;
-            action
+            self.preview_source.clone_from(&cache_key);
+            if matches!(
+                self.preview_fade,
+                SelectPreviewFade::FadingIn { .. } | SelectPreviewFade::Playing
+            ) {
+                self.preview_fade = SelectPreviewFade::FadingOut { started_at: now };
+            }
+        }
+        let key = cache_key?;
+        match self.preview_cache.get(&key) {
+            Some(SelectPreviewCacheEntry::Ready(prepared)) if !self.preview_playing() => {
+                Some(prepared.clone())
+            }
+            Some(_) => None,
+            None => {
+                self.request_preview_load(key);
+                None
+            }
         }
     }
 
@@ -547,15 +531,16 @@ impl SelectAssetRuntime {
         &mut self,
         prepared: PreparedSelectPreview,
         volume: f32,
+        loop_playback: bool,
         now: Instant,
     ) -> bool {
         let normalization_gain = prepared.normalization_gain;
         let loaded = self
             .preview
             .as_ref()
-            .is_some_and(|preview| preview.play_sample(prepared.sample, volume));
-        self.preview_playing = loaded;
+            .is_some_and(|preview| preview.play_sample(prepared.sample, volume, loop_playback));
         if loaded {
+            self.preview_played_once = !loop_playback;
             self.preview_normalization_gain = normalization_gain;
             self.preview_fade = SelectPreviewFade::FadingIn { started_at: now };
         }
@@ -563,6 +548,9 @@ impl SelectAssetRuntime {
     }
 
     pub(super) fn advance_preview_fade(&mut self, now: Instant) {
+        if self.preview.as_ref().is_some_and(SelectChartPreview::is_finished) {
+            self.preview_fade = SelectPreviewFade::Silent;
+        }
         match self.preview_fade {
             SelectPreviewFade::FadingIn { started_at }
                 if now.duration_since(started_at) >= SELECT_PREVIEW_FADE_DURATION =>
@@ -573,9 +561,9 @@ impl SelectAssetRuntime {
                 if now.duration_since(started_at) >= SELECT_PREVIEW_FADE_DURATION =>
             {
                 self.stop_preview_voice();
-                self.preview_playing = false;
                 self.preview_fade = SelectPreviewFade::Silent;
             }
+            SelectPreviewFade::Silent => self.stop_preview_voice(),
             _ => {}
         }
     }
@@ -592,9 +580,17 @@ impl SelectAssetRuntime {
 
     pub(super) fn stop_preview(&mut self) {
         self.stop_preview_voice();
+        self.discard_pending_preview_load();
         self.preview_source = None;
-        self.preview_playing = false;
+        self.preview_selection = None;
+        self.preview_played_once = false;
         self.preview_fade = SelectPreviewFade::Silent;
+    }
+
+    fn discard_pending_preview_load(&mut self) {
+        if let Some(key) = self.preview_load_queue.pending.take() {
+            self.preview_cache.remove(&key);
+        }
     }
 
     fn stop_preview_voice(&self) {
@@ -939,7 +935,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut uploads = Vec::new();
         while Instant::now() < deadline {
-            uploads.extend(runtime.poll_loads().0);
+            uploads.extend(runtime.poll_loads());
             if done(runtime, &uploads) {
                 return uploads;
             }
@@ -1062,12 +1058,111 @@ mod tests {
 
         assert!(runtime.preview.is_none());
         assert_eq!(runtime.preview_source, None);
-        assert!(!runtime.preview_playing);
+        assert!(!runtime.preview_playing());
         assert_eq!(runtime.preview_fade, SelectPreviewFade::Silent);
         assert_eq!(runtime.preview_normalization_gain, 1.0);
         assert!(runtime.meta_image_cache.is_empty());
         assert!(runtime.preview_cache.is_empty());
         assert!(!runtime.generated_preview_loading);
+    }
+
+    #[test]
+    fn once_preview_restores_bgm_at_end_and_rearms_on_selection_change() {
+        use bmz_audio::command::AudioEngineHandle;
+        use bmz_audio::engine::AudioEngine;
+        use bmz_core::ids::SoundId;
+
+        let mut engine = AudioEngine::new(1_000);
+        let bgm_id = SoundId(1);
+        let sample = DecodedSample { channels: 1, sample_rate: 1_000, frames: vec![0.25; 256] };
+        engine.insert_sample(bgm_id, sample.clone());
+        let handle = AudioEngineHandle::new(engine);
+        let mut callback = handle.processor();
+        assert!(handle.play_now(bgm_id, 0.5, true));
+        let mut runtime = SelectAssetRuntime::new(
+            Some(SelectChartPreview::new(handle.clone())),
+            PathBuf::new(),
+            PathBuf::new(),
+        );
+        let key = Some("shared-preview".to_owned());
+        runtime.insert_preview_cache(
+            key.clone().unwrap(),
+            SelectPreviewCacheEntry::Ready(PreparedSelectPreview {
+                sample,
+                normalization_gain: 1.0,
+            }),
+        );
+        let now = Instant::now();
+        assert!(runtime.update_preview_selection(1, Some(20)));
+        let prepared = runtime.sync_preview(key.clone(), true, now).expect("first preview");
+        assert!(runtime.play_preview(prepared, 1.0, false, now));
+        let faded_in_at = now + SELECT_PREVIEW_FADE_DURATION;
+        runtime.advance_preview_fade(faded_in_at);
+        assert_eq!(runtime.preview_fade_factor(faded_in_at), 1.0);
+
+        let mut first = [0.0; 128 * 2];
+        assert!(callback.render_stereo(0, &mut first));
+        runtime.advance_preview_fade(faded_in_at);
+        assert!(runtime.preview_playing());
+        assert_eq!(first[20], 0.375);
+
+        assert!(callback.render_stereo(128, &mut first));
+        runtime.advance_preview_fade(faded_in_at);
+        assert!(!handle.is_idle(), "the independent select BGM still plays");
+        assert_eq!(runtime.preview_fade_factor(faded_in_at), 0.0);
+        assert!(!runtime.update_preview_selection(1, Some(20)));
+        assert!(runtime.sync_preview(key.clone(), false, faded_in_at).is_none());
+
+        let mut tail = [0.0; 2];
+        assert!(callback.render_stereo(256, &mut tail));
+        assert_eq!(tail, [0.125; 2]);
+        assert!(runtime.update_preview_selection(3, Some(20)));
+        assert!(runtime.sync_preview(key, true, faded_in_at).is_some());
+    }
+
+    #[test]
+    fn stopping_preview_drops_queued_load_and_caches_in_flight_result() {
+        use bmz_audio::command::AudioEngineHandle;
+        use bmz_audio::engine::AudioEngine;
+
+        let handle = AudioEngineHandle::new(AudioEngine::new(1_000));
+        let mut runtime = SelectAssetRuntime::new(
+            Some(SelectChartPreview::new(handle.clone())),
+            PathBuf::new(),
+            PathBuf::new(),
+        );
+        let active_key = "active".to_owned();
+        let pending_key = "pending".to_owned();
+        assert_eq!(
+            runtime.preview_load_queue.request(active_key.clone()),
+            Some(active_key.clone())
+        );
+        runtime.request_preview_load(pending_key.clone());
+        runtime.stop_preview();
+        assert!(!runtime.preview_cache.contains_key(&pending_key));
+        assert!(runtime.preview_load_queue.pending.is_none());
+
+        runtime
+            .preview_tx
+            .send(SelectPreviewResult {
+                key: active_key.clone(),
+                path: None,
+                result: Ok(PreparedSelectPreview {
+                    sample: DecodedSample {
+                        channels: 1,
+                        sample_rate: 1_000,
+                        frames: vec![0.25; 256],
+                    },
+                    normalization_gain: 1.0,
+                }),
+            })
+            .unwrap();
+        let submitted = handle.diagnostics().submitted;
+        assert!(runtime.poll_loads().is_empty());
+        assert_eq!(handle.diagnostics().submitted, submitted);
+        assert!(!runtime.preview_playing());
+        assert!(!runtime.preview_load_queue.active);
+        assert!(runtime.sync_preview(Some(active_key), true, Instant::now()).is_some());
     }
 
     #[test]

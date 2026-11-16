@@ -301,6 +301,7 @@ fn rival_score_cache_replaces_one_rival_snapshot() {
     let first = IrRivalScoreRecord {
         chart_sha256: [7; 32],
         ln_mode: 1,
+        bmz_identity: None,
         ex_score: 1234,
         clear_type: 5,
         max_combo: 500,
@@ -329,6 +330,7 @@ fn rival_score_cache_keeps_scores_and_etag_when_snapshot_commit_fails() {
     let original = IrRivalScoreRecord {
         chart_sha256: [7; 32],
         ln_mode: 1,
+        bmz_identity: None,
         ex_score: 1234,
         clear_type: 5,
         max_combo: 500,

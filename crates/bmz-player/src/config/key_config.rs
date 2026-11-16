@@ -147,10 +147,7 @@ pub enum KeyBindingTarget {
     Action { action: InputActionConfig, slot: KeyBindingSlot },
 }
 
-/// キーコンフィグの共通/画面別グループ。
-///
-/// `Common` は全画面で有効な共通操作、その他は対応する画面だけで有効な
-/// 操作を表す。競合解決では、現在の画面に応じて共通グループも候補に含める。
+/// キーコンフィグの表示グループ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyBindingGroup {
     Common,
@@ -158,6 +155,20 @@ pub enum KeyBindingGroup {
     Play,
     Result,
 }
+
+impl KeyBindingGroup {
+    pub const fn label_key(self) -> &'static str {
+        match self {
+            Self::Common => "settings-category-common",
+            Self::Select => "settings-nav-select",
+            Self::Play => "settings-nav-play",
+            Self::Result => "settings-nav-result",
+        }
+    }
+}
+
+pub const COMMON_SELECT_GROUPS: &[KeyBindingGroup] =
+    &[KeyBindingGroup::Common, KeyBindingGroup::Select];
 
 impl KeyBindingTarget {
     pub fn slot(self) -> KeyBindingSlot {
@@ -167,8 +178,19 @@ impl KeyBindingTarget {
     }
 }
 
-pub const COMMON_ACTIONS: &[InputActionConfig] =
+const E_ACTIONS: &[InputActionConfig] =
     &[InputActionConfig::E1, InputActionConfig::E2, InputActionConfig::E3, InputActionConfig::E4];
+
+pub const COMMON_ACTIONS: &[InputActionConfig] = &[
+    InputActionConfig::E1,
+    InputActionConfig::E2,
+    InputActionConfig::E3,
+    InputActionConfig::E4,
+    InputActionConfig::Screenshot,
+    InputActionConfig::SelectOpenIr,
+    InputActionConfig::SelectFavoriteSong,
+    InputActionConfig::SelectFavoriteChart,
+];
 
 pub const SELECT_ACTIONS: &[InputActionConfig] = &[
     InputActionConfig::SelectModeFilter,
@@ -183,11 +205,7 @@ pub const SELECT_ACTIONS: &[InputActionConfig] = &[
     InputActionConfig::SelectDifficultyFilter,
     InputActionConfig::SelectOpenFolder,
     InputActionConfig::SelectReload,
-    InputActionConfig::SelectFavoriteSong,
-    InputActionConfig::SelectFavoriteChart,
     InputActionConfig::SelectAutoplayFolder,
-    InputActionConfig::SelectOpenIr,
-    InputActionConfig::Screenshot,
 ];
 
 pub const PLAY_ACTIONS: &[InputActionConfig] = &[
@@ -283,6 +301,7 @@ pub fn key_binding_targets_for_group(
         return Vec::new();
     }
     let actions = match group {
+        KeyBindingGroup::Common if is_side_specific_gamepad_device(slot.device()) => E_ACTIONS,
         KeyBindingGroup::Common => COMMON_ACTIONS,
         KeyBindingGroup::Select => SELECT_ACTIONS,
         KeyBindingGroup::Play => PLAY_ACTIONS,
@@ -303,20 +322,22 @@ pub fn key_binding_targets_for_group(
 enum BindingContext {
     Common,
     Select,
+    SelectAndResult,
     Play,
     Result,
     KeyMode,
 }
 
 fn binding_context_for_action(action: InputActionConfig) -> BindingContext {
-    if COMMON_ACTIONS.contains(&action) {
-        BindingContext::Common
-    } else if SELECT_ACTIONS.contains(&action) {
-        BindingContext::Select
-    } else if PLAY_ACTIONS.contains(&action) {
-        BindingContext::Play
-    } else {
-        BindingContext::Result
+    match action {
+        InputActionConfig::Screenshot => BindingContext::Common,
+        InputActionConfig::SelectOpenIr
+        | InputActionConfig::SelectFavoriteSong
+        | InputActionConfig::SelectFavoriteChart => BindingContext::SelectAndResult,
+        _ if E_ACTIONS.contains(&action) => BindingContext::Common,
+        _ if SELECT_ACTIONS.contains(&action) => BindingContext::Select,
+        _ if PLAY_ACTIONS.contains(&action) => BindingContext::Play,
+        _ => BindingContext::Result,
     }
 }
 
@@ -331,7 +352,10 @@ fn binding_priority(context: BindingContext) -> u8 {
     match context {
         BindingContext::KeyMode => 3,
         BindingContext::Common => 2,
-        BindingContext::Select | BindingContext::Play | BindingContext::Result => 1,
+        BindingContext::Select
+        | BindingContext::SelectAndResult
+        | BindingContext::Play
+        | BindingContext::Result => 1,
     }
 }
 
@@ -344,6 +368,11 @@ fn contexts_conflict(left: BindingContext, right: BindingContext) -> bool {
             | (BindingContext::Play, BindingContext::KeyMode)
             | (BindingContext::KeyMode, BindingContext::KeyMode)
             | (BindingContext::Select, BindingContext::Select)
+            | (
+                BindingContext::SelectAndResult,
+                BindingContext::Select | BindingContext::Result | BindingContext::SelectAndResult
+            )
+            | (BindingContext::Select | BindingContext::Result, BindingContext::SelectAndResult)
             | (BindingContext::Play, BindingContext::Play)
             | (BindingContext::Result, BindingContext::Result)
     )

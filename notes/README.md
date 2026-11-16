@@ -40,6 +40,12 @@
 | 日付 | 記録 |
 |---|---|
 | 2026-11-16 | [選曲G-BATTLEの保持解除とSESSION MODE ref](2026/2026-11-16-select-battle-hold-session-mode.md) |
+| 2026-11-16 | [BMZ IRの選曲ライバルと全譜面ベスト取得](2026/2026-11-16-bmz-ir-rival-best-scores.md) |
+| 2026-11-16 | [beatoraja系から累計プレイ統計を取り込む（#114）](2026/2026-11-16-import-player-stats.md) |
+| 2026-11-16 | [数字画像にスキンの filter を適用（#114）](2026/2026-11-16-skin-number-filter.md) |
+| 2026-11-16 | [BMS-IRの選曲ライバル切替を修正（#109）](2026/2026-11-16-bms-ir-rival-selection.md) |
+| 2026-11-16 | [共通・選曲のキー設定を統合（#109）](2026/2026-11-16-key-config-common-select.md) |
+| 2026-11-16 | [選曲プレビューの再生モード（#113）](2026/2026-11-16-song-preview-playback.md) |
 | 2026-11-15 | [選曲バーごとのバナーと非同期サムネイルキャッシュ](2026/2026-11-15-songlist-row-banners.md) |
 | 2026-11-15 | [途中終了した外部スコアのBP・CB（#105）](2026/2026-11-15-import-unprocessed-bp.md) |
 | 2026-11-15 | [EXTRA NOTEを16段階の追加量に変更](2026/2026-11-15-extra-note-depth.md) |

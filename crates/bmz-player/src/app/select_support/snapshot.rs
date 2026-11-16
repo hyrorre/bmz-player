@@ -99,7 +99,7 @@ struct SelectSnapshotRowContext<'a> {
     in_difficulty_table_level: bool,
     key_config_edit: Option<&'a KeyConfigEditSession>,
     chart_distributions: &'a HashMap<i64, CachedSelectChartDistribution>,
-    select_ir: Option<&'a crate::screens::select_ir::SelectIrRanking>,
+    select_ir: Option<(&'a crate::screens::select_ir::SelectIrRanking, DoubleOption)>,
     now_unix: i64,
 }
 
@@ -156,7 +156,7 @@ pub(in crate::app) fn select_snapshot_rows_with_rival(
     in_difficulty_table_level: bool,
     key_config_edit: Option<&KeyConfigEditSession>,
     chart_distributions: &HashMap<i64, CachedSelectChartDistribution>,
-    select_ir: Option<&crate::screens::select_ir::SelectIrRanking>,
+    select_ir: Option<(&crate::screens::select_ir::SelectIrRanking, DoubleOption)>,
 ) -> Vec<SelectRowSnapshot> {
     let context = SelectSnapshotRowContext {
         profile,
@@ -220,6 +220,12 @@ fn select_snapshot_row(
             let description = row.description_text(context.profile);
             select_config_snapshot(index, row.label(), value, description)
         }
+        SelectItem::SettingsHeader(label_key) => SelectRowSnapshot {
+            index: index as u32,
+            title: Localizer::new(context.profile.ui.locale()).text(label_key),
+            kind: bmz_render::scene::SelectRowKind::Config,
+            ..SelectRowSnapshot::default()
+        },
         SelectItem::SettingsBack => select_navigation_snapshot(
             index,
             context.profile,
@@ -276,17 +282,17 @@ fn select_chart_snapshot(
         .map(|chart| chart.scored_total_notes_for_setting(context.profile.play.ln_mode_policy))
         .unwrap_or(0);
     let distribution = chart.and_then(|chart| context.chart_distributions.get(&chart.chart_id));
-    let rival_score = context
-        .select_ir
-        .filter(|select_ir| select_ir.active_rival_display_name().is_some())
-        .and_then(|select_ir| {
-            let chart_sha256 = row.score_sha256()?;
-            let ln_profile = chart.map(|chart| chart.ln_profile).unwrap_or_default();
-            let policy =
-                crate::ln_policy::score_ln_policy(context.profile.play.ln_mode_policy, ln_profile);
-            let ln_mode = crate::screens::select_ir::rian_ln_mode_for_chart(ln_profile, policy);
-            select_ir.active_rival_score(chart_sha256, ln_mode)
-        });
+    let rival_score = context.select_ir.and_then(|(select_ir, double_option)| {
+        let chart_sha256 = row.score_sha256()?;
+        let ln_profile = chart.map(|chart| chart.ln_profile).unwrap_or_default();
+        let policy =
+            crate::ln_policy::score_ln_policy(context.profile.play.ln_mode_policy, ln_profile);
+        let ln_mode = crate::screens::select_ir::rian_ln_mode_for_chart(ln_profile, policy);
+        let key_mode =
+            chart.and_then(|chart| KeyMode::from_str_opt(&chart.mode)).unwrap_or_default();
+        let double_option = double_option.normalize_for_key_mode(key_mode).score_bucket();
+        select_ir.active_rival_score(chart_sha256, ln_mode, policy, double_option)
+    });
     let rival_clear_index = rival_score
         .map(|score| i64::from(score.clear_type).clamp(0, ClearType::Max as i64) as usize)
         .unwrap_or(0);

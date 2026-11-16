@@ -262,7 +262,6 @@ pub(super) fn render_fields(
                         super::number_cells::Layout {
                             max_digits: digits.digit.max(0) as usize,
                             align: digits.align,
-                            compact_digits: false,
                             center: dst.center,
                             blend: skin_blend_mode(dst.blend),
                             filter: dst.filter != 0,

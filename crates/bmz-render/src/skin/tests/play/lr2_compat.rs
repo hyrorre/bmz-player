@@ -46,7 +46,7 @@ fn lr2_number_animation_uses_consecutive_frames_and_cache_tracks_cycle() {
         let signed = signed_number_render_for_value(&doc.value[0], &SkinDrawState::default());
         let mut cache = NumberRenderCache::default();
         for (time, offset) in [(0, 0), (50, stride), (50, stride), (100, 0)] {
-            let items = cache.render(&doc, 0, "n", 7, frame, time, &sources, signed);
+            let items = cache.render(&doc, 0, "n", 7, frame, time, &sources, false, signed);
             let SkinRenderItem::Image { uv, .. } = items.last().unwrap() else {
                 panic!("digit image")
             };

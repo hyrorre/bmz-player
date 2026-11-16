@@ -1360,4 +1360,28 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
                   AND h.clear_type IN ('FullCombo', 'Perfect', 'Max')
             );"],
     },
+    Migration {
+        version: 39,
+        // Keep cumulative stats already imported by the local v37 migration.
+        statements: &["CREATE TABLE IF NOT EXISTS imported_player_stats (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            play_count INTEGER NOT NULL,
+            clear_count INTEGER NOT NULL,
+            playtime_seconds INTEGER NOT NULL,
+            max_combo INTEGER NOT NULL,
+            fast_pgreat INTEGER NOT NULL,
+            slow_pgreat INTEGER NOT NULL,
+            fast_great INTEGER NOT NULL,
+            slow_great INTEGER NOT NULL,
+            fast_good INTEGER NOT NULL,
+            slow_good INTEGER NOT NULL,
+            fast_bad INTEGER NOT NULL,
+            slow_bad INTEGER NOT NULL,
+            fast_poor INTEGER NOT NULL,
+            slow_poor INTEGER NOT NULL,
+            fast_empty_poor INTEGER NOT NULL,
+            slow_empty_poor INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );"],
+    },
 ];

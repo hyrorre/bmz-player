@@ -2,6 +2,15 @@ use super::*;
 use bmz_skin_document::{SongListField, SongListFieldRender};
 
 #[test]
+fn empty_lua_songlist_loads_as_an_empty_definition() {
+    let root = TestDir::created("bmz-lua-empty-songlist");
+    let path = root.join("play.luaskin");
+    fs::write(&path, "return {type=0,songlist={}}").unwrap();
+    let loaded = load_lua_skin(&path, SkinKind::Play, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    assert_eq!(loaded.document.songlist, Some(Default::default()));
+}
+
+#[test]
 fn songlist_banner_single_and_array_destinations_match_in_json_and_lua() {
     let root = unique_test_dir("songlist-banners");
     fs::create_dir_all(&root).unwrap();

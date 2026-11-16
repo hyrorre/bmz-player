@@ -5,11 +5,12 @@ pub(super) struct RianRivalSyncRequest {
     provider_key: String,
     base_url: String,
     account_id: String,
+    bmz: bool,
 }
 
 #[derive(Debug)]
 pub(super) struct RianRivalSyncOutcome {
-    provider_key: String,
+    request: RianRivalSyncRequest,
     rivals: Vec<crate::ir::types::IrRivalEntry>,
 }
 
@@ -18,8 +19,10 @@ pub(super) type RianRivalSyncWorkerResult = Result<RianRivalSyncOutcome>;
 impl RianRivalSyncRequest {
     pub(super) fn from_profile(profile: &ProfileConfig) -> Option<Self> {
         let provider = crate::ir::provider_key::primary_provider_config(&profile.ir)?;
+        let bmz = crate::ir::bmz_official::is_bmz_rival_provider(provider);
         if !crate::ir::rian_ir::is_rian_ir_config(provider)
             && !crate::ir::bms_ir::is_bms_ir_config(provider)
+            && !bmz
         {
             return None;
         }
@@ -32,11 +35,13 @@ impl RianRivalSyncRequest {
             provider_key: provider_key.to_string(),
             base_url: provider.base_url.clone(),
             account_id: account_id.to_string(),
+            bmz,
         })
     }
 
     async fn fetch(self, profile_root: &Path) -> Result<RianRivalSyncOutcome> {
-        let rivals = if crate::ir::bms_ir::is_bms_ir_provider(&self.provider_key) {
+        let bms = crate::ir::bms_ir::is_bms_ir_provider(&self.provider_key);
+        let rivals = if bms || self.bmz {
             let credentials = crate::ir::sync::ensure_fresh_credentials(
                 profile_root,
                 &self.provider_key,
@@ -44,21 +49,35 @@ impl RianRivalSyncRequest {
                 now_unix_seconds(),
             )
             .await?;
-            crate::ir::bms_ir::BmsIrClient::new(&self.base_url)?
-                .get_rivals(&credentials.account_id, &credentials.access_token)
+            if bms {
+                crate::ir::bms_ir::BmsIrClient::new(&self.base_url)?
+                    .get_rivals(&credentials.account_id, &credentials.access_token)
+                    .await?
+                    .rivals
+            } else {
+                anyhow::ensure!(
+                    credentials.account_id == self.account_id,
+                    "BMZ IR account changed"
+                );
+                crate::ir::bmz_official::BmzOfficialIrClient::new(
+                    &self.base_url,
+                    credentials.access_token,
+                )?
+                .get_rivals()
                 .await?
                 .rivals
+            }
         } else {
             crate::ir::rian_ir::RianIrClient::new(&self.base_url)?
                 .fetch_rivals(&self.account_id)
                 .await?
         };
-        Ok(RianRivalSyncOutcome { provider_key: self.provider_key, rivals })
+        Ok(RianRivalSyncOutcome { request: self, rivals })
     }
 }
 
 impl WinitApp {
-    /// 保存済み一覧でSelectを先に表示し、初回描画後にrianIRの一覧を1回だけ更新する。
+    /// 保存済み一覧でSelectを先に表示し、描画後にプライマリIRの一覧を更新する。
     pub(super) fn start_startup_rival_sync_after_first_frame(&mut self) {
         if !self.select_maintenance_allowed() || self.jobs.pending_rival_sync.is_some() {
             return;
@@ -71,10 +90,10 @@ impl WinitApp {
         let event_proxy = self.event_proxy.clone();
         let profile_root = self.boot.profile_paths.root_dir.clone();
         let spawn_result =
-            thread::Builder::new().name("rian-rival-sync".to_string()).spawn(move || {
+            thread::Builder::new().name("ir-rival-sync".to_string()).spawn(move || {
                 let result = (|| -> RianRivalSyncWorkerResult {
                     let runtime = tokio::runtime::Runtime::new()
-                        .context("failed to create rianIR rival sync runtime")?;
+                        .context("failed to create IR rival sync runtime")?;
                     runtime.block_on(request.fetch(&profile_root))
                 })();
                 let _ = tx.send(result);
@@ -83,9 +102,9 @@ impl WinitApp {
         match spawn_result {
             Ok(_) => {
                 self.jobs.pending_rival_sync = Some(rx);
-                tracing::info!("started startup rianIR rival sync");
+                tracing::info!("started IR rival sync");
             }
-            Err(error) => tracing::warn!(%error, "failed to spawn rianIR rival sync worker"),
+            Err(error) => tracing::warn!(%error, "failed to spawn IR rival sync worker"),
         }
     }
 
@@ -95,11 +114,16 @@ impl WinitApp {
         };
         match pending.try_recv() {
             Ok(Ok(outcome)) => {
+                if RianRivalSyncRequest::from_profile(&self.boot.profile_config).as_ref()
+                    != Some(&outcome.request)
+                {
+                    return;
+                }
                 let previous_rival = self.boot.profile_config.rival.clone();
                 let previous_updated_at = self.boot.profile_config.updated_at;
                 let changed = crate::ir_cmd::sync_ir_rivals_into_profile(
                     &mut self.boot.profile_config,
-                    &outcome.provider_key,
+                    &outcome.request.provider_key,
                     &outcome.rivals,
                 );
                 if changed {
@@ -107,7 +131,7 @@ impl WinitApp {
                     if let Err(error) = self.save_profile_config_now() {
                         self.boot.profile_config.rival = previous_rival;
                         self.boot.profile_config.updated_at = previous_updated_at;
-                        tracing::warn!(%error, "failed to save startup rianIR rival sync");
+                        tracing::warn!(%error, "failed to save IR rival sync");
                         return;
                     }
                 }
@@ -116,20 +140,16 @@ impl WinitApp {
                     &self.boot.profile_config,
                 );
                 self.select.select_ir.update_rival(target, &self.boot.profile_paths.root_dir);
-                tracing::info!(
-                    rivals = outcome.rivals.len(),
-                    changed,
-                    "startup rianIR rival sync complete"
-                );
+                tracing::info!(rivals = outcome.rivals.len(), changed, "IR rival sync complete");
             }
             Ok(Err(error)) => {
-                tracing::warn!(%error, "startup rianIR rival sync failed; using saved rivals");
+                tracing::warn!(%error, "IR rival sync failed; using saved rivals");
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.jobs.pending_rival_sync = Some(pending);
             }
             Err(mpsc::TryRecvError::Disconnected) => {
-                tracing::warn!("rianIR rival sync worker disconnected");
+                tracing::warn!("IR rival sync worker disconnected");
             }
         }
     }
@@ -165,6 +185,7 @@ mod tests {
                 provider_key: "rian-ir".to_string(),
                 base_url: "https://rian.example.test/".to_string(),
                 account_id: "player-1".to_string(),
+                bmz: false,
             })
         );
     }

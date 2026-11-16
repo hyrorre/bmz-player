@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, TransactionBehavior, params};
 
 use super::common::configure_connection;
 
@@ -169,7 +169,32 @@ fn repair_kaleid_migration_collisions(
 
 fn run_score_migrations(conn: &mut Connection) -> Result<()> {
     repair_ir_score_migration_20_collision(conn)?;
+    repair_player_stats_migration_37_collision(conn)?;
     run_migrations(conn, SCORE_MIGRATIONS)
+}
+
+/// The local v37 created `imported_player_stats` while main's v37 repaired BP/CB.
+/// Catch up through v38 in one transaction before applying the remaining migrations.
+fn repair_player_stats_migration_37_collision(conn: &mut Connection) -> Result<()> {
+    let is_player_stats_v37 = |conn: &Connection| -> Result<bool> {
+        let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        Ok(version == 37 && table_exists(conn, "imported_player_stats")?)
+    };
+    if !is_player_stats_v37(conn)? {
+        return Ok(());
+    }
+
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if is_player_stats_v37(&tx)? {
+        for migration in SCORE_MIGRATIONS.iter().filter(|m| matches!(m.version, 37 | 38)) {
+            for statement in migration.statements {
+                tx.execute_batch(statement)?;
+            }
+        }
+        tx.pragma_update(None, "user_version", 38)?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 /// `codex/ir-score-import` originally used score DB migration version 20 for
@@ -239,13 +264,13 @@ mod tests {
 
     #[test]
     fn pre_merge_kaleid_databases_keep_data_and_gain_main_columns() {
-        for (migrations, before, old_version, new_version, table, column) in [
+        for (migrations, before, old_version, kaleid_version, table, column) in [
             (LIBRARY_MIGRATIONS, 36, 37, 38, "chart_files", "failed_import_version"),
             (SCORE_MIGRATIONS, 34, 35, 36, "score_history", "normal_best_eligible"),
         ] {
             let mut conn = Connection::open_in_memory().unwrap();
             run_migrations(&mut conn, &migrations[..before]).unwrap();
-            let kaleid = migrations.iter().find(|m| m.version == new_version).unwrap();
+            let kaleid = migrations.iter().find(|m| m.version == kaleid_version).unwrap();
             run_migrations(
                 &mut conn,
                 &[Migration { version: old_version, statements: kaleid.statements }],
@@ -273,6 +298,52 @@ mod tests {
             } else {
                 assert!(table_exists(&conn, "score_kaleid_plays").unwrap());
             }
+        }
+    }
+
+    #[test]
+    fn score_migration_repairs_local_v37_and_preserves_imported_player_stats() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let before_v37 = SCORE_MIGRATIONS.iter().position(|m| m.version == 37).unwrap();
+        run_migrations(&mut conn, &SCORE_MIGRATIONS[..before_v37]).unwrap();
+        let player_stats_v39 = SCORE_MIGRATIONS.last().unwrap();
+        run_migrations(
+            &mut conn,
+            &[Migration { version: 37, statements: player_stats_v39.statements }],
+        )
+        .unwrap();
+        conn.execute_batch(
+            "INSERT INTO imported_player_stats VALUES (1, 42, 5, 1000, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1);
+             INSERT INTO score_history (
+                chart_sha256, played_at, clear_type, gauge_type, gauge_value,
+                total_notes, ex_score, bp, cb, max_combo,
+                fast_pgreat, slow_pgreat, fast_great, slow_great,
+                fast_good, slow_good, fast_bad, slow_bad,
+                fast_poor, slow_poor, fast_empty_poor, slow_empty_poor,
+                gauge_option, replay_path, source_kind
+             ) VALUES (
+                'chart', 1, 'Failed', '', NULL,
+                10, 1, 2, 2, 1,
+                0, 0, 1, 0,
+                0, 0, 0, 0,
+                2, 0, 0, 0,
+                '', '', 'Beatoraja'
+             );",
+        )
+        .unwrap();
+
+        for _ in 0..2 {
+            run_score_migrations(&mut conn).unwrap();
+            let version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+            assert_eq!(version, player_stats_v39.version);
+            let play_count: i32 = conn
+                .query_row("SELECT play_count FROM imported_player_stats", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(play_count, 42);
+            let (bp, cb): (i32, i32) = conn
+                .query_row("SELECT bp, cb FROM score_history", [], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap();
+            assert_eq!((bp, cb), (9, 9));
         }
     }
 

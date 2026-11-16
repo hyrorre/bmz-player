@@ -18,10 +18,7 @@ impl SelectIrRanking {
             match result {
                 Ok(scores) => {
                     self.rival_pending = None;
-                    self.active_rival_scores = scores
-                        .into_iter()
-                        .map(|score| ((score.chart_sha256, score.ln_mode), score))
-                        .collect();
+                    self.install_rival_scores(scores);
                     tracing::info!(
                         rival = %result_target.rival_id,
                         scores = self.active_rival_scores.len(),
@@ -52,10 +49,7 @@ impl SelectIrRanking {
                     db.rival_scores(&target.provider, &target.rival_id, &target.body)
                 }) {
                     Ok(scores) => {
-                        self.active_rival_scores = scores
-                            .into_iter()
-                            .map(|score| ((score.chart_sha256, score.ln_mode), score))
-                            .collect();
+                        self.install_rival_scores(scores);
                     }
                     Err(error) => tracing::debug!(%error, "rival score disk cache is unavailable"),
                 }
@@ -79,6 +73,13 @@ impl SelectIrRanking {
         let requested_at = Instant::now();
         self.rival_in_flight = Some((target.clone(), requested_at));
         spawn_rival_fetch(target, profile_root, requested_at, self.rival_sender.clone());
+    }
+
+    fn install_rival_scores(&mut self, scores: Vec<IrRivalScoreRecord>) {
+        self.active_rival_scores = scores
+            .into_iter()
+            .map(|score| ((score.chart_sha256, score.ln_mode, score.bmz_identity), score))
+            .collect();
     }
 
     /// 毎フレーム呼ぶ。取得完了の取り込みと、カーソル譜面の取得予約を行う。

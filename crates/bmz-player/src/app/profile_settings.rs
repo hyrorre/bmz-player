@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::profile_config::SongPreviewMode;
 
 /// Captured before editing or restoring a profile, independently of the UI.
 pub(super) struct ProfileSettingsSnapshot {
@@ -9,6 +10,7 @@ pub(super) struct ProfileSettingsSnapshot {
     input: ProfileInputConfig,
     ir_primary: Option<(String, String, String)>,
     show_fps: bool,
+    song_preview_mode: SongPreviewMode,
 }
 
 impl ProfileSettingsSnapshot {
@@ -21,6 +23,7 @@ impl ProfileSettingsSnapshot {
             input: profile.input.clone(),
             ir_primary: ir_primary_identity(profile),
             show_fps: profile.ui.show_fps,
+            song_preview_mode: profile.audio_mix.song_preview_mode,
         }
     }
 
@@ -47,6 +50,8 @@ impl WinitApp {
         let locale = self.boot.profile_config.ui.locale();
         if before.ir_primary != ir_primary_identity(&self.boot.profile_config) {
             self.select.select_ir.clear();
+            self.jobs.startup_rival_sync =
+                RianRivalSyncRequest::from_profile(&self.boot.profile_config);
         }
         self.renderer.set_default_font_coverage(locale.font_coverage());
         let locale_changed = locale != before.locale;
@@ -105,6 +110,10 @@ impl WinitApp {
             && let Some(egui) = self.ui.egui.as_mut()
         {
             egui.set_show_fps(self.boot.profile_config.ui.show_fps);
+        }
+        if before.song_preview_mode != self.boot.profile_config.audio_mix.song_preview_mode {
+            self.stop_select_preview();
+            self.play_pending_select_bgm();
         }
         self.sync_realtime_profile_settings();
         self.sync_discord_presence_config();

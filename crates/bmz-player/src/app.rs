@@ -75,8 +75,8 @@ use crate::config::profile_config::{
     HispeedConfigPreset, HispeedDirectionConfig, HsFixConfig, InputActionConfig,
     JudgeAlgorithmConfig, KeyModeConversionConfig, LaneEffectConfig, LaneViewConfig,
     PlayDefaultsConfig, PlayModeConfig, ProfileConfig, ProfileInputConfig, RandomOptionConfig,
-    RivalSourceConfig, SkinConfig, SkinOffsetConfig, TargetOptionConfig,
-    normalize_classic_hispeed_step, normalize_floating_hispeed_step, replay_slot_rule_indices,
+    SkinConfig, SkinOffsetConfig, TargetOptionConfig, normalize_classic_hispeed_step,
+    normalize_floating_hispeed_step, replay_slot_rule_indices,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
@@ -397,8 +397,8 @@ use scene_input::{
     select_action as scene_select_action,
 };
 use select_assets::{
-    PreparedSelectPreview, SelectAssetRuntime, SelectMetaImage, SelectMetaImageSlot,
-    SelectPreviewFade, SelectPreviewSyncAction, select_preview_fade_factor,
+    SelectAssetRuntime, SelectMetaImage, SelectMetaImageSlot, SelectPreviewFade,
+    select_preview_fade_factor,
 };
 use select_folder_summary::SelectFolderSummaryRuntime;
 use select_search::{SearchInputAction, SelectSearchRuntime};

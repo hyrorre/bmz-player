@@ -206,11 +206,34 @@ pub struct IrLocalScoreCleanupReport {
     pub removed_submissions: u32,
 }
 
-/// rianIR の軽量ライバル全曲APIから取得した、譜面/LNモード単位のベスト。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BmzRivalScoreIdentity {
+    pub ln_policy: crate::ln_policy::LnScorePolicy,
+    pub double_option: crate::select_options::DoubleOptionScoreBucket,
+}
+
+impl BmzRivalScoreIdentity {
+    pub fn from_values(ln_policy: &str, double_option: &str) -> Option<Self> {
+        use crate::select_options::DoubleOptionScoreBucket;
+        let double_option = match double_option {
+            "off" => DoubleOptionScoreBucket::Off,
+            "battle" => DoubleOptionScoreBucket::Battle,
+            "battle_auto_scratch" => DoubleOptionScoreBucket::BattleAutoScratch,
+            _ => return None,
+        };
+        Some(Self {
+            ln_policy: crate::ln_policy::LnScorePolicy::from_str_opt(ln_policy)?,
+            double_option,
+        })
+    }
+}
+
+/// 選択中のIRライバルの譜面別ベスト。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IrRivalScoreRecord {
     pub chart_sha256: [u8; 32],
     pub ln_mode: u8,
+    pub bmz_identity: Option<BmzRivalScoreIdentity>,
     pub ex_score: u32,
     pub clear_type: i32,
     pub max_combo: u32,

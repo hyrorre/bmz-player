@@ -19,6 +19,7 @@ struct NumberRenderKey {
     number: i64,
     geometry_color: [i32; 9],
     lr2_style: Option<SkinLr2FrameStyle>,
+    linear_filter: bool,
     texture: SkinTextureId,
     source_size: SkinImageSize,
     animation_phase: i32,
@@ -35,6 +36,7 @@ impl NumberRenderCache {
         frame: ResolvedSkinFrame,
         elapsed_ms: i32,
         sources: &HashMap<String, SkinDocumentTexture>,
+        linear_filter: bool,
         signed: SignedNumberRender,
     ) -> Vec<SkinRenderItem> {
         if self.entries.len() <= destination_index {
@@ -69,6 +71,7 @@ impl NumberRenderCache {
                 frame.angle,
             ],
             lr2_style: frame.lr2_style,
+            linear_filter,
             texture: source.texture,
             source_size: source.source_size,
             animation_phase: if value.lr2_number {
@@ -90,7 +93,7 @@ impl NumberRenderCache {
             frame,
             elapsed_ms,
             sources,
-            false,
+            linear_filter,
             None,
             signed,
         );

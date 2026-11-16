@@ -27,7 +27,7 @@ impl WinitApp {
                     egui.set_score_import_status(
                         Localizer::new(self.boot.profile_config.ui.locale())
                             .format("score-import-success", &args),
-                        report.failed > 0,
+                        report.has_errors(),
                     );
                 }
             }

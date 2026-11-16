@@ -144,7 +144,9 @@ pub(super) fn score_history_entry_from_row(
     })
 }
 
-pub(super) fn player_stats_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlayerStats> {
+pub(in crate::storage) fn player_stats_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<PlayerStats> {
     Ok(PlayerStats {
         play_count: row.get(0)?,
         clear_count: row.get(1)?,

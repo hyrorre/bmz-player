@@ -29,6 +29,7 @@ fn lr2_number_cache_matches_source_frame_boundaries_for_all_glyph_layouts() {
                     frame,
                     elapsed,
                     &sources,
+                    false,
                     SignedNumberRender::Unsigned,
                 );
                 let expected = document.value_number_render_items(
@@ -71,7 +72,7 @@ fn number_cache_matches_uncached_digits_for_animation_style_sources_and_sentinel
         let original_frame =
             ResolvedSkinFrame { x: 100, y: 200, w: 20, h: 30, ..Default::default() };
         let mut frame = original_frame;
-        for step in 0..10 {
+        for step in 0..12 {
             match step {
                 2 => frame.x += 5,
                 3 => {
@@ -90,9 +91,11 @@ fn number_cache_matches_uncached_digits_for_animation_style_sources_and_sentinel
                 }
                 7 => frame = original_frame,
                 8 => frame.angle = 90,
-                9 => frame.lr2_style = Some(SkinLr2FrameStyle { blend: 2, filter: 1, center: 5 }),
+                10 => frame.lr2_style = Some(SkinLr2FrameStyle { blend: 2, filter: 1, center: 5 }),
+                11 => frame.lr2_style.as_mut().unwrap().filter = 0,
                 _ => {}
             }
+            let linear_filter = step == 9 || step == 11;
             for elapsed in [0, 0, 25, 50, 99, 100, -1] {
                 for number in [12, 12, 0, -123, i64::from(i32::MIN), i64::from(i32::MAX), 12] {
                     for signed in [
@@ -106,15 +109,31 @@ fn number_cache_matches_uncached_digits_for_animation_style_sources_and_sentinel
                             frame,
                             elapsed,
                             &sources,
-                            false,
+                            linear_filter,
                             None,
                             signed,
                         );
                         // Repeated calls exercise both rebuilding and reuse.
                         for _ in 0..2 {
                             let actual = cache.render(
-                                &document, 5, "n", number, frame, elapsed, &sources, signed,
+                                &document,
+                                5,
+                                "n",
+                                number,
+                                frame,
+                                elapsed,
+                                &sources,
+                                linear_filter,
+                                signed,
                             );
+                            for item in &actual {
+                                assert!(matches!(
+                                    item,
+                                    SkinRenderItem::Image { linear_filter: actual, .. }
+                                        | SkinRenderItem::RotatedImage { linear_filter: actual, .. }
+                                        if *actual == matches!(step, 9 | 10)
+                                ));
+                            }
                             assert_eq!(
                                 actual, expected,
                                 "cycle={cycle} step={step} elapsed={elapsed} number={number} signed={signed:?}"
@@ -127,12 +146,32 @@ fn number_cache_matches_uncached_digits_for_animation_style_sources_and_sentinel
         let source = sources.remove("digits").unwrap();
         assert!(
             cache
-                .render(&document, 5, "n", 12, frame, 0, &sources, SignedNumberRender::Unsigned)
+                .render(
+                    &document,
+                    5,
+                    "n",
+                    12,
+                    frame,
+                    0,
+                    &sources,
+                    false,
+                    SignedNumberRender::Unsigned
+                )
                 .is_empty()
         );
         sources.insert("digits".into(), source);
         assert_eq!(
-            cache.render(&document, 5, "n", 12, frame, 0, &sources, SignedNumberRender::Unsigned),
+            cache.render(
+                &document,
+                5,
+                "n",
+                12,
+                frame,
+                0,
+                &sources,
+                false,
+                SignedNumberRender::Unsigned
+            ),
             document.value_number_render_items(
                 "n",
                 12,

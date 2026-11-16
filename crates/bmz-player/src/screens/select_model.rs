@@ -408,6 +408,7 @@ pub enum SelectItem {
     Config(ConfigSelectRow),
     AppConfig(AppConfigSelectRow),
     KeyBinding(KeyBindingSelectRow),
+    SettingsHeader(&'static str),
     /// 設定カテゴリから 1 階層戻るアクション行。
     SettingsBack,
     /// 設定ルートを閉じるアクション行。
@@ -432,6 +433,7 @@ impl SelectItem {
             Self::Config(row) => row.label().to_string(),
             Self::AppConfig(row) => row.label().to_string(),
             Self::KeyBinding(row) => row.label(),
+            Self::SettingsHeader(label_key) => Localizer::new(locale).text(label_key),
             Self::SettingsBack => Localizer::new(locale).text("select-back"),
             Self::SettingsClose => Localizer::new(locale).text("select-close"),
             Self::AdvancedSettings => Localizer::new(locale).text("select-advanced-settings"),

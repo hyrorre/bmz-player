@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::config::profile_config::SelectInputModeConfig;
+use crate::config::profile_config::{SelectInputModeConfig, SongPreviewMode};
 
 pub(in crate::ui::profile_panel) fn build_profile_basic_section(
     ui: &mut egui::Ui,
@@ -89,6 +89,14 @@ pub(in crate::ui::profile_panel) fn build_profile_volume_section(
                 &mut profile.audio_mix.system_se_volume,
                 &tr!(text, "profile-volume-system-se"),
             );
+            let preview_mode = &mut profile.audio_mix.song_preview_mode;
+            egui::ComboBox::new("song_preview_mode", tr!(text, "profile-preview-mode"))
+                .selected_text(text.text(preview_mode.label_key()))
+                .show_ui(ui, |ui| {
+                    for mode in SongPreviewMode::ORDER {
+                        ui.selectable_value(preview_mode, mode, text.text(mode.label_key()));
+                    }
+                });
         });
 }
 

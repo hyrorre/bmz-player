@@ -232,4 +232,38 @@ pub const NETWORK_MIGRATIONS: &[Migration] = &[
             );",
         ],
     },
+    Migration {
+        version: 8,
+        statements: &[
+            "ALTER TABLE ir_rival_scores RENAME TO ir_rival_scores_v7;",
+            "CREATE TABLE ir_rival_scores (
+                provider TEXT NOT NULL,
+                rival_id TEXT NOT NULL,
+                body TEXT NOT NULL,
+                chart_sha256 TEXT NOT NULL,
+                ln_mode INTEGER NOT NULL,
+                ex_score INTEGER NOT NULL,
+                clear_type INTEGER NOT NULL,
+                max_combo INTEGER NOT NULL,
+                min_bp INTEGER NOT NULL,
+                play_option INTEGER NOT NULL,
+                arrange_1p TEXT NOT NULL DEFAULT '',
+                arrange_2p TEXT NOT NULL DEFAULT '',
+                double_option TEXT NOT NULL DEFAULT '',
+                play_seed INTEGER,
+                fetched_at INTEGER NOT NULL,
+                ln_policy TEXT NOT NULL DEFAULT '',
+                double_option_bucket TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(provider, rival_id, body, chart_sha256, ln_mode, ln_policy, double_option_bucket)
+            );",
+            "INSERT INTO ir_rival_scores (
+                provider, rival_id, body, chart_sha256, ln_mode, ex_score, clear_type,
+                max_combo, min_bp, play_option, arrange_1p, arrange_2p, double_option,
+                play_seed, fetched_at
+            ) SELECT provider, rival_id, body, chart_sha256, ln_mode, ex_score, clear_type,
+                max_combo, min_bp, play_option, arrange_1p, arrange_2p, double_option,
+                play_seed, fetched_at FROM ir_rival_scores_v7;",
+            "DROP TABLE ir_rival_scores_v7;",
+        ],
+    },
 ];

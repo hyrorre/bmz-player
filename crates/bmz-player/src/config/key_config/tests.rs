@@ -81,11 +81,7 @@ fn action_groups_keep_screen_order_and_play_visual_shortcuts() {
             InputActionConfig::SelectDifficultyFilter,
             InputActionConfig::SelectOpenFolder,
             InputActionConfig::SelectReload,
-            InputActionConfig::SelectFavoriteSong,
-            InputActionConfig::SelectFavoriteChart,
             InputActionConfig::SelectAutoplayFolder,
-            InputActionConfig::SelectOpenIr,
-            InputActionConfig::Screenshot,
         ]
     );
     assert_eq!(PLAY_ACTIONS.len(), 7);
@@ -94,6 +90,31 @@ fn action_groups_keep_screen_order_and_play_visual_shortcuts() {
         key_binding_targets_for_group(KeyBindingGroup::Result, KeyBindingSlot::KeyboardPrimary)
             .is_empty()
     );
+}
+
+#[test]
+fn common_shortcuts_keep_their_existing_controller_slots_and_conflict_scopes() {
+    let mut profile = ProfileConfig::new_default("default", "Default", 0);
+    for slot in [KeyBindingSlot::Controller1P, KeyBindingSlot::Controller2P] {
+        assert_eq!(
+            common_key_binding_targets(slot),
+            E_ACTIONS.iter().map(|&action| action_target(action, slot)).collect::<Vec<_>>()
+        );
+        assert!(key_binding_targets_for_group(KeyBindingGroup::Select, slot).is_empty());
+    }
+
+    let slot = KeyBindingSlot::KeyboardPrimary;
+    let open_ir = action_target(InputActionConfig::SelectOpenIr, slot);
+    apply_play_binding(&mut profile.input, KeyMode::K7, open_ir, "3").unwrap();
+    let conflict = key_binding_conflict_description(&profile, KeyMode::K7, open_ir).unwrap();
+    assert!(conflict.contains("LN MODE"));
+
+    let play_offset = action_target(InputActionConfig::PlayVisualOffsetUp, slot);
+    assert!(key_binding_conflict_description(&profile, KeyMode::K7, play_offset).is_none());
+    let screenshot = action_target(InputActionConfig::Screenshot, slot);
+    apply_play_binding(&mut profile.input, KeyMode::K7, screenshot, "3").unwrap();
+    let conflict = key_binding_conflict_description(&profile, KeyMode::K7, play_offset).unwrap();
+    assert!(conflict.contains("SCREENSHOT"));
 }
 
 #[test]

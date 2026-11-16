@@ -367,6 +367,7 @@ pub(super) struct AppAudioRuntimeState {
     /// 構築されるが id_map が空なので各 play/stop は no-op になる。
     pub(super) system_sound: Option<crate::system_sound_manager::SystemSoundManager>,
     pub(super) select_enter_pending: bool,
+    pub(super) select_bgm_pending: bool,
     /// decode / loudness解析中のシステム音セット。重いファイルI/Oをapp threadから外す。
     pub(super) pending_system_sound: Option<PendingSystemSoundLoad>,
     /// 適用済みセットを対象にする正規化解析。セット差し替えworkerと並行して保持する。

@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::profile_config::SongPreviewMode;
 
 impl WinitApp {
     pub(super) fn poll_select_asset_loads(&mut self) {
@@ -10,14 +11,8 @@ impl WinitApp {
             }
         });
         self.select.select_assets.update_source(folder, Instant::now());
-        let (image_uploads, previews) = self.select.select_assets.poll_loads();
-        for upload in image_uploads {
+        for upload in self.select.select_assets.poll_loads() {
             self.upload_select_meta_image(upload.slot, upload.image);
-        }
-        for prepared in previews {
-            if self.play_select_preview_sample(prepared, 0.0) {
-                self.apply_select_preview_audio_mix();
-            }
         }
     }
 
@@ -88,24 +83,39 @@ impl WinitApp {
             self.select.select_bar_started_at.elapsed() >= SELECT_PREVIEW_START_DELAY,
             &self.boot.app_paths.library_db,
         );
+        let mode = self.boot.profile_config.audio_mix.song_preview_mode;
+        if mode == SongPreviewMode::Off {
+            return;
+        }
+        let chart_id = self
+            .selected_chart_row()
+            .and_then(|row| row.chart.as_ref())
+            .map(|chart| chart.chart_id);
+        let selection_changed = self
+            .select
+            .select_assets
+            .update_preview_selection(self.select.selection_generation, chart_id);
+        let restart = selection_changed && mode == SongPreviewMode::Once;
         if self.selected_chart_needs_generated_preview_distribution() {
             self.ensure_visible_select_chart_distributions(SELECT_VISIBLE_ROWS);
         }
         let selected_cache_key = self.selected_select_preview_cache_key();
         let cache_key = select_preview_key_after_delay(
             selected_cache_key,
-            self.select.select_assets.preview_source(),
+            if restart { None } else { self.select.select_assets.preview_source() },
             self.select.select_bar_started_at.elapsed(),
             SELECT_PREVIEW_START_DELAY,
         );
-        match self.select.select_assets.sync_preview(cache_key, Instant::now()) {
-            SelectPreviewSyncAction::None => {}
-            SelectPreviewSyncAction::Play(prepared) => {
-                if self.play_select_preview_sample(prepared, 0.0) {
-                    self.apply_select_preview_audio_mix();
-                }
-            }
-            SelectPreviewSyncAction::ApplyMix => self.apply_select_preview_audio_mix(),
+        let now = Instant::now();
+        if let Some(prepared) = self.select.select_assets.sync_preview(cache_key, restart, now)
+            && self.select.select_assets.play_preview(
+                prepared,
+                0.0,
+                mode == SongPreviewMode::Loop,
+                now,
+            )
+        {
+            self.start_audio_output_stream();
         }
     }
 
@@ -189,24 +199,11 @@ impl WinitApp {
         volume.clamp(0.0, 1.0)
     }
 
-    pub(super) fn play_select_preview_sample(
-        &mut self,
-        prepared: PreparedSelectPreview,
-        volume_factor: f32,
-    ) -> bool {
-        let volume = self.select_preview_volume_for_gain(prepared.normalization_gain)
-            * volume_factor.clamp(0.0, 1.0);
-        let loaded = self.select.select_assets.play_preview(prepared, volume, Instant::now());
-        if loaded {
-            self.start_audio_output_stream();
-        }
-        loaded
-    }
-
     pub(super) fn update_select_preview_fade(&mut self) {
         let now = Instant::now();
         self.select.select_assets.advance_preview_fade(now);
         self.apply_select_preview_audio_mix();
+        self.play_pending_select_bgm();
     }
 
     pub(super) fn apply_select_preview_audio_mix(&self) {
