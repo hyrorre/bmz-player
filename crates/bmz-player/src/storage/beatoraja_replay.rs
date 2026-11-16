@@ -9,6 +9,7 @@ use bmz_core::input::{InputDeviceKind, InputKind, ScratchDirection};
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::replay::ReplayEvent;
 use bmz_core::time::TimeUs;
+use bmz_gameplay::judge::model::JudgeAlgorithm;
 use flate2::read::GzDecoder;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -57,6 +58,27 @@ struct BeatorajaReplayData {
     randomoption2seed: i64,
     #[serde(default)]
     doubleoption: i64,
+    #[serde(default)]
+    config: Option<BeatorajaPlayConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BeatorajaPlayConfig {
+    // libGDX omits fields with their default values, including Combo.
+    #[serde(default)]
+    judgetype: Option<String>,
+}
+
+impl BeatorajaPlayConfig {
+    fn judge_algorithm(&self) -> Option<JudgeAlgorithm> {
+        match self.judgetype.as_deref() {
+            None | Some("Combo") => Some(JudgeAlgorithm::Combo),
+            Some("Duration") => Some(JudgeAlgorithm::Duration),
+            Some("Lowest") => Some(JudgeAlgorithm::Lowest),
+            Some("Score") => Some(JudgeAlgorithm::Score),
+            Some(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -74,7 +96,7 @@ struct LegacyKeyInput {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum BeatorajaReplayDocumentData {
-    Single(BeatorajaReplayData),
+    Single(Box<BeatorajaReplayData>),
     Course(Vec<BeatorajaReplayData>),
 }
 
@@ -152,7 +174,7 @@ pub fn decode_beatoraja_replay_document(reader: impl Read) -> Result<BeatorajaRe
 
     match document {
         BeatorajaReplayDocumentData::Single(data) => {
-            Ok(BeatorajaReplayDocument::Single(Box::new(decode_replay_data(data)?)))
+            Ok(BeatorajaReplayDocument::Single(Box::new(decode_replay_data(*data)?)))
         }
         BeatorajaReplayDocumentData::Course(stages) => Ok(BeatorajaReplayDocument::Course(
             stages.into_iter().map(decode_replay_data).collect::<Result<Vec<_>>>()?,
@@ -233,7 +255,7 @@ impl BeatorajaReplay {
         )?;
         let random_seed = pack_random_seed(arrange_seed, arrange_seed_2p)?;
 
-        Ok(ReplayFile::new_with_policy(
+        let mut file = ReplayFile::new_with_policy(
             chart_sha256,
             conversion.ln_policy,
             double_option.score_bucket(),
@@ -251,7 +273,11 @@ impl BeatorajaReplay {
             double_option,
             gauge_type,
             conversion.h_random_threshold_ms,
-        ))
+        );
+        file.judge_algorithm =
+            self.data.config.as_ref().and_then(BeatorajaPlayConfig::judge_algorithm);
+        file.input_excludes_start_margin = true;
+        Ok(file)
     }
 }
 
@@ -665,6 +691,24 @@ mod tests {
         assert_eq!(converted.events[0].device_kind, InputDeviceKind::Controller);
         assert_eq!(converted.events[1].kind, InputKind::Release);
         assert_eq!(converted.effective_s_random_scheme().unwrap(), SRandomScheme::Legacy40MsV1);
+        assert!(converted.input_excludes_start_margin);
+        assert_eq!(converted.judge_algorithm, None);
+    }
+
+    #[test]
+    fn judge_algorithm_uses_recorded_judgetype_and_libgdx_default() {
+        for (config, expected) in [
+            (json!({}), Some(JudgeAlgorithm::Combo)),
+            (json!({"judgetype": "Duration"}), Some(JudgeAlgorithm::Duration)),
+            (json!({"judgetype": "Lowest"}), Some(JudgeAlgorithm::Lowest)),
+            (json!({"judgetype": "Score"}), Some(JudgeAlgorithm::Score)),
+            (json!({"judgetype": "Unknown"}), None),
+        ] {
+            let mut value = base_json();
+            value["config"] = config;
+            let converted = decode_json(value).to_replay_file(conversion(KeyMode::K7)).unwrap();
+            assert_eq!(converted.judge_algorithm, expected);
+        }
     }
 
     #[test]

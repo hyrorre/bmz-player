@@ -4,7 +4,7 @@ use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::Lane;
 use bmz_core::time::{ChartTick, TimeUs};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum JudgeAlgorithm {
     #[default]
     Combo,

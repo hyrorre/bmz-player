@@ -46,6 +46,8 @@ pub fn apply_fixed_start_margin(chart: &mut PlayableChart, margin: TimeUs) {
     shift_chart(chart, margin_ticks, margin_us);
     ensure_leading_bar_line(chart);
     chart.end_time = TimeUs(chart.end_time.0.saturating_add(margin_us));
+    chart.metadata.start_note_margin.0 =
+        chart.metadata.start_note_margin.0.saturating_add(margin_us);
 }
 
 fn first_trigger_note_time_us(chart: &PlayableChart) -> Option<i64> {

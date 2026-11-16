@@ -2,6 +2,8 @@ use bmz_core::input::InputEvent;
 use bmz_core::replay::ReplayEvent;
 use bmz_core::time::TimeUs;
 
+use crate::judge::model::JudgeAlgorithm;
+
 #[derive(Debug, Clone, Default)]
 pub struct ReplayRecorder {
     pub events: Vec<ReplayEvent>,
@@ -27,6 +29,9 @@ pub struct ReplayPlayer {
     pub kaleid: Option<bmz_chart::kaleid::KaleidPlayEvidence>,
     pub branch_decisions: Option<Vec<bmz_core::replay::BranchDecision>>,
     pub events: Vec<ReplayEvent>,
+    pub judge_algorithm: Option<JudgeAlgorithm>,
+    /// The source recorded input relative to the chart before the start-note margin.
+    pub input_excludes_start_margin: bool,
     pub next_index: usize,
     /// Runtime-only chart-time cursor of the next tick to process; never
     /// serialized into the replay file.
@@ -53,6 +58,15 @@ impl ReplayPlayer {
 
     pub fn new(events: Vec<ReplayEvent>) -> Self {
         Self { events, ..Self::default() }
+    }
+
+    pub fn apply_chart_start_margin(&mut self, margin: TimeUs) {
+        if self.input_excludes_start_margin {
+            for event in &mut self.events {
+                event.time.0 = event.time.0.saturating_add(margin.0);
+            }
+            self.input_excludes_start_margin = false;
+        }
     }
     pub(crate) fn complete_scoring_tick(&mut self, time: TimeUs) {
         self.next_scoring_time = Some(TimeUs(time.0.saturating_add(REPLAY_SCORING_STEP_US)));
@@ -168,8 +182,7 @@ mod tests {
                     scratch_direction: None,
                 },
             ],
-            next_index: 0,
-            next_scoring_time: None,
+            ..Default::default()
         };
 
         player.skip_before(TimeUs(2));

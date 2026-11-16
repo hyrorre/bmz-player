@@ -2,6 +2,7 @@ use anyhow::Result;
 use bmz_core::clear::ClearType;
 use bmz_core::input::{InputDeviceKind, InputKind};
 use bmz_core::replay::ReplayEvent;
+use bmz_gameplay::judge::model::JudgeAlgorithm;
 use bmz_gameplay::result::PlayResult;
 
 use crate::config::profile_config::{ReplayConfig, ReplaySlotRule};
@@ -43,6 +44,7 @@ pub struct StorePlayResultRequest {
     pub rule_mode: String,
     pub assist_mask: u32,
     pub replay_events: Vec<ReplayEvent>,
+    pub judge_algorithm: JudgeAlgorithm,
     pub branch_decisions: Option<Vec<bmz_core::replay::BranchDecision>>,
     pub kaleid: Option<bmz_chart::kaleid::KaleidPlayEvidence>,
     pub arrange: ArrangeOption,
@@ -133,7 +135,7 @@ pub fn store_play_result(
     {
         let file_name = replay_file_name(result.chart_sha256, request.played_at);
         let path = profile_paths.replay_dir.join(&file_name);
-        let replay = ReplayFile::new_with_policy(
+        let mut replay = ReplayFile::new_with_policy(
             result.chart_sha256,
             request.ln_policy,
             request.double_option,
@@ -156,6 +158,7 @@ pub fn store_play_result(
             request.h_random_threshold_ms,
         )
         .with_freq_semitones(request.freq_semitones);
+        replay.judge_algorithm = Some(request.judge_algorithm);
         let hash = save_replay_with_hash(&path, &replay)?;
         (format!("replay/{file_name}"), Some(hash))
     } else {
@@ -219,7 +222,7 @@ pub fn store_play_result(
                 slot,
             );
             let path = profile_paths.replay_dir.join(&file_name);
-            let replay = ReplayFile::new_with_policy(
+            let mut replay = ReplayFile::new_with_policy(
                 result.chart_sha256,
                 request.ln_policy,
                 request.double_option,
@@ -246,6 +249,7 @@ pub fn store_play_result(
                 request.h_random_threshold_ms,
             )
             .with_freq_semitones(request.freq_semitones);
+            replay.judge_algorithm = Some(request.judge_algorithm);
             save_replay(&path, &replay)?;
             let rel_path = format!("replay/{file_name}");
             score_db.upsert_replay_slot(&ReplaySlotRecord {

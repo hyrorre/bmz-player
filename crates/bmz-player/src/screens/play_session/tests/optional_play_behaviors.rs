@@ -52,13 +52,7 @@ fn optional_play_behaviors_reach_session_without_changing_score_chart_or_practic
                             SessionMode::Normal
                         },
                         autoplay,
-                        replay_player: replay.then(|| ReplayPlayer {
-                            kaleid: None,
-                            branch_decisions: None,
-                            events: Vec::new(),
-                            next_index: 0,
-                            next_scoring_time: None,
-                        }),
+                        replay_player: replay.then(ReplayPlayer::default),
                         initial_gauge_value: Some(50.0),
                         ..Default::default()
                     };

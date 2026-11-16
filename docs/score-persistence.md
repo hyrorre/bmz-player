@@ -153,6 +153,16 @@ H-RANDOM / ALL-SCRの鍵盤は、同じレーンの直前ノーツから閾値�
 beatorajaのreplay取込は`config_player.json`の`hranThresholdBPM`から閾値を求め、
 見つからなければ125msを記録します。
 
+### 判定アルゴリズムと入力時刻
+
+BMZで保存するリプレイに、プレイ時の判定アルゴリズムを記録します。beatorajaからの取込では
+`.brd`の`config.judgetype`を記録し、`config`内で省略された場合はbeatoraja既定の`Combo`を使います。
+`config`がない場合や未対応の値の場合は、再生時のプロフィール設定を使います。
+
+beatorajaの入力時刻は先頭ノーツを1秒まで繰り下げる余白を除いて記録されています。
+インポート済みリプレイの再生・動画出力では、再生対象の譜面に適用した余白を入力時刻にも足します。
+修正前に取り込んだリプレイは、元の`.brd`を再インポートすると更新されます。
+
 ## Key mode 変換
 
 BMZは`SpToDp`と`SevenToSix`を`score_save_disabled`とし、ランプ・回数を含めて

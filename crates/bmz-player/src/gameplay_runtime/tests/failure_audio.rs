@@ -89,8 +89,7 @@ fn optional_play_behaviors_missed_keysound_reaches_audio_in_normal_and_replay() 
                     kaleid: None,
                     branch_decisions: None,
                     events: Vec::new(),
-                    next_index: 0,
-                    next_scoring_time: None,
+                    ..Default::default()
                 });
             }
             let mut processor = audio.processor();
@@ -129,8 +128,7 @@ fn optional_play_behaviors_hcn_miss_plays_then_mutes_and_resumes_on_press() {
                         device_kind: bmz_core::input::InputDeviceKind::Keyboard,
                         scratch_direction: None,
                     }],
-                    next_index: 0,
-                    next_scoring_time: None,
+                    ..Default::default()
                 });
             }
             let mut processor = audio.processor();
@@ -373,8 +371,7 @@ fn replay_gauge_failure_stops_audio_and_autoplay_completion_keeps_tails() {
                 kaleid: None,
                 branch_decisions: None,
                 events: Vec::new(),
-                next_index: 0,
-                next_scoring_time: None,
+                ..Default::default()
             });
             runtime.session.gauge = GaugeState::new(GaugeType::Hard, 160.0, 8);
             runtime.session.gauge.set_initial_value(0.1);

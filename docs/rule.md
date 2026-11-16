@@ -226,6 +226,9 @@ BMZの実装でもDX modeの`judge_percent_at_time`は常に100%を返し、
 `Duration`は時間差最小、`Lowest`は先に見つかったノーツ優先、`Combo`はcombo継続寄り、
 `Score`はscore寄りの比較を行います。BMZではすべてのrule modeで同じ設定値を使います。
 
+リプレイに判定アルゴリズムの記録があれば、再生・動画出力・G-BATTLEでその記録を使います。
+記録がなければプロフィールの設定を使います。
+
 ## MultiBad
 
 LR2oraja / DX modeでは、押下時に選ばれたノーツ周辺のBAD範囲ノーツへ追加BADを出します。

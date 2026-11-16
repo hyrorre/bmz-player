@@ -29,6 +29,8 @@ use super::score_db::{
 const DEFAULT_BEATORAJA_H_RANDOM_THRESHOLD_MS: u32 =
     crate::screens::play_session::DEFAULT_H_RANDOM_THRESHOLD_MS;
 const REPLAY_IMPORT_DB_BATCH_SIZE: usize = 256;
+// Include the conversion revision so reimporting the same BRD upgrades old output files.
+const REPLAY_IMPORT_CONVERSION: &str = "beatoraja-replay-v2";
 
 #[derive(Debug, Clone)]
 pub struct ImportBeatorajaReplaysRequest {
@@ -116,7 +118,7 @@ pub struct ReplayImportProgress {
 enum ImportOneOutcome {
     Imported { replaced: bool, record: ReplaySlotRecord },
     ImportedCourse { replaced: bool },
-    Unchanged { fingerprint_backfill: Option<ReplaySlotRecord> },
+    Unchanged,
     MissingChart(String),
     ProtectedSlot(String),
     EmptyInput(String),
@@ -195,12 +197,7 @@ pub fn import_beatoraja_replays_with_progress(
                 report.course_imported += 1;
                 report.replaced += usize::from(replaced);
             }
-            Ok(ImportOneOutcome::Unchanged { fingerprint_backfill }) => {
-                report.unchanged += 1;
-                if let Some(record) = fingerprint_backfill {
-                    pending_records.push(record);
-                }
-            }
+            Ok(ImportOneOutcome::Unchanged) => report.unchanged += 1,
             Ok(ImportOneOutcome::MissingChart(message)) => {
                 report.missing_chart += 1;
                 report.issues.push(ReplayImportIssue {
@@ -298,6 +295,7 @@ fn import_one(
 ) -> Result<ImportOneOutcome> {
     let (document, source_fingerprint) =
         load_beatoraja_replay_document_with_fingerprint(source_path)?;
+    let source_fingerprint = format!("{REPLAY_IMPORT_CONVERSION}:{source_fingerprint}");
     let replay = match document {
         BeatorajaReplayDocument::Single(replay) => *replay,
         BeatorajaReplayDocument::Course(stages) => {
@@ -375,21 +373,10 @@ fn import_one(
     let source_path_text = source_path.to_string_lossy().into_owned();
     if let Some(previous) = previous.as_ref()
         && previous.source_kind == ScoreSourceKind::Beatoraja
+        && previous.source_fingerprint == source_fingerprint
         && profile_paths.root_dir.join(&previous.replay_path).is_file()
     {
-        let fingerprint_matches = !previous.source_fingerprint.is_empty()
-            && previous.source_fingerprint == source_fingerprint;
-        let legacy_record_matches = previous.source_fingerprint.is_empty()
-            && previous.source_path == source_path_text
-            && previous.played_at == converted.played_at;
-        if fingerprint_matches || legacy_record_matches {
-            let fingerprint_backfill = legacy_record_matches.then(|| {
-                let mut record = previous.clone();
-                record.source_fingerprint = source_fingerprint.clone();
-                record
-            });
-            return Ok(ImportOneOutcome::Unchanged { fingerprint_backfill });
-        }
+        return Ok(ImportOneOutcome::Unchanged);
     }
 
     save_replay_for_import(&destination, &converted)?;
@@ -564,7 +551,7 @@ fn import_course_replay(
             .iter()
             .all(|replay| profile_paths.root_dir.join(&replay.replay_path).is_file());
         if files_exist {
-            return Ok(ImportOneOutcome::Unchanged { fingerprint_backfill: None });
+            return Ok(ImportOneOutcome::Unchanged);
         }
     }
 
@@ -973,8 +960,10 @@ mod tests {
         assert_eq!(slot.ex_score, None);
         assert_eq!(slot.source_path, source.to_string_lossy());
         assert!(!slot.source_fingerprint.is_empty());
-        let converted = load_replay(&paths.root_dir.join(slot.replay_path)).unwrap();
+        let replay_path = paths.root_dir.join(slot.replay_path);
+        let mut converted = load_replay(&replay_path).unwrap();
         assert_eq!(converted.h_random_threshold_ms, Some(150));
+        assert!(converted.input_excludes_start_margin);
 
         let repeated = import_beatoraja_replays(
             &library_db,
@@ -987,17 +976,21 @@ mod tests {
         assert_eq!(repeated.unchanged, 1);
 
         let mut legacy_slot = score_db.replay_slot(key, 0).unwrap().unwrap();
-        legacy_slot.source_fingerprint.clear();
+        legacy_slot.source_fingerprint =
+            legacy_slot.source_fingerprint.split_once(':').unwrap().1.to_string();
         score_db.upsert_replay_slot(&legacy_slot).unwrap();
-        let backfilled = import_beatoraja_replays(
+        converted.input_excludes_start_margin = false;
+        save_replay_for_import(&replay_path, &converted).unwrap();
+        let refreshed = import_beatoraja_replays(
             &library_db,
             &mut score_db,
             &paths,
             &ImportBeatorajaReplaysRequest::new(&player),
         )
         .unwrap();
-        assert_eq!(backfilled.unchanged, 1);
-        assert!(!score_db.replay_slot(key, 0).unwrap().unwrap().source_fingerprint.is_empty());
+        assert_eq!(refreshed.imported, 1);
+        assert_eq!(refreshed.replaced, 1);
+        assert!(load_replay(&replay_path).unwrap().input_excludes_start_margin);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -1232,7 +1225,8 @@ mod tests {
         );
         let replays = score_db.list_course_replays(source_row.course_score_id).unwrap();
         assert_eq!(replays.len(), 1);
-        assert!(paths.root_dir.join(&replays[0].replay_path).is_file());
+        let stage = load_replay(&paths.root_dir.join(&replays[0].replay_path)).unwrap();
+        assert!(stage.input_excludes_start_margin);
 
         let repeated = import_beatoraja_replays(
             &library_db,

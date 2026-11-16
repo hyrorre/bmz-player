@@ -148,6 +148,7 @@ fn isolate_hln_sounds(chart: &mut PlayableChart, starts: &LongNoteStarts) {
 pub(super) fn normalize_metadata(input: &IntermediateMetadata) -> ChartMetadata {
     ChartMetadata {
         kaleid: input.kaleid.clone(),
+        start_note_margin: TimeUs(0),
         free_zones: Vec::new(),
         isolated_sound_sources: Default::default(),
         conditional: input.conditional.clone(),
