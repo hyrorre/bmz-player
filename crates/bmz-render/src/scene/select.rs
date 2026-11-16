@@ -212,10 +212,12 @@ impl Lr2SkinSettingsSnapshot {
     }
 }
 
-/// 選曲カーソル譜面に対する IR ライバル (最上位 1 名) のベストスコア。
+/// 選曲カーソル譜面に対するライバルのベストスコア。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectRivalSnapshot {
     pub display_name: String,
+    /// falseの場合はランプのみ。EX・BP・コンボ・判定の数値refを表示しない。
+    pub numeric_score_available: bool,
     pub ex_score: u32,
     /// beatoraja ClearType index (0=NO PLAY .. 10=MAX)。
     pub clear_index: i64,

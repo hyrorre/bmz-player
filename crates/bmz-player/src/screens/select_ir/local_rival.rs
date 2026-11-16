@@ -160,6 +160,7 @@ impl SelectIrRanking {
             let score = self.local_rival.score(key)?;
             return Some(SelectRivalSnapshot {
                 display_name: name.to_string(),
+                numeric_score_available: score.numeric_score_available,
                 ex_score: score.ex_score,
                 clear_index: i64::from(bmz_core::clear::ClearType::rank_from_label(
                     &score.clear_type,
@@ -273,8 +274,12 @@ mod tests {
         clear_only.chart_sha256 = [8; 32];
         clear_only.clear_type = ClearType::AssistEasy;
         db.update_score_clear_only(&clear_only).unwrap();
+        let mut numeric_zero =
+            record(LnScorePolicy::AutoLn, DoubleOptionScoreBucket::Off, RuleMode::Beatoraja, 0);
+        numeric_zero.chart_sha256 = [9; 32];
+        db.insert_score(&numeric_zero).unwrap();
         let before = db.all_best_scores().unwrap();
-        assert_eq!(before.len(), 5);
+        assert_eq!(before.len(), 6);
         let readonly = ScoreDatabase::open_read_only(&path).unwrap();
         assert!(
             readonly.conn().execute_batch("CREATE TABLE must_not_write (value INTEGER)").is_err()
@@ -283,7 +288,7 @@ mod tests {
         let mut ranking = SelectIrRanking::default();
         ranking.local_rival.update(Some(target.clone()));
         wait_until(&mut ranking.local_rival, &target, |state| {
-            state.scores.len() == 5 || state.error.is_some()
+            state.scores.len() == 6 || state.error.is_some()
         });
         assert!(ranking.local_rival.error.is_none());
         assert_eq!(ranking.active_rival_display_name(), Some("Past self"));
@@ -295,6 +300,7 @@ mod tests {
                 score.rule_mode,
             );
             let snapshot = ranking.rival_snapshot_for(key, 0).unwrap();
+            assert_eq!(snapshot.numeric_score_available, score.numeric_score_available);
             assert_eq!(snapshot.ex_score, score.ex_score);
             if score.chart_sha256 == [8; 32] {
                 assert_eq!(snapshot.clear_index, ClearType::AssistEasy as i64);
