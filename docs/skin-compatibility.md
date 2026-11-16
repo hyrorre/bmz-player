@@ -132,6 +132,7 @@ Resultのお気に入りは、単曲・コース曲間で`act = 89 / 90`とimage
 | songlistの`graph` | フォルダ行のランプ分布に加え、LR2oraja Endless Dreamと同様に譜面ダウンロード中の曲バーへ進捗を描きます。[描画](../crates/bmz-render/src/skin/document_render/select/graph.rs)、[仕様](chart-downloads.md#進捗と操作) |
 | Playターゲットスコア | 数値ref `121/151`は最終値、`153`は進行値との差分です。グラフ`114`は進行値、`115`は最終値を最大EX SCOREに対する割合で返します。value / text / Luaの共通処理で解決します。[仕様](skin.md#play-target-score-refs)、[回帰テスト](../crates/bmz-render/src/skin/tests/graphs_more.rs) |
 | Mine sprite | JSON / Luaの`note.mine`を使い、指定がない場合はデフォルトtextureへfallbackします。[note描画](../crates/bmz-render/src/skin/document_render/play/note.rs)、[plan](../crates/bmz-render/src/plan/play/document.rs) |
+| Selectの`judgegraph`背景 | type 0の背景を密度10刻みの帯で塗り、ピークに応じた縦軸で拡縮します。Luxe Flat等の標準描画へ適用し、`backTexOff=1`では非表示です。[仕様](skin.md#selectのノート分布グラフ)、[回帰テスト](../crates/bmz-render/src/skin/state_values/note_graph.rs) |
 | Playの`judgegraph` | ノート種別・判定・FAST/SLOWの積み上げ、現在位置の白線、`delay`に対応します。判定は最短750 ms間隔で更新します。[仕様](skin.md#playのノート分布グラフ) |
 | Playの`hiterrorvisualizer` | 内部画像の線幅・タイミング位置をdestinationへ拡縮し、FASTを左、SLOWを右に描きます。履歴の減衰・判定色・POOR透過・中央線・EMAの線／三角に対応します。EMAだけの設定も表示します。[仕様](skin.md#playのヒットエラービジュアライザー)、[描画テスト](../crates/bmz-render/src/skin/tests/hit_error.rs)、[実スキン・GPUテスト](../crates/bmz-player/src/skin_loader/tests/lua/hit_error.rs) |
 | PMS見逃しノーツ | `note.dst2` / `DST_NOTE2`による判定ライン上の待機・落下・消滅と、処理済みノーツの即時非表示に対応します。キーモードによらず、`dst2`を持つスキンに適用します。[仕様](skin.md#playの見逃しノーツと判定領域)、[描画テスト](../crates/bmz-render/src/skin/tests/play/cases_04.rs)、[snapshotテスト](../crates/bmz-player/src/screens/play_snapshot/tests/cases_01.rs) |

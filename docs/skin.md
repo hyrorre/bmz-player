@@ -867,6 +867,14 @@ JSON / Luaの`hiterrorvisualizer`は、直近100件のPGREAT / GREAT / GOOD / BA
 実スキンの配置とGPU上の影響範囲の回帰テストは
 [`hit_error.rs`](../crates/bmz-player/src/skin_loader/tests/lua/hit_error.rs)を参照してください。
 
+## Selectのノート分布グラフ
+
+Selectの`judgegraph`（type 0、`backTexOff=0`）は、密度10刻みの帯で背景を塗ります。
+密度0〜10は黒、10以上は`RGB=(0.007×密度, 0.007×密度, 0)`です。
+縦軸は分布の最大値に応じて20〜100へ拡大し、各帯の高さも同じ軸で拡縮します。
+Luxe Flat等が使う標準描画であり、スキン側で密度別の背景を定義する必要はありません。
+`backTexOff=1`では帯と時間の補助線を描きません。
+
 ## Playのノート分布グラフ
 
 Playの`judgegraph`は、beatorajaの`SkinNoteDistributionGraph`と同じく1秒ごとのbucketを積み上げます。
