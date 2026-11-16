@@ -328,6 +328,7 @@ impl SelectIrRanking {
         let score = self.active_rival_score(chart_sha256, ln_mode, ln_policy, double_option)?;
         Some(SelectRivalSnapshot {
             display_name: self.active_rival.as_ref()?.display_name.clone(),
+            numeric_score_available: true,
             ex_score: score.ex_score,
             clear_index: rival_clear_index(score.clear_type),
             max_combo: score.max_combo,

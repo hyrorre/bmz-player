@@ -63,6 +63,7 @@ fn mz_battle_info_switches_all_three_bodies_and_keeps_player_options_separate() 
         rival_selected: true,
         rival: Some(SelectRivalSnapshot {
             display_name: "rival".into(),
+            numeric_score_available: true,
             ex_score: 2000,
             clear_index: 7,
             max_combo: 800,

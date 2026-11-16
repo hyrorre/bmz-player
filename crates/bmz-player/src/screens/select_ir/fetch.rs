@@ -231,6 +231,7 @@ pub(super) fn top_rival_snapshot(rivals: &IrRankingResult) -> Option<SelectRival
     let entry = rivals.ranking.entries.first()?;
     Some(SelectRivalSnapshot {
         display_name: entry.player.display_name.clone(),
+        numeric_score_available: true,
         ex_score: entry.score.ex_score,
         clear_index: bmz_core::clear::ClearType::from_label(&entry.score.clear)
             .map_or(0, |clear| clear as i64),

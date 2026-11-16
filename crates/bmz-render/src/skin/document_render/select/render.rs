@@ -470,6 +470,8 @@ macro_rules! skin_document_render_select_render_methods {
             snapshot: &'a SelectSnapshot,
             mut dynamic_timers: Option<&mut DynamicTimerRuntime>,
         ) -> (SkinDrawState, Option<&'a SelectRowSnapshot>) {
+            let numeric_rival =
+                snapshot.rival.as_ref().filter(|rival| rival.numeric_score_available);
             let selected_row =
                 snapshot.rows.iter().find(|row| row.index == snapshot.selected_index);
             let selected_chart_has_long_notes = selected_row
@@ -704,7 +706,7 @@ macro_rules! skin_document_render_select_render_methods {
                 gauge: selected_row.and_then(|row| row.gauge_value).unwrap_or(0.0),
                 gauge_auto_shift: snapshot.gauge_auto_shift != "OFF",
                 ex_score: selected_row.and_then(|row| row.ex_score).unwrap_or(0),
-                target_ex_score: snapshot.rival.as_ref().map(|rival| rival.ex_score),
+                target_ex_score: numeric_rival.map(|rival| rival.ex_score),
                 target_clear_index: snapshot.rival.as_ref().map(|rival| rival.clear_index),
                 in_settings: snapshot.in_settings,
                 settings_editing: snapshot.settings_editing,
@@ -726,11 +728,11 @@ macro_rules! skin_document_render_select_render_methods {
                 mouse_y: mouse_position.map(|position| position.1),
                 ir_ranking: snapshot.ir.clone(),
                 rival_selected: snapshot.rival_selected,
-                rival_ex_score: snapshot.rival.as_ref().map(|rival| i64::from(rival.ex_score)),
-                rival_max_combo: snapshot.rival.as_ref().map(|rival| i64::from(rival.max_combo)),
+                rival_ex_score: numeric_rival.map(|rival| i64::from(rival.ex_score)),
+                rival_max_combo: numeric_rival.map(|rival| i64::from(rival.max_combo)),
                 rival_clear_index: snapshot.rival.as_ref().map(|rival| rival.clear_index),
-                rival_bp: snapshot.rival.as_ref().map(|rival| i64::from(rival.bp)),
-                rival_judge_counts: snapshot.rival.as_ref().and_then(|rival| {
+                rival_bp: numeric_rival.map(|rival| i64::from(rival.bp)),
+                rival_judge_counts: numeric_rival.and_then(|rival| {
                     rival.judge_counts.map(|counts| {
                         [counts.pgreat, counts.great, counts.good, counts.bad, counts.poor]
                     })

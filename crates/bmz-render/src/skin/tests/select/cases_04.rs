@@ -665,6 +665,7 @@ fn select_compare_rival_option_stays_visible_without_chart_score() {
         rows: vec![SelectRowSnapshot { ex_score: Some(1400), ..SelectRowSnapshot::default() }],
         rival: Some(crate::scene::SelectRivalSnapshot {
             display_name: "Rival".to_string(),
+            numeric_score_available: true,
             ex_score: 1500,
             clear_index: 6,
             max_combo: 700,
@@ -772,6 +773,41 @@ fn skin_state_number_maps_select_refs() {
     assert!(skin_state_number(24, &state).is_some_and(|value| (0..=23).contains(&value)));
     assert!(skin_state_number(25, &state).is_some_and(|value| (0..=59).contains(&value)));
     assert!(skin_state_number(26, &state).is_some_and(|value| (0..=59).contains(&value)));
+}
+
+#[test]
+fn clear_only_rival_hides_numeric_refs_but_preserves_the_lamp_and_real_zero_scores() {
+    let document: SkinDocument = serde_json::from_str(r#"{ "type": 5 }"#).unwrap();
+    for available in [false, true] {
+        let snapshot = SelectSnapshot {
+            rival: Some(crate::scene::SelectRivalSnapshot {
+                display_name: "Past self".into(),
+                numeric_score_available: available,
+                ex_score: 0,
+                clear_index: 2,
+                max_combo: 0,
+                bp: 0,
+                judge_counts: Some(crate::scene::SelectRivalJudgeCounts {
+                    pgreat: 0,
+                    great: 0,
+                    good: 0,
+                    bad: 0,
+                    poor: 0,
+                }),
+            }),
+            rival_selected: true,
+            ..Default::default()
+        };
+        let (state, _) = document.select_draw_state(&snapshot, None);
+        for reference in [271, 275, 276] {
+            assert_eq!(skin_state_number(reference, &state), available.then_some(0));
+        }
+        assert_eq!(state.target_ex_score, available.then_some(0));
+        assert_eq!(state.rival_judge_counts, available.then_some([0; 5]));
+        assert_eq!(state.rival_clear_index, Some(2));
+        assert_eq!(state.target_clear_index, Some(2));
+        assert!(state.rival_selected);
+    }
 }
 
 #[test]

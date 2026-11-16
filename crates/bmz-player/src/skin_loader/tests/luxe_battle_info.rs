@@ -19,6 +19,7 @@ fn select_snapshot() -> SelectSnapshot {
         rival_selected: true,
         rival: Some(SelectRivalSnapshot {
             display_name: "rival".into(),
+            numeric_score_available: true,
             ex_score: 2000,
             clear_index: 7,
             max_combo: 800,

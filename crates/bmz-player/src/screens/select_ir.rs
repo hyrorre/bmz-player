@@ -574,6 +574,7 @@ mod tests {
                 self_and_rivals_scroll_offset: 0,
                 rival: Some(SelectRivalSnapshot {
                     display_name: "RivalOne".to_string(),
+                    numeric_score_available: true,
                     ex_score: 1500,
                     clear_index: 6,
                     max_combo: 700,
@@ -800,6 +801,7 @@ mod tests {
                 self_and_rivals_scroll_offset: 0,
                 rival: Some(SelectRivalSnapshot {
                     display_name: "RivalOne".to_string(),
+                    numeric_score_available: true,
                     ex_score: 1500,
                     clear_index: 6,
                     max_combo: 700,
