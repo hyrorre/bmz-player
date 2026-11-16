@@ -728,10 +728,7 @@ impl WinitApp {
         }
     }
 
-    fn update_egui_select_ir(&mut self, scene_kind: AppSceneKind) {
-        if scene_kind != AppSceneKind::Select || self.jobs.profile_change.is_some() {
-            return;
-        }
+    pub(super) fn update_local_rival(&mut self) {
         if let Some(error) = self
             .select
             .select_ir
@@ -739,10 +736,16 @@ impl WinitApp {
         {
             tracing::warn!(%error, "failed to load local rival scores");
             self.show_left_overlay_toast(
-                Localizer::new(self.boot.profile_config.ui.locale())
-                    .text("local-rival-load-failed"),
+                Localizer::new(self.boot.profile_config.ui.locale()).text(error.message_key()),
             );
         }
+    }
+
+    fn update_egui_select_ir(&mut self, scene_kind: AppSceneKind) {
+        if scene_kind != AppSceneKind::Select || self.jobs.profile_change.is_some() {
+            return;
+        }
+        self.update_local_rival();
         let rival_target = crate::screens::select_ir::SelectRivalFetchTarget::from_profile(
             &self.boot.profile_config,
         );

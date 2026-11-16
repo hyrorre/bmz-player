@@ -1073,3 +1073,4 @@ profile-rivals-help = Check other profiles to compare their scores. Their data s
 profile-rivals-active = Active rival
 profile-rivals-none = None
 local-rival-load-failed = Could not load rival scores. Check the selected source profile.
+local-rival-schema-outdated = The source score data needs an update. Launch BMZ Player with that profile once, then press F5 to reload.

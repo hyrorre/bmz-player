@@ -318,6 +318,7 @@ impl Default for SelectIrRanking {
 
 mod fetch;
 mod local_rival;
+pub use local_rival::LocalRivalLoadError;
 mod update;
 mod view;
 
