@@ -1068,3 +1068,4 @@ profile-rivals-help = 勾選要比較成績的其他個人檔案。不會修改�
 profile-rivals-active = 目前對手
 profile-rivals-none = 無
 local-rival-load-failed = 無法讀取對手成績。請檢查所選的來源個人檔案。
+local-rival-schema-outdated = 來源成績資料需要更新。請使用該個人檔案啟動一次BMZ Player，再按F5重新讀取。

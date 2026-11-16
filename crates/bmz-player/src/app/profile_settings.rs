@@ -60,10 +60,7 @@ impl WinitApp {
                 &self.boot.profile_config,
             );
             self.select.select_ir.update_rival(target, &self.boot.profile_paths.root_dir);
-            let _ = self
-                .select
-                .select_ir
-                .update_local_rival(&self.boot.profile_config, &self.boot.app_paths);
+            self.update_local_rival();
         }
         self.renderer.set_default_font_coverage(locale.font_coverage());
         let locale_changed = locale != before.locale;

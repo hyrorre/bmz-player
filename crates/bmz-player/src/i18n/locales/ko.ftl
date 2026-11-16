@@ -1067,3 +1067,4 @@ profile-rivals-help = 점수를 비교할 다른 프로필을 선택합니다. �
 profile-rivals-active = 선택한 라이벌
 profile-rivals-none = 없음
 local-rival-load-failed = 라이벌 점수를 불러오지 못했습니다. 선택한 원본 프로필을 확인해 주세요.
+local-rival-schema-outdated = 원본 점수 데이터를 업데이트해야 합니다. 해당 프로필로 BMZ Player를 한 번 실행한 뒤 F5로 다시 불러와 주세요.

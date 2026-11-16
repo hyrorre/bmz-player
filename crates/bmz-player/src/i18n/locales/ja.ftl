@@ -1067,3 +1067,4 @@ profile-rivals-help = 比較したい別プロファイルにチェックを入�
 profile-rivals-active = 選択中のライバル
 profile-rivals-none = なし
 local-rival-load-failed = ライバルのスコアを読み込めませんでした。参照先のプロファイルを確認してください。
+local-rival-schema-outdated = 参照先のスコアデータが古いため読み込めません。参照先のプロファイルで一度起動して更新し、F5で読み直してください。
