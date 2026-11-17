@@ -638,8 +638,10 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     if let Some(id) = &window_overrides.monitor
                         && id != "primary"
                         && self.window.as_ref().is_some_and(|w| {
-                            !w.available_monitors()
-                                .any(|m| crate::window_config::monitor_config_name(&m) == *id)
+                            !crate::window_config::configured_monitor_exists(
+                                id,
+                                w.available_monitors(),
+                            )
                         })
                     {
                         tracing::error!(monitor = %id, "viewer monitor not found; use monitors list");
@@ -658,11 +660,13 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                         && let Some(window) = self.window.clone()
                     {
                         let video = &self.boot.app_config.video;
-                        let monitor = select_monitor(
+                        let selection = resolve_monitor(
                             &video.monitor_name,
                             window.available_monitors(),
                             window.primary_monitor(),
                         );
+                        selection.log("viewer window options");
+                        let monitor = selection.handle();
                         window.set_fullscreen(fullscreen_from_config(video, monitor.clone()));
                         if matches!(video.mode, WindowMode::Windowed) {
                             if window_overrides.monitor.is_some()
@@ -674,6 +678,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                                 .request_inner_size(PhysicalSize::new(video.width, video.height));
                         }
                         self.ui.applied_window_mode = video.mode.clone();
+                        self.ui.applied_monitor_name = video.monitor_name.clone();
                     }
                     if let Err(error) = self.play_viewer_chart(&path, measure, battle) {
                         tracing::error!(path = %path.display(), measure, battle, %error, "external viewer play request failed");

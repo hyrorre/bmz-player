@@ -183,7 +183,7 @@ use crate::ui::{
     UpdateDialog, UpdateDialogAction,
 };
 use crate::update::{DownloadedUpdate, UpdateAssetKind, UpdateCandidate};
-use crate::window_config::{monitor_config_name, select_monitor};
+use crate::window_config::{describe_monitors, resolve_monitor};
 use bmz_render::skin::{
     DestinationListEntry, SKIN_EVENT_DAILY_STATISTICS_RESET, SKIN_EVENT_IR_SCOPE_GLOBAL,
     SKIN_EVENT_IR_SCOPE_RIVAL, SKIN_EVENT_IR_SCOPE_TOGGLE, SKIN_EVENT_RESULT_PANEL_GRAPH,

@@ -215,6 +215,7 @@ impl WinitApp {
         phase.complete();
         let phase = StartupPhase::begin(startup_started_at, "obs_and_system_sound_catalog");
         let initial_window_mode = boot.app_config.video.mode.clone();
+        let initial_monitor_name = boot.app_config.video.monitor_name.clone();
         let applied_obs_config = boot.app_config.obs.clone();
         let obs_controller = crate::obs::ObsController::spawn(applied_obs_config.clone());
 
@@ -545,6 +546,7 @@ impl WinitApp {
                 idle_inhibitor: None,
                 log_buffer,
                 applied_window_mode: initial_window_mode,
+                applied_monitor_name: initial_monitor_name,
                 exclusive_fullscreen_fallback_active: false,
                 device_events_reconfigure_pending: false,
                 focused: true,

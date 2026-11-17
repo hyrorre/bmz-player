@@ -276,19 +276,22 @@ pub(super) fn build_audio_video_settings_sections(
                     tr!(text, "settings-video-internal-resolution-skin"),
                 );
             });
-            let available_monitors = window.available_monitors().collect::<Vec<_>>();
+            let available_monitors = describe_monitors(window.available_monitors())
+                .into_iter()
+                .map(|monitor| monitor.facts)
+                .collect::<Vec<_>>();
+            let disconnected_summary = monitor_config_summary(&config.video.monitor_name);
             let selected_monitor = if config.video.monitor_name.is_empty() {
                 tr!(text, "settings-video-primary-monitor")
-            } else if available_monitors
-                .iter()
-                .any(|monitor| monitor_config_name(monitor) == config.video.monitor_name)
+            } else if let Some((index, _)) =
+                match_configured_monitor(&config.video.monitor_name, &available_monitors)
             {
-                config.video.monitor_name.clone()
+                available_monitors[index].label()
             } else {
                 tr!(
                     text,
                     "settings-video-monitor-disconnected",
-                    "name" => config.video.monitor_name.as_str()
+                    "name" => disconnected_summary.as_str()
                 )
             };
             egui::ComboBox::new("video_monitor", tr!(text, "settings-video-monitor"))
@@ -300,8 +303,11 @@ pub(super) fn build_audio_video_settings_sections(
                         tr!(text, "settings-video-primary-monitor"),
                     );
                     for monitor in &available_monitors {
-                        let name = monitor_config_name(monitor);
-                        ui.selectable_value(&mut config.video.monitor_name, name.clone(), name);
+                        ui.selectable_value(
+                            &mut config.video.monitor_name,
+                            monitor.config_value(),
+                            monitor.label(),
+                        );
                     }
                 });
             egui::ComboBox::new("video_vsync_mode", tr!(text, "settings-video-vsync-mode"))

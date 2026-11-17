@@ -242,7 +242,9 @@ impl WinitApp {
                 let mut names = vec![String::new()];
                 if let Some(window) = self.window.as_ref() {
                     names.extend(
-                        window.available_monitors().map(|monitor| monitor_config_name(&monitor)),
+                        describe_monitors(window.available_monitors())
+                            .into_iter()
+                            .map(|monitor| monitor.facts.config_value()),
                     );
                 }
                 if !self.boot.app_config.video.monitor_name.is_empty()

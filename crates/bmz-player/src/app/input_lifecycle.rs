@@ -343,11 +343,18 @@ impl WinitApp {
         let window_phase = StartupPhase::optional(startup, "window_setup");
         let phase = StartupPhase::optional(startup, "window_attributes_and_monitors");
         let video = &self.boot.app_config.video;
-        if self.boot.app_config.cli_window_baseline.as_ref().is_some_and(|s| s.0.monitor.is_some())
+        let cli_monitor_override = self
+            .boot
+            .app_config
+            .cli_window_baseline
+            .as_ref()
+            .is_some_and(|s| s.0.monitor.is_some());
+        if cli_monitor_override
             && !video.monitor_name.is_empty()
-            && !event_loop
-                .available_monitors()
-                .any(|m| crate::window_config::monitor_config_name(&m) == video.monitor_name)
+            && !crate::window_config::configured_monitor_exists(
+                &video.monitor_name,
+                event_loop.available_monitors(),
+            )
         {
             self.startup_error =
                 Some(format!("monitor not found: {}; use monitors list", video.monitor_name));
@@ -356,19 +363,34 @@ impl WinitApp {
             return;
         }
         let requested_window_mode = video.mode.clone();
-        let monitor = select_monitor(
+        let selection = resolve_monitor(
             &video.monitor_name,
             event_loop.available_monitors(),
             event_loop.primary_monitor(),
         );
+        selection.log("startup");
+        let monitor = selection.handle();
         let fullscreen = fullscreen_from_config(video, monitor.clone());
         let mut effective_mode = effective_window_mode(&fullscreen);
         let mut attributes = window_attributes_from_config(video).with_fullscreen(fullscreen);
-        if self.boot.app_config.cli_window_baseline.as_ref().is_some_and(|s| s.0.monitor.is_some())
+        if cli_monitor_override
             && matches!(video.mode, WindowMode::Windowed)
             && let Some(monitor) = &monitor
         {
             attributes = attributes.with_position(monitor.position());
+        }
+        // 従来形式などで一致した設定値は、メモリ上だけ新しい保存値へ置き換える。
+        // ファイルへは次回の設定保存で書く。CLI指定中は保存対象が別の値なので触らない。
+        if !cli_monitor_override
+            && let Some(migrated) = selection.migrated_config_value(&video.monitor_name)
+        {
+            tracing::info!(
+                previous = %video.monitor_name,
+                migrated = %migrated,
+                matched = ?selection.matched,
+                "migrated monitor setting to stable identifier"
+            );
+            self.boot.app_config.video.monitor_name = migrated;
         }
         phase.complete();
         let phase = StartupPhase::optional(startup, "winit_create_window");
@@ -481,6 +503,7 @@ impl WinitApp {
                     }
                 }
                 self.ui.applied_window_mode = effective_mode.clone();
+                self.ui.applied_monitor_name = self.boot.app_config.video.monitor_name.clone();
                 self.ui.exclusive_fullscreen_fallback_active = requested_window_mode
                     == WindowMode::ExclusiveFullscreen
                     && effective_mode == WindowMode::BorderlessFullscreen;
