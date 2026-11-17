@@ -702,6 +702,34 @@ impl OutputSample for i32 {
     }
 }
 
+impl OutputSample for ::cpal::I24 {
+    fn from_f32(value: f32) -> Self {
+        // CPAL uses a sign-extended i32 container with 24 significant bits.
+        Self::new((value.clamp(-1.0, 1.0) * 8_388_607.0) as i32)
+            .expect("clamped PCM sample fits in 24 bits")
+    }
+}
+
+#[cfg(test)]
+mod pcm24_tests {
+    use super::OutputSample;
+
+    #[test]
+    fn pcm24_preserves_polarity_and_clips_at_full_scale() {
+        for (input, expected) in [
+            (0.0, 0),
+            (0.5, 4_194_303),
+            (-0.5, -4_194_303),
+            (1.0, 8_388_607),
+            (-1.0, -8_388_607),
+            (2.0, 8_388_607),
+            (-2.0, -8_388_607),
+        ] {
+            assert_eq!(::cpal::I24::from_f32(input).inner(), expected);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
