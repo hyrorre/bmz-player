@@ -35,6 +35,27 @@ fn cli_overrides_reach_game_session_and_auto_scratch() {
 }
 
 #[test]
+fn cli_auto_scratch_does_not_autoplay_a_replay() {
+    let crate::cli::Command::Run(options) =
+        crate::cli::parse_command(["chart.bms", "--auto-scratch", "on"]).unwrap()
+    else {
+        panic!()
+    };
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.set_cli_play(options.play_overrides);
+    let session = build_game_session(
+        Arc::new(chart()),
+        &profile,
+        PlaySessionOptions {
+            replay_player: Some(ReplayPlayer::default()),
+            ..PlaySessionOptions::default()
+        },
+    );
+    // A replay follows its recorded inputs; the CLI override is for live play.
+    assert!(session.autoplay.is_none());
+}
+
+#[test]
 fn profile_auto_scratch_plays_only_scratch_lanes() {
     let profile = ProfileConfig::new_default("default", "Default", 1);
     let options = PlaySessionOptions {

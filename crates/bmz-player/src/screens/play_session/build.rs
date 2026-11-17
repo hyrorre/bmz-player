@@ -330,7 +330,7 @@ pub fn build_game_session_with_input_backend(
         && (session_mode.primary_autoplay() || profile.play.auto_play || options.autoplay);
     // AUTO SCRATCH はリプレイ再生ではキーログと食い違うため掛けない。
     let auto_scratch = options.double_option == DoubleOption::BattleAutoScratch
-        || profile.cli_auto_scratch()
+        || (profile.cli_auto_scratch() && !is_replay)
         || (options.assist.auto_scratch && !is_replay);
     let autoplay = if autoplay_enabled {
         Some(AutoplayController::default())
