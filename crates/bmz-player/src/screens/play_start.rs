@@ -752,13 +752,14 @@ pub fn apply_arrange_override(
     options.bms_switch_choices = Some(arrange.bms_switch_choices.clone());
     options.lr2_seed = arrange.lr2_seed;
     options.mirror_lr2_arrangement = false;
-    // A seeded LR2 play already has the exact side seeds. In mixed DP the saved
-    // lane pattern only describes the fixed side, so applying it would skip S-RANDOM.
-    options.arrange_pattern = if arrange.lr2_seed.is_some() && arrange.seed.is_some() {
-        None
-    } else {
-        arrange.pattern.clone()
-    };
+    // A partial DP pattern would skip the per-note side. Use the applied seeds
+    // for both sides, as for LR2 plays whose layout was converted to side seeds.
+    options.arrange_pattern =
+        if arrange.pattern_is_partial || (arrange.lr2_seed.is_some() && arrange.seed.is_some()) {
+            None
+        } else {
+            arrange.pattern.clone()
+        };
     options.reuse_applied_arrangement = true;
     options.key_mode_conversion = arrange.key_mode_conversion;
     options.seven_to_nine_pattern = arrange.seven_to_nine_pattern;
@@ -825,6 +826,7 @@ mod tests {
             bms_random_choices: vec![2],
             bms_switch_choices: vec![2_000_000_000_000],
             pattern: Some(vec![3, 1, 2, 0]),
+            pattern_is_partial: false,
             key_mode_conversion: KeyModeConversionConfig::SevenToSix,
             seven_to_nine_pattern: SevenToNinePattern::default(),
             seven_to_nine_type: SevenToNineType::default(),

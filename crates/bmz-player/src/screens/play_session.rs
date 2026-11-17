@@ -278,6 +278,8 @@ pub struct AppliedArrange {
     /// BMS `#SWITCH` decisions applied before the arrange modifier.
     pub bms_switch_choices: Vec<u64>,
     pub pattern: Option<Vec<u8>>,
+    /// The lane pattern omits a DP side that was arranged per note.
+    pub(crate) pattern_is_partial: bool,
     /// Key-mode conversion actually applied to the source chart.
     pub key_mode_conversion: KeyModeConversionConfig,
     pub seven_to_nine_pattern: SevenToNinePattern,

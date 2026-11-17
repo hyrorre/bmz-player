@@ -716,6 +716,7 @@ fn finish_session_result_returns_summary() {
         bms_random_choices: vec![1, 2],
         bms_switch_choices: vec![2_000_000_000_000],
         pattern: Some(lane_shuffle_pattern.clone()),
+        pattern_is_partial: false,
         key_mode_conversion: KeyModeConversionConfig::Off,
         seven_to_nine_pattern: Default::default(),
         seven_to_nine_type: Default::default(),

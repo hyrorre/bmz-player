@@ -51,3 +51,11 @@ Windowsで整形、`bmz-player`のcheck・all-targets Clippy・テストが通�
 リザルトとFAILED演出からの同一配置リトライは、初回の自分側の配置を復元する。相手の配置設定は再適用せず、LR2の分岐用seedと確定した両サイドのseedを保持する。DPで固定配置とS-RANDOMなどを併用する場合は、固定側のレーン表だけを当てず、両側を記録済みseedで復元する。
 
 ZIP内の14K譜面を再読み込みするテストで、1Pの反転済みseed `2975`、2PのS-RANDOMを含む全レーンのノーツ配置と分岐選択の一致を確認した。Windowsで整形、`bmz-player`のcheck、all-targets Clippy、テストが通過した。単体テストは3,304件成功、91件ignoredだった。プレイ画面からの操作は未確認。
+
+### beatoraja形式の混在DP
+
+同じZIPテストに、beatoraja形式の対戦相手を `RIVALCHART` で選び、1PをRANDOM（seed `77`）、2PをS-RANDOM（seed `89`）にするケースを追加した。修正前は2Pのレーンで、初回に1ノーツ、リトライ後に9ノーツとなった。
+
+固定側だけを含むレーン表を配置の適用時に識別し、同一配置リトライでは確定済みのseedから両側を再生成する。ZIP再読み込み後の全レーンでノーツのIDと時刻を比較し、分岐選択と配置seedの一致も確認する。
+
+Windowsで整形、`bmz-player`のcheck、all-targets Clippy、テストが通過した。単体テストは3,304件成功、91件ignoredだった。プレイ画面からの操作は未確認。

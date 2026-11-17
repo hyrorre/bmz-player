@@ -99,6 +99,7 @@ pub(super) fn normal_applied_arrange(
         bms_random_choices: Vec::new(),
         bms_switch_choices: Vec::new(),
         pattern: None,
+        pattern_is_partial: false,
         key_mode_conversion: KeyModeConversionConfig::Off,
         seven_to_nine_pattern: SevenToNinePattern::default(),
         seven_to_nine_type: SevenToNineType::default(),
@@ -154,6 +155,7 @@ pub(super) fn apply_arrange_internal(
             bms_random_choices: Vec::new(),
             bms_switch_choices: Vec::new(),
             pattern: Some(perm.to_vec()),
+            pattern_is_partial: false,
             key_mode_conversion: KeyModeConversionConfig::Off,
             seven_to_nine_pattern: SevenToNinePattern::default(),
             seven_to_nine_type: SevenToNineType::default(),
@@ -184,6 +186,7 @@ pub(super) fn apply_arrange_internal(
                 bms_random_choices: Vec::new(),
                 bms_switch_choices: Vec::new(),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
+                pattern_is_partial: false,
                 key_mode_conversion: KeyModeConversionConfig::Off,
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
@@ -209,6 +212,7 @@ pub(super) fn apply_arrange_internal(
                 bms_random_choices: Vec::new(),
                 bms_switch_choices: Vec::new(),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
+                pattern_is_partial: false,
                 key_mode_conversion: KeyModeConversionConfig::Off,
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
@@ -234,6 +238,7 @@ pub(super) fn apply_arrange_internal(
                 bms_random_choices: Vec::new(),
                 bms_switch_choices: Vec::new(),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
+                pattern_is_partial: false,
                 key_mode_conversion: KeyModeConversionConfig::Off,
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
@@ -259,6 +264,7 @@ pub(super) fn apply_arrange_internal(
                 bms_random_choices: Vec::new(),
                 bms_switch_choices: Vec::new(),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
+                pattern_is_partial: false,
                 key_mode_conversion: KeyModeConversionConfig::Off,
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
@@ -284,6 +290,7 @@ pub(super) fn apply_arrange_internal(
                 bms_random_choices: Vec::new(),
                 bms_switch_choices: Vec::new(),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
+                pattern_is_partial: false,
                 key_mode_conversion: KeyModeConversionConfig::Off,
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
@@ -319,6 +326,7 @@ pub(super) fn apply_arrange_internal(
                 bms_random_choices: Vec::new(),
                 bms_switch_choices: Vec::new(),
                 pattern: None,
+                pattern_is_partial: false,
                 key_mode_conversion: KeyModeConversionConfig::Off,
                 seven_to_nine_pattern: SevenToNinePattern::default(),
                 seven_to_nine_type: SevenToNineType::default(),
@@ -390,6 +398,7 @@ pub fn apply_arrange_pair(
             bms_random_choices: Vec::new(),
             bms_switch_choices: Vec::new(),
             pattern: Some(perm.to_vec()),
+            pattern_is_partial: false,
             key_mode_conversion: KeyModeConversionConfig::Off,
             seven_to_nine_pattern: SevenToNinePattern::default(),
             seven_to_nine_type: SevenToNineType::default(),
@@ -398,10 +407,7 @@ pub fn apply_arrange_pair(
         };
     }
 
-    let mut combined_perm: Vec<usize> = (0..LANE_COUNT).collect();
-    let mut has_perm = false;
-
-    if let Some(perm) = apply_arrange_side(
+    let perm_1p = apply_arrange_side(
         chart,
         arrange_1p,
         Some(used_seed),
@@ -409,11 +415,8 @@ pub fn apply_arrange_pair(
         legacy_seed,
         s_random_scheme,
         h_random_threshold_ms,
-    ) {
-        merge_lane_permutation(&mut combined_perm, &perm);
-        has_perm = true;
-    }
-    if let Some(perm) = apply_arrange_side(
+    );
+    let perm_2p = apply_arrange_side(
         chart,
         arrange_2p,
         Some(used_seed_2p),
@@ -421,9 +424,14 @@ pub fn apply_arrange_pair(
         legacy_seed,
         used_s_random_scheme_2p,
         h_random_threshold_ms,
-    ) {
+    );
+    let has_perm = perm_1p.is_some() || perm_2p.is_some();
+    let pattern_is_partial = has_perm
+        && ((perm_1p.is_none() && arrange_1p != ArrangeOption::Normal)
+            || (perm_2p.is_none() && arrange_2p != ArrangeOption::Normal));
+    let mut combined_perm: Vec<usize> = (0..LANE_COUNT).collect();
+    for perm in [perm_1p, perm_2p].into_iter().flatten() {
         merge_lane_permutation(&mut combined_perm, &perm);
-        has_perm = true;
     }
 
     AppliedArrange {
@@ -441,6 +449,7 @@ pub fn apply_arrange_pair(
         bms_random_choices: Vec::new(),
         bms_switch_choices: Vec::new(),
         pattern: has_perm.then(|| combined_perm.iter().map(|&i| i as u8).collect()),
+        pattern_is_partial,
         key_mode_conversion: KeyModeConversionConfig::Off,
         seven_to_nine_pattern: SevenToNinePattern::default(),
         seven_to_nine_type: SevenToNineType::default(),
