@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use everything_ipc::wm::{EverythingClient, FileInfo, RequestFlags};
+use rayon::prelude::*;
 
 use super::discovery::{
     ChartDiscovery, ChartFileEntry, DiscoveredArchive, discover_archive_charts,
@@ -15,6 +16,7 @@ use super::{ScanConfig, ScanDiscoveryBackend, ScanDiscoveryOperation};
 const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 const FILETIME_TICKS_PER_SECOND: u64 = 10_000_000;
 const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
+const ARCHIVE_BATCH_SIZE: usize = 4;
 
 /// Everything found nothing below the root: the root is empty or not indexed. Native
 /// discovery takes over quietly, without reporting Everything as unavailable.
@@ -85,9 +87,7 @@ pub(super) fn discover_chart_files_everything(
     }
 
     let mut entries = Vec::new();
-    let mut archives = Vec::new();
-    let mut issues = Vec::new();
-    let mut complete = true;
+    let mut archive_paths = Vec::new();
     let mut document_folders = HashSet::new();
     let mut verified = HashMap::new();
     for item in results.iter() {
@@ -125,22 +125,7 @@ pub(super) fn discover_chart_files_everything(
             if inside_song_folder(root, &relative_path, true, &mut verified) {
                 continue;
             }
-            match discover_archive_charts(&output_path) {
-                Ok((charts, generation)) => {
-                    entries.extend(charts);
-                    archives.push(DiscoveredArchive { path: output_path, generation });
-                }
-                Err(error) => {
-                    complete &= crate::song_archive::is_unsupported(&error);
-                    record_discovery_issue(
-                        &mut issues,
-                        root,
-                        &output_path,
-                        ScanDiscoveryOperation::ReadArchive,
-                        std::io::Error::other(format!("{error:#}")),
-                    );
-                }
-            }
+            archive_paths.push((entries.len(), output_path));
             continue;
         }
         if !is_chart_file_name(name)
@@ -164,7 +149,18 @@ pub(super) fn discover_chart_files_everything(
         });
     }
 
-    for entry in &mut entries {
+    let mut discovery = ChartDiscovery {
+        entries: Vec::new(),
+        archives: Vec::new(),
+        complete: true,
+        issues: Vec::new(),
+        root_readable: true,
+        backend: ScanDiscoveryBackend::Everything,
+        fallback_reason: None,
+    };
+    add_archive_entries(root, entries, &archive_paths, &mut discovery);
+    let entries = &mut discovery.entries;
+    for entry in entries.iter_mut() {
         entry.has_document |=
             entry.path.parent().is_some_and(|parent| document_folders.contains(parent));
     }
@@ -180,15 +176,48 @@ pub(super) fn discover_chart_files_everything(
         "Everything song discovery query complete"
     );
 
-    Ok(ChartDiscovery {
-        entries,
-        archives,
-        complete,
-        issues,
-        root_readable: true,
-        backend: ScanDiscoveryBackend::Everything,
-        fallback_reason: None,
-    })
+    Ok(discovery)
+}
+
+fn add_archive_entries(
+    root: &Path,
+    loose_entries: Vec<ChartFileEntry>,
+    archive_paths: &[(usize, PathBuf)],
+    discovery: &mut ChartDiscovery,
+) {
+    if archive_paths.is_empty() {
+        discovery.entries = loose_entries;
+        return;
+    }
+
+    let mut loose = loose_entries.into_iter();
+    let mut previous_position = 0;
+    // Limit concurrent reads and merge in query order, including errors and loose charts.
+    for batch in archive_paths.chunks(ARCHIVE_BATCH_SIZE) {
+        let results: Vec<_> =
+            batch.par_iter().map(|(_, path)| discover_archive_charts(path)).collect();
+        for ((position, path), result) in batch.iter().zip(results) {
+            discovery.entries.extend(loose.by_ref().take(position - previous_position));
+            previous_position = *position;
+            match result {
+                Ok((charts, generation)) => {
+                    discovery.entries.extend(charts);
+                    discovery.archives.push(DiscoveredArchive { path: path.clone(), generation });
+                }
+                Err(error) => {
+                    discovery.complete &= crate::song_archive::is_unsupported(&error);
+                    record_discovery_issue(
+                        &mut discovery.issues,
+                        root,
+                        path,
+                        ScanDiscoveryOperation::ReadArchive,
+                        std::io::Error::other(format!("{error:#}")),
+                    );
+                }
+            }
+        }
+    }
+    discovery.entries.extend(loose);
 }
 
 fn folder_key(path: &Path) -> String {
@@ -256,6 +285,74 @@ fn filetime_to_unix_seconds(filetime: u64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn archive_batches_preserve_chart_order_and_report_read_failures() {
+        use std::io::Write;
+
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let mut paths = Vec::new();
+        for index in 0..ARCHIVE_BATCH_SIZE + 1 {
+            let path = root.join(format!("{index}.zip"));
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+            zip.start_file("chart.bms", zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(b"#TITLE Test\n").unwrap();
+            zip.finish().unwrap();
+            paths.push((usize::from(index > 0), path));
+        }
+        let missing = root.join("missing.zip");
+        paths.push((1, missing.clone()));
+        let loose_path = root.join("loose.bms");
+        let loose = ChartFileEntry {
+            path: loose_path.clone(),
+            file_size: 0,
+            modified_at: 0,
+            has_document: false,
+        };
+        let expected: Vec<_> = paths[..paths.len() - 1]
+            .iter()
+            .flat_map(|(_, path)| discover_archive_charts(path).unwrap().0)
+            .map(|entry| entry.path)
+            .collect();
+        let mut discovery = ChartDiscovery { complete: true, ..Default::default() };
+        add_archive_entries(root, vec![loose], &paths, &mut discovery);
+        let mut expected = expected;
+        expected.insert(1, loose_path);
+        assert_eq!(
+            discovery.entries.iter().map(|entry| &entry.path).collect::<Vec<_>>(),
+            expected.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(discovery.archives.len(), ARCHIVE_BATCH_SIZE + 1);
+        assert_eq!(discovery.issues.len(), 1);
+        assert!(!discovery.complete);
+    }
+
+    #[test]
+    #[ignore = "requires BMZ_ARCHIVE_BENCH_DIR with song archives"]
+    fn archive_batches_timing() {
+        let root = PathBuf::from(std::env::var_os("BMZ_ARCHIVE_BENCH_DIR").unwrap());
+        let mut paths: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|item| item.unwrap().path())
+            .filter(|path| crate::chart_source::is_archive_file(path))
+            .map(|path| (0, path))
+            .collect();
+        paths.sort_unstable();
+        assert!(!paths.is_empty());
+
+        let mut discovery = ChartDiscovery { complete: true, ..Default::default() };
+        let started = std::time::Instant::now();
+        add_archive_entries(&root, Vec::new(), &paths, &mut discovery);
+        eprintln!(
+            "archive listing: {:.3} ms, {} charts, {} archives, {} issues",
+            started.elapsed().as_secs_f64() * 1000.0,
+            discovery.entries.len(),
+            discovery.archives.len(),
+            discovery.issues.len()
+        );
+        assert!(!discovery.entries.is_empty());
+    }
 
     #[test]
     fn song_folder_filter_keeps_direct_charts_and_ignores_stale_index_matches() {
