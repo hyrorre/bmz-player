@@ -220,6 +220,15 @@ impl CpalBackend {
                 Arc::clone(&current_frame),
                 Arc::clone(&diagnostics),
             ),
+            SampleFormat::I24 => build_output_stream::<::cpal::I24>(
+                &device,
+                config,
+                channel_offset,
+                Arc::clone(&output_commands),
+                Arc::clone(&retired_sources),
+                Arc::clone(&current_frame),
+                Arc::clone(&diagnostics),
+            ),
             _ => build_output_stream::<f32>(
                 &device,
                 config,
