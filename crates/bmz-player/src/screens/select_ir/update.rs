@@ -75,7 +75,18 @@ impl SelectIrRanking {
         spawn_rival_fetch(target, profile_root, requested_at, self.rival_sender.clone());
     }
 
-    fn install_rival_scores(&mut self, scores: Vec<IrRivalScoreRecord>) {
+    fn install_rival_scores(&mut self, mut scores: Vec<IrRivalScoreRecord>) {
+        // The BMS-IR rival snapshot has no seed format in our cache contract.
+        // Both cached and fresh rows would otherwise be treated as beatoraja.
+        if self
+            .active_rival
+            .as_ref()
+            .is_some_and(|rival| crate::ir::bms_ir::is_bms_ir_provider(&rival.provider))
+        {
+            for score in &mut scores {
+                score.play_seed = None;
+            }
+        }
         self.active_rival_scores = scores
             .into_iter()
             .map(|score| ((score.chart_sha256, score.ln_mode, score.bmz_identity), score))

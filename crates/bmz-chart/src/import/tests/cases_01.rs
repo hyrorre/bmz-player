@@ -648,6 +648,8 @@ fn lr2_seed_selects_random_branches_and_keeps_the_rest_of_the_sequence() {
 #ENDIF
 #ENDRANDOM
 #RANDOM 4
+#IF 1
+#ENDIF
 #ENDRANDOM
 #SWITCH 2
 #CASE 1

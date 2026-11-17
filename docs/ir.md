@@ -894,6 +894,8 @@ payloadと署名は次のとおりです。
 - ログインした後はprimary providerに選べ、既存のqueueから単曲と、最後のコース / 段位のscoreを送ります。
 - ランキング、登録したライバルとbestの同期、BMS-IRの難易度表、サーバーからローカルへの自己スコアの同期を、providerごとのcacheで扱います。ライバルの追加・解除はWebで行います。
 - プライマリIRがBMS-IRの場合、選曲の数字キー`7`または対応スキンのライバル選択から、登録済みの相手を1人選べます。選択中の相手のベストを比較とプレイ目標に使います。`NONE`では通常のランプを表示します。DXルールはライバル選択の対象外です。
+- 単曲ランキングからのG-BATTLEは、`score_id`があってもseedを使います。seedが無い行を選ぶとエラーを表示します。seedがあり`seed_scheme`が空・欠落・未知の場合は、ローカルのseedで配置します。[G-BATTLEの操作と再現範囲](controls.md#g-battle)
+- 登録ライバルのベスト同期の`play_seed`は形式を判別できないため、ライバルの配置オプションとローカルのseedを使います。[本番応答の確認記録](../notes/2026/2026-11-17-bms-ir-lr2-seed-review.md)
 - 選曲では、Kaleid解析情報が未記録の旧ライブラリでも、単曲・コースのランキングを取得できます。旧プレイのスコア送信には、プレイ時のKaleid解析情報が必要です。
 - オートプレイ・リプレイ再生のResultで選曲キャッシュを使えない場合は、コース中間の単曲Resultを含め、実際に再生した譜面のKaleid解析情報でランキング取得可否を判定します。
 - BMS / PMSはMD5、BMSONはBMS-IR互換のSHA hashで照合します。
@@ -907,6 +909,7 @@ payloadと署名は次のとおりです。
 
 - 新しいプレイでは、beatorajaと同じサイド別の24 bitのseedを使います。SPはP1、DPは`P1 + P2 * 2^24`を、`play_options.seed` / `random_seed`に10進数の文字列で送ります。
 - `seed_scheme=beatoraja_24bit_v1`と、BMSの`#RANDOM`の選択列（`bms_random_choices` / `bms_switch_choices`）を、別のmetadataとして送ります。
+- G-BATTLEで自分側の譜面にLR2の分岐解決を適用したときは、分岐用seedをリプレイに保存します。通常の24 bit配置としては再現できないため、IRの`play_options.seed` / `random_seed`は省略します。
 - F-RANDOM / MF-RANDOMを含むオプションを送るかどうか、外部のIDへどう対応させるかは、共通の層では拒否せず、将来のprovider側の対応状況とユーザーの設定で決めます。
 
 ### ローカルでの動作確認

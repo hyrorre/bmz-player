@@ -2,7 +2,7 @@
 //!
 //! LR2 は分岐を入れ子にせず、直近の `#RANDOM` が選んだ値1つと、`#IF` の真偽1つだけを持つ。
 //! - `#RANDOM n` は行ごとに `GetRand(n - 1)` を1回消費し、結果 + 1 を選択値にする。
-//!   偽の `#IF` の中にある `#RANDOM` も同じく消費し、選択値を更新する。
+//!   偽の `#IF` の中でも消費する。`#RANDOM` の直後は行を無効にし、後続の `#IF` / `#ENDIF` で再開する。
 //! - `#IF v` は `v == 選択値` を真偽にし、`#ENDIF` で真に戻す。
 //! - `#SWITCH` 系、`#SETRANDOM`、`#ELSE` / `#ELSEIF` は LR2 では分岐として働かない。
 //!   これらの行は状態を変えずに落とし、中の行は `#IF` の真偽だけで残すか決める。
@@ -18,7 +18,7 @@ pub(super) struct Lr2RandomResolver {
 
 impl Lr2RandomResolver {
     pub(super) fn new(seed: u32) -> Self {
-        Self { rng: Lr2Mt19937::new(seed), random_value: 0, if_on: true }
+        Self { rng: Lr2Mt19937::new(seed), random_value: -1, if_on: true }
     }
 
     /// Applies line `line_number` and returns whether it stays in the resolved text.
@@ -32,6 +32,7 @@ impl Lr2RandomResolver {
     ) -> bool {
         match beatoraja_random_control_line(line) {
             Some(BeatorajaRandomControl::Random(args)) => {
+                self.if_on = false;
                 if let Some(max) = parse_lr2_control_int(args, line_number, "#RANDOM", warnings) {
                     if max <= 0 {
                         warnings.push(ImportWarning::ParserDiagnostic {
@@ -146,12 +147,23 @@ mod tests {
     #[test]
     fn if_compares_with_the_single_latest_value() {
         // seed 2179: GetRand(2) -> 0, so #RANDOM 3 selects 1.
-        let text = "#RANDOM 3\n#IF 1\n#00111:01\n#IF 2\n#00112:01\n#ENDIF\n#00113:01";
+        let text = "#RANDOM 3\n#00114:01\n#IF 1\n#00111:01\n#RANDOM 1\n#00112:01\n#IF 1\n#00115:01\n#IF 2\n#00118:01\n#ENDIF\n#00113:01";
         let (kept, choices, _, mut rest) = resolve(text, 2179);
 
-        assert_eq!(kept, "#00111:01\n#00113:01");
-        assert_eq!(choices, [1]);
-        assert_eq!(rest.shuffle_key_table(7), [0, 5, 1, 6, 2, 7, 4, 3]);
+        assert_eq!(kept, "#00111:01\n#00115:01\n#00113:01");
+        assert_eq!(choices, [1, 1]);
+        let mut reference = Lr2Mt19937::new(2179);
+        reference.get_rand(2);
+        reference.get_rand(0);
+        assert_eq!(rest.next_u32(), reference.next_u32());
+    }
+
+    #[test]
+    fn if_before_first_random_compares_with_minus_one() {
+        let text = "#IF 0\n#00111:01\n#ENDIF\n#IF -1\n#00112:01\n#ENDIF";
+        let (kept, choices, _, _) = resolve(text, 2179);
+        assert_eq!(kept, "#00112:01");
+        assert!(choices.is_empty());
     }
 
     #[test]

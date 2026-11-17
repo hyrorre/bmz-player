@@ -907,18 +907,13 @@ fn apply_battle_target_replication(
             tracing::warn!(packed_seed, ?key_mode, "ignoring invalid battle target play seed");
         }
     }
-    // An LR2 seed has no BMZ seed. Its RANDOM lanes continue the LR2 sequence after the
-    // chart's `#RANDOM`, so they are drawn when the chart is loaded.
-    let copied_lr2 =
-        !copied_chart && arrangement.arrange_pattern.is_none() && arrangement.lr2_seed.is_some();
-    if copied_lr2 {
-        options.lr2_seed = arrangement.lr2_seed;
-    }
+    // The LR2 resolver is needed even if the replay already carries a lane pattern.
+    options.lr2_seed = arrangement.lr2_seed;
 
     if arrangement.arrange_pattern.is_some() {
         copied_chart = true;
     }
-    if copied_chart || copied_lr2 {
+    if copied_chart || options.lr2_seed.is_some() {
         options.arrange_pattern = arrangement.arrange_pattern.clone();
         options.legacy_arrange_seed = arrangement.legacy_arrange_seed;
         options.s_random_scheme = arrangement.s_random_scheme;
@@ -932,7 +927,8 @@ fn apply_battle_target_replication(
         );
     }
     if replication == ChartReplicationModeConfig::RivalChartMirror {
-        if copied_lr2
+        if options.lr2_seed.is_some()
+            && !copied_chart
             && [arrangement.arrange, arrangement.arrange_2p].contains(&ArrangeOption::Random)
         {
             // The LR2 lanes are known only after the chart's `#RANDOM`, too late to look

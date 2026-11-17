@@ -974,7 +974,7 @@ mod tests {
             arrange_1p: String::new(),
             arrange_2p: String::new(),
             double_option: String::new(),
-            play_seed: None,
+            play_seed: Some(2179),
         };
         select_ir.rival_in_flight = Some((first.clone(), requested_at));
         select_ir
@@ -985,6 +985,13 @@ mod tests {
         let snapshot = rival_snapshot(&select_ir, sha).unwrap();
         assert_eq!(snapshot.display_name, "A");
         assert_eq!(snapshot.ex_score, 1500);
+        assert_eq!(
+            select_ir
+                .active_rival_score(sha, 0, LnScorePolicy::ForceLn, DoubleOptionScoreBucket::Off)
+                .unwrap()
+                .play_seed,
+            None
+        );
         assert!(rival_snapshot(&select_ir, [8; 32]).is_none());
         assert_eq!(select_ir.active_rival_display_name(), Some("A"));
 

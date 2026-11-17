@@ -268,6 +268,8 @@ pub struct AppliedArrange {
     /// 2P generation for DP charts. `None` means this is an SP chart.
     pub s_random_scheme_2p: Option<SRandomScheme>,
     pub h_random_threshold_ms: Option<u32>,
+    /// Seed of the LR2 resolver used to import the chart, including its branch semantics.
+    pub lr2_seed: Option<u32>,
     /// BMS `#RANDOM` decisions applied before the arrange modifier.
     pub bms_random_choices: Vec<i32>,
     /// BMS `#SWITCH` decisions applied before the arrange modifier.
@@ -298,7 +300,7 @@ impl AppliedArrange {
 
 impl AppliedArrange {
     pub fn packed_beatoraja_seed_from_sides(&self) -> Option<i64> {
-        if self.legacy_seed {
+        if self.legacy_seed || self.lr2_seed.is_some() {
             return None;
         }
         let p1 = RandomOptionSeed::new(u32::try_from(self.seed?).ok()?)?;

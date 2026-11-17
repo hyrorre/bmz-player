@@ -146,7 +146,7 @@ mod lr2_tests {
             Some(&[0, 1, 3, 5, 7, 2, 4, 6, 8, 9, 10, 11, 12, 13, 14, 15][..])
         );
 
-        let drawn = transform("#RANDOM 3\n#ENDRANDOM\n", &options);
+        let drawn = transform("#RANDOM 3\n#IF 1\n#ENDIF\n#ENDRANDOM\n", &options);
         assert_eq!(drawn.applied_arrange.bms_random_choices, [1]);
         assert_eq!(lr2_table(&drawn.chart), [5, 1, 6, 2, 7, 4, 3]);
     }
@@ -164,13 +164,45 @@ mod lr2_tests {
         recorded.arrange_pattern = Some((0..LANE_COUNT as u8).collect());
         assert_eq!(lr2_table(&transform("", &recorded).chart), [1, 2, 3, 4, 5, 6, 7]);
 
-        // Recorded choices come before the LR2 seed.
+        // An LR2 replay keeps the LR2 resolver even when it also records the choices.
         let mut replay = opponent_options(ArrangeOption::Random);
         replay.bms_random_choices = Some(vec![2]);
-        assert!(matches!(bms_random_source_for_chart(&replay), BmsRandomSource::Choices { .. }));
-        replay.bms_random_choices = None;
         replay.legacy_arrange_seed = true;
         assert_eq!(bms_random_source_for_chart(&replay), BmsRandomSource::Lr2Seed(2179));
+    }
+
+    #[test]
+    fn lr2_replay_resolves_the_same_chart_with_its_recorded_pattern() {
+        use crate::screens::play_start::{
+            PlayStartOptions, apply_queued_replay, play_session_options_from_start,
+        };
+        use crate::storage::replay::{QueuedCourseReplay, ReplayFile};
+
+        // LR2 suppresses the extra note after #RANDOM until the first #IF.
+        let header = "#RANDOM 3\n#00811:01\n#IF 1\n#ENDIF\n";
+        let original = transform(header, &opponent_options(ArrangeOption::Random));
+        let applied = &original.applied_arrange;
+        let mut replay = ReplayFile::new(
+            [0; 32],
+            0,
+            applied.packed_beatoraja_seed(KeyMode::K7),
+            applied.arrange,
+            applied.seed,
+            applied.pattern.clone(),
+            Vec::new(),
+        )
+        .with_randomization(None, applied.bms_random_choices.clone(), Vec::new());
+        replay.lr2_seed = applied.lr2_seed;
+        let replay =
+            crate::storage::replay::parse_replay(&toml::to_string(&replay).unwrap()).unwrap();
+        let queued = QueuedCourseReplay { position: 0, chart_id: 1, chart_sha256: [0; 32], replay };
+        let mut start = PlayStartOptions::default();
+        apply_queued_replay(&mut start, &queued).unwrap();
+
+        let options = play_session_options_from_start(&Default::default(), start);
+        let retraced = transform(header, &options);
+        assert_eq!(retraced.applied_arrange.lr2_seed, Some(2179));
+        assert_eq!(lr2_table(&retraced.chart), lr2_table(&original.chart));
     }
 }
 
@@ -223,16 +255,15 @@ pub fn load_game_session_for_chart_with_input_backend(
     ))
 }
 
-/// Recorded choices (replays) first, then a battle target's LR2 seed, then the legacy
-/// shared seed and the ordinary `#RANDOM` seed.
+/// An explicit LR2 seed selects both the PRNG and the LR2 control flow.
 pub(super) fn bms_random_source_for_chart(options: &PlaySessionOptions) -> BmsRandomSource {
-    if options.bms_random_choices.is_some() || options.bms_switch_choices.is_some() {
+    if let Some(seed) = options.lr2_seed {
+        BmsRandomSource::Lr2Seed(seed)
+    } else if options.bms_random_choices.is_some() || options.bms_switch_choices.is_some() {
         BmsRandomSource::Choices {
             random: options.bms_random_choices.clone().unwrap_or_default(),
             switches: options.bms_switch_choices.clone().unwrap_or_default(),
         }
-    } else if let Some(seed) = options.lr2_seed {
-        BmsRandomSource::Lr2Seed(seed)
     } else if options.legacy_arrange_seed {
         // Replay v3 and older derived `#RANDOM` from the shared arrange seed.
         BmsRandomSource::Seed(options.arrange_seed.map(|seed| seed as u64))
@@ -693,6 +724,7 @@ fn transform_chart_import(
     options: &PlaySessionOptions,
 ) -> Result<TransformedPlayChart> {
     let mut import = import;
+    let lr2_seed = options.lr2_seed.filter(|_| import.lr2_random_state.is_some());
     // LR2 RANDOM lanes become this load's pattern, which branch charts reuse below.
     let lr2_options = lr2_arrange_pattern(&mut import, options)
         .map(|pattern| PlaySessionOptions { arrange_pattern: Some(pattern), ..options.clone() });
@@ -748,6 +780,7 @@ fn transform_chart_import(
         }
     }
     let mut result = transform_chart_for_play(import, options, true);
+    result.applied_arrange.lr2_seed = lr2_seed;
     if let Some(program) = result.chart.metadata.conditional.take() {
         let mut program = (*program).clone();
         let mut branch_options = options.clone();

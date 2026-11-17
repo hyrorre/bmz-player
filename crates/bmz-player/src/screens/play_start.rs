@@ -75,12 +75,13 @@ pub enum SeedScheme {
 }
 
 impl SeedScheme {
-    /// IRの `seed_scheme` 値を解釈する。値が無い場合は `fallback` を返す。
+    /// IRの `seed_scheme` 値を解釈する。欠落・空文字の場合は `fallback` を返す。
     pub fn from_ir_value(value: Option<&str>, fallback: Self) -> Self {
         let Some(value) = value else {
             return fallback;
         };
         match value.trim().to_ascii_lowercase().as_str() {
+            "" => fallback,
             "beatoraja" | "beatoraja_24bit_v1" => Self::Beatoraja24,
             "lr2" => Self::Lr2,
             _ => Self::Unknown,
@@ -115,7 +116,7 @@ impl BattleTargetPlayback {
                 arrange_seed: replay.arrange_seed,
                 arrange_seed_2p: replay.arrange_seed_2p,
                 packed_seed: None,
-                lr2_seed: None,
+                lr2_seed: replay.lr2_seed,
                 arrange_pattern: replay.lane_shuffle_pattern.clone(),
                 legacy_arrange_seed: replay.uses_legacy_seed_scheme(),
                 s_random_scheme: replay.effective_s_random_scheme().unwrap_or_default(),
@@ -233,7 +234,7 @@ pub struct PlayStartOptions {
     pub s_random_scheme_2p: Option<SRandomScheme>,
     pub h_random_threshold_ms: Option<u32>,
     pub bms_random_seed: Option<u64>,
-    /// LR2 seed copied from a battle target's chart. Only chart replication sets it.
+    /// LR2 branch seed from a battle target or previously played arrangement.
     pub lr2_seed: Option<u32>,
     pub bms_random_choices: Option<Vec<i32>>,
     pub bms_switch_choices: Option<Vec<u64>>,
@@ -743,6 +744,7 @@ pub fn apply_arrange_override(
     options.h_random_threshold_ms = arrange.h_random_threshold_ms;
     options.bms_random_choices = Some(arrange.bms_random_choices.clone());
     options.bms_switch_choices = Some(arrange.bms_switch_choices.clone());
+    options.lr2_seed = arrange.lr2_seed;
     options.arrange_pattern = arrange.pattern.clone();
     options.key_mode_conversion = arrange.key_mode_conversion;
     options.seven_to_nine_pattern = arrange.seven_to_nine_pattern;
@@ -769,6 +771,7 @@ pub fn apply_queued_replay(
     options.replay_gauge_override = replay.replay.recorded_gauge_type();
     options.bms_random_choices = replay.replay.bms_random_choices.clone();
     options.bms_switch_choices = replay.replay.bms_switch_choices.clone();
+    options.lr2_seed = replay.replay.lr2_seed;
     options.arrange_pattern = replay.replay.lane_shuffle_pattern.clone();
     // Play back at the recorded rate, not the player's current FREQ.
     options.freq_semitones = replay.replay.recorded_freq_semitones();
@@ -804,6 +807,7 @@ mod tests {
             s_random_scheme: SRandomScheme::Legacy40MsV1,
             s_random_scheme_2p: Some(SRandomScheme::Lm120HzV1),
             h_random_threshold_ms: Some(125),
+            lr2_seed: None,
             bms_random_choices: vec![2],
             bms_switch_choices: vec![2_000_000_000_000],
             pattern: Some(vec![3, 1, 2, 0]),
@@ -901,7 +905,8 @@ mod tests {
             (" Beatoraja ", SeedScheme::Beatoraja24),
             ("lr2", SeedScheme::Lr2),
             ("LR2", SeedScheme::Lr2),
-            ("", SeedScheme::Unknown),
+            ("", SeedScheme::Beatoraja24),
+            ("  ", SeedScheme::Beatoraja24),
             ("legacy_shared_v3", SeedScheme::Unknown),
         ] {
             assert_eq!(
@@ -915,6 +920,7 @@ mod tests {
             SeedScheme::Beatoraja24
         );
         assert_eq!(SeedScheme::from_ir_value(None, SeedScheme::Unknown), SeedScheme::Unknown);
+        assert_eq!(SeedScheme::from_ir_value(Some(""), SeedScheme::Unknown), SeedScheme::Unknown);
     }
 
     #[test]

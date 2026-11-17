@@ -83,6 +83,7 @@ impl WinitApp {
             options.h_random_threshold_ms = applied.h_random_threshold_ms;
             options.bms_random_choices = Some(applied.bms_random_choices.clone());
             options.bms_switch_choices = Some(applied.bms_switch_choices.clone());
+            options.lr2_seed = applied.lr2_seed;
             options.arrange_pattern = applied.pattern.clone();
         }
         options
@@ -128,6 +129,7 @@ impl WinitApp {
                     options.h_random_threshold_ms = applied.h_random_threshold_ms;
                     options.bms_random_choices = Some(applied.bms_random_choices.clone());
                     options.bms_switch_choices = Some(applied.bms_switch_choices.clone());
+                    options.lr2_seed = applied.lr2_seed;
                     options.arrange_pattern = applied.pattern.clone();
                 }
                 ResultRetryMode::DifferentArrange => {

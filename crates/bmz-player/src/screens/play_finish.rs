@@ -584,6 +584,7 @@ fn finish_session_snapshot_result(
                     arrange_2p: applied_arrange.arrange_2p,
                     arrange_seed,
                     arrange_seed_2p: applied_arrange.seed_2p,
+                    lr2_seed: applied_arrange.lr2_seed,
                     bms_random_choices: applied_arrange.bms_random_choices.clone(),
                     bms_switch_choices: applied_arrange.bms_switch_choices.clone(),
                     seed_scheme: if applied_arrange.legacy_seed {

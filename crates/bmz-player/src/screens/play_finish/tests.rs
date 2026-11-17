@@ -710,6 +710,7 @@ fn finish_session_result_returns_summary() {
         s_random_scheme: crate::screens::play_session::SRandomScheme::Lm120HzV1,
         s_random_scheme_2p: None,
         h_random_threshold_ms: None,
+        lr2_seed: Some(2179),
         bms_random_choices: vec![1, 2],
         bms_switch_choices: vec![2_000_000_000_000],
         pattern: Some(lane_shuffle_pattern.clone()),
@@ -756,6 +757,8 @@ fn finish_session_result_returns_summary() {
             .unwrap();
     assert_eq!(recorded.freq_semitones, Some(3));
     assert_eq!(recorded.recorded_freq_semitones(), 3);
+    assert_eq!(recorded.lr2_seed, Some(2179));
+    assert_eq!(recorded.random_seed, None);
 
     // First play creates a best, but Result still refers to the absent pre-save best.
     assert_eq!(finished.summary.skin_attempt.best_score_options, None);

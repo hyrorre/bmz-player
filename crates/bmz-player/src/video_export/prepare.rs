@@ -99,6 +99,7 @@ pub fn prepare(
         play_options.h_random_threshold_ms = file.h_random_threshold_ms;
         play_options.bms_random_seed = None;
         play_options.bms_random_choices = file.bms_random_choices.clone();
+        play_options.lr2_seed = file.lr2_seed;
         play_options.bms_switch_choices = file.bms_switch_choices.clone();
         play_options.arrange_pattern = file.lane_shuffle_pattern.clone();
         if imported.chart.metadata.has_bms_random

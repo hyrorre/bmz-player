@@ -62,6 +62,9 @@ pub struct ReplayFile {
     pub arrange_seed: Option<i64>,
     #[serde(default)]
     pub arrange_seed_2p: Option<i64>,
+    /// BMS branch resolution uses LR2 syntax and PRNG when this seed is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lr2_seed: Option<u32>,
     #[serde(default)]
     pub bms_random_choices: Option<Vec<i32>>,
     #[serde(default)]
@@ -170,6 +173,7 @@ impl ReplayFile {
             input_excludes_start_margin: false,
             arrange_seed,
             arrange_seed_2p: None,
+            lr2_seed: None,
             bms_random_choices: Some(Vec::new()),
             bms_switch_choices: Some(Vec::new()),
             seed_scheme: SEED_SCHEME_BEATORAJA_24BIT_V1.to_string(),
