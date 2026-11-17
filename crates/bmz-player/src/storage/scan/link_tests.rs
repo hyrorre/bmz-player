@@ -132,12 +132,16 @@ fn overlapping_external_links_read_every_folder_once() {
     link(&ext.join("sub"), &root.join("b"));
     assert_eq!(discovered(&root, true, &config(true)).0, ["a/c.bms"]);
 
-    // A link found inside an adopted tree that points at its ancestor.
+    // A link found inside an adopted tree that points at its ancestor. The
+    // adopted tree must not be a song folder, or its children are not read.
+    let ext = base.path().join("ext3");
+    chart(&ext.join("c.bms"), "C");
+    chart(&ext.join("sub/song/b.bms"), "B");
     let root = base.path().join("root3");
     std::fs::create_dir_all(&root).unwrap();
     link(&ext.join("sub"), &root.join("a"));
     link(&ext, &ext.join("sub/parent"));
-    assert_eq!(discovered(&root, true, &config(true)).0, ["a/b.bms", "a/parent/c.bms"]);
+    assert_eq!(discovered(&root, true, &config(true)).0, ["a/parent/c.bms", "a/song/b.bms"]);
 }
 
 #[cfg(unix)]

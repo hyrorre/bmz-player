@@ -512,7 +512,13 @@ mod tests {
         let root = make_temp_dir("scan-unreadable-subdirectory");
         let unreadable = root.join("unreadable");
         std::fs::create_dir_all(&unreadable).unwrap();
-        write_file(&root.join("available.bms"), "#TITLE Available\n#BPM 120\n#00011:01\n");
+        std::fs::create_dir_all(root.join("available")).unwrap();
+        // A loose chart in the root would make it a song folder and skip its
+        // children, so keep the readable chart in a sibling song folder.
+        write_file(
+            &root.join("available/available.bms"),
+            "#TITLE Available\n#BPM 120\n#00011:01\n",
+        );
         write_file(&unreadable.join("hidden.bms"), "#TITLE Hidden\n#BPM 120\n#00011:01\n");
         std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
 
