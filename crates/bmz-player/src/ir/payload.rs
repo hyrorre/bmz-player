@@ -117,7 +117,28 @@ pub fn build_score_submission(
 
     let mut chart_payload =
         build_ir_chart_payload_with_ln_profile(chart, context.source_ln_profile);
+    // The hash identifies the original SP chart. D-BATTLE doubles the scoring
+    // denominator, but must not register that hash as a DP chart in either IR.
+    if context.applied_double_option.is_battle() {
+        let source_mode = match chart.metadata.key_mode {
+            bmz_core::lane::KeyMode::K10 => Some(bmz_core::lane::KeyMode::K5),
+            bmz_core::lane::KeyMode::K14 => Some(bmz_core::lane::KeyMode::K7),
+            _ => None,
+        };
+        if let Some(mode) = source_mode {
+            chart_payload.mode = mode.as_str().to_string();
+            chart_payload.notes.total /= 2;
+            chart_payload.notes.ln /= 2;
+            chart_payload.notes.cn /= 2;
+            chart_payload.notes.hcn /= 2;
+            chart_payload.notes.hln /= 2;
+            chart_payload.notes.mine /= 2;
+            chart_payload.total =
+                Some(gauge_total_for_chart(chart.metadata.total, chart_payload.notes.total));
+        }
+    }
     chart_payload.length_ms = context.chart_length_ms;
+    let key_mode = chart_payload.mode.clone();
 
     IrScoreSubmission {
         client: IrClientInfo {
@@ -127,8 +148,8 @@ pub fn build_score_submission(
         },
         chart: chart_payload,
         rule: IrRulePayload {
-            play_mode: play_mode_payload(chart.metadata.key_mode.as_str()),
-            key_mode: chart.metadata.key_mode.as_str().to_string(),
+            play_mode: play_mode_payload(&key_mode),
+            key_mode,
             gauge: context.gauge_option,
             ln_policy: context.ln_policy,
             effective_ln_mode: effective_ln_mode_payload(effective_ln_mode),
@@ -514,6 +535,47 @@ mod tests {
             payload.play_options.get("bms_switch_choices"),
             Some(&serde_json::json!([2_000_000_000_000_u64]))
         );
+        for (dp, sp) in [(KeyMode::K10, "5K"), (KeyMode::K14, "7K")] {
+            let mut battle_chart = chart.clone();
+            battle_chart.metadata.key_mode = dp;
+            battle_chart.metadata.source_format = bmz_chart::model::ChartSourceFormat::Bms;
+            battle_chart.metadata.kaleid = bmz_chart::kaleid::KaleidProvenance::imported();
+            battle_chart.total_notes = 2;
+            battle_chart.metadata.total = None;
+            for (index, lane) in
+                [bmz_core::lane::Lane::Key1, bmz_core::lane::Lane::Key8].into_iter().enumerate()
+            {
+                battle_chart.lane_notes[lane.index()].push(bmz_chart::model::NoteEvent {
+                    id: bmz_core::ids::NoteId(index as u32),
+                    lane,
+                    tick: bmz_core::time::ChartTick(0),
+                    time: bmz_core::time::TimeUs(0),
+                    kind: NoteKind::Tap,
+                    sound: None,
+                    layered_sounds: Vec::new(),
+                    damage: None,
+                });
+            }
+            for double in [DoubleOption::Battle, DoubleOption::BattleAutoScratch] {
+                let battle = build_score_submission(
+                    &battle_chart,
+                    &PlayResult { total_notes: 2, ..result.clone() },
+                    IrSubmissionContext {
+                        double_option: double.score_bucket(),
+                        applied_double_option: double,
+                        ..context.clone()
+                    },
+                );
+                assert_eq!(battle.chart.mode, sp);
+                assert_eq!(battle.rule.key_mode, sp);
+                assert_eq!(battle.rule.play_mode, "single");
+                assert_eq!(battle.chart.notes.total, 1);
+                assert_eq!(battle.result.notes, 2);
+                assert_eq!(battle.chart.total, Some(gauge_total_for_chart(None, 1)));
+                assert_eq!(battle.play_options["double_option"], double.ir_value());
+                crate::ir::bms_ir::ensure_score_payload_supported(&battle).unwrap();
+            }
+        }
         let replay = payload.replay.expect("replay payload");
         assert_eq!(replay.hash, "ab".repeat(32));
         assert_eq!(replay.format, "bmz-replay-v1");

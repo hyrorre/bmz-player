@@ -91,6 +91,12 @@ pub fn advance_session_frame(
             for now in scoring_times {
                 sync_judge_windows(session, now);
                 judgements.extend(process_replay_inputs(session, now));
+                // Partial autoplay (D-BATTLE AS) is not recorded in the human
+                // input log. Run it on the same scoring clock as the replay.
+                judgements.extend(process_autoplay_inputs(session, now));
+                if session.autoplay.is_some() {
+                    apply_auto_key_release(session, now);
+                }
                 judgements.extend(process_mine_passes(session, now));
                 judgements.extend(process_misses(session, now));
                 update_hcn_lane_timers(session, now);

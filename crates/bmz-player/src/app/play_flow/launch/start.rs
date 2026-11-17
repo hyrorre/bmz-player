@@ -334,8 +334,7 @@ impl WinitApp {
         // preload 完了で install_active_play がフル snapshot に置き換えるまでの間、
         // 初期ゲージや緑数字が空表示にならないようセッション開始時相当の値を埋める。
         let key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
-        let play_config_key_mode =
-            effective_play_key_mode(self.key_mode_for_chart(chart_id), options.key_mode_conversion);
+        let play_config_key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
         self.boot.profile_config.activate_play_mode(play_config_key_mode);
         self.select.hs_fix_option =
             hs_fix_option_from_profile(self.boot.profile_config.play.hs_fix);

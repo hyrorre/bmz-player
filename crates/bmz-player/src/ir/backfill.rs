@@ -767,7 +767,16 @@ fn build_local_score_submission(
             version: env!("CARGO_PKG_VERSION").to_string(),
             platform: std::env::consts::OS.to_string(),
         },
-        chart: chart_payload_from_library(chart, analysis, scored_total_notes, row.ln_policy),
+        chart: chart_payload_from_library(
+            chart,
+            analysis,
+            if row.double_option == DoubleOptionScoreBucket::Off {
+                scored_total_notes
+            } else {
+                chart.scored_total_notes(row.ln_policy)
+            },
+            row.ln_policy,
+        ),
         rule: IrRulePayload {
             play_mode: play_mode_payload(&chart.mode),
             key_mode: chart.mode.clone(),

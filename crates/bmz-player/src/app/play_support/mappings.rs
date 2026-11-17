@@ -98,7 +98,7 @@ pub(in crate::app) fn effective_play_key_mode(
     key_mode_conversion.effective_key_mode(chart_key_mode)
 }
 
-/// Battle duplicates lanes for presentation, but uses the source mode's profile slot.
+/// Session battle uses the source profile slot; D-BATTLE uses the DP slot.
 pub(in crate::app) fn key_mode_conversion_for_session(
     conversion: KeyModeConversionConfig,
     session: SessionMode,
