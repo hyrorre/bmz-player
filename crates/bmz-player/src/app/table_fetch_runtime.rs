@@ -44,7 +44,7 @@ pub(super) enum RianTableFetchOutcome {
 ///
 /// DB保存は同時1件のworkerへ渡す。開始と結果の適用はSelect中だけ行う。
 pub(super) struct TableFetchRuntime {
-    pub(super) startup_urls: Option<Vec<String>>,
+    pub(super) startup_pending: bool,
     pub(super) pending: Option<Receiver<TableFetchWorkerEvent>>,
     pub(super) pending_store: Option<PendingTableStore>,
     pub(super) pending_urls: HashSet<String>,
@@ -62,9 +62,9 @@ pub(super) struct TableFetchRuntime {
 }
 
 impl TableFetchRuntime {
-    pub(super) fn new(startup_urls: Vec<String>, rian_identity: Option<RianTableIdentity>) -> Self {
+    pub(super) fn new(startup_pending: bool, rian_identity: Option<RianTableIdentity>) -> Self {
         Self {
-            startup_urls: Some(startup_urls),
+            startup_pending,
             pending: None,
             pending_store: None,
             pending_urls: HashSet::new(),
@@ -94,34 +94,33 @@ pub(super) fn startup_difficulty_table_fetch_urls_for_boot(
     boot: &BootstrappedApp,
     startup: std::time::Instant,
 ) -> Vec<String> {
-    let phase = super::StartupPhase::begin(startup, "startup_difficulty_table_download_metadata");
-    let fetched_source_urls: HashSet<String> = match phase
-        .result(boot.library_db.list_difficulty_table_sources_with_current_download_metadata())
-    {
-        Ok(source_urls) => source_urls.into_iter().collect(),
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                "failed to list difficulty tables with current download metadata"
-            );
-            HashSet::new()
+    startup_difficulty_table_fetch_urls(&boot.app_config, || {
+        let phase =
+            super::StartupPhase::begin(startup, "startup_difficulty_table_download_metadata");
+        match phase
+            .result(boot.library_db.list_difficulty_table_sources_with_current_download_metadata())
+        {
+            Ok(source_urls) => source_urls.into_iter().collect(),
+            Err(error) => {
+                tracing::warn!(%error, "failed to list difficulty tables with current download metadata");
+                HashSet::new()
+            }
         }
-    };
-    startup_difficulty_table_fetch_urls(&boot.app_config, &fetched_source_urls)
+    })
 }
 
 fn startup_difficulty_table_fetch_urls(
     app_config: &AppConfig,
-    fetched_source_urls: &HashSet<String>,
+    load_cached_urls: impl FnOnce() -> HashSet<String>,
 ) -> Vec<String> {
-    app_config
-        .tables
-        .sources
-        .iter()
-        .filter(|source| source.enabled)
-        .filter(|source| {
-            app_config.tables.auto_fetch_on_startup || !fetched_source_urls.contains(&source.url)
-        })
+    let mut enabled = app_config.tables.sources.iter().filter(|source| source.enabled).peekable();
+    if enabled.peek().is_none() {
+        return Vec::new();
+    }
+    let cached =
+        if app_config.tables.auto_fetch_on_startup { HashSet::new() } else { load_cached_urls() };
+    enabled
+        .filter(|source| !cached.contains(&source.url))
         .map(|source| source.url.clone())
         .collect()
 }
@@ -156,7 +155,7 @@ mod tests {
         let fetched = HashSet::from(["https://example.com/fetched".to_string()]);
 
         assert_eq!(
-            startup_difficulty_table_fetch_urls(&config, &fetched),
+            startup_difficulty_table_fetch_urls(&config, || fetched),
             vec!["https://example.com/missing".to_string()]
         );
     }
@@ -183,10 +182,9 @@ mod tests {
             },
             ..AppConfig::default()
         };
-        let fetched = HashSet::from(["https://example.com/fetched".to_string()]);
 
         assert_eq!(
-            startup_difficulty_table_fetch_urls(&config, &fetched),
+            startup_difficulty_table_fetch_urls(&config, || panic!("cache is not needed")),
             vec![
                 "https://example.com/fetched".to_string(),
                 "https://example.com/missing".to_string(),
@@ -195,8 +193,26 @@ mod tests {
     }
 
     #[test]
+    fn startup_table_fetch_skips_cache_lookup_without_enabled_sources() {
+        let config = AppConfig {
+            tables: DifficultyTablesConfig {
+                sources: vec![DifficultyTableSource {
+                    url: "https://example.com/disabled".to_string(),
+                    enabled: false,
+                }],
+                auto_fetch_on_startup: false,
+            },
+            ..AppConfig::default()
+        };
+        assert!(
+            startup_difficulty_table_fetch_urls(&config, || panic!("cache is not needed"))
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn filter_new_urls_deduplicates_input_pending_and_queued_urls() {
-        let mut runtime = TableFetchRuntime::new(Vec::new(), None);
+        let mut runtime = TableFetchRuntime::new(false, None);
         runtime.pending_urls.insert("https://example.com/pending".to_string());
         runtime.queued_urls.push("https://example.com/queued".to_string());
 
