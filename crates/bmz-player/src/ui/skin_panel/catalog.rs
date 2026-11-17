@@ -2,6 +2,7 @@ pub(in crate::ui) fn skin_path_combo(
     ui: &mut egui::Ui,
     skin: &mut SkinConfig,
     slot: SkinSlot,
+    app_paths: &AppPaths,
     candidates: &[SkinCandidate],
     show_bundled_origin: bool,
     text: Localizer,
@@ -28,13 +29,7 @@ pub(in crate::ui) fn skin_path_combo(
         })
         .response
         .on_hover_text(selected_text);
-    let combo_changed = selected != current;
-    if combo_changed {
-        save_skin_slot_history(skin, slot);
-        *skin_slot_path_mut(skin, slot) = selected;
-        restore_skin_slot_history(skin, slot);
-    }
-    combo_changed
+    switch_skin_slot(skin, slot, app_paths, selected)
 }
 
 pub(in crate::ui) fn skin_candidate_label(
@@ -235,32 +230,72 @@ pub(in crate::ui) fn skin_slot_history_key(slot: SkinSlot, path: &str) -> String
     format!("{slot_name}::{path}")
 }
 
-pub(in crate::ui) fn save_skin_slot_history(skin: &mut SkinConfig, slot: SkinSlot) {
-    let path = skin_slot_path(skin, slot).trim().to_string();
-    if path.is_empty() {
-        return;
+pub(in crate::ui) fn switch_skin_slot(
+    skin: &mut SkinConfig,
+    slot: SkinSlot,
+    app_paths: &AppPaths,
+    next: String,
+) -> bool {
+    if skin_slot_path(skin, slot) == next {
+        return false;
     }
+    let current = skin_history_path(app_paths, skin_slot_path(skin, slot));
+    save_skin_slot_history(skin, slot, &current);
+    *skin_slot_path_mut(skin, slot) = next;
+    restore_skin_slot_history(skin, slot, app_paths);
+    true
+}
+
+fn skin_history_path(app_paths: &AppPaths, path: &str) -> String {
+    let path = path.trim();
+    app_paths
+        .resolve_optional_path_ref(path)
+        .ok()
+        .flatten()
+        .and_then(|resolved| {
+            app_paths.data_path_ref(&resolved).or_else(|| app_paths.resource_path_ref(&resolved))
+        })
+        .unwrap_or_else(|| path.to_owned())
+}
+
+fn save_skin_slot_history(skin: &mut SkinConfig, slot: SkinSlot, path: &str) {
     let options = skin_slot_options_mut(skin, slot).clone();
     let files = skin_slot_files_mut(skin, slot).clone();
     let offsets = skin_slot_offsets_mut(skin, slot).clone();
     skin.history.insert(
-        skin_slot_history_key(slot, &path),
+        skin_slot_history_key(slot, path),
         SkinHistoryEntryConfig { options, files, offsets },
     );
 }
 
-pub(in crate::ui) fn restore_skin_slot_history(skin: &mut SkinConfig, slot: SkinSlot) {
-    let path = skin_slot_path(skin, slot).trim().to_string();
-    let history_key = skin_slot_history_key(slot, &path);
-    let Some(entry) =
-        skin.history.get(&history_key).cloned().or_else(|| skin.history.get(&path).cloned())
-    else {
-        skin_slot_options_mut(skin, slot).clear();
-        skin_slot_files_mut(skin, slot).clear();
-        skin_slot_offsets_mut(skin, slot).clear();
-        return;
-    };
-    skin.history.entry(history_key).or_insert_with(|| entry.clone());
+fn restore_skin_slot_history(skin: &mut SkinConfig, slot: SkinSlot, app_paths: &AppPaths) {
+    let path = skin_slot_path(skin, slot).trim();
+    let identity = skin_history_path(app_paths, path);
+    let history_key = skin_slot_history_key(slot, &identity);
+    let prefix = skin_slot_history_key(slot, "");
+    let entry = skin
+        .history
+        .get(&history_key)
+        .or_else(|| skin.history.get(&skin_slot_history_key(slot, path)))
+        .or_else(|| {
+            skin.history.iter().find_map(|(key, entry)| {
+                let stored_path = key.strip_prefix(&prefix)?;
+                (skin_history_path(app_paths, stored_path) == identity).then_some(entry)
+            })
+        })
+        .or_else(|| skin.history.get(path))
+        .or_else(|| {
+            skin.history.iter().find_map(|(key, entry)| {
+                (!key.contains("::") && skin_history_path(app_paths, key) == identity)
+                    .then_some(entry)
+            })
+        })
+        .cloned();
+    if let Some(entry) = &entry {
+        skin.history.entry(history_key).or_insert_with(|| entry.clone());
+    }
+    let entry = entry.unwrap_or_default();
+
     *skin_slot_options_mut(skin, slot) = entry.options;
     *skin_slot_files_mut(skin, slot) = entry.files;
     *skin_slot_offsets_mut(skin, slot) = entry.offsets;

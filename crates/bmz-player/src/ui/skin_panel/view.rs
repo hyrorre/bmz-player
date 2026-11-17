@@ -164,7 +164,8 @@ pub(in crate::ui) fn build_skin_panel(
             SkinSlot::Result => &skin_catalog.result,
             SkinSlot::CourseResult => &skin_catalog.course_result,
         };
-        if skin_path_combo(ui, skin, editor.slot, candidates, show_bundled_origin, text) {
+        if skin_path_combo(ui, skin, editor.slot, app_paths, candidates, show_bundled_origin, text)
+        {
             request_skin_reload(&mut reload, editor.slot, true);
         }
     });
@@ -537,7 +538,6 @@ mod tests {
         skin.select_files.insert("Font".into(), "custom.ttf".into());
         skin.select_offsets
             .push(SkinOffsetConfig { name: Some("Saved offset".into()), ..Default::default() });
-        save_skin_slot_history(&mut skin, SkinSlot::Select);
         let before = skin.clone();
         // An installed fallback's definitions must not normalize the failed skin's options.
         let meta = SkinConfigMeta {
