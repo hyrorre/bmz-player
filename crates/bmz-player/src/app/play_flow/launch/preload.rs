@@ -881,6 +881,7 @@ fn apply_battle_target_replication(
     options.double_option = arrangement.double_option.normalize_for_key_mode(key_mode);
     options.arrange_pattern = None;
     options.random_trainer_seed = None;
+    options.lr2_seed = None;
 
     if !replication.copies_chart() {
         return;
@@ -906,11 +907,18 @@ fn apply_battle_target_replication(
             tracing::warn!(packed_seed, ?key_mode, "ignoring invalid battle target play seed");
         }
     }
+    // An LR2 seed has no BMZ seed. Its RANDOM lanes continue the LR2 sequence after the
+    // chart's `#RANDOM`, so they are drawn when the chart is loaded.
+    let copied_lr2 =
+        !copied_chart && arrangement.arrange_pattern.is_none() && arrangement.lr2_seed.is_some();
+    if copied_lr2 {
+        options.lr2_seed = arrangement.lr2_seed;
+    }
 
     if arrangement.arrange_pattern.is_some() {
         copied_chart = true;
     }
-    if copied_chart {
+    if copied_chart || copied_lr2 {
         options.arrange_pattern = arrangement.arrange_pattern.clone();
         options.legacy_arrange_seed = arrangement.legacy_arrange_seed;
         options.s_random_scheme = arrangement.s_random_scheme;
@@ -924,6 +932,14 @@ fn apply_battle_target_replication(
         );
     }
     if replication == ChartReplicationModeConfig::RivalChartMirror {
+        if copied_lr2
+            && [arrangement.arrange, arrangement.arrange_2p].contains(&ArrangeOption::Random)
+        {
+            // The LR2 lanes are known only after the chart's `#RANDOM`, too late to look
+            // for a seed of the mirrored lanes. Play the mirror with a local seed instead.
+            tracing::warn!("cannot mirror LR2 RANDOM lanes; keeping the local seed");
+            options.lr2_seed = None;
+        }
         mirror_replicated_chart(options, key_mode, copied_chart);
     }
 }
@@ -1110,6 +1126,7 @@ mod rival_replication_tests {
             arrange_seed: None,
             arrange_seed_2p: None,
             packed_seed: None,
+            lr2_seed: None,
             arrange_pattern: None,
             legacy_arrange_seed: false,
             s_random_scheme: SRandomScheme::Lm120HzV1,
@@ -1136,6 +1153,7 @@ mod rival_replication_tests {
                     arrange_2p: ArrangeOption::Normal,
                     double_option: DoubleOption::Off,
                     packed_seed: None,
+                    seed_scheme: crate::screens::play_start::SeedScheme::Beatoraja24,
                 },
             }),
             ..Default::default()
@@ -1299,6 +1317,46 @@ mod rival_replication_tests {
 
         assert_eq!(options.arrange, ArrangeOption::Random);
         assert_eq!(options.arrange_seed, Some(77));
+    }
+
+    #[test]
+    fn battle_rival_chart_copies_an_lr2_seed_only_with_the_chart() {
+        let mut arrangement = battle_arrangement();
+        arrangement.arrange_2p = ArrangeOption::Normal;
+        arrangement.double_option = DoubleOption::Off;
+        arrangement.lr2_seed = Some(2179);
+
+        let mut options = PlayStartOptions { arrange_seed: Some(77), ..Default::default() };
+        apply_battle_target_replication(
+            &mut options,
+            &arrangement,
+            ChartReplicationModeConfig::RivalChart,
+            KeyMode::K7,
+        );
+        assert_eq!(options.arrange, ArrangeOption::Random);
+        assert_eq!(options.lr2_seed, Some(2179));
+        assert_eq!(options.arrange_pattern, None);
+
+        let mut options = PlayStartOptions { arrange_seed: Some(77), ..Default::default() };
+        apply_battle_target_replication(
+            &mut options,
+            &arrangement,
+            ChartReplicationModeConfig::RivalOption,
+            KeyMode::K7,
+        );
+        assert_eq!(options.lr2_seed, None);
+        assert_eq!(options.arrange_seed, Some(77));
+
+        // The mirrored LR2 RANDOM lanes cannot be found before the chart is loaded.
+        let mut options = PlayStartOptions { arrange_seed: Some(77), ..Default::default() };
+        apply_battle_target_replication(
+            &mut options,
+            &arrangement,
+            ChartReplicationModeConfig::RivalChartMirror,
+            KeyMode::K7,
+        );
+        assert_eq!(options.lr2_seed, None);
+        assert_eq!(options.arrange, ArrangeOption::Random);
     }
 
     #[test]

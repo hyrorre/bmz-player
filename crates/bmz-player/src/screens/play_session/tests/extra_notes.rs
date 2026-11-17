@@ -120,6 +120,7 @@ fn extra_notes_g_battle_keeps_opponent_display_and_judgement_unmodified() {
             arrange_seed_2p: None,
             legacy_arrange_seed: false,
             packed_seed: None,
+            lr2_seed: None,
             bms_random_choices: None,
             bms_switch_choices: None,
             arrange_pattern: None,

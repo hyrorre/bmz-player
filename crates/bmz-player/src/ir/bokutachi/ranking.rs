@@ -174,6 +174,7 @@ impl PersonalBest {
                 arrange_1p: None,
                 arrange_2p: None,
                 random_seed: None,
+                seed_scheme: None,
                 double_option: None,
                 verification: None,
                 judges: None,

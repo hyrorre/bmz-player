@@ -13,6 +13,17 @@ pub(crate) fn preview_arrange_pattern(
             return None;
         }
         pattern.iter().map(|&lane| usize::from(lane)).collect()
+    } else if let Some(pattern) = arrangement.lr2_seed.and_then(|seed| {
+        // A preview has no chart. Assume it has no `#RANDOM`, so RANDOM continues a
+        // fresh LR2 sequence; a chart that draws `#RANDOM` first gets other lanes.
+        lr2_random_arrange_pattern(
+            &mut bmz_chart::lr2_random::Lr2Mt19937::new(seed),
+            key_mode,
+            arrangement.arrange,
+            arrangement.arrange_2p,
+        )
+    }) {
+        pattern.into_iter().map(usize::from).collect()
     } else {
         let packed = arrangement
             .packed_seed

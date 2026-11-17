@@ -91,6 +91,89 @@ mod conditional_tests {
     }
 }
 
+#[cfg(test)]
+mod lr2_tests {
+    use super::*;
+
+    /// 7K key `k` has its only note in measure `k`, so the note order names its source key.
+    const SEVEN_KEYS: &str = "#BPM 120\n#WAV01 a.wav\n#00111:01\n#00212:01\n#00313:01\n\
+        #00414:01\n#00515:01\n#00618:01\n#00719:01\n";
+
+    fn transform(header: &str, options: &PlaySessionOptions) -> TransformedPlayChart {
+        let text = format!("{header}{SEVEN_KEYS}");
+        let import = bmz_chart::import::import_chart_bytes_with_random_source(
+            std::path::Path::new("lr2.bms"),
+            text.as_bytes(),
+            bms_random_source_for_chart(options),
+            false,
+        )
+        .unwrap();
+        transform_chart_import(import, options).unwrap()
+    }
+
+    /// `table[source key] = destination key`, as LR2 writes its RANDOM table.
+    fn lr2_table(chart: &PlayableChart) -> Vec<usize> {
+        let keys =
+            [Lane::Key1, Lane::Key2, Lane::Key3, Lane::Key4, Lane::Key5, Lane::Key6, Lane::Key7];
+        let mut by_time: Vec<(TimeUs, usize)> = keys
+            .iter()
+            .enumerate()
+            .map(|(destination, &lane)| {
+                let notes = chart.notes_for_lane(lane);
+                assert_eq!(notes.len(), 1, "{lane:?}");
+                (notes[0].time, destination + 1)
+            })
+            .collect();
+        by_time.sort();
+        by_time.into_iter().map(|(_, destination)| destination).collect()
+    }
+
+    fn opponent_options(arrange: ArrangeOption) -> PlaySessionOptions {
+        PlaySessionOptions { arrange, lr2_seed: Some(2179), ..Default::default() }
+    }
+
+    #[test]
+    fn lr2_random_lanes_continue_the_sequence_after_the_chart_random() {
+        let options = opponent_options(ArrangeOption::Random);
+        assert_eq!(bms_random_source_for_chart(&options), BmsRandomSource::Lr2Seed(2179));
+
+        let plain = transform("", &options);
+        assert_eq!(plain.source_key_mode, KeyMode::K7);
+        assert_eq!(lr2_table(&plain.chart), [1, 5, 2, 6, 3, 7, 4]);
+        // The pattern is the ordinary lane pattern, so replays and retries reuse it.
+        assert_eq!(
+            plain.applied_arrange.pattern.as_deref(),
+            Some(&[0, 1, 3, 5, 7, 2, 4, 6, 8, 9, 10, 11, 12, 13, 14, 15][..])
+        );
+
+        let drawn = transform("#RANDOM 3\n#ENDRANDOM\n", &options);
+        assert_eq!(drawn.applied_arrange.bms_random_choices, [1]);
+        assert_eq!(lr2_table(&drawn.chart), [5, 1, 6, 2, 7, 4, 3]);
+    }
+
+    #[test]
+    fn lr2_seed_keeps_bmz_lanes_for_other_options_and_yields_to_recorded_data() {
+        // MIRROR does not draw, and S-RANDOM keeps BMZ's own note arrangement.
+        let mirror = transform("", &opponent_options(ArrangeOption::Mirror));
+        assert_eq!(lr2_table(&mirror.chart), [7, 6, 5, 4, 3, 2, 1]);
+        let s_random = transform("", &opponent_options(ArrangeOption::SRandom));
+        assert_eq!(s_random.applied_arrange.pattern, None);
+
+        // A recorded pattern is used as is.
+        let mut recorded = opponent_options(ArrangeOption::Random);
+        recorded.arrange_pattern = Some((0..LANE_COUNT as u8).collect());
+        assert_eq!(lr2_table(&transform("", &recorded).chart), [1, 2, 3, 4, 5, 6, 7]);
+
+        // Recorded choices come before the LR2 seed.
+        let mut replay = opponent_options(ArrangeOption::Random);
+        replay.bms_random_choices = Some(vec![2]);
+        assert!(matches!(bms_random_source_for_chart(&replay), BmsRandomSource::Choices { .. }));
+        replay.bms_random_choices = None;
+        replay.legacy_arrange_seed = true;
+        assert_eq!(bms_random_source_for_chart(&replay), BmsRandomSource::Lr2Seed(2179));
+    }
+}
+
 /// 音源 preload の入力規模。source は宣言パス単位、region は `SoundId` 単位で数える。
 ///
 /// source candidate の拡張子フォールバックや decode cache の実装には依存しないため、
@@ -140,12 +223,16 @@ pub fn load_game_session_for_chart_with_input_backend(
     ))
 }
 
+/// Recorded choices (replays) first, then a battle target's LR2 seed, then the legacy
+/// shared seed and the ordinary `#RANDOM` seed.
 pub(super) fn bms_random_source_for_chart(options: &PlaySessionOptions) -> BmsRandomSource {
     if options.bms_random_choices.is_some() || options.bms_switch_choices.is_some() {
         BmsRandomSource::Choices {
             random: options.bms_random_choices.clone().unwrap_or_default(),
             switches: options.bms_switch_choices.clone().unwrap_or_default(),
         }
+    } else if let Some(seed) = options.lr2_seed {
+        BmsRandomSource::Lr2Seed(seed)
     } else if options.legacy_arrange_seed {
         // Replay v3 and older derived `#RANDOM` from the shared arrange seed.
         BmsRandomSource::Seed(options.arrange_seed.map(|seed| seed as u64))
@@ -320,6 +407,7 @@ pub fn preload_play_session_for_chart_with_callbacks(
             opponent_options.arrange_seed = Some(i64::from(seeds.p1.value()));
             opponent_options.arrange_seed_2p = seeds.p2.map(|seed| i64::from(seed.value()));
         }
+        opponent_options.lr2_seed = opponent.lr2_seed;
         opponent_options.bms_random_choices = opponent.bms_random_choices.clone();
         opponent_options.bms_switch_choices = opponent.bms_switch_choices.clone();
         opponent_options.arrange_pattern = opponent.arrange_pattern.clone();
@@ -605,6 +693,10 @@ fn transform_chart_import(
     options: &PlaySessionOptions,
 ) -> Result<TransformedPlayChart> {
     let mut import = import;
+    // LR2 RANDOM lanes become this load's pattern, which branch charts reuse below.
+    let lr2_options = lr2_arrange_pattern(&mut import, options)
+        .map(|pattern| PlaySessionOptions { arrange_pattern: Some(pattern), ..options.clone() });
+    let options = lr2_options.as_ref().unwrap_or(options);
     if import.chart.metadata.conditional.is_some()
         && let Some(replay) = &options.replay_player
     {
@@ -667,12 +759,48 @@ fn transform_chart_import(
                 warnings: Vec::new(),
                 bms_random_choices: Vec::new(),
                 bms_switch_choices: Vec::new(),
+                lr2_random_state: None,
             };
             *chart = transform_chart_for_play(import, &branch_options, false).chart;
         }));
         result.chart.metadata.conditional = Some(Arc::new(program));
     }
     Ok(result)
+}
+
+/// The LR2 RANDOM lanes of a chart read with [`BmsRandomSource::Lr2Seed`]. They continue
+/// the LR2 sequence its `#RANDOM` left, 1P side first. A recorded pattern wins, and a
+/// BATTLE option or a key-mode conversion, which change the lanes before the arrangement,
+/// keep BMZ's own arrangement.
+fn lr2_arrange_pattern(import: &mut ImportResult, options: &PlaySessionOptions) -> Option<Vec<u8>> {
+    let mut rng = import.lr2_random_state.take()?;
+    if options.arrange_pattern.is_some() {
+        return None;
+    }
+    let key_mode = import.chart.metadata.key_mode;
+    let battle_option = options.double_option.normalize_for_key_mode(key_mode).is_battle();
+    let battle_presentation = (options.session_mode.is_battle()
+        || options.battle_opponent.is_some())
+        && matches!(key_mode, KeyMode::K5 | KeyMode::K7);
+    let converted = !battle_presentation && options.key_mode_conversion.applies_to(key_mode);
+    let pattern = if battle_option || converted {
+        None
+    } else {
+        lr2_random_arrange_pattern(&mut rng, key_mode, options.arrange, options.arrange_2p)
+    };
+    let draws_lanes = options.arrange == ArrangeOption::Random
+        || (matches!(key_mode, KeyMode::K10 | KeyMode::K14)
+            && options.arrange_2p == ArrangeOption::Random);
+    if pattern.is_none() && draws_lanes {
+        tracing::warn!(
+            arrange = options.arrange.as_str(),
+            arrange_2p = options.arrange_2p.as_str(),
+            double_option = options.double_option.as_str(),
+            ?key_mode,
+            "cannot reproduce LR2 RANDOM lanes here; using a local seed"
+        );
+    }
+    pattern
 }
 
 fn transform_chart_for_play(

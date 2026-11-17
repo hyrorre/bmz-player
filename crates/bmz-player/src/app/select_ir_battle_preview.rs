@@ -1,6 +1,6 @@
 use super::select_ir_battle::SelectBattleChoice;
 use super::*;
-use crate::screens::play_start::{BattleTargetArrangement, BattleTargetPlayback};
+use crate::screens::play_start::{BattleTargetArrangement, BattleTargetPlayback, SeedScheme};
 use bmz_render::scene::SelectBattleSnapshot;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +115,7 @@ impl WinitApp {
                         arrange_2p,
                         double_option,
                         packed_seed: score.play_seed,
+                        seed_scheme: SeedScheme::Beatoraja24,
                     }
                     .arrangement();
                     preview = arrangement_preview(preview.name, key_mode, &arrangement);
@@ -276,6 +277,7 @@ fn ranking_preview(
             arrange_2p: arrange_2p.unwrap_or_default(),
             double_option: double_option.unwrap_or_default(),
             packed_seed: entry.random_seed,
+            seed_scheme: entry.seed_scheme,
         }
         .arrangement();
         preview.lane_shuffle_pattern =
@@ -346,6 +348,7 @@ mod tests {
             arrange_1p: None,
             arrange_2p: None,
             random_seed: None,
+            seed_scheme: SeedScheme::Beatoraja24,
             double_option: None,
         };
         let missing = ranking_preview(&entry, KeyMode::K7);
@@ -355,6 +358,17 @@ mod tests {
         assert!(ranking_preview(&entry, KeyMode::K7).lane_shuffle_pattern.is_empty());
         entry.random_seed = Some(0);
         assert_eq!(ranking_preview(&entry, KeyMode::K7).lane_shuffle_pattern.len(), 16);
+        // LR2 rows draw from a fresh LR2 sequence, assuming the chart has no #RANDOM.
+        entry.seed_scheme = SeedScheme::Lr2;
+        entry.random_seed = Some(2179);
+        assert_eq!(
+            ranking_preview(&entry, KeyMode::K7).lane_shuffle_pattern,
+            [0, 1, 3, 5, 7, 2, 4, 6, 8, 9, 10, 11, 12, 13, 14, 15]
+        );
+        entry.random_seed = Some(0x7fff);
+        assert!(ranking_preview(&entry, KeyMode::K7).lane_shuffle_pattern.is_empty());
+        entry.seed_scheme = SeedScheme::Beatoraja24;
+        entry.random_seed = Some(0);
         entry.arrange_1p = Some("unrecognized".into());
         assert!(ranking_preview(&entry, KeyMode::K7).arrange.is_none());
         entry.arrange_1p = Some("s-random".into());

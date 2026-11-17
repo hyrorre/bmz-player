@@ -100,6 +100,7 @@ pub(super) fn score_ranking_entry(index: usize, resource: RianRankingResource) -
             random_seed: attributes.get("play_seed").and_then(|value| {
                 value.as_i64().or_else(|| value.as_str().and_then(|value| value.parse().ok()))
             }),
+            seed_scheme: None,
             double_option,
             verification: None,
             judges: Some(ranking_judges(&attributes)),

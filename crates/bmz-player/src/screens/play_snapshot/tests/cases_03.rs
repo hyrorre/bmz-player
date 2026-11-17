@@ -200,6 +200,7 @@ fn build_render_snapshot_reports_independent_opponent_skin_timers() {
                 arrange_seed_2p: None,
                 legacy_arrange_seed: false,
                 packed_seed: None,
+                lr2_seed: None,
                 bms_random_choices: None,
                 bms_switch_choices: None,
                 arrange_pattern: None,

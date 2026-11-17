@@ -585,10 +585,14 @@ pub struct IrRankingScore {
     pub arrange_1p: Option<String>,
     #[serde(default)]
     pub arrange_2p: Option<String>,
-    /// Provider arrangement seed. rianIR uses the LR2-compatible packed
-    /// 24-bit-per-side representation.
-    #[serde(default)]
+    /// Provider arrangement seed. rianIR uses the beatoraja-compatible packed
+    /// 24-bit-per-side representation. BMS-IR states the format in `seed_scheme`.
+    #[serde(default, deserialize_with = "deserialize_optional_i64")]
     pub random_seed: Option<i64>,
+    /// Seed format of `random_seed` ("beatoraja" / "lr2").
+    /// Some providers do not send it.
+    #[serde(default)]
+    pub seed_scheme: Option<String>,
     #[serde(default)]
     pub double_option: Option<String>,
     #[serde(default)]
@@ -676,5 +680,35 @@ mod tests {
         assert_eq!(response.deleted_score_ids, ["backfill-score"]);
         assert_eq!(response.retained_score_ids, ["verified-play-score"]);
         assert!(response.missing_score_ids.is_empty());
+    }
+
+    #[test]
+    fn ranking_score_decodes_seed_as_string_or_number_with_optional_scheme() {
+        let base = |extra: serde_json::Value| {
+            let mut value = serde_json::json!({
+                "clear": "HARD",
+                "ex_score": 100,
+                "max_combo": 50,
+                "min_bp": 1,
+                "min_cb": 1
+            });
+            value.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            serde_json::from_value::<IrRankingScore>(value).unwrap()
+        };
+
+        let lr2 = base(serde_json::json!({
+            "random_seed": "281474976710655",
+            "seed_scheme": "lr2"
+        }));
+        assert_eq!(lr2.random_seed, Some(281_474_976_710_655));
+        assert_eq!(lr2.seed_scheme.as_deref(), Some("lr2"));
+
+        let numeric = base(serde_json::json!({ "random_seed": 42 }));
+        assert_eq!(numeric.random_seed, Some(42));
+        assert_eq!(numeric.seed_scheme, None);
+
+        let missing = base(serde_json::json!({}));
+        assert_eq!(missing.random_seed, None);
+        assert_eq!(missing.seed_scheme, None);
     }
 }
