@@ -37,3 +37,11 @@ LR2のスコアは`rseed`を保持する。運営者の説明ではLR2形式の�
 ## 検証
 
 Windowsで`cargo fmt --check`、`cargo check --workspace --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked --no-fail-fast`が通過した。全体テストはローカル通信とフォルダーリンクを使える環境で実行し、`bmz-player`は3,299件成功、91件はignoredだった。プレイ画面での対戦は未確認。
+
+## 配置seed変換のレビュー対応（2026-11-17）
+
+- 譜面読み込み時にLR2方式で分岐と鍵盤配置を解決する。確定した並びに一致するbeatoraja形式のseedを既存の探索で求め、そのseedを配置・保存・IR送信に使う。DPは各サイドを独立に変換する。
+- `RIVALCHART MIRROR`の反転は、相手の配列を確定した後に行う。ランキングから直接選んだ相手と、既存の配置パターンを持つリプレイの両方で、LR2の分岐解決を維持して反転できる。
+- 以前の記録などで再現できる配置seedが無い場合、rianIRのリクエストでは`play_seed`を省略する。明示された0は引き続き送る。
+
+Windowsで整形、`bmz-player`のcheck・all-targets Clippy・テストが通過した。単体テストは3,303件成功、91件ignoredだった。7Kの反転、DP FLIPを含む両サイドのseed再現、3つのIRの送信キュー、BMS-IRの模擬HTTPリクエストを確認した。実プレイと本番送信は未確認。

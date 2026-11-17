@@ -109,6 +109,40 @@ fn mirror_side(
     found.map(|seed| (target_arrange, Some(seed)))
 }
 
+/// Finds independent beatoraja seeds that reproduce the entire recorded lane pattern.
+/// NORMAL and MIRROR need no seed to reproduce their lanes.
+pub(super) fn seeds_for_lane_pattern(
+    key_mode: KeyMode,
+    arrange_1p: ArrangeOption,
+    arrange_2p: ArrangeOption,
+    pattern: &[u8],
+) -> Option<(Option<i64>, Option<i64>)> {
+    if pattern.len() != LANE_COUNT {
+        return None;
+    }
+    let target: Vec<_> = pattern.iter().map(|&lane| usize::from(lane)).collect();
+    let reproduce = |side, arrange| {
+        let seed = match arrange {
+            ArrangeOption::Normal | ArrangeOption::Mirror => None,
+            ArrangeOption::Random => {
+                let mirror = mirror_lane_permutation_for_side(key_mode, side);
+                Some(find_seed(key_mode, side, arrange, &target, &mirror)?)
+            }
+            _ => return None,
+        };
+        Some((seed, fixed_side_permutation(key_mode, side, arrange, seed, false)?))
+    };
+    let (seed, mut reproduced) = reproduce(ArrangeSide::P1, arrange_1p)?;
+    let seed_2p = if matches!(key_mode, KeyMode::K10 | KeyMode::K14) {
+        let (seed_2p, perm) = reproduce(ArrangeSide::P2, arrange_2p)?;
+        merge_lane_permutation(&mut reproduced, &perm);
+        seed_2p
+    } else {
+        None
+    };
+    (reproduced == target).then_some((seed, seed_2p))
+}
+
 /// The first beatoraja seed (from 0) for which `arrange` puts this side's lanes as in
 /// `target`. Every lane order of up to 9 lanes has at least 20 of the 24-bit seeds.
 fn find_seed(

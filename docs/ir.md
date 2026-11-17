@@ -909,7 +909,7 @@ payloadと署名は次のとおりです。
 
 - 新しいプレイでは、beatorajaと同じサイド別の24 bitのseedを使います。SPはP1、DPは`P1 + P2 * 2^24`を、`play_options.seed` / `random_seed`に10進数の文字列で送ります。
 - `seed_scheme=beatoraja_24bit_v1`と、BMSの`#RANDOM`の選択列（`bms_random_choices` / `bms_switch_choices`）を、別のmetadataとして送ります。
-- G-BATTLEで自分側の譜面にLR2の分岐解決を適用したときは、分岐用seedをリプレイに保存します。通常の24 bit配置としては再現できないため、IRの`play_options.seed` / `random_seed`は省略します。
+- LR2形式のseedを使ったG-BATTLEでは、自分側の鍵盤配置に一致するbeatoraja形式のseedを、読み込み時に求めてスコア保存とIR送信に使います。リプレイにはLR2の分岐用seedも保存します。以前のリプレイにある固定配置を24 bit seedで再現できない場合は、その配置を使い、送信時の配置seedを省略します。
 - F-RANDOM / MF-RANDOMを含むオプションを送るかどうか、外部のIDへどう対応させるかは、共通の層では拒否せず、将来のprovider側の対応状況とユーザーの設定で決めます。
 
 ### ローカルでの動作確認

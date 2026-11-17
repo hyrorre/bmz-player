@@ -149,6 +149,111 @@ mod lr2_tests {
         let drawn = transform("#RANDOM 3\n#IF 1\n#ENDIF\n#ENDRANDOM\n", &options);
         assert_eq!(drawn.applied_arrange.bms_random_choices, [1]);
         assert_eq!(lr2_table(&drawn.chart), [5, 1, 6, 2, 7, 4, 3]);
+        let seed = drawn.applied_arrange.packed_beatoraja_seed(KeyMode::K7).unwrap();
+        let seeded = transform(
+            "",
+            &PlaySessionOptions {
+                arrange: ArrangeOption::Random,
+                arrange_seed: Some(seed),
+                ..Default::default()
+            },
+        );
+        assert_eq!(lr2_table(&seeded.chart), lr2_table(&drawn.chart));
+    }
+
+    #[test]
+    fn lr2_mirror_keeps_the_branch_and_reproduces_the_reflected_lanes_with_its_seed() {
+        let options = opponent_options(ArrangeOption::Random);
+        let mirror = PlaySessionOptions { mirror_lr2_arrangement: true, ..options.clone() };
+        let mirrored = transform("", &mirror);
+        assert_eq!(lr2_table(&mirrored.chart), [7, 3, 6, 2, 5, 1, 4]);
+        assert_eq!(mirrored.applied_arrange.packed_beatoraja_seed(KeyMode::K7), Some(6481));
+
+        let header = "#RANDOM 3\n#00811:01\n#IF 1\n#ENDIF\n";
+        let original = transform(header, &options);
+        let direct = transform(header, &mirror);
+        let recorded = transform(
+            header,
+            &PlaySessionOptions {
+                arrange_seed: Some(0),
+                arrange_pattern: original.applied_arrange.pattern,
+                ..mirror
+            },
+        );
+        let expected: Vec<_> =
+            lr2_table(&original.chart).into_iter().map(|lane| 8 - lane).collect();
+        assert_eq!(lr2_table(&direct.chart), expected);
+        assert_eq!(lr2_table(&recorded.chart), expected);
+        assert_eq!(recorded.applied_arrange.lr2_seed, Some(2179));
+        assert_eq!(recorded.applied_arrange.bms_random_choices, [1]);
+        assert_eq!(recorded.applied_arrange.seed, direct.applied_arrange.seed);
+
+        let replay = transform(
+            header,
+            &PlaySessionOptions {
+                arrange_seed: recorded.applied_arrange.seed,
+                arrange_pattern: recorded.applied_arrange.pattern.clone(),
+                ..options
+            },
+        );
+        assert_eq!(lr2_table(&replay.chart), expected);
+        assert_eq!(replay.applied_arrange.seed, recorded.applied_arrange.seed);
+    }
+
+    #[test]
+    fn lr2_double_converts_both_sides_after_chart_random() {
+        let text = format!(
+            "#PLAYER 3\n#RANDOM 3\n#IF 1\n#ENDIF\n{SEVEN_KEYS}#00821:01\n#00922:01\n#01023:01\n#01124:01\n#01225:01\n#01328:01\n#01429:01\n"
+        );
+        let options = PlaySessionOptions {
+            arrange_2p: ArrangeOption::Random,
+            double_option: DoubleOption::Flip,
+            ..opponent_options(ArrangeOption::Random)
+        };
+        let load = |options: &PlaySessionOptions| {
+            let import = bmz_chart::import::import_chart_bytes_with_random_source(
+                std::path::Path::new("lr2-dp.bms"),
+                text.as_bytes(),
+                bms_random_source_for_chart(options),
+                false,
+            )
+            .unwrap();
+            transform_chart_import(import, options).unwrap()
+        };
+        let chart = load(&options);
+        assert_eq!(chart.source_key_mode, KeyMode::K14);
+        let packed = chart.applied_arrange.packed_beatoraja_seed(KeyMode::K14).unwrap();
+        let seeds = RandomOptionSeeds::unpack(packed as u64, true).unwrap();
+        let reproduced = load(&PlaySessionOptions {
+            lr2_seed: None,
+            arrange_seed: Some(i64::from(seeds.p1.value())),
+            arrange_seed_2p: seeds.p2.map(|seed| i64::from(seed.value())),
+            bms_random_choices: Some(chart.applied_arrange.bms_random_choices.clone()),
+            ..options
+        });
+        assert_eq!(chart.applied_arrange.pattern, reproduced.applied_arrange.pattern);
+        for (original, replayed) in chart.chart.lane_notes.iter().zip(&reproduced.chart.lane_notes)
+        {
+            assert!(
+                original.iter().map(|note| note.time).eq(replayed.iter().map(|note| note.time))
+            );
+        }
+    }
+
+    #[test]
+    fn lr2_recorded_layout_without_a_matching_seed_keeps_the_pattern() {
+        let mut pattern: Vec<_> = (0..LANE_COUNT as u8).collect();
+        pattern.swap(Lane::Scratch.index(), Lane::Scratch2.index());
+        let chart = transform(
+            "",
+            &PlaySessionOptions {
+                arrange_pattern: Some(pattern.clone()),
+                arrange_seed: Some(0),
+                ..opponent_options(ArrangeOption::Random)
+            },
+        );
+        assert_eq!(chart.applied_arrange.pattern, Some(pattern));
+        assert_eq!(chart.applied_arrange.packed_beatoraja_seed(KeyMode::K7), None);
     }
 
     #[test]
@@ -439,6 +544,7 @@ pub fn preload_play_session_for_chart_with_callbacks(
             opponent_options.arrange_seed_2p = seeds.p2.map(|seed| i64::from(seed.value()));
         }
         opponent_options.lr2_seed = opponent.lr2_seed;
+        opponent_options.mirror_lr2_arrangement = false;
         opponent_options.bms_random_choices = opponent.bms_random_choices.clone();
         opponent_options.bms_switch_choices = opponent.bms_switch_choices.clone();
         opponent_options.arrange_pattern = opponent.arrange_pattern.clone();
@@ -725,9 +831,7 @@ fn transform_chart_import(
 ) -> Result<TransformedPlayChart> {
     let mut import = import;
     let lr2_seed = options.lr2_seed.filter(|_| import.lr2_random_state.is_some());
-    // LR2 RANDOM lanes become this load's pattern, which branch charts reuse below.
-    let lr2_options = lr2_arrange_pattern(&mut import, options)
-        .map(|pattern| PlaySessionOptions { arrange_pattern: Some(pattern), ..options.clone() });
+    let lr2_options = resolve_lr2_arrangement(&mut import, options);
     let options = lr2_options.as_ref().unwrap_or(options);
     if import.chart.metadata.conditional.is_some()
         && let Some(replay) = &options.replay_player
@@ -781,6 +885,11 @@ fn transform_chart_import(
     }
     let mut result = transform_chart_for_play(import, options, true);
     result.applied_arrange.lr2_seed = lr2_seed;
+    // An explicit LR2-derived pattern that could not be converted overrides all side seeds.
+    if lr2_seed.is_some() && options.arrange_pattern.is_some() {
+        result.applied_arrange.seed = None;
+        result.applied_arrange.seed_2p = None;
+    }
     if let Some(program) = result.chart.metadata.conditional.take() {
         let mut program = (*program).clone();
         let mut branch_options = options.clone();
@@ -801,39 +910,74 @@ fn transform_chart_import(
     Ok(result)
 }
 
-/// The LR2 RANDOM lanes of a chart read with [`BmsRandomSource::Lr2Seed`]. They continue
-/// the LR2 sequence its `#RANDOM` left, 1P side first. A recorded pattern wins, and a
-/// BATTLE option or a key-mode conversion, which change the lanes before the arrangement,
-/// keep BMZ's own arrangement.
-fn lr2_arrange_pattern(import: &mut ImportResult, options: &PlaySessionOptions) -> Option<Vec<u8>> {
+/// Resolves the LR2 lanes after the chart's `#RANDOM`, then applies those lanes through the
+/// ordinary beatoraja option seeds. The LR2 seed remains available for branch resolution.
+fn resolve_lr2_arrangement(
+    import: &mut ImportResult,
+    options: &PlaySessionOptions,
+) -> Option<PlaySessionOptions> {
     let mut rng = import.lr2_random_state.take()?;
-    if options.arrange_pattern.is_some() {
-        return None;
-    }
     let key_mode = import.chart.metadata.key_mode;
     let battle_option = options.double_option.normalize_for_key_mode(key_mode).is_battle();
     let battle_presentation = (options.session_mode.is_battle()
         || options.battle_opponent.is_some())
         && matches!(key_mode, KeyMode::K5 | KeyMode::K7);
     let converted = !battle_presentation && options.key_mode_conversion.applies_to(key_mode);
-    let pattern = if battle_option || converted {
-        None
-    } else {
-        lr2_random_arrange_pattern(&mut rng, key_mode, options.arrange, options.arrange_2p)
-    };
-    let draws_lanes = options.arrange == ArrangeOption::Random
-        || (matches!(key_mode, KeyMode::K10 | KeyMode::K14)
-            && options.arrange_2p == ArrangeOption::Random);
-    if pattern.is_none() && draws_lanes {
-        tracing::warn!(
-            arrange = options.arrange.as_str(),
-            arrange_2p = options.arrange_2p.as_str(),
-            double_option = options.double_option.as_str(),
-            ?key_mode,
-            "cannot reproduce LR2 RANDOM lanes here; using a local seed"
-        );
+    if battle_option || converted {
+        return None;
     }
-    pattern
+
+    let mut resolved = options.clone();
+    if resolved.arrange_pattern.is_none() {
+        resolved.arrange_pattern =
+            lr2_random_arrange_pattern(&mut rng, key_mode, options.arrange, options.arrange_2p);
+        let draws_lanes = options.arrange == ArrangeOption::Random
+            || (matches!(key_mode, KeyMode::K10 | KeyMode::K14)
+                && options.arrange_2p == ArrangeOption::Random);
+        if resolved.arrange_pattern.is_none() && draws_lanes {
+            tracing::warn!(
+                ?key_mode,
+                "cannot reproduce LR2 RANDOM lanes here; using BMZ arrangement"
+            );
+        }
+    }
+    if let Some(pattern) = resolved.arrange_pattern.as_deref() {
+        let Some((seed, seed_2p)) = super::arrange_mirror::seeds_for_lane_pattern(
+            key_mode,
+            resolved.arrange,
+            resolved.arrange_2p,
+            pattern,
+        ) else {
+            tracing::warn!(?key_mode, "no compatible seeds for the recorded LR2 lane pattern");
+            return Some(resolved);
+        };
+        resolved.arrange_seed = seed.or(resolved.arrange_seed);
+        resolved.arrange_seed_2p = seed_2p.or(resolved.arrange_seed_2p);
+        resolved.legacy_arrange_seed = false;
+        resolved.random_trainer_seed = None;
+        resolved.arrange_pattern = None;
+    }
+    if resolved.mirror_lr2_arrangement
+        && let Some(mirrored) = mirror_copied_arrangement(
+            key_mode,
+            &CopiedArrangement {
+                arrange: resolved.arrange,
+                arrange_2p: resolved.arrange_2p,
+                double_option: resolved.double_option,
+                seed: resolved.arrange_seed,
+                seed_2p: resolved.arrange_seed_2p,
+                legacy_seed: resolved.legacy_arrange_seed,
+                pattern: None,
+            },
+        )
+    {
+        resolved.arrange = mirrored.arrange;
+        resolved.arrange_2p = mirrored.arrange_2p;
+        resolved.arrange_seed = mirrored.seed;
+        resolved.arrange_seed_2p = mirrored.seed_2p;
+        resolved.legacy_arrange_seed = false;
+    }
+    Some(resolved)
 }
 
 fn transform_chart_for_play(

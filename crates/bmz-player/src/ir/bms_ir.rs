@@ -1125,11 +1125,22 @@ mod tests {
         let client =
             BmsIrClient::new_with_timeout(&base_url, std::time::Duration::from_secs(2)).unwrap();
 
-        client.submit_score(&sample_score_payload(), "123", "token", true).await.unwrap();
+        let mut payload = sample_score_payload();
+        payload.play_options.extend([
+            ("seed".into(), serde_json::json!("6481")),
+            ("random_seed".into(), serde_json::json!("6481")),
+            ("seed_scheme".into(), serde_json::json!("beatoraja_24bit_v1")),
+        ]);
+        client.submit_score(&payload, "123", "token", true).await.unwrap();
         let score_request = requests.recv().unwrap();
         assert!(score_request.starts_with("POST /api/bmz-player/v1/score HTTP/1.1"));
-        assert_eq!(request_json(&score_request)["score"]["idempotency_key"], "score-contract-test");
-        assert_eq!(request_json(&score_request)["include_ranking"], true);
+        let body = request_json(&score_request);
+        assert_eq!(body["score"]["idempotency_key"], "score-contract-test");
+        assert_eq!(body["include_ranking"], true);
+        let options = &body["score"]["play_options"];
+        assert_eq!(options["seed"], "6481");
+        assert_eq!(options["random_seed"], "6481");
+        assert_eq!(options["seed_scheme"], "beatoraja_24bit_v1");
 
         client
             .submit_course_score(&serde_json::json!({"course_hash": course_hash}), "123", "token")

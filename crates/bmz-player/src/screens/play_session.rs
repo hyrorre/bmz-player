@@ -188,9 +188,10 @@ pub struct PlaySessionOptions {
     /// Independent seed used only while selecting BMS `#RANDOM` branches.
     pub bms_random_seed: Option<u64>,
     /// LR2 seed of a battle target. `#RANDOM` is resolved as LR2 does, and RANDOM
-    /// takes its lanes from the same LR2 sequence. Set only for the opponent and for a
-    /// local chart that replicates it; recorded choices and patterns take priority.
+    /// takes its lanes from the same LR2 sequence when a pattern has not been recorded.
     pub lr2_seed: Option<u32>,
+    /// Reflect the copied layout after resolving the LR2 branch and lane sequence.
+    pub mirror_lr2_arrangement: bool,
     /// Recorded `#RANDOM` decisions, in source order, for exact replay.
     pub bms_random_choices: Option<Vec<i32>>,
     /// Recorded `#SWITCH` decisions, in source order, for exact replay.
@@ -300,7 +301,7 @@ impl AppliedArrange {
 
 impl AppliedArrange {
     pub fn packed_beatoraja_seed_from_sides(&self) -> Option<i64> {
-        if self.legacy_seed || self.lr2_seed.is_some() {
+        if self.legacy_seed {
             return None;
         }
         let p1 = RandomOptionSeed::new(u32::try_from(self.seed?).ok()?)?;
@@ -469,6 +470,7 @@ impl Default for PlaySessionOptions {
             h_random_threshold_ms: Some(DEFAULT_H_RANDOM_THRESHOLD_MS),
             bms_random_seed: None,
             lr2_seed: None,
+            mirror_lr2_arrangement: false,
             bms_random_choices: None,
             bms_switch_choices: None,
             arrange_pattern: None,

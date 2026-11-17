@@ -236,6 +236,7 @@ pub struct PlayStartOptions {
     pub bms_random_seed: Option<u64>,
     /// LR2 branch seed from a battle target or previously played arrangement.
     pub lr2_seed: Option<u32>,
+    pub mirror_lr2_arrangement: bool,
     pub bms_random_choices: Option<Vec<i32>>,
     pub bms_switch_choices: Option<Vec<u64>>,
     pub arrange_pattern: Option<Vec<u8>>,
@@ -401,6 +402,7 @@ pub fn play_session_options_from_start(
         h_random_threshold_ms: start_options.h_random_threshold_ms,
         bms_random_seed: start_options.bms_random_seed,
         lr2_seed: start_options.lr2_seed,
+        mirror_lr2_arrangement: start_options.mirror_lr2_arrangement,
         bms_random_choices: start_options.bms_random_choices,
         bms_switch_choices: start_options.bms_switch_choices,
         arrange_pattern: start_options.arrange_pattern,

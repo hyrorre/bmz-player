@@ -125,13 +125,15 @@ pub(super) fn score_request(
         "arrange_1p": arrange_value(payload, "arrange_1p"),
         "arrange_2p": arrange_value(payload, "arrange_2p"),
         "double_option": double_option_value(payload),
-        "play_seed": seed_value(payload),
         "play_assist": 0,
         "play_gauge": gauge_type_id(&payload.rule.gauge)?,
         "total_notes": payload.result.notes,
         "play_duration": payload.result.duration_ms.map(|ms| ms as f64 / 1000.0).unwrap_or(0.0),
         "body": body,
     });
+    if let Some(seed) = value_seed(&json!(payload.play_options)) {
+        request["play_seed"] = json!(seed);
+    }
     // `length_ms` is also the version marker for duration-aware queue jobs. Jobs
     // serialized by older BMZ versions retain their legacy wire shape and do not
     // reinterpret chart end time as hardware-clock play duration.
@@ -234,7 +236,7 @@ pub(super) fn course_request(payload: &Value, player_id: &str, api_token: &str) 
         "arrange_1p": arrange,
         "arrange_2p": "normal",
         "double_option": "off",
-        "play_seed": value_seed(play_options),
+        "play_seed": value_seed(play_options).unwrap_or(0),
         "play_assist": 0,
         "play_gauge": gauge_type_id(required_str(rule, "gauge")?)?,
         "total_notes": total_notes,
@@ -399,18 +401,11 @@ pub(super) fn double_option_value(payload: &IrScoreSubmission) -> String {
         .to_string()
 }
 
-pub(super) fn seed_value(payload: &IrScoreSubmission) -> i64 {
-    value_seed(&json!(payload.play_options))
-}
-
-pub(super) fn value_seed(play_options: &Value) -> i64 {
-    ["random_seed", "seed"]
-        .iter()
-        .find_map(|key| {
-            let value = play_options.get(*key)?;
-            value.as_i64().or_else(|| value.as_str()?.parse().ok())
-        })
-        .unwrap_or(0)
+fn value_seed(play_options: &Value) -> Option<i64> {
+    ["random_seed", "seed"].iter().find_map(|key| {
+        let value = play_options.get(*key)?;
+        value.as_i64().or_else(|| value.as_str()?.parse().ok())
+    })
 }
 
 pub(super) fn b64(value: &str) -> String {

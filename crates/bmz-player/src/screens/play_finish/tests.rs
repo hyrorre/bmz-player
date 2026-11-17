@@ -696,15 +696,17 @@ fn finish_session_result_returns_summary() {
     };
     let mut session = session();
     let mut windows = session.judge.window_set;
+    Arc::get_mut(&mut session.chart).unwrap().metadata.source_format =
+        bmz_chart::model::ChartSourceFormat::Bms;
     windows.note.pgreat_us = 7_000;
     session.judge.set_window_set(windows);
-    let lane_shuffle_pattern = (0..bmz_core::lane::LANE_COUNT as u8).rev().collect::<Vec<_>>();
+    let lane_shuffle_pattern = vec![0, 6, 4, 2, 7, 5, 3, 1, 8, 9, 10, 11, 12, 13, 14, 15];
     let applied_arrange = AppliedArrange {
         source_key_mode: None,
         arrange: crate::select_options::ArrangeOption::Random,
         arrange_2p: crate::select_options::ArrangeOption::Mirror,
         double_option: crate::select_options::DoubleOption::Off,
-        seed: Some(42),
+        seed: Some(6481),
         seed_2p: None,
         legacy_seed: false,
         s_random_scheme: crate::screens::play_session::SRandomScheme::Lm120HzV1,
@@ -727,7 +729,7 @@ fn finish_session_result_returns_summary() {
         FinishSessionResultRequest {
             profile_paths: &paths,
             replay_config: &replay_config,
-            ir_config: &crate::config::profile_config::IrConfig::default(),
+            ir_config: &all_ir_providers(),
             session: &session,
             source_ln_profile: ChartLnProfile::from_chart(&session.chart),
             chart_length_ms: None,
@@ -758,7 +760,18 @@ fn finish_session_result_returns_summary() {
     assert_eq!(recorded.freq_semitones, Some(3));
     assert_eq!(recorded.recorded_freq_semitones(), 3);
     assert_eq!(recorded.lr2_seed, Some(2179));
-    assert_eq!(recorded.random_seed, None);
+    assert_eq!(recorded.random_seed, Some(6481));
+    let jobs = network_db.pending_ir_score_jobs(1_700_000_102, 10).unwrap();
+    let mut providers: Vec<_> = jobs.iter().map(|job| job.provider.as_str()).collect();
+    providers.sort_unstable();
+    assert_eq!(providers, ["bms-ir", "bmz", "rian-ir"], "{:?}", finished.summary.ir_last_error);
+    for job in jobs {
+        let payload: crate::ir::types::IrScoreSubmission =
+            serde_json::from_str(&job.payload_json).unwrap();
+        assert_eq!(payload.play_options["seed"], "6481");
+        assert_eq!(payload.play_options["random_seed"], "6481");
+        assert_eq!(payload.play_options["seed_scheme"], "beatoraja_24bit_v1");
+    }
 
     // First play creates a best, but Result still refers to the absent pre-save best.
     assert_eq!(finished.summary.skin_attempt.best_score_options, None);

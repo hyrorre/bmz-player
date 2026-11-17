@@ -882,6 +882,7 @@ fn apply_battle_target_replication(
     options.arrange_pattern = None;
     options.random_trainer_seed = None;
     options.lr2_seed = None;
+    options.mirror_lr2_arrangement = false;
 
     if !replication.copies_chart() {
         return;
@@ -927,16 +928,11 @@ fn apply_battle_target_replication(
         );
     }
     if replication == ChartReplicationModeConfig::RivalChartMirror {
-        if options.lr2_seed.is_some()
-            && !copied_chart
-            && [arrangement.arrange, arrangement.arrange_2p].contains(&ArrangeOption::Random)
-        {
-            // The LR2 lanes are known only after the chart's `#RANDOM`, too late to look
-            // for a seed of the mirrored lanes. Play the mirror with a local seed instead.
-            tracing::warn!("cannot mirror LR2 RANDOM lanes; keeping the local seed");
-            options.lr2_seed = None;
+        if options.lr2_seed.is_some() {
+            options.mirror_lr2_arrangement = true;
+        } else {
+            mirror_replicated_chart(options, key_mode, copied_chart);
         }
-        mirror_replicated_chart(options, key_mode, copied_chart);
     }
 }
 
@@ -1343,7 +1339,7 @@ mod rival_replication_tests {
         assert_eq!(options.lr2_seed, None);
         assert_eq!(options.arrange_seed, Some(77));
 
-        // The mirrored LR2 RANDOM lanes cannot be found before the chart is loaded.
+        // Both the LR2 branch and the mirror request reach the chart loader.
         let mut options = PlayStartOptions { arrange_seed: Some(77), ..Default::default() };
         apply_battle_target_replication(
             &mut options,
@@ -1351,7 +1347,8 @@ mod rival_replication_tests {
             ChartReplicationModeConfig::RivalChartMirror,
             KeyMode::K7,
         );
-        assert_eq!(options.lr2_seed, None);
+        assert_eq!(options.lr2_seed, Some(2179));
+        assert!(options.mirror_lr2_arrangement);
         assert_eq!(options.arrange, ArrangeOption::Random);
     }
 
