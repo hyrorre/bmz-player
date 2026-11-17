@@ -57,7 +57,7 @@ use crate::storage::difficulty_table_db::DifficultyTableRecord;
 use crate::storage::replay_import::{ImportBeatorajaReplaysRequest, ReplayImportProgress};
 use crate::storage::score_import::{ScoreImportKind, ScoreImportRequest};
 use crate::update::{UpdateAssetKind, UpdateCandidate, current_version};
-use crate::window_config::monitor_config_name;
+use crate::window_config::{describe_monitors, match_configured_monitor, monitor_config_summary};
 
 const BUNDLED_THIRD_PARTY_NOTICES: &str = include_str!("../../../THIRD-PARTY-NOTICES.txt");
 const THIRD_PARTY_NOTICE_PATH: &str = "licenses/third-party-notices.txt";

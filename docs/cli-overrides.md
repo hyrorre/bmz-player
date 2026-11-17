@@ -45,7 +45,7 @@ Viewer IPCはv3です。更新前の常駐Viewerは終了してから新版を�
 |---|---|
 | `--window-mode` | `windowed` / `borderless` / `exclusive` |
 | `--window-size` | `WIDTHxHEIGHT`です。物理ピクセル、各辺1〜16384です。実効モードがwindowedの場合のみ |
-| `--monitor` | `primary`または`monitors list`に表示されたID全体を引用符で囲んで指定 |
+| `--monitor` | `primary`または`monitors list`の1列目のID全体を引用符で囲んで指定。一覧は「ID・解像度・表示名・primary」のタブ区切りです。Windowsではデバイスパスと座標、それ以外では「モニター名 [x, y]」です。従来の「モニター名 [x, y]」も受け付けます |
 | `--arrange` / `--arrange-2p` | `off` / `mirror` / `random` / `r-random` / `s-random` / `spiral` / `h-random` / `all-scratch` / `random-ex` / `s-random-ex` / `f-random` / `mf-random` |
 | `--double-option` | `off` / `flip` / `battle` / `battle-auto-scratch` |
 | `--gauge` | `assist-easy` / `easy` / `normal` / `hard` / `ex-hard` / `hazard` |

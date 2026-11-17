@@ -950,20 +950,29 @@ impl WinitApp {
         } else {
             configured_mode.clone()
         };
-        if desired_mode == self.ui.applied_window_mode {
+        let monitor_changed =
+            self.boot.app_config.video.monitor_name != self.ui.applied_monitor_name;
+        if desired_mode == self.ui.applied_window_mode && !monitor_changed {
             return;
         }
-        let monitor = select_monitor(
+        self.ui.applied_monitor_name = self.boot.app_config.video.monitor_name.clone();
+        // ウィンドウモードではモニター設定を使わないため、モニターだけの変更では動かさない。
+        if desired_mode == self.ui.applied_window_mode && desired_mode == WindowMode::Windowed {
+            return;
+        }
+        let selection = resolve_monitor(
             &self.boot.app_config.video.monitor_name,
             window.available_monitors(),
             window.primary_monitor(),
         );
+        selection.log("video config changed");
         let mut effective_video = self.boot.app_config.video.clone();
         effective_video.mode = desired_mode.clone();
-        window.set_fullscreen(fullscreen_from_config(&effective_video, monitor));
+        window.set_fullscreen(fullscreen_from_config(&effective_video, selection.handle()));
         tracing::info!(
             requested_window_mode = ?configured_mode,
             effective_window_mode = ?desired_mode,
+            monitor_changed,
             "window mode updated"
         );
         self.ui.applied_window_mode = desired_mode;
