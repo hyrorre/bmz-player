@@ -67,24 +67,7 @@ impl WinitApp {
         if let Some(applied) =
             self.result.finished_play.as_ref().map(|finished| &finished.applied_arrange)
         {
-            options.key_mode_conversion = applied.key_mode_conversion;
-            options.seven_to_nine_pattern = applied.seven_to_nine_pattern;
-            options.seven_to_nine_type = applied.seven_to_nine_type;
-            options.seven_to_nine_rule_mode = applied.seven_to_nine_rule_mode;
-            options.score_save_disabled |= applied.score_persistence_disabled();
-            options.arrange = applied.arrange;
-            options.arrange_2p = applied.arrange_2p;
-            options.double_option = applied.double_option;
-            options.arrange_seed = applied.seed;
-            options.arrange_seed_2p = applied.seed_2p;
-            options.legacy_arrange_seed = applied.legacy_seed;
-            options.s_random_scheme = applied.s_random_scheme;
-            options.s_random_scheme_2p = applied.s_random_scheme_2p;
-            options.h_random_threshold_ms = applied.h_random_threshold_ms;
-            options.bms_random_choices = Some(applied.bms_random_choices.clone());
-            options.bms_switch_choices = Some(applied.bms_switch_choices.clone());
-            options.lr2_seed = applied.lr2_seed;
-            options.arrange_pattern = applied.pattern.clone();
+            apply_arrange_override(&mut options, applied);
         }
         options
     }
@@ -111,6 +94,10 @@ impl WinitApp {
         options.battle_target = self.play.last_battle_target.clone();
         if let Some(active) = &self.play.active_play {
             let applied = &active.running.applied_arrange;
+            if mode == ResultRetryMode::SameArrange {
+                apply_arrange_override(&mut options, applied);
+                return options;
+            }
             options.key_mode_conversion = applied.key_mode_conversion;
             options.seven_to_nine_pattern = applied.seven_to_nine_pattern;
             options.seven_to_nine_type = applied.seven_to_nine_type;
@@ -119,23 +106,7 @@ impl WinitApp {
             options.arrange = applied.arrange;
             options.arrange_2p = applied.arrange_2p;
             options.double_option = applied.double_option;
-            match mode {
-                ResultRetryMode::SameArrange => {
-                    options.arrange_seed = applied.seed;
-                    options.arrange_seed_2p = applied.seed_2p;
-                    options.legacy_arrange_seed = applied.legacy_seed;
-                    options.s_random_scheme = applied.s_random_scheme;
-                    options.s_random_scheme_2p = applied.s_random_scheme_2p;
-                    options.h_random_threshold_ms = applied.h_random_threshold_ms;
-                    options.bms_random_choices = Some(applied.bms_random_choices.clone());
-                    options.bms_switch_choices = Some(applied.bms_switch_choices.clone());
-                    options.lr2_seed = applied.lr2_seed;
-                    options.arrange_pattern = applied.pattern.clone();
-                }
-                ResultRetryMode::DifferentArrange => {
-                    options.arrange_pattern = None;
-                }
-            }
+            options.arrange_pattern = None;
         }
         options
     }

@@ -240,6 +240,8 @@ pub struct PlayStartOptions {
     pub bms_random_choices: Option<Vec<i32>>,
     pub bms_switch_choices: Option<Vec<u64>>,
     pub arrange_pattern: Option<Vec<u8>>,
+    /// Start from the previous play's resolved arrangement.
+    pub reuse_applied_arrangement: bool,
     /// Override the starting gauge value (used to carry the gauge between
     /// charts in a course).  None means use the gauge's default `init`.
     pub initial_gauge_value: Option<f32>,
@@ -406,6 +408,7 @@ pub fn play_session_options_from_start(
         bms_random_choices: start_options.bms_random_choices,
         bms_switch_choices: start_options.bms_switch_choices,
         arrange_pattern: start_options.arrange_pattern,
+        reuse_applied_arrangement: start_options.reuse_applied_arrangement,
         initial_gauge_value: start_options.initial_gauge_value,
         initial_gauge_values: start_options.initial_gauge_values,
         initial_course_combo: start_options.initial_course_combo,
@@ -740,6 +743,7 @@ pub fn apply_arrange_override(
     options.double_option = arrange.double_option;
     options.arrange_seed = arrange.seed;
     options.arrange_seed_2p = arrange.seed_2p;
+    options.random_trainer_seed = None;
     options.legacy_arrange_seed = arrange.legacy_seed;
     options.s_random_scheme = arrange.s_random_scheme;
     options.s_random_scheme_2p = arrange.s_random_scheme_2p;
@@ -747,7 +751,15 @@ pub fn apply_arrange_override(
     options.bms_random_choices = Some(arrange.bms_random_choices.clone());
     options.bms_switch_choices = Some(arrange.bms_switch_choices.clone());
     options.lr2_seed = arrange.lr2_seed;
-    options.arrange_pattern = arrange.pattern.clone();
+    options.mirror_lr2_arrangement = false;
+    // A seeded LR2 play already has the exact side seeds. In mixed DP the saved
+    // lane pattern only describes the fixed side, so applying it would skip S-RANDOM.
+    options.arrange_pattern = if arrange.lr2_seed.is_some() && arrange.seed.is_some() {
+        None
+    } else {
+        arrange.pattern.clone()
+    };
+    options.reuse_applied_arrangement = true;
     options.key_mode_conversion = arrange.key_mode_conversion;
     options.seven_to_nine_pattern = arrange.seven_to_nine_pattern;
     options.seven_to_nine_type = arrange.seven_to_nine_type;

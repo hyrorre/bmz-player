@@ -45,3 +45,9 @@ Windowsで`cargo fmt --check`、`cargo check --workspace --locked`、`cargo clip
 - 以前の記録などで再現できる配置seedが無い場合、rianIRのリクエストでは`play_seed`を省略する。明示された0は引き続き送る。
 
 Windowsで整形、`bmz-player`のcheck・all-targets Clippy・テストが通過した。単体テストは3,303件成功、91件ignoredだった。7Kの反転、DP FLIPを含む両サイドのseed再現、3つのIRの送信キュー、BMS-IRの模擬HTTPリクエストを確認した。実プレイと本番送信は未確認。
+
+## 同一配置リトライの再反転への対応（2026-11-17）
+
+リザルトとFAILED演出からの同一配置リトライは、初回の自分側の配置を復元する。相手の配置設定は再適用せず、LR2の分岐用seedと確定した両サイドのseedを保持する。DPで固定配置とS-RANDOMなどを併用する場合は、固定側のレーン表だけを当てず、両側を記録済みseedで復元する。
+
+ZIP内の14K譜面を再読み込みするテストで、1Pの反転済みseed `2975`、2PのS-RANDOMを含む全レーンのノーツ配置と分岐選択の一致を確認した。Windowsで整形、`bmz-player`のcheck、all-targets Clippy、テストが通過した。単体テストは3,304件成功、91件ignoredだった。プレイ画面からの操作は未確認。

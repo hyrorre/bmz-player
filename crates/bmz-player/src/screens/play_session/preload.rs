@@ -548,6 +548,7 @@ pub fn preload_play_session_for_chart_with_callbacks(
         opponent_options.bms_random_choices = opponent.bms_random_choices.clone();
         opponent_options.bms_switch_choices = opponent.bms_switch_choices.clone();
         opponent_options.arrange_pattern = opponent.arrange_pattern.clone();
+        opponent_options.reuse_applied_arrangement = false;
         opponent_options.s_random_scheme = opponent.s_random_scheme;
         opponent_options.s_random_scheme_2p = opponent.s_random_scheme_2p;
         opponent_options.h_random_threshold_ms = opponent.h_random_threshold_ms;
@@ -916,6 +917,9 @@ fn resolve_lr2_arrangement(
     import: &mut ImportResult,
     options: &PlaySessionOptions,
 ) -> Option<PlaySessionOptions> {
+    if options.reuse_applied_arrangement {
+        return None;
+    }
     let mut rng = import.lr2_random_state.take()?;
     let key_mode = import.chart.metadata.key_mode;
     let battle_option = options.double_option.normalize_for_key_mode(key_mode).is_battle();

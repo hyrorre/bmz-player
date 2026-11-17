@@ -197,6 +197,8 @@ pub struct PlaySessionOptions {
     /// Recorded `#SWITCH` decisions, in source order, for exact replay.
     pub bms_switch_choices: Option<Vec<u64>>,
     pub arrange_pattern: Option<Vec<u8>>,
+    /// Use the previously applied layout while still resolving the chart's branches.
+    pub reuse_applied_arrangement: bool,
     /// When set, overrides the gauge's starting value.  Used to carry the
     /// gauge between charts during a course.
     pub initial_gauge_value: Option<f32>,
@@ -474,6 +476,7 @@ impl Default for PlaySessionOptions {
             bms_random_choices: None,
             bms_switch_choices: None,
             arrange_pattern: None,
+            reuse_applied_arrangement: false,
             initial_gauge_value: None,
             initial_gauge_values: None,
             initial_course_combo: None,

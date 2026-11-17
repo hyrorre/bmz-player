@@ -831,7 +831,7 @@ fn apply_rival_score_replication(
 ) {
     use crate::config::profile_config::ChartReplicationModeConfig;
 
-    if replication == ChartReplicationModeConfig::None {
+    if options.reuse_applied_arrangement || replication == ChartReplicationModeConfig::None {
         return;
     }
     if score.bmz_identity.is_some() && score.arrange_1p.trim().is_empty() {
@@ -872,7 +872,7 @@ fn apply_battle_target_replication(
 ) {
     use crate::config::profile_config::ChartReplicationModeConfig;
 
-    if replication == ChartReplicationModeConfig::None {
+    if options.reuse_applied_arrangement || replication == ChartReplicationModeConfig::None {
         return;
     }
 
@@ -1350,6 +1350,94 @@ mod rival_replication_tests {
         assert_eq!(options.lr2_seed, Some(2179));
         assert!(options.mirror_lr2_arrangement);
         assert_eq!(options.arrange, ArrangeOption::Random);
+    }
+
+    #[test]
+    fn archive_same_arrange_retry_keeps_lr2_mirrored_random_and_s_random() {
+        use crate::screens::play_session::preload_play_session_for_chart;
+        use crate::screens::play_start::{BattleTarget, BattleTargetPlayback, SeedScheme};
+        use crate::storage::migration::{LIBRARY_MIGRATIONS, run_migrations};
+        use std::io::Write as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("songs.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        zip.start_file("chart.bms", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(
+            b"#PLAYER 3\n#BPM 120\n#WAV01 missing.wav\n#RANDOM 3\n#00021:01\n#IF 1\n\
+              #00111:01\n#00212:01\n#00313:01\n#00414:01\n#00515:01\n#00618:01\n#00719:01\n\
+              #00121:01010101\n#00221:01010101\n#00329:01\n#ENDIF\n",
+        )
+        .unwrap();
+        zip.finish().unwrap();
+        let locator = PathBuf::from(format!("{}!/chart.bms", archive.display()));
+        let mut library = LibraryDatabase::open(Path::new(":memory:")).unwrap();
+        run_migrations(library.conn_mut(), LIBRARY_MIGRATIONS).unwrap();
+        let chart_id =
+            crate::storage::import::import_chart_file(&mut library, &locator, None, None, 0)
+                .unwrap()
+                .chart_id;
+
+        let target = BattleTarget {
+            provider: "bms-ir".into(),
+            score_id: "score".into(),
+            player_id: "player".into(),
+            player_name: "RIVAL".into(),
+            rank: 1,
+            ex_score: 100,
+            gauge: None,
+            playback: BattleTargetPlayback::Seed {
+                arrange: ArrangeOption::Random,
+                arrange_2p: ArrangeOption::SRandom,
+                double_option: DoubleOption::Off,
+                packed_seed: Some(2179),
+                seed_scheme: SeedScheme::Lr2,
+            },
+        };
+        let arrangement = target.playback.arrangement();
+        let mode = ChartReplicationModeConfig::RivalChartMirror;
+        let mut start = PlayStartOptions {
+            battle_target: Some(target.clone()),
+            arrange_seed: Some(77),
+            arrange_seed_2p: Some(89),
+            read_archive_assets: true,
+            ..Default::default()
+        };
+        apply_battle_target_replication(&mut start, &arrangement, mode, KeyMode::K14);
+        let preload = |options| {
+            let options = play_session_options_from_start(&Default::default(), options);
+            preload_play_session_for_chart(&library, chart_id, options, 1.0).unwrap()
+        };
+        let first = preload(start);
+        assert!(first.archive_resources.is_some());
+        assert_eq!(first.applied_arrange.seed, Some(2975));
+        assert_eq!(first.applied_arrange.seed_2p, Some(89));
+        assert_eq!(first.applied_arrange.bms_random_choices, [1]);
+        assert!(first.applied_arrange.pattern.is_some());
+        assert!(first.chart.notes_for_lane(Lane::Key8).len() < 8);
+
+        let mut retry = PlayStartOptions {
+            battle_target: Some(target),
+            read_archive_assets: true,
+            ..Default::default()
+        };
+        apply_arrange_override(&mut retry, &first.applied_arrange);
+        apply_battle_target_replication(&mut retry, &arrangement, mode, KeyMode::K14);
+        assert!(!retry.mirror_lr2_arrangement);
+        assert_eq!(retry.lr2_seed, Some(2179));
+        assert!(retry.arrange_pattern.is_none());
+
+        let reloaded = preload(retry);
+        assert!(reloaded.archive_resources.is_some());
+        assert_eq!(reloaded.applied_arrange, first.applied_arrange);
+        for (first_lane, retried_lane) in
+            first.chart.lane_notes.iter().zip(&reloaded.chart.lane_notes)
+        {
+            let notes = |lane: &[bmz_chart::model::NoteEvent]| {
+                lane.iter().map(|note| (note.id, note.time)).collect::<Vec<_>>()
+            };
+            assert_eq!(notes(first_lane), notes(retried_lane));
+        }
     }
 
     #[test]
