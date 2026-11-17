@@ -122,8 +122,10 @@ pub struct PlaySessionOptions {
     /// Preload workers read archive chart assets into memory. Other callers import only the
     /// chart, so the window thread never decodes an archive.
     pub read_archive_assets: bool,
-    /// Per-key presentation settings use the source chart mode. This differs
-    /// from `chart.metadata.key_mode` after BATTLE expands 5K/7K to 10K/14K.
+    /// Profile slot for per-key presentation settings and bindings; `None` uses
+    /// the played chart mode. G-BATTLE passes the source 5K/7K mode while the
+    /// chart is expanded to 10K/14K. D-BATTLE ignores this override and always
+    /// uses the 10K/14K slot, because the player plays both sides.
     pub play_config_key_mode: Option<KeyMode>,
     /// The authoritative launch mode. Practice-specific runtime state is
     /// derived from this value instead of being configured independently.

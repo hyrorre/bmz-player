@@ -214,3 +214,85 @@ fn session_mode_skin_clicks_update_profile_like_keyboard_without_starting_play()
         }
     }
 }
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "creates a Winit event loop; run alone with --ignored"]
+fn d_battle_select_preload_and_start_activate_the_dp_profile_slot() {
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+
+    let event_loop =
+        EventLoop::<AppUserEvent>::with_user_event().with_any_thread(true).build().unwrap();
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    let mut boot = data.boot();
+    boot.app_config.input.gamepad_enabled = false;
+    let (maintenance_tx, _) = tokio::sync::watch::channel(false);
+    let mut app = WinitApp::new(
+        boot,
+        AppOptions { viewer_play: true, ..Default::default() },
+        Instant::now(),
+        None,
+        None,
+        Arc::new(AtomicBool::new(false)),
+        event_loop.create_proxy(),
+        LogBuffer::default(),
+        maintenance_tx,
+        None,
+    )
+    .unwrap();
+    app.viewer_mode = false;
+    // A distinct HS-FIX per slot shows which slot each step activated.
+    let slots = [
+        (KeyMode::K5, HsFixConfig::StartBpm),
+        (KeyMode::K7, HsFixConfig::MinBpm),
+        (KeyMode::K10, HsFixConfig::MaxBpm),
+        (KeyMode::K14, HsFixConfig::MainBpm),
+    ];
+    for (mode, hs_fix) in slots {
+        app.boot.profile_config.activate_play_mode(mode);
+        app.boot.profile_config.play.hs_fix = hs_fix;
+        app.boot.profile_config.sync_active_play_mode();
+    }
+    let hs_fix_of =
+        |mode: KeyMode| slots.iter().find(|(slot, _)| *slot == mode).map(|(_, hs_fix)| *hs_fix);
+    let assert_slot = |app: &WinitApp, mode: KeyMode, context: &str| {
+        assert_eq!(app.boot.profile_config.active_play_mode, mode, "{context}");
+        assert_eq!(Some(app.boot.profile_config.play.hs_fix), hs_fix_of(mode), "{context}");
+        assert_eq!(app.select.hs_fix_option, hs_fix_option_from_profile(hs_fix_of(mode).unwrap()));
+    };
+    app.select.select_items = vec![chart_row_with_mode(1, "7K"), chart_row_with_mode(2, "5K")];
+
+    for (index, source, doubled) in [(0, KeyMode::K7, KeyMode::K14), (1, KeyMode::K5, KeyMode::K10)]
+    {
+        let chart_id = index as i64 + 1;
+        app.select.selected_index = index;
+        for (session, double, expected) in [
+            (SessionMode::Normal, DoubleOption::Battle, doubled),
+            (SessionMode::Normal, DoubleOption::BattleAutoScratch, doubled),
+            (SessionMode::Normal, DoubleOption::Off, source),
+            (SessionMode::GBattle, DoubleOption::Battle, source),
+        ] {
+            let context = format!("{source:?} {session:?} {double:?}");
+            app.set_session_mode(session);
+            app.select.double_option = double;
+
+            // Select: the slot follows the selected double option.
+            assert_eq!(app.selected_play_config_key_mode(), Some(expected), "{context}");
+            app.sync_selected_play_mode();
+            assert_eq!(app.boot.profile_config.active_play_mode, expected, "{context}");
+
+            // Leave the other slot active, so preload and start must switch it.
+            let other = if expected == source { doubled } else { source };
+            app.boot.profile_config.activate_play_mode(other);
+            let mut options = app.play_start_options();
+            assert_eq!(options.double_option, double, "{context}");
+            app.normalize_key_mode_conversion_options(chart_id, &mut options);
+            assert_eq!(app.play_skin_key_mode_for_chart(chart_id, &options), expected, "{context}");
+
+            assert_eq!(app.activate_play_start_key_mode(chart_id, &mut options), expected);
+            assert_slot(&app, expected, &context);
+            assert_eq!(options.hs_fix, app.select.hs_fix_option, "{context}");
+        }
+    }
+    app.set_session_mode(SessionMode::Normal);
+}

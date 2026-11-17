@@ -363,6 +363,24 @@ impl DoubleOption {
         }
     }
 
+    /// Key mode that BATTLE plays a 5K/7K chart in. Other modes are not doubled.
+    pub const fn battle_key_mode(source: KeyMode) -> KeyMode {
+        match source {
+            KeyMode::K5 => KeyMode::K10,
+            KeyMode::K7 => KeyMode::K14,
+            _ => source,
+        }
+    }
+
+    /// Source chart mode of a BATTLE-doubled 10K/14K chart.
+    pub const fn battle_source_key_mode(doubled: KeyMode) -> Option<KeyMode> {
+        match doubled {
+            KeyMode::K10 => Some(KeyMode::K5),
+            KeyMode::K14 => Some(KeyMode::K7),
+            _ => None,
+        }
+    }
+
     pub fn score_bucket(self) -> DoubleOptionScoreBucket {
         match self {
             Self::Off | Self::Flip => DoubleOptionScoreBucket::Off,

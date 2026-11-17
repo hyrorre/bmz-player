@@ -718,8 +718,8 @@ fn build_local_score_submission(
         DoubleOptionScoreBucket::Off => 1,
         DoubleOptionScoreBucket::Battle | DoubleOptionScoreBucket::BattleAutoScratch => 2,
     };
-    let expected_total_notes =
-        chart.scored_total_notes(row.ln_policy).saturating_mul(double_multiplier);
+    let base_total_notes = chart.scored_total_notes(row.ln_policy);
+    let expected_total_notes = base_total_notes.saturating_mul(double_multiplier);
     // Preserve a larger historical count for forward compatibility, while
     // repairing legacy BMZ CN/HCN rows that stored the base library count.
     let scored_total_notes = row.total_notes.max(expected_total_notes);
@@ -773,7 +773,7 @@ fn build_local_score_submission(
             if row.double_option == DoubleOptionScoreBucket::Off {
                 scored_total_notes
             } else {
-                chart.scored_total_notes(row.ln_policy)
+                base_total_notes
             },
             row.ln_policy,
         ),

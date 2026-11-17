@@ -52,6 +52,7 @@ pub(in crate::app) fn double_config_from_option(double_option: DoubleOption) -> 
     }
 }
 
+/// Session battle uses the source profile slot; D-BATTLE uses the DP slot.
 pub(in crate::app) fn play_skin_key_mode_for_options(
     chart_key_mode: KeyMode,
     double_option: DoubleOption,
@@ -64,11 +65,9 @@ pub(in crate::app) fn play_skin_key_mode_for_options(
     }
     let double_option = double_option.normalize_for_key_mode(chart_key_mode);
     match double_option {
-        DoubleOption::Battle | DoubleOption::BattleAutoScratch => match chart_key_mode {
-            KeyMode::K5 => KeyMode::K10,
-            KeyMode::K7 => KeyMode::K14,
-            _ => chart_key_mode,
-        },
+        DoubleOption::Battle | DoubleOption::BattleAutoScratch => {
+            DoubleOption::battle_key_mode(chart_key_mode)
+        }
         DoubleOption::Off | DoubleOption::Flip
             if key_mode_conversion.applies_to(chart_key_mode) =>
         {
@@ -98,7 +97,8 @@ pub(in crate::app) fn effective_play_key_mode(
     key_mode_conversion.effective_key_mode(chart_key_mode)
 }
 
-/// Session battle uses the source profile slot; D-BATTLE uses the DP slot.
+/// Battle modes already double the chart, so a requested key-mode conversion
+/// is turned off for them.
 pub(in crate::app) fn key_mode_conversion_for_session(
     conversion: KeyModeConversionConfig,
     session: SessionMode,

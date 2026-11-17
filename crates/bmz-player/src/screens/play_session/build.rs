@@ -18,11 +18,7 @@ pub(crate) fn effective_primary_key_mode(
             (KeyMode::K5, KeyMode::K10) | (KeyMode::K7, KeyMode::K14)
         );
     if battle_presentation {
-        match chart_key_mode {
-            KeyMode::K10 => KeyMode::K5,
-            KeyMode::K14 => KeyMode::K7,
-            _ => chart_key_mode,
-        }
+        DoubleOption::battle_source_key_mode(chart_key_mode).unwrap_or(chart_key_mode)
     } else {
         chart_key_mode
     }
@@ -744,11 +740,7 @@ pub(super) fn play_config_key_mode(
         && !options.session_mode.is_battle()
         && options.battle_opponent.is_none()
     {
-        return match chart_key_mode {
-            KeyMode::K5 => KeyMode::K10,
-            KeyMode::K7 => KeyMode::K14,
-            _ => chart_key_mode,
-        };
+        return DoubleOption::battle_key_mode(chart_key_mode);
     }
     options.play_config_key_mode.unwrap_or(chart_key_mode)
 }
