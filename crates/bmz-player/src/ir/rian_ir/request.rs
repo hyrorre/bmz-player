@@ -45,6 +45,7 @@ pub fn body_for_rule_mode(rule_mode: RuleMode) -> &'static str {
         RuleMode::Beatoraja => "beatoraja",
         RuleMode::Lr2Oraja => "LR2oraja",
         RuleMode::Dx => "DX MODE",
+        RuleMode::Legacy => RuleMode::Legacy.as_str(),
     }
 }
 

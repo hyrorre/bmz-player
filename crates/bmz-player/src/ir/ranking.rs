@@ -35,6 +35,7 @@ pub(crate) async fn fetch_course_ranking(
     base_url: &str,
     target: &CourseRankingTarget,
 ) -> anyhow::Result<IrCourseRankingResult> {
+    anyhow::ensure!(target.rule_mode != RuleMode::Legacy, "LEGACY rankings are local only");
     if crate::ir::bokutachi::is_provider(provider) {
         return Err(crate::ir::bokutachi::unsupported());
     }
@@ -109,6 +110,7 @@ pub(crate) async fn fetch_ranking_with_limit(
     scope: IrRankingScope,
     limit: u32,
 ) -> anyhow::Result<IrRankingResult> {
+    anyhow::ensure!(query.rule_mode != RuleMode::Legacy, "LEGACY rankings are local only");
     if crate::ir::bokutachi::is_provider(&query.provider) {
         anyhow::ensure!(scope == IrRankingScope::Global, "{}", super::bokutachi::unsupported());
         let Some(game) = query.bokutachi_game else {

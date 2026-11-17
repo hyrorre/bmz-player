@@ -836,3 +836,42 @@ fn defined_hcn_pair_judges_early_release_even_when_chart_default_is_ln() {
     assert_eq!(release.events[0].judge, Judge::Poor);
     assert_eq!(engine.judged_notes.get(&NoteId(2)), Some(&Judge::Poor));
 }
+
+#[test]
+fn legacy_tap_bad_consumes_the_note_and_continues_with_the_same_press() {
+    let chart = chart_with_two_taps(TimeUs(1_000_900), TimeUs(1_161_900));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    let outcome = engine.process_input(&chart, press_at(TimeUs(1_179_001)));
+    let grades: Vec<_> = outcome.events.iter().map(|event| (event.note_id, event.judge)).collect();
+    assert_eq!(grades, vec![(Some(NoteId(1)), Judge::Bad), (Some(NoteId(2)), Judge::PGreat)]);
+    assert_eq!(outcome.events[1].delta, TimeUs(18_000));
+}
+
+#[test]
+fn legacy_empty_poor_does_not_consume_and_excludes_exact_early_boundary() {
+    let chart = chart_with_tap(TimeUs(2_000_000));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    assert!(engine.process_input(&chart, press_at(TimeUs(1_000_000))).events.is_empty());
+    let early = engine.process_input(&chart, press_at(TimeUs(1_001_000)));
+    assert_eq!(early.events[0].note_id, None);
+    assert_eq!(early.events[0].judge, Judge::EmptyPoor);
+    let on_time = engine.process_input(&chart, press_at(TimeUs(2_000_000)));
+    assert_eq!(on_time.events[0].judge, Judge::PGreat);
+}
+
+#[test]
+fn legacy_ln_release_preserves_head_grade_inside_the_good_window() {
+    let chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    for (release_ms, expected) in [(1_900, Judge::PGreat), (1_899, Judge::Bad)] {
+        let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+        engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+        let outcome = engine.process_input(&chart, release_at(TimeUs(release_ms * 1_000)));
+        assert_eq!(outcome.events[0].judge, expected);
+    }
+}

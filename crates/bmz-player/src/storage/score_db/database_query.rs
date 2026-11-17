@@ -43,7 +43,7 @@ impl ScoreDatabase {
                         WHERE h.chart_sha256 = r.chart_sha256 AND h.ln_policy = r.ln_policy
                           AND h.double_option = r.double_option
                           AND CASE h.rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
-                              WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = r.rule_mode
+                              WHEN 'Dx' THEN 'Dx' WHEN 'Legacy' THEN 'Legacy' ELSE 'Beatoraja' END = r.rule_mode
                           AND h.autoplay = 0), 0), COALESCE(u.played_at, 0))
                  FROM requested r LEFT JOIN score_unrecorded_plays u
                  ON u.chart_sha256 = r.chart_sha256 AND u.ln_policy = r.ln_policy
@@ -95,7 +95,7 @@ impl ScoreDatabase {
             "SELECT clear_type, gauge_type, arrange, assist_mask FROM score_history
              WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3
                AND CASE rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
-                   WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = ?4
+                   WHEN 'Dx' THEN 'Dx' WHEN 'Legacy' THEN 'Legacy' ELSE 'Beatoraja' END = ?4
                AND autoplay = 0 AND clear_type NOT IN ('NoPlay', 'Failed')",
         )?;
         let rows = stmt.query_map(
@@ -191,7 +191,7 @@ impl ScoreDatabase {
                           AND prior.ln_policy = b.ln_policy
                           AND prior.double_option = b.double_option
                           AND CASE prior.rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
-                              WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = b.rule_mode
+                              WHEN 'Dx' THEN 'Dx' WHEN 'Legacy' THEN 'Legacy' ELSE 'Beatoraja' END = b.rule_mode
                     ) END
                 FROM score_best b
                 LEFT JOIN score_history h ON h.id = b.best_score_history_id

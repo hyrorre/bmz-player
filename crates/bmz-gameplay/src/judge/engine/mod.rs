@@ -243,7 +243,12 @@ impl JudgeEngine {
                 &self.judged_notes,
             ) {
                 let windows = press_window(self.window_set, self.scratch_lane_mask[lane.index()]);
-                if judge_time.0 <= note.time.0 + windows.bad_slow_us {
+                let expired = if self.rule_mode == RuleMode::Legacy {
+                    legacy_note_expired(note, judge_time, windows)
+                } else {
+                    judge_time.0 > note.time.0 + windows.bad_slow_us
+                };
+                if !expired {
                     break;
                 }
 
@@ -313,7 +318,14 @@ impl JudgeEngine {
 
                 match active.mode {
                     LongNoteMode::Ln | LongNoteMode::Hln => {
-                        if judge_time.0 > active.end.end_time.0 {
+                        let elapsed = if self.rule_mode == RuleMode::Legacy
+                            && active.mode == LongNoteMode::Ln
+                        {
+                            legacy_offset(judge_time, active.end.end_time)
+                        } else {
+                            judge_time.0 - active.end.end_time.0
+                        };
+                        if elapsed > 0 {
                             lane_state.active_long = None;
                             self.judged_notes.insert(active.start_note_id, active.start_judge);
                             outcome.events.push(ln_final_event(
@@ -464,6 +476,51 @@ impl JudgeEngine {
         input: InputEvent,
         event_time: TimeUs,
     ) -> JudgeOutcome {
+        let mut outcome = self.process_press_once(chart, input, event_time);
+        if self.rule_mode != RuleMode::Legacy {
+            return outcome;
+        }
+
+        // A consumed tap BAD can expose another note within the same press window.
+        let windows = press_window(self.window_set, self.scratch_lane_mask[input.lane.index()]);
+        loop {
+            let consumed_tap_bad = outcome.events.last().is_some_and(|event| {
+                event.judge == Judge::Bad
+                    && event
+                        .note_id
+                        .and_then(|id| self.note_by_id(chart, id))
+                        .is_some_and(|note| note.kind == NoteKind::Tap)
+            });
+            if !consumed_tap_bad
+                || !next_unjudged_press_reference_note(
+                    chart,
+                    input.lane,
+                    self.lanes[input.lane.index()].next_note_index,
+                    &self.judged_notes,
+                )
+                .is_some_and(|(_, note)| {
+                    legacy_press_candidate(note, input.time, windows)
+                        .is_some_and(|candidate| candidate.consumes_note)
+                })
+            {
+                break;
+            }
+            let next = self.process_press_once(chart, input, event_time);
+            let judged = !next.events.is_empty();
+            append_outcome(&mut outcome, next);
+            if !judged {
+                break;
+            }
+        }
+        outcome
+    }
+
+    fn process_press_once(
+        &mut self,
+        chart: &PlayableChart,
+        input: InputEvent,
+        event_time: TimeUs,
+    ) -> JudgeOutcome {
         // Consume the BSS reverse edge before it can reach a note or Mine.
         if self.consume_scratch_press_suppression(InputEvent { time: event_time, ..input }) {
             return JudgeOutcome { consumed_input: true, ..Default::default() };
@@ -519,16 +576,26 @@ impl JudgeEngine {
 
         let rule_mode = self.rule_mode;
         let windows = press_window(self.window_set, self.scratch_lane_mask[input.lane.index()]);
-        let candidate = select_press_candidate(
-            chart,
-            input.lane,
-            input.time,
-            windows,
-            rule_mode,
-            self.algorithm,
-            &self.judged_notes,
-            &self.bad_attempted_notes,
-        );
+        let candidate = if rule_mode == RuleMode::Legacy {
+            next_unjudged_press_reference_note(
+                chart,
+                input.lane,
+                self.lanes[input.lane.index()].next_note_index,
+                &self.judged_notes,
+            )
+            .and_then(|(_, note)| legacy_press_candidate(note, input.time, windows))
+        } else {
+            select_press_candidate(
+                chart,
+                input.lane,
+                input.time,
+                windows,
+                rule_mode,
+                self.algorithm,
+                &self.judged_notes,
+                &self.bad_attempted_notes,
+            )
+        };
         let Some(candidate) = candidate else {
             return JudgeOutcome { mine_hits, ..Default::default() };
         };
@@ -546,6 +613,7 @@ impl JudgeEngine {
             };
             let note_vanishes = candidate.judge != Judge::Bad
                 || self.bad_judge_vanish
+                || rule_mode == RuleMode::Legacy
                 || hln::is_hln_head(chart, note.id);
             let multi_bad_candidates = if matches!(rule_mode, RuleMode::Lr2Oraja | RuleMode::Dx) {
                 lr2oraja_multi_bad_candidates(
@@ -699,7 +767,19 @@ impl JudgeEngine {
         match active.mode {
             LongNoteMode::Ln | LongNoteMode::Hln => {
                 let end_delta = TimeUs(input.time.0 - active.end.end_time.0);
-                let (judge, delta) = if end_delta.0 >= 0 {
+                let (judge, delta) = if self.rule_mode == RuleMode::Legacy
+                    && active.mode == LongNoteMode::Ln
+                {
+                    let windows =
+                        press_window(self.window_set, self.scratch_lane_mask[input.lane.index()]);
+                    let grade = if legacy_offset(input.time, active.end.end_time) < -windows.good_us
+                    {
+                        Judge::Bad
+                    } else {
+                        active.start_judge
+                    };
+                    (grade, active.start_delta)
+                } else if end_delta.0 >= 0 {
                     (active.start_judge, active.start_delta)
                 } else {
                     let windows = long_end_window(

@@ -29,6 +29,6 @@ pub fn gauge_total_for_chart_and_rule_mode(
 ) -> f64 {
     metadata_total.filter(|total| *total > 0.0).unwrap_or_else(|| match rule_mode {
         RuleMode::Beatoraja | RuleMode::Dx => default_gauge_total(total_notes),
-        RuleMode::Lr2Oraja => lr2oraja_default_gauge_total(total_notes),
+        RuleMode::Lr2Oraja | RuleMode::Legacy => lr2oraja_default_gauge_total(total_notes),
     })
 }

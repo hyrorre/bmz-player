@@ -116,6 +116,43 @@ pub(super) struct MultiBadCandidate {
     pub(super) delta: TimeUs,
 }
 
+/// LEGACY compares the integer millisecond positions of input and note.
+pub(super) fn legacy_offset(input: TimeUs, note: TimeUs) -> i64 {
+    (input.0 / 1_000 - note.0 / 1_000) * 1_000
+}
+
+pub(super) fn legacy_note_expired(note: &NoteEvent, now: TimeUs, windows: JudgeWindow) -> bool {
+    let late_limit = match note.kind {
+        NoteKind::LongStart => windows.good_us,
+        _ => windows.bad_slow_us,
+    };
+    now.0 / 1_000 * 1_000 - note.time.0 > late_limit
+}
+
+pub(super) fn legacy_press_candidate(
+    note: &NoteEvent,
+    input: TimeUs,
+    windows: JudgeWindow,
+) -> Option<PressCandidate> {
+    if legacy_note_expired(note, input, windows) {
+        return None;
+    }
+
+    let delta = legacy_offset(input, note.time);
+    let judge = classify_normal_delta(delta, windows).or_else(|| {
+        (delta > -windows.empty_poor_fast_us && delta < 0).then_some(Judge::EmptyPoor)
+    })?;
+    let consumes_note = judge != Judge::EmptyPoor;
+    Some(PressCandidate {
+        note_id: consumes_note.then_some(note.id),
+        keysound_note_id: Some(note.id),
+        judge,
+        side: side_from_delta(delta),
+        delta: TimeUs(delta),
+        consumes_note,
+    })
+}
+
 pub(super) fn select_press_candidate(
     chart: &PlayableChart,
     lane: Lane,
