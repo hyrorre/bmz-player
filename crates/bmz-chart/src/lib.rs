@@ -5,6 +5,7 @@ pub mod conditional;
 pub mod hash;
 pub mod import;
 pub mod kaleid;
+pub mod lr2_random;
 pub mod model;
 pub mod practice;
 pub mod sound_asset;

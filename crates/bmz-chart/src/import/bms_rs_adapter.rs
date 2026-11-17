@@ -50,6 +50,7 @@ use bmz_core::lane::{ChartKeyLayout, KeyMode, Lane, PmsKeyLayout};
 use bmz_core::time::ChartTick;
 
 use crate::hash::compute_chart_identity;
+use crate::lr2_random::Lr2Mt19937;
 
 use super::BmsRandomSource;
 use super::decode::decode_bms_text_cow;
@@ -66,6 +67,7 @@ mod compat;
 mod kaleid;
 mod long_end;
 mod long_note_headers;
+mod lr2_resolver;
 mod metadata;
 mod objects;
 mod prepare;
@@ -76,6 +78,7 @@ mod text;
 mod timing;
 
 use compat::*;
+use lr2_resolver::*;
 use metadata::*;
 use objects::*;
 use prepare::*;
@@ -148,6 +151,7 @@ pub fn import_bms_to_intermediate_with_random_source(
         random_source,
         bms_random_choices,
         bms_switch_choices,
+        &mut None,
         warnings,
     )
 }
@@ -158,6 +162,7 @@ pub(super) fn import_bms_bytes_to_intermediate(
     random_source: &BmsRandomSource,
     bms_random_choices: &mut Vec<i32>,
     bms_switch_choices: &mut Vec<u64>,
+    lr2_random_state: &mut Option<Lr2Mt19937>,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
     let identity = compute_chart_identity(bytes);
@@ -169,6 +174,7 @@ pub(super) fn import_bms_bytes_to_intermediate(
         random_source,
         bms_random_choices,
         bms_switch_choices,
+        lr2_random_state,
         warnings,
     )
 }
@@ -202,6 +208,7 @@ pub fn import_pms_to_intermediate_with_random_source(
         random_source,
         bms_random_choices,
         bms_switch_choices,
+        &mut None,
         warnings,
     )
 }
@@ -212,6 +219,7 @@ pub(super) fn import_pms_bytes_to_intermediate(
     random_source: &BmsRandomSource,
     bms_random_choices: &mut Vec<i32>,
     bms_switch_choices: &mut Vec<u64>,
+    lr2_random_state: &mut Option<Lr2Mt19937>,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
     let decode_start = warnings.len();
@@ -238,6 +246,7 @@ pub(super) fn import_pms_bytes_to_intermediate(
             random_source,
             bms_random_choices,
             bms_switch_choices,
+            lr2_random_state,
             warnings,
         ),
         PmsKeyLayout::BmeType => import_with_layout::<KeyLayoutPmsBmeType>(
@@ -247,11 +256,13 @@ pub(super) fn import_pms_bytes_to_intermediate(
             random_source,
             bms_random_choices,
             bms_switch_choices,
+            lr2_random_state,
             warnings,
         ),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn import_with_layout<T: KeyLayoutMapper>(
     source_path: &Path,
     (raw_text, identity): (&str, ChartIdentity),
@@ -259,12 +270,13 @@ fn import_with_layout<T: KeyLayoutMapper>(
     random_source: &BmsRandomSource,
     bms_random_choices: &mut Vec<i32>,
     bms_switch_choices: &mut Vec<u64>,
+    lr2_random_state: &mut Option<Lr2Mt19937>,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
     let pms_standard = layout == ChartKeyLayout::pms(PmsKeyLayout::Standard);
     if !kaleid::needs_interpretation(raw_text, layout) {
         // Keep main's single-pass preparation for ordinary charts.
-        let source = prepare_bms_source(
+        let mut source = prepare_bms_source(
             raw_text,
             pms_standard,
             random_source,
@@ -272,6 +284,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
             bms_switch_choices,
             warnings,
         );
+        *lr2_random_state = source.lr2_random_state.take();
         return parse_prepared_with_layout::<T>(
             source_path,
             layout,
@@ -283,7 +296,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
         )
         .map(|(chart, _)| chart);
     }
-    let text = resolve_kaleid_source(
+    let (text, lr2_state) = resolve_kaleid_source(
         raw_text,
         pms_standard,
         random_source,
@@ -291,6 +304,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
         bms_switch_choices,
         warnings,
     );
+    *lr2_random_state = lr2_state;
     let mut bms_headers = BTreeMap::new();
     for line in raw_text.lines() {
         insert_bms_header_line(&mut bms_headers, line);

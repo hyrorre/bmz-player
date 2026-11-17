@@ -634,6 +634,53 @@ fn recorded_bms_switch_choices_replay_large_switch_branch() {
 }
 
 #[test]
+fn lr2_seed_selects_random_branches_and_keeps_the_rest_of_the_sequence() {
+    let text = "\
+#TITLE LR2 Random
+#BPM 120
+#TOTAL 200
+#RANDOM 2
+#IF 1
+#00111:01
+#ENDIF
+#IF 2
+#00112:01
+#ENDIF
+#ENDRANDOM
+#RANDOM 4
+#ENDRANDOM
+#SWITCH 2
+#CASE 1
+#00113:01
+#SKIP
+#CASE 2
+#00114:01
+#ENDSW
+";
+    let path = write_temp_bms(text);
+    let lr2 =
+        import_bms_chart_with_random_source(&path, BmsRandomSource::Lr2Seed(391), false).unwrap();
+    let seeded = import_bms_chart(&path, Some(391), false).unwrap();
+
+    // seed 391 selects 1 for both #RANDOM 2 and #RANDOM 4.
+    assert_eq!(lr2.bms_random_choices, vec![1, 1]);
+    assert_eq!(lr2.chart.notes_for_lane(Lane::Key1).len(), 1);
+    assert_eq!(lr2.chart.notes_for_lane(Lane::Key2).len(), 0);
+    // LR2 does not branch on #SWITCH: every case stays.
+    assert!(lr2.bms_switch_choices.is_empty());
+    assert_eq!(lr2.chart.notes_for_lane(Lane::Key3).len(), 1);
+    assert_eq!(lr2.chart.notes_for_lane(Lane::Key4).len(), 1);
+    // The RANDOM lanes continue after both draws.
+    let mut rest = lr2.lr2_random_state.expect("LR2 sequence");
+    assert_eq!(rest.shuffle_key_table(7), [0, 1, 2, 3, 4, 6, 5, 7]);
+
+    assert!(seeded.lr2_random_state.is_none());
+    assert_eq!(seeded.bms_switch_choices.len(), 1);
+
+    std::fs::remove_file(&path).unwrap();
+}
+
+#[test]
 fn invalid_bms_random_choice_is_clamped_with_a_warning() {
     let text = "\
 #TITLE Invalid Random Choice
