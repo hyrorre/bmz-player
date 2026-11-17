@@ -352,6 +352,22 @@ CIジョブ、IDEとターミナルなど、別のテストプロセスが同時
 
 再現の確認には、同じテストを2つのプロセスで同時に繰り返し実行するのが有効です。
 
+### パスの別名とOS差
+
+一時ディレクトリのパスは、そのままでは実体のパスと一致しないことがあります。
+macOSの`/var`（実体は`/private/var`）、Windowsの短い名前（`RUNNER~1`等）や`\\?\`付きのパス、
+シンボリックリンクを経由した曲rootやスキンrootがその例です。Windowsだけで確認すると見落とします。
+
+- 本体コードは、受け取ったパスの表記を許可rootの別名として保持します。正規化したパスだけを
+  rootとして次のloaderへ渡さず、`SkinPathPolicy::root_paths()`を使います。
+  正規化済みのパスと未正規化のパスを混ぜて`starts_with` / `strip_prefix`しません。
+- テストは、loaderへは未正規化のパスを渡します。返ってきたパスと比べるときは、
+  期待値を`bmz_skin_assets::canonicalize_skin_path`（スキン以外は`canonicalize`）で揃えます。
+- 別名の扱いを変える場合は、`#[cfg(unix)]`のsymlinkで別名を作る回帰テストを追加します
+  （例: `bmz-skin-assets`の`path_policy_tests.rs`）。Linux CIでもmacOSと同じ形を再現できます。
+- `#[cfg(unix)]`のテストはWindowsでは実行されません。曲scanや探索の仕様を変えたときは、
+  macOSかLinuxでも対象テストを実行します。
+
 ```bash
 bin=$(cargo test -p <crate> --locked --lib --no-run --message-format=json \
   | python3 -c "import sys,json;[print(m['executable']) for m in map(json.loads,sys.stdin) if m.get('reason')=='compiler-artifact' and m.get('executable')]")

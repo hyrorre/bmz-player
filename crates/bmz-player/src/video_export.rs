@@ -60,6 +60,7 @@ pub fn run(options: VideoExportOptions, paths: &AppPaths, profile_id: Option<&st
         crate::app::offline_skin_load_state(&prepared.play, &prepared.profile, prepared.best);
     runtime_state.screen_size = renderer.render_target_size();
     let context = paths.skin_path_context(&prepared.profile.skin, &skin_path)?;
+    let library_roots = context.policy().root_paths();
     let mut decoded = crate::skin_loader::decode_beatoraja_skin_request(
         crate::skin_loader::BeatorajaSkinDecodeRequest {
             pinned_sources: None,
@@ -68,7 +69,7 @@ pub fn run(options: VideoExportOptions, paths: &AppPaths, profile_id: Option<&st
             options: selection.options,
             files: selection.files,
             runtime_state: &runtime_state,
-            library_roots: context.library_roots(),
+            library_roots: &library_roots,
             document_cache: None,
             source_cache: None,
             texture_cache: None,

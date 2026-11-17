@@ -541,6 +541,8 @@ fn wildcard_skin_font_resolves_nested_file() {
         resolve_json_skin_asset_path(&root, "frame/SP/*/song.fnt", &document, &BTreeMap::new())
             .unwrap();
 
+    // Resolution returns the real path (macOS /var -> /private/var).
+    let root = bmz_skin_assets::canonicalize_skin_path(&root).unwrap();
     assert_eq!(resolved.strip_prefix(&root).unwrap(), Path::new("frame/SP/Default/song.fnt"));
 }
 
@@ -555,5 +557,7 @@ fn skin_asset_path_resolves_case_insensitive_file_names() {
         resolve_json_skin_asset_path(&root, "_font/artist.fnt", &document, &BTreeMap::new())
             .unwrap();
 
+    // Resolution returns the real path (macOS /var -> /private/var).
+    let root = bmz_skin_assets::canonicalize_skin_path(&root).unwrap();
     assert_eq!(resolved.strip_prefix(&root).unwrap(), Path::new("_font/Artist.fnt"));
 }

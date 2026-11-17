@@ -91,6 +91,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
     installed_fonts: Option<HashMap<String, SkinFontCacheKey>>,
 ) -> Result<DecodedSkin> {
     let context = SkinPathContext::for_entry(skin_path)?;
+    let library_roots = context.policy().root_paths();
     decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
         pinned_sources: None,
         skin_path,
@@ -98,7 +99,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
         options,
         files,
         runtime_state,
-        library_roots: context.library_roots(),
+        library_roots: &library_roots,
         document_cache,
         source_cache,
         texture_cache,

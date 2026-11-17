@@ -19,8 +19,11 @@ pub(in crate::skin_loader) fn decode_font_with_cache(
     path: &Path,
     font_cache: Option<&SharedSkinFontCache>,
 ) -> Result<(DecodedFontData, FontCacheStatus, Option<SkinFontCacheKey>)> {
+    // The context root is the real parent; request the font by its resolved
+    // spelling so aliases such as macOS /var -> /private/var stay inside it.
     let asset = bmz_skin_assets::SkinAsset::resolve(path)?;
     let context = SkinPathContext::for_entry(asset.backing_path())?;
+    let path = asset.logical_path();
     decode_font_with_cache_key(path, &context, font_cache, skin_font_cache_key(path))
 }
 
@@ -52,7 +55,7 @@ pub(in crate::skin_loader) fn decode_font_with_cache_key(
 pub(in crate::skin_loader) fn skin_font_cache_key(path: &Path) -> Option<SkinFontCacheKey> {
     let asset = bmz_skin_assets::SkinAsset::resolve(path).ok()?;
     let context = SkinPathContext::for_entry(asset.backing_path()).ok()?;
-    skin_font_cache_key_with_context(path, &context)
+    skin_font_cache_key_with_context(asset.logical_path(), &context)
 }
 
 pub(in crate::skin_loader) fn skin_font_cache_key_with_context(

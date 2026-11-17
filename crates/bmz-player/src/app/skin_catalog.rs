@@ -209,7 +209,7 @@ pub(super) fn is_skin_candidate_file(path: &Path) -> bool {
 #[cfg(test)]
 pub(super) fn load_skin_header_document(path: &Path) -> Option<SkinDocument> {
     let context = bmz_skin::SkinPathContext::for_entry(path).ok()?;
-    load_skin_header_document_with_library_roots(path, context.library_roots())
+    load_skin_header_document_with_library_roots(path, &context.policy().root_paths())
 }
 
 pub(super) fn load_skin_header_document_with_library_roots(

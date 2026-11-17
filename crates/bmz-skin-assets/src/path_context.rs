@@ -45,8 +45,21 @@ impl SkinPathContext {
     /// Never use as a fallback for catalog or saved-profile entries.
     pub fn for_entry(entry_file: &Path) -> Result<Self> {
         let entry = canonicalize_skin_path(entry_file)?;
-        let parent = entry.parent().context("skin entry has no parent")?;
-        Self::new(&entry, [parent.to_path_buf()])
+        let parent = entry.parent().context("skin entry has no parent")?.to_path_buf();
+        // Keep the caller's directory spelling as a root alias (macOS
+        // /var -> /private/var, Windows short names, linked parents) so later
+        // requests using that spelling stay inside the authorized root. A
+        // linked entry file whose real parent differs grants only the real one.
+        let logical_parent =
+            lexical_normalize(&simplify_verbatim_path(std::path::absolute(entry_file)?))?
+                .parent()
+                .map(Path::to_path_buf);
+        let root = logical_parent
+            .filter(|logical| {
+                canonicalize_skin_path(logical).is_ok_and(|canonical| canonical == parent)
+            })
+            .unwrap_or(parent);
+        Self::new(&entry, [root])
     }
 
     /// Directory-scoped resolver for tools without an entry file.

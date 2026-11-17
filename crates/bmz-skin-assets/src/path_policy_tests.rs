@@ -32,6 +32,53 @@ fn directory_context_preserves_the_supplied_root_alias() {
 }
 
 #[test]
+fn entry_context_preserves_the_supplied_parent_alias() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("skin");
+    fs::create_dir(&directory).unwrap();
+    fs::write(directory.join("skin.json"), b"{}").unwrap();
+    fs::write(directory.join("font.ttf"), b"font").unwrap();
+    fs::write(temp.path().join("outside.png"), b"private").unwrap();
+    let real = canonicalize_skin_path(&directory).unwrap();
+    // Same alias shape as macOS /var -> /private/var, reproducible on Linux.
+    #[cfg(unix)]
+    let directory = {
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(&directory, &alias).unwrap();
+        alias
+    };
+    let context = SkinPathContext::for_entry(&directory.join("skin.json")).unwrap();
+    assert_eq!(context.library_roots(), std::slice::from_ref(&real));
+    assert_eq!(context.entry_file(), real.join("skin.json"));
+    assert_eq!(
+        context.resolve_asset(&directory.join("font.ttf").to_string_lossy()).unwrap(),
+        real.join("font.ttf")
+    );
+    // Handing the roots to another loader keeps the alias usable.
+    let forwarded =
+        SkinPathContext::new(&directory.join("skin.json"), context.policy().root_paths()).unwrap();
+    assert_eq!(forwarded.entry_file(), real.join("skin.json"));
+    assert!(context.resolve_file(&temp.path().join("outside.png").to_string_lossy()).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn linked_entry_file_authorizes_only_its_real_parent() {
+    let temp = tempfile::tempdir().unwrap();
+    let real_dir = temp.path().join("real");
+    let link_dir = temp.path().join("links");
+    fs::create_dir_all(&real_dir).unwrap();
+    fs::create_dir_all(&link_dir).unwrap();
+    fs::write(real_dir.join("skin.json"), b"{}").unwrap();
+    fs::write(link_dir.join("private.png"), b"private").unwrap();
+    std::os::unix::fs::symlink(real_dir.join("skin.json"), link_dir.join("skin.json")).unwrap();
+
+    let context = SkinPathContext::for_entry(&link_dir.join("skin.json")).unwrap();
+    assert_eq!(context.library_roots(), &[canonicalize_skin_path(&real_dir).unwrap()]);
+    assert!(context.resolve_file(&link_dir.join("private.png").to_string_lossy()).is_err());
+}
+
+#[test]
 fn discovery_never_authorizes_an_external_entry() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("skins");
