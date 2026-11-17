@@ -863,6 +863,169 @@ fn legacy_empty_poor_does_not_consume_and_excludes_exact_early_boundary() {
     assert_eq!(on_time.events[0].judge, Judge::PGreat);
 }
 
+/// 実際の OpenLR2 (RianMod) が記録した判定との照合 (`Air -GOD-`)。
+///
+/// `air7god.bme` (title `Air -GOD-`, `#RANK 3`, BPM 180, LN なし, 3414 notes) を
+/// OpenLR2_RianMod_x64.exe で RANDOM を掛けてプレイしたときの
+/// `LR2files/Replay/lightning_23k/751738dea1169c5c39db935adfc9e85f.lr2rep` には、
+/// 確定した判定が op 210 (P1) の value として 3418 件残っている
+/// (`Scene04_Play.cpp` の `ApplyJudgeNote` が `AddReplayData` で書き出す)。
+/// 同じプレイのスコア DB 集計は perfect 3106 / great 261 / good 22 / bad 10 / poor 19
+/// (totalnotes 3414, clear 4) で、リプレイの 3418 件 (poor 19 = POOR 15 + 空 POOR 4) と一致する。
+///
+/// ここでは OpenLR2 が実際に使った譜面時刻と押下時刻をそのまま LEGACY エンジンへ与え、
+/// 3418 件の判定値が記録された順序まで含めて一致することを確認する。
+/// フィクスチャは `tests/data/air_god_*.csv`:
+///
+/// - `air_god_notes.csv`: `譜面レーン,ノート時刻ms`。BMS の `#xxx16` `#xxx11`..`#xxx19` を
+///   小節位置に直し、OpenLR2 の `realTiming` 逐次加算
+///   (`240.0 / BPM * meaLength * (bmsTiming - prev) * 1000.0`, `meaLength = 1.0`) で求めた値を
+///   `(int)note.realTiming` と同じく切り捨てたもの。
+/// - `air_god_presses.csv`: `入力レーン,押下時刻ms`。リプレイの op 0-7 の value=1。
+/// - `air_god_judgements.csv`: `時刻ms,判定`。リプレイの op 210。5=PGREAT 4=GREAT
+///   3=GOOD 2=BAD 1=POOR 0=空 POOR (`JudgeToScore` の引数)。
+///
+/// 3414 notes / 3400 押下 / 3418 判定と量が多いので、テスト本体ではなく CSV に分けている。
+///
+/// このプレイは RANDOM なので、リプレイの入力レーン (op) と譜面レーンは一致しない。
+/// 押下回数と譜面ノート数の対応、および最近傍ノートとの差が ±21ms 以内になる割合から
+/// `op 0..7 -> 譜面レーン {0, 4, 1, 5, 2, 6, 7, 3}` と確定できる
+/// (例: op 2 の押下 564 回のうち 520 回が譜面 Key1 のノートから ±21ms 以内)。
+#[test]
+fn legacy_matches_openlr2_recorded_judgement_of_air_god() {
+    /// 譜面レーン番号 (BMS の scratch, key1..key7) -> `Lane`。
+    const LANE_BY_INDEX: [Lane; 8] = [
+        Lane::Scratch,
+        Lane::Key1,
+        Lane::Key2,
+        Lane::Key3,
+        Lane::Key4,
+        Lane::Key5,
+        Lane::Key6,
+        Lane::Key7,
+    ];
+    /// リプレイの入力レーン (op 0..7) -> 譜面レーン。RANDOM で決まった対応。
+    const RANDOM_LANE: [Lane; 8] = [
+        Lane::Scratch,
+        Lane::Key4,
+        Lane::Key1,
+        Lane::Key5,
+        Lane::Key2,
+        Lane::Key6,
+        Lane::Key7,
+        Lane::Key3,
+    ];
+
+    const NOTES_CSV: &str = include_str!("data/air_god_notes.csv");
+    const PRESSES_CSV: &str = include_str!("data/air_god_presses.csv");
+    const JUDGEMENTS_CSV: &str = include_str!("data/air_god_judgements.csv");
+
+    fn parse_rows(csv: &str) -> Vec<(usize, i64)> {
+        csv.lines()
+            .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+            .map(|line| {
+                let (first, second) = line.split_once(',').expect("csv row");
+                (
+                    first.trim().parse().expect("first column"),
+                    second.trim().parse().expect("second column"),
+                )
+            })
+            .collect()
+    }
+
+    let notes = parse_rows(NOTES_CSV);
+    let presses = parse_rows(PRESSES_CSV);
+    let expected = parse_rows(JUDGEMENTS_CSV);
+
+    assert_eq!(notes.len(), 3414);
+    assert_eq!(presses.len(), 3400);
+    assert_eq!(expected.len(), 3418);
+
+    // 譜面。CSV は譜面レーン順に並んでいるので、ノート ID もレーンごとに昇順になる。
+    let mut chart = chart_with_lane_tap(Lane::Scratch, TimeUs(0));
+    chart.lane_notes = std::array::from_fn(|_| Vec::new());
+    let mut end_time = 0;
+    for (index, &(lane_index, ms)) in notes.iter().enumerate() {
+        let lane = LANE_BY_INDEX[lane_index];
+        chart.lane_notes[lane.index()].push(NoteEvent {
+            id: NoteId(index as u32 + 1),
+            lane,
+            kind: NoteKind::Tap,
+            tick: Default::default(),
+            time: TimeUs(ms * 1_000),
+            sound: None,
+            layered_sounds: Vec::new(),
+            damage: None,
+        });
+        end_time = end_time.max(ms * 1_000);
+    }
+    chart.total_notes = notes.len() as u32;
+    chart.end_time = TimeUs(end_time);
+
+    let window = crate::judge::window::judge_window_for_rule_mode(
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy),
+        100, // #RANK 3 -> 21 / 60 / 120ms, BAD 200ms, 空 POOR 1000ms
+        RuleMode::Legacy,
+    );
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+
+    // OpenLR2 は毎フレーム全レーンの取りこぼしを判定するので、
+    // 押下時刻に加えて各ノートが BAD 窓を過ぎる時刻も進める。
+    let mut timeline: Vec<i64> = presses.iter().map(|&(_, ms)| ms).collect();
+    timeline.extend(notes.iter().map(|&(_, ms)| ms + 201));
+    timeline.sort_unstable();
+    timeline.dedup();
+
+    let mut press_cursor = 0;
+    let mut judged = Vec::new();
+    for &ms in &timeline {
+        let now = TimeUs(ms * 1_000);
+        judged.extend(engine.process_misses(&chart, now).events.iter().map(|e| e.judge));
+        while let Some(&(op, press_ms)) = presses.get(press_cursor) {
+            if press_ms != ms {
+                break;
+            }
+            // 同じフレームの押下は OpenLR2 と同じく入力レーン順に処理する。
+            assert!(op < RANDOM_LANE.len(), "op {op} is not a P1 input lane");
+            let outcome = engine.process_input(&chart, press_lane_at(RANDOM_LANE[op], now));
+            judged.extend(outcome.events.iter().map(|e| e.judge));
+            press_cursor += 1;
+        }
+    }
+    assert_eq!(press_cursor, presses.len());
+
+    // 3414 notes がすべて 1 回ずつ消費され、取りこぼしも残らない。
+    assert!(engine.process_misses(&chart, TimeUs(1_000_000_000)).events.is_empty());
+
+    let judge_value = |judge: Judge| match judge {
+        Judge::PGreat => 5,
+        Judge::Great => 4,
+        Judge::Good => 3,
+        Judge::Bad => 2,
+        Judge::Poor => 1,
+        Judge::EmptyPoor => 0,
+    };
+    let judged_values: Vec<i64> = judged.iter().map(|&judge| judge_value(judge)).collect();
+    let expected_values: Vec<i64> = expected.iter().map(|&(_, value)| value).collect();
+    assert_eq!(judged_values.len(), expected_values.len());
+    for (index, (got, want)) in judged_values.iter().zip(&expected_values).enumerate() {
+        assert_eq!(got, want, "judgement #{index} of the recorded play");
+    }
+
+    let count = |want: Judge| judged.iter().filter(|&&judge| judge == want).count();
+    assert_eq!(
+        (
+            count(Judge::PGreat),
+            count(Judge::Great),
+            count(Judge::Good),
+            count(Judge::Bad),
+            count(Judge::Poor),
+            count(Judge::EmptyPoor),
+        ),
+        (3106, 261, 22, 10, 15, 4)
+    );
+}
+
 #[test]
 fn legacy_ln_release_preserves_head_grade_inside_the_good_window() {
     let chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
