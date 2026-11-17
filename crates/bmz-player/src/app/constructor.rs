@@ -37,16 +37,6 @@ impl WinitApp {
         }
 
         phase.complete();
-        let phase =
-            StartupPhase::begin(startup_started_at, "startup_difficulty_table_fetch_urls_for_boot");
-        // ネットワークへ出る前に、DBから必要なURLだけ選定しておく。実際の取得は
-        // 最初の描画後に開始するため、初回起動でもウィンドウ表示を待たせない。
-        let startup_table_fetch_urls = if viewer_mode {
-            Vec::new()
-        } else {
-            startup_difficulty_table_fetch_urls_for_boot(&boot, startup_started_at)
-        };
-        phase.complete();
         let phase = StartupPhase::begin(startup_started_at, "initial_select_settings");
         let startup_rival_sync = if viewer_mode {
             None
@@ -267,19 +257,6 @@ impl WinitApp {
             )
         });
         phase.complete();
-        let phase = StartupPhase::begin(startup_started_at, "difficulty_tables_for_ui");
-        let difficulty_tables = if viewer_mode {
-            phase.complete();
-            Vec::new()
-        } else {
-            match phase.result(boot.library_db.list_difficulty_tables()) {
-                Ok(tables) => tables,
-                Err(error) => {
-                    tracing::warn!(%error, "failed to list difficulty tables for egui");
-                    Vec::new()
-                }
-            }
-        };
         let phase = StartupPhase::begin(startup_started_at, "select_folder_summary_runtime");
         let select_folder_summary_ln_policy = boot.profile_config.play.ln_mode_policy;
         let select_folder_summary_rule_mode = boot.profile_config.play.rule_mode;
@@ -304,7 +281,7 @@ impl WinitApp {
         let rian_table_identity = (!viewer_mode)
             .then(|| RianTableIdentity::from_ir_config(&boot.profile_config.ir))
             .flatten();
-        let table_fetch = TableFetchRuntime::new(startup_table_fetch_urls, rian_table_identity);
+        let table_fetch = TableFetchRuntime::new(!viewer_mode, rian_table_identity);
         let queued_update_check = (!viewer_mode
             && boot.app_config.updates.enabled
             && boot.app_config.updates.check_on_startup)
@@ -356,7 +333,7 @@ impl WinitApp {
                 lr2_skin_settings: Box::default(),
                 virtual_folders,
                 select_distributions: RefCell::new(Default::default()),
-                difficulty_tables,
+                difficulty_tables: Vec::new(),
                 table_breadcrumb_cache: RefCell::new(HashMap::new()),
                 select_folder_summaries,
                 selected_index_stack: vec![0; folder_stack.len()],

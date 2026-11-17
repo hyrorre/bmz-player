@@ -63,9 +63,16 @@ impl WinitApp {
         if !self.select_maintenance_allowed() {
             return;
         }
-        let Some(urls) = self.jobs.table_fetch.startup_urls.take() else {
+        if !std::mem::take(&mut self.jobs.table_fetch.startup_pending) {
             return;
-        };
+        }
+        let startup = self.smoke.startup_started_at;
+        let phase = StartupPhase::begin(startup, "difficulty_tables_for_ui");
+        match phase.result(self.boot.library_db.list_difficulty_tables()) {
+            Ok(tables) => self.select.difficulty_tables = tables,
+            Err(error) => tracing::warn!(%error, "failed to list difficulty tables for egui"),
+        }
+        let urls = startup_difficulty_table_fetch_urls_for_boot(&self.boot, startup);
         self.spawn_table_fetches(urls, "startup table fetch".to_string());
         self.spawn_rian_table_fetch(false);
     }

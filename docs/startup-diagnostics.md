@@ -34,8 +34,6 @@ startup phase complete phase="renderer_default" elapsed_ms=... startup_elapsed_m
 |---|---|
 | `winit_app_new` | constructor全体（以下の子段階を含む） |
 | `constructor_options_and_ir_handle` | latency起動オプション、IR操作ハンドルとwake、CLI renderer反映 |
-| `startup_difficulty_table_fetch_urls_for_boot` | 起動時の難易度表取得対象URLの選定 |
-| `startup_difficulty_table_download_metadata` | 上記で使う取得済み難易度表メタデータのDB読み込み |
 | `initial_select_settings` | rival sync要求、初期folder stack・filter・sort・cache生成 |
 | `virtual_folder_catalog_load` | `VirtualFolderCatalog::load()` |
 | `load_items_for_stack` | 起動時の選曲リスト構築全体 |
@@ -70,7 +68,7 @@ startup phase complete phase="renderer_default" elapsed_ms=... startup_elapsed_m
 | `gamepad_initialization` | gamepad backend・slot・analog設定 |
 | `obs_and_system_sound_catalog` | OBS controller起動とシステム音候補走査 |
 | `select_assets_and_result_signature` | preview / asset runtimeと初期Result signature |
-| `difficulty_tables_for_ui`, `select_folder_summary_runtime` | UI用DB読み込みとsummary worker起動 |
+| `select_folder_summary_runtime` | summary worker起動 |
 | `app_state_assembly`, `constructor_final_setup` | app状態生成、debug boot・システム音要求・Discord設定 |
 | `event_loop_handoff` | profile IR sync要求からイベントループ開始直前まで |
 | `window_setup` | 初回window初期化全体 |
@@ -80,6 +78,8 @@ startup phase complete phase="renderer_default" elapsed_ms=... startup_elapsed_m
 | `window_input_and_egui` | windowへの入力attach、clipboard、egui / font初期化 |
 | `initial_select_skin_ready` | 初回Selectのdecode / upload待ち |
 | `first_surface_frame` | 最初の描画要求から初回present成功まで（復旧・再試行を含む） |
+| `difficulty_tables_for_ui` | 初回描画後に設定画面用の難易度表一覧を読み込み |
+| `startup_difficulty_table_download_metadata` | 初回描画後、自動更新が無効で有効な取得元がある場合に取得済みメタデータを読み込み |
 
 既存の `application bootstrap complete`、`startup constructor timings`、
 `starting winit event loop`、`first surface frame presented` も引き続き出力します。
