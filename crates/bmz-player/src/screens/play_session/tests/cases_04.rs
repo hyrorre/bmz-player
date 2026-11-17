@@ -1050,6 +1050,98 @@ fn g_battle_target_replay_judges_its_chart_but_displays_primary_arrangement() {
 }
 
 #[test]
+fn g_battle_seed_target_from_a_d_battle_row_places_the_opponent_with_its_p1_seed() {
+    use crate::screens::play_start::{
+        BattleTarget, BattleTargetPlayback, PlayStartOptions, SeedScheme,
+        play_session_options_from_start,
+    };
+
+    let path = write_temp_bms(
+        "\
+#TITLE D-Battle Seed
+#BPM 120
+#00111:01
+#00212:01
+#00313:01
+#00414:01
+#00515:01
+#00618:01
+#00719:01
+",
+    );
+    let imported = import_bms_chart(&path, None, true).unwrap();
+    assert_eq!(imported.chart.metadata.key_mode, KeyMode::K7);
+    let mut conn = Connection::open_in_memory().unwrap();
+    configure_connection(&conn).unwrap();
+    run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+    let mut library_db = LibraryDatabase::from_connection(conn);
+    let chart_id = library_db
+        .upsert_chart_import(&ChartImportRecord {
+            root_id: None,
+            file_path: &path,
+            file_size: 1,
+            modified_at: 1,
+            scanned_at: 1,
+            chart: &imported.chart,
+        })
+        .unwrap();
+    let key_times = |chart: &PlayableChart| {
+        Lane::ALL[Lane::Key1.index()..=Lane::Key7.index()]
+            .iter()
+            .map(|lane| {
+                chart.lane_notes[lane.index()].iter().map(|note| note.time).collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    let p1_seed = 0x123456;
+    let rival = preload_play_session_for_chart(
+        &library_db,
+        chart_id,
+        PlaySessionOptions {
+            arrange: ArrangeOption::Random,
+            arrange_seed: Some(p1_seed),
+            ..PlaySessionOptions::default()
+        },
+        1.0,
+    )
+    .unwrap();
+    assert_ne!(key_times(&rival.chart), key_times(&imported.chart));
+
+    // The row's key_mode is 7K, but D-BATTLE packed both sides as P1 + P2 * 2^24.
+    let target = BattleTarget {
+        provider: "bms-ir".into(),
+        score_id: "score".into(),
+        player_id: "player".into(),
+        player_name: "RIVAL".into(),
+        rank: 1,
+        ex_score: 100,
+        gauge: None,
+        playback: BattleTargetPlayback::Seed {
+            arrange: ArrangeOption::Random,
+            arrange_2p: ArrangeOption::Random,
+            double_option: DoubleOption::Battle,
+            packed_seed: Some(p1_seed | (0x654321 << 24)),
+            seed_scheme: SeedScheme::Beatoraja24,
+        },
+    };
+    let options = play_session_options_from_start(
+        &Default::default(),
+        PlayStartOptions {
+            session_mode: SessionMode::GBattle,
+            battle_target: Some(target),
+            ..Default::default()
+        },
+    );
+    let preloaded = preload_play_session_for_chart(&library_db, chart_id, options, 1.0).unwrap();
+
+    let opponent = preloaded.opponent_chart.as_ref().expect("opponent chart");
+    assert_eq!(opponent.metadata.key_mode, KeyMode::K7);
+    assert_eq!(key_times(opponent), key_times(&rival.chart));
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn load_transformed_chart_applies_start_note_margin() {
     let path = write_temp_bms(
         "\

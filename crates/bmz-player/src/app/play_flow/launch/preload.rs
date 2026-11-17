@@ -842,7 +842,15 @@ fn apply_rival_score_replication(
     let (arrange, arrange_2p, double_option) = rival_arrange_options(score);
     options.arrange = arrange;
     options.arrange_2p = arrange_2p;
-    options.double_option = double_option.normalize_for_key_mode(key_mode);
+    // The player's D-BATTLE selected the score bucket compared above and stays. The
+    // rival decides only FLIP; its BATTLE never doubles the player's chart.
+    let battle_play = options.double_option.normalize_for_key_mode(key_mode).is_battle();
+    if !battle_play {
+        options.double_option = match double_option.normalize_for_key_mode(key_mode) {
+            DoubleOption::Battle | DoubleOption::BattleAutoScratch => DoubleOption::Off,
+            other => other,
+        };
+    }
     options.arrange_pattern = None;
     options.random_trainer_seed = None;
 
@@ -851,10 +859,14 @@ fn apply_rival_score_replication(
         && let Some(packed) = score.play_seed.and_then(|seed| u64::try_from(seed).ok())
     {
         let is_double = matches!(key_mode, KeyMode::K10 | KeyMode::K14);
-        if let Some(seeds) = crate::random_option_seed::RandomOptionSeeds::unpack(packed, is_double)
-        {
+        // A D-BATTLE score packs both sides like DP on its 5K/7K chart.
+        if let Some(seeds) = crate::random_option_seed::RandomOptionSeeds::unpack(
+            packed,
+            is_double || double_option.is_battle(),
+        ) {
             options.arrange_seed = Some(i64::from(seeds.p1.value()));
-            options.arrange_seed_2p = seeds.p2.map(|seed| i64::from(seed.value()));
+            options.arrange_seed_2p =
+                seeds.p2.filter(|_| is_double || battle_play).map(|seed| i64::from(seed.value()));
             options.legacy_arrange_seed = false;
             copied_chart = true;
         } else {
@@ -1002,9 +1014,13 @@ fn arrange_option_from_beatoraja_id(value: i32) -> ArrangeOption {
     }
 }
 
+/// Keeps BATTLE / BATTLE AS: such a row's packed seed holds both sides like DP
+/// although its chart is 5K/7K. The play sites decide whether to double the chart.
 pub(in crate::app) fn double_option_from_rian(value: &str) -> DoubleOption {
     match value.trim().to_ascii_lowercase().as_str() {
         "flip" => DoubleOption::Flip,
+        "battle" => DoubleOption::Battle,
+        "battle_auto_scratch" | "battle_assist" => DoubleOption::BattleAutoScratch,
         _ => DoubleOption::Off,
     }
 }
@@ -1451,6 +1467,126 @@ mod rival_replication_tests {
             }
             assert_eq!(reloaded.applied_arrange, first.applied_arrange);
         }
+    }
+
+    #[test]
+    fn battle_row_seed_copies_only_the_dp_packed_p1_seed_onto_an_sp_chart() {
+        use crate::screens::play_start::{BattleTargetPlayback, SeedScheme};
+
+        let seed_row = |double_option: &str, packed_seed| {
+            BattleTargetPlayback::Seed {
+                arrange: ArrangeOption::Random,
+                arrange_2p: ArrangeOption::SRandom,
+                double_option: double_option_from_rian(double_option),
+                packed_seed: Some(packed_seed),
+                seed_scheme: SeedScheme::Beatoraja24,
+            }
+            .arrangement()
+        };
+        let replicate = |arrangement: &BattleTargetArrangement| {
+            let mut options = PlayStartOptions {
+                arrange_seed: Some(77),
+                arrange_seed_2p: Some(88),
+                ..PlayStartOptions::default()
+            };
+            apply_battle_target_replication(
+                &mut options,
+                arrangement,
+                ChartReplicationModeConfig::RivalChart,
+                KeyMode::K7,
+            );
+            options
+        };
+
+        // The 7K D-BATTLE row packs P1 + P2 * 2^24. G-BATTLE copies P1 to the SP chart.
+        for double_option in ["battle", "battle_auto_scratch"] {
+            let options = replicate(&seed_row(double_option, 0x654321_123456));
+            assert_eq!(options.double_option, DoubleOption::Off, "{double_option}");
+            assert_eq!(options.arrange, ArrangeOption::Random);
+            assert_eq!(options.arrange_seed, Some(0x123456));
+            assert_eq!(options.arrange_seed_2p, None);
+            assert_eq!(
+                lanes_7k(options.arrange, options.arrange_seed),
+                lanes_7k(ArrangeOption::Random, Some(0x123456))
+            );
+        }
+
+        // Other rows keep the SP format: a value above 24 bits is invalid.
+        let options = replicate(&seed_row("off", 0x654321_123456));
+        assert_eq!(options.arrange_seed, Some(77));
+        let options = replicate(&seed_row("off", 0x123456));
+        assert_eq!(options.arrange_seed, Some(0x123456));
+        assert_eq!(options.arrange_seed_2p, None);
+    }
+
+    #[test]
+    fn rival_replication_keeps_the_players_d_battle() {
+        use crate::select_options::DoubleOptionScoreBucket;
+        use crate::storage::network_db::BmzRivalScoreIdentity;
+
+        let battle_score = IrRivalScoreRecord {
+            bmz_identity: Some(BmzRivalScoreIdentity {
+                ln_policy: crate::ln_policy::LnScorePolicy::AutoLn,
+                double_option: DoubleOptionScoreBucket::Battle,
+            }),
+            arrange_2p: "mirror".to_string(),
+            double_option: "battle".to_string(),
+            play_seed: Some(0x654321_123456),
+            ..rival_score(0, "random")
+        };
+        let replicate = |double_option, score: &IrRivalScoreRecord| {
+            let mut options = PlayStartOptions {
+                double_option,
+                arrange_seed: Some(77),
+                arrange_seed_2p: Some(88),
+                ..PlayStartOptions::default()
+            };
+            apply_rival_score_replication(
+                &mut options,
+                score,
+                ChartReplicationModeConfig::RivalChart,
+                KeyMode::K7,
+            );
+            options
+        };
+
+        // D-BATTLE against the rival's D-BATTLE best copies both sides.
+        for double_option in [DoubleOption::Battle, DoubleOption::BattleAutoScratch] {
+            let options = replicate(double_option, &battle_score);
+            assert_eq!(options.double_option, double_option);
+            assert_eq!(options.arrange, ArrangeOption::Random);
+            assert_eq!(options.arrange_2p, ArrangeOption::Mirror);
+            assert_eq!(options.arrange_seed, Some(0x123456));
+            assert_eq!(options.arrange_seed_2p, Some(0x654321));
+        }
+
+        // A rival without the BATTLE bucket does not turn the player's D-BATTLE off.
+        let sp_score = IrRivalScoreRecord { play_seed: Some(0x123456), ..rival_score(0, "random") };
+        let options = replicate(DoubleOption::Battle, &sp_score);
+        assert_eq!(options.double_option, DoubleOption::Battle);
+        assert_eq!(options.arrange_seed, Some(0x123456));
+        assert_eq!(options.arrange_seed_2p, None);
+
+        // The rival's BATTLE never doubles an SP play; only its P1 seed is copied.
+        let options = replicate(DoubleOption::Off, &battle_score);
+        assert_eq!(options.double_option, DoubleOption::Off);
+        assert_eq!(options.arrange_seed, Some(0x123456));
+        assert_eq!(options.arrange_seed_2p, None);
+
+        // Other rows keep the SP format, and FLIP still comes from the rival on DP.
+        let options = replicate(
+            DoubleOption::Off,
+            &IrRivalScoreRecord { play_seed: Some(0x654321_123456), ..rival_score(0, "random") },
+        );
+        assert_eq!((options.double_option, options.arrange_seed), (DoubleOption::Off, Some(77)));
+        let mut options = PlayStartOptions::default();
+        apply_rival_score_replication(
+            &mut options,
+            &IrRivalScoreRecord { double_option: "flip".to_string(), ..rival_score(0, "random") },
+            ChartReplicationModeConfig::RivalChart,
+            KeyMode::K14,
+        );
+        assert_eq!(options.double_option, DoubleOption::Flip);
     }
 
     #[test]

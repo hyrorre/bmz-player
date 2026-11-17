@@ -23,6 +23,7 @@ use crate::config::profile_config::{
 };
 use crate::input::gamepad::GamepadSlotMap;
 use crate::input::shared::SharedInputBackend;
+use crate::random_option_seed::RandomOptionSeeds;
 use crate::screens::play_session::{
     BattleOpponentOptions, PlaySessionOptions, PreloadedPlaySession, PreparedPlaySession,
     SRandomScheme, build_practice_prepared_from_preloaded,
@@ -124,16 +125,28 @@ impl BattleTargetPlayback {
                 h_random_threshold_ms: replay.h_random_threshold_ms,
             },
             Self::Seed { arrange, arrange_2p, double_option, packed_seed, seed_scheme } => {
+                let beatoraja_seed =
+                    packed_seed.filter(|_| *seed_scheme == SeedScheme::Beatoraja24);
+                // D-BATTLEの行は、譜面が5K / 7KでもDPと同じ形式で両サイドのseedを
+                // 詰めている。G-BATTLEはSPの譜面へ1P側だけを写すので、P1を取り出す。
+                let battle_seed = beatoraja_seed
+                    .filter(|_| double_option.is_battle())
+                    .and_then(|seed| u64::try_from(seed).ok())
+                    .and_then(|seed| RandomOptionSeeds::unpack(seed, true));
                 BattleTargetArrangement {
                     arrange: *arrange,
                     arrange_2p: *arrange_2p,
-                    double_option: *double_option,
-                    arrange_seed: None,
+                    double_option: if double_option.is_battle() {
+                        DoubleOption::Off
+                    } else {
+                        *double_option
+                    },
+                    arrange_seed: battle_seed.map(|seeds| i64::from(seeds.p1.value())),
                     arrange_seed_2p: None,
                     // beatoraja形式のseedはBMZの配置seedへ展開し、LR2形式のseedは
                     // LR2方式で配置を再現する。それ以外はseedを渡さず、
                     // ローカルseedにフォールバックする。
-                    packed_seed: packed_seed.filter(|_| *seed_scheme == SeedScheme::Beatoraja24),
+                    packed_seed: beatoraja_seed.filter(|_| battle_seed.is_none()),
                     lr2_seed: packed_seed
                         .filter(|_| *seed_scheme == SeedScheme::Lr2)
                         .and_then(lr2_seed_from_ir),

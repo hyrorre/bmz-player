@@ -161,6 +161,37 @@ fn battle_preview_draws_lr2_random_lanes_from_a_fresh_sequence() {
 }
 
 #[test]
+fn battle_preview_draws_the_p1_seed_of_a_d_battle_row_on_an_sp_chart() {
+    let seed_row = |double_option, packed_seed| {
+        BattleTargetPlayback::Seed {
+            arrange: ArrangeOption::Random,
+            arrange_2p: ArrangeOption::Random,
+            double_option,
+            packed_seed: Some(packed_seed),
+            seed_scheme: SeedScheme::Beatoraja24,
+        }
+        .arrangement()
+    };
+    let expected =
+        preview_arrange_pattern(KeyMode::K7, &seed_row(DoubleOption::Off, 0x123456)).unwrap();
+    assert_ne!(expected, (0..LANE_COUNT as u8).collect::<Vec<_>>());
+
+    // D-BATTLE packs both sides like DP even though the row's chart is 7K.
+    for double_option in [DoubleOption::Battle, DoubleOption::BattleAutoScratch] {
+        assert_eq!(
+            preview_arrange_pattern(KeyMode::K7, &seed_row(double_option, 0x654321_123456)),
+            Some(expected.clone()),
+            "{double_option:?}"
+        );
+    }
+    // Other rows keep the SP format, where a value above 24 bits is invalid.
+    assert!(
+        preview_arrange_pattern(KeyMode::K7, &seed_row(DoubleOption::Off, 0x654321_123456))
+            .is_none()
+    );
+}
+
+#[test]
 fn battle_preview_never_draws_a_missing_seed_or_a_note_randomization_as_fixed_keys() {
     for arrange in ArrangeOption::VALUES {
         let mut arrangement = BattleTargetPlayback::Seed {
