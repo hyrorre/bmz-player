@@ -187,6 +187,8 @@ Webのコマンドはリポジトリrootから実行します。対象ファイ�
   `feat` は機能追加、`fix` は不具合修正、`test` はテスト変更、`chore` は文書・整形等に使います。
 - 本文に必要性、主要変更、検証結果を記載します。日本語で構いません。
   Footerには実際に使用したagent/modelを `Co-Authored-By:` で記載します。他のagentの名前やアドレスを流用しません。
+  確認できる範囲でバージョンと系列名まで記載します。
+- commit には必ずSSHまたはGPG keyによる署名をつけます。環境に署名鍵が見つからない場合はユーザーに確認します。
 
 ```text
 fix(bmz-player): discard obsolete result skin refreshes
@@ -198,8 +200,8 @@ fix(bmz-player): discard obsolete result skin refreshes
 Co-Authored-By: <agent名> <実際のモデル名> <agentのnoreplyアドレス>
 ```
 
-Footerの例: `Co-Authored-By: Codex <実際のモデル名> <noreply@openai.com>`、
-`Co-Authored-By: Claude <実際のモデル名> <noreply@anthropic.com>`。
+Footerの例: `Co-Authored-By: Codex GPT-6.1 Sol <noreply@openai.com>`、
+`Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`。
 
 - 本文やFooterを含む複数行のcommit messageは、OSやshellを問わずBOMなしUTF-8の一時ファイルへ保存し、
   `git commit -F <file>` で渡します。shell引数内の `\n` による改行表現は、literalな `\n` の混入を防ぐため使いません。
