@@ -333,16 +333,10 @@ impl WinitApp {
         }
         // preload 完了で install_active_play がフル snapshot に置き換えるまでの間、
         // 初期ゲージや緑数字が空表示にならないようセッション開始時相当の値を埋める。
-        let key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
-        let play_config_key_mode =
-            effective_play_key_mode(self.key_mode_for_chart(chart_id), options.key_mode_conversion);
-        self.boot.profile_config.activate_play_mode(play_config_key_mode);
-        self.select.hs_fix_option =
-            hs_fix_option_from_profile(self.boot.profile_config.play.hs_fix);
-        options.hs_fix = self.select.hs_fix_option;
+        let key_mode = self.activate_play_start_key_mode(chart_id, &mut options);
         let mut session_options =
             play_session_options_from_start(&self.play_session_app_config(), options.clone());
-        session_options.play_config_key_mode = Some(play_config_key_mode);
+        session_options.play_config_key_mode = Some(key_mode);
         // ノーツ入力は preload したセッションの割り当てで動くので、E1〜E4 や補助操作も
         // 同じ割り当てに揃える。
         if let Some(slots) = self.play_preload_gamepad_slots(chart_id) {
@@ -355,7 +349,7 @@ impl WinitApp {
         {
             self.boot.profile_config.sync_active_play_mode();
             tracing::info!(
-                key_mode = ?play_config_key_mode,
+                key_mode = ?key_mode,
                 "filled zero lane cover amounts for play start"
             );
         }
@@ -393,7 +387,7 @@ impl WinitApp {
             &snapshot,
             &self.boot.profile_config,
             key_mode,
-            play_config_key_mode,
+            key_mode,
             session_options.gamepad_slots,
         );
         pending_play_start.prepared_chart_applied = prepared_chart.is_some();
@@ -411,6 +405,21 @@ impl WinitApp {
         self.play.pending_play_start = Some(pending_play_start);
         self.sync_play_control_holds_from_pressed_controls();
         self.play.last_started_chart_id = Some(chart_id);
+    }
+
+    /// Play 開始時に使う profile slot を有効にして返す。
+    /// D-BATTLE は 10K/14K の slot、G-BATTLE は元譜面の slot を使う。
+    pub(super) fn activate_play_start_key_mode(
+        &mut self,
+        chart_id: i64,
+        options: &mut PlayStartOptions,
+    ) -> KeyMode {
+        let key_mode = self.play_skin_key_mode_for_chart(chart_id, options);
+        self.boot.profile_config.activate_play_mode(key_mode);
+        self.select.hs_fix_option =
+            hs_fix_option_from_profile(self.boot.profile_config.play.hs_fix);
+        options.hs_fix = self.select.hs_fix_option;
+        key_mode
     }
 
     /// FAST/SLOW 表示モード (Auto / ThresholdMs) を snapshot へ適用する。

@@ -718,8 +718,8 @@ fn build_local_score_submission(
         DoubleOptionScoreBucket::Off => 1,
         DoubleOptionScoreBucket::Battle | DoubleOptionScoreBucket::BattleAutoScratch => 2,
     };
-    let expected_total_notes =
-        chart.scored_total_notes(row.ln_policy).saturating_mul(double_multiplier);
+    let base_total_notes = chart.scored_total_notes(row.ln_policy);
+    let expected_total_notes = base_total_notes.saturating_mul(double_multiplier);
     // Preserve a larger historical count for forward compatibility, while
     // repairing legacy BMZ CN/HCN rows that stored the base library count.
     let scored_total_notes = row.total_notes.max(expected_total_notes);
@@ -767,7 +767,16 @@ fn build_local_score_submission(
             version: env!("CARGO_PKG_VERSION").to_string(),
             platform: std::env::consts::OS.to_string(),
         },
-        chart: chart_payload_from_library(chart, analysis, scored_total_notes, row.ln_policy),
+        chart: chart_payload_from_library(
+            chart,
+            analysis,
+            if row.double_option == DoubleOptionScoreBucket::Off {
+                scored_total_notes
+            } else {
+                base_total_notes
+            },
+            row.ln_policy,
+        ),
         rule: IrRulePayload {
             play_mode: play_mode_payload(&chart.mode),
             key_mode: chart.mode.clone(),

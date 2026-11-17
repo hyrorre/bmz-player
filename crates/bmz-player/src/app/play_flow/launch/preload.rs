@@ -259,8 +259,7 @@ impl WinitApp {
     ) -> u64 {
         self.normalize_key_mode_conversion_options(chart_id, &mut options);
         self.resolve_play_target_from_cache(chart_id, &mut options);
-        let play_config_key_mode =
-            effective_play_key_mode(self.key_mode_for_chart(chart_id), options.key_mode_conversion);
+        let play_config_key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
         options.hs_fix = hs_fix_option_from_profile(
             self.boot.profile_config.play_mode_config(play_config_key_mode).hs_fix,
         );
@@ -778,12 +777,15 @@ fn play_skin_score_key(
     } else {
         KeyModeConversionConfig::Off
     };
-    let double_option =
+    let mut double_option =
         if key_mode_conversion != KeyModeConversionConfig::Off || battle_presentation {
             DoubleOption::Off
         } else {
             options.double_option.normalize_for_key_mode(source_key_mode)
         };
+    if options.assist.auto_scratch {
+        double_option = double_option.with_auto_scratch(true);
+    }
     let ln_policy = crate::ln_policy::course_score_ln_policy(
         ln_policy_setting,
         options.ln_mode_override,
@@ -1588,6 +1590,22 @@ mod first_play_score_key_tests {
         assert_eq!(battle_key.ln_policy, LnScorePolicy::ForceCn);
         assert_eq!(battle_key.double_option, DoubleOptionScoreBucket::Battle);
         assert_eq!(battle_key.rule_mode, RuleMode::Dx);
+
+        let assisted_key = play_skin_score_key(
+            [7; 32],
+            ChartLnProfile::default(),
+            KeyMode::K7,
+            &PlayStartOptions {
+                assist: crate::config::profile_config::AssistOptionConfig {
+                    auto_scratch: true,
+                    ..Default::default()
+                },
+                ..options.clone()
+            },
+            LnPolicySetting::AutoLn,
+            RuleMode::Beatoraja,
+        );
+        assert_eq!(assisted_key.double_option, DoubleOptionScoreBucket::BattleAutoScratch);
 
         let presentation_key = play_skin_score_key(
             [7; 32],

@@ -18,11 +18,7 @@ pub(crate) fn effective_primary_key_mode(
             (KeyMode::K5, KeyMode::K10) | (KeyMode::K7, KeyMode::K14)
         );
     if battle_presentation {
-        match chart_key_mode {
-            KeyMode::K10 => KeyMode::K5,
-            KeyMode::K14 => KeyMode::K7,
-            _ => chart_key_mode,
-        }
+        DoubleOption::battle_source_key_mode(chart_key_mode).unwrap_or(chart_key_mode)
     } else {
         chart_key_mode
     }
@@ -330,7 +326,7 @@ pub fn build_game_session_with_input_backend(
         && (session_mode.primary_autoplay() || profile.play.auto_play || options.autoplay);
     // AUTO SCRATCH はリプレイ再生ではキーログと食い違うため掛けない。
     let auto_scratch = options.double_option == DoubleOption::BattleAutoScratch
-        || profile.cli_auto_scratch()
+        || (profile.cli_auto_scratch() && !is_replay)
         || (options.assist.auto_scratch && !is_replay);
     let autoplay = if autoplay_enabled {
         Some(AutoplayController::default())
@@ -738,17 +734,15 @@ pub(super) fn play_config_key_mode(
     chart_key_mode: KeyMode,
     options: &PlaySessionOptions,
 ) -> KeyMode {
-    options.play_config_key_mode.unwrap_or({
-        if matches!(options.double_option, DoubleOption::Battle | DoubleOption::BattleAutoScratch) {
-            match chart_key_mode {
-                KeyMode::K10 => KeyMode::K5,
-                KeyMode::K14 => KeyMode::K7,
-                _ => chart_key_mode,
-            }
-        } else {
-            chart_key_mode
-        }
-    })
+    // D-BATTLE plays both sides, using the DP bindings and presentation settings.
+    // G-BATTLE's display-only opponent keeps the explicit source-mode override.
+    if options.double_option.is_battle()
+        && !options.session_mode.is_battle()
+        && options.battle_opponent.is_none()
+    {
+        return DoubleOption::battle_key_mode(chart_key_mode);
+    }
+    options.play_config_key_mode.unwrap_or(chart_key_mode)
 }
 
 pub(super) fn apply_judge_constraint_to_windows(

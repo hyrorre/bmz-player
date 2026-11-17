@@ -330,6 +330,10 @@ fn local_backfill_payload_uses_history_counts_and_options() {
     assert_eq!(payload.play_options["source_kind"], "beatoraja");
     assert_eq!(payload.play_options["device_type"], "controller");
     assert_eq!(payload.play_options["assist_mask"], 4);
+    assert_eq!(payload.chart.mode, "7K");
+    assert_eq!(payload.rule.key_mode, "7K");
+    assert_eq!(payload.chart.notes.total, test_chart().scored_total_notes(LnScorePolicy::ForceCn));
+    assert_eq!(payload.result.notes, 2 * payload.chart.notes.total);
 }
 
 #[test]
@@ -366,7 +370,7 @@ fn local_backfill_chart_payload_uses_library_metadata() {
 
     assert_eq!(payload.chart.sha256, hash_to_hex(&[2; 32]));
     assert_eq!(payload.chart.level, Some(12));
-    assert_eq!(payload.chart.notes.total, 2100);
+    assert_eq!(payload.chart.notes.total, 1050);
     assert_eq!(payload.result.notes, 2100);
     assert_eq!(payload.chart.notes.ln, 50);
     assert_eq!(payload.chart.notes.cn, 50);

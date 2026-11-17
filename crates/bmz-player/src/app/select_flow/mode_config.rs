@@ -59,8 +59,15 @@ impl WinitApp {
 
     /// The profile slot used for editing and starting the selected chart.
     pub(super) fn selected_play_config_key_mode(&self) -> Option<KeyMode> {
-        self.selected_source_key_mode()
-            .map(|mode| effective_play_key_mode(mode, self.selected_key_mode_conversion()))
+        self.selected_source_key_mode().map(|mode| {
+            play_skin_key_mode_for_options(
+                mode,
+                self.select.double_option,
+                self.select.session_mode,
+                self.selected_key_mode_conversion(),
+                self.select.ir_battle.active,
+            )
+        })
     }
 
     /// Both controllers edit the player's arrangement in SP. Keep the physical

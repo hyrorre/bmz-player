@@ -1901,6 +1901,100 @@ fn all_ir_providers() -> IrConfig {
     IrConfig { primary_provider: "bms-ir".to_string(), providers, ..IrConfig::default() }
 }
 
+#[test]
+fn double_battle_saves_separate_bests_and_enqueues_only_supported_ir_providers() {
+    use crate::select_options::{DoubleOption, DoubleOptionScoreBucket};
+    for (sp, dp) in [(KeyMode::K5, KeyMode::K10), (KeyMode::K7, KeyMode::K14)] {
+        let root = tempfile::tempdir().unwrap();
+        let paths = profile_paths(root.path());
+        let mut scores = open_score_db();
+        let mut network = open_network_db();
+        for (index, double) in
+            [DoubleOption::Battle, DoubleOption::BattleAutoScratch].into_iter().enumerate()
+        {
+            let mut s = session();
+            let chart = Arc::make_mut(&mut s.chart);
+            chart.metadata.key_mode = dp;
+            chart.metadata.source_format = bmz_chart::model::ChartSourceFormat::Bms;
+            let mut second = chart.lane_notes[Lane::Key1.index()][0].clone();
+            second.id = NoteId(2);
+            second.lane = Lane::Key8;
+            chart.lane_notes[Lane::Key8.index()].push(second);
+            chart.total_notes = 2;
+            s.primary_key_mode = dp;
+            s.scored_total_notes = 2;
+            s.score.judges.fast_pgreat = 1;
+            s.score.judges.slow_great = 1;
+            s.score.past_notes = 2;
+            s.score.max_combo = 2;
+            s.state = PlayState::Finished;
+            if double == DoubleOption::BattleAutoScratch {
+                s.autoplay = Some(bmz_gameplay::autoplay::AutoplayController::for_lanes(&[
+                    Lane::Scratch,
+                    Lane::Scratch2,
+                ]));
+            }
+            let key = ScoreKey::with_options(
+                s.chart.identity.file_sha256,
+                crate::ln_policy::LnScorePolicy::ForceLn,
+                double.score_bucket(),
+                s.rule_mode,
+            );
+            let arrange = AppliedArrange {
+                source_key_mode: Some(sp),
+                double_option: double,
+                ..Default::default()
+            };
+            let finished = finish_session_result(
+                &mut scores,
+                &mut network,
+                FinishSessionResultRequest {
+                    profile_paths: &paths,
+                    replay_config: &ReplayConfig {
+                        auto_save: false,
+                        compress: false,
+                        slot_rules: crate::config::profile_config::default_slot_rules(),
+                    },
+                    ir_config: &all_ir_providers(),
+                    session: &s,
+                    played_at: 100 + index as i64,
+                    applied_arrange: &arrange,
+                    source_ln_profile: ChartLnProfile::from_chart(&s.chart),
+                    chart_length_ms: None,
+                    play_duration_ms: None,
+                    target_ex_score: None,
+                    score_key: key,
+                    practice_mode: false,
+                    finish_mode: FinishResultMode::Normal,
+                },
+            )
+            .unwrap();
+            assert!(finished.score_data_changed);
+            assert_eq!(finished.summary.ir_queued_jobs, 2);
+            let best = scores.best_scores_for_charts(&[key]).unwrap();
+            assert_eq!(best.len(), 1);
+            assert_eq!(best[0].ex_score, 3);
+            assert_eq!(best[0].double_option, double.score_bucket());
+            assert_ne!(best[0].clear_type, "AssistEasy");
+            assert_ne!(best[0].clear_type, "LightAssistEasy");
+            let normal_key = ScoreKey { double_option: DoubleOptionScoreBucket::Off, ..key };
+            assert!(scores.best_scores_for_charts(&[normal_key]).unwrap().is_empty());
+        }
+        let jobs = network.pending_ir_score_jobs(200, 10).unwrap();
+        assert_eq!(jobs.len(), 4);
+        for job in jobs {
+            assert!(matches!(job.provider.as_str(), "bmz" | "bms-ir"));
+            let payload: crate::ir::types::IrScoreSubmission =
+                serde_json::from_str(&job.payload_json).unwrap();
+            assert_eq!(payload.chart.mode, sp.as_str());
+            assert_eq!(payload.rule.key_mode, sp.as_str());
+            assert_eq!(payload.chart.notes.total, 1);
+            assert_eq!(payload.result.notes, 2);
+            crate::ir::bms_ir::ensure_score_payload_supported(&payload).unwrap();
+        }
+    }
+}
+
 /// 1ノーツをPGREAT、1ノーツを見逃した、FCではないASSIST EASY完走。
 fn assist_easy_session(gauge: bmz_gameplay::gauge::GaugeState) -> GameSession {
     use bmz_core::judge::{Judge, TimingSide};

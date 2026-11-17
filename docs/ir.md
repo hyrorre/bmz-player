@@ -314,6 +314,7 @@ POST /api/v1/scores?include=rankings&ranking_scopes=global,self_and_rivals&ranki
 - `device_type`はスコアを記録した主な入力デバイスです。判定のルールは[判定・EXスコア・クリアランプ](#判定exスコアクリアランプ)を参照してください。ランキングを分ける条件ではなく、表示・検索・検証の補助に使います。
 - `rule.ln_policy`は、プロファイルの設定と譜面のLN情報からBMZが正規化した値で、ランキング・best・集計の単位に使います。`rule.effective_ln_mode`は実際に降らせたLNの種別を示す補助情報です。`chart.ln_profile`はサーバーが譜面情報を補完・検証するための参考情報で、bestを分ける単位にはしません。
 - `play_options.double_option`はランキングを分ける単位で、`off` / `battle` / `battle_auto_scratch`のどれかです（`flip`は`off`として扱います）。実際に適用したDPオプションは`applied_double_option`（`off` / `flip` / `battle` / `battle_auto_scratch`）に入れ、個別のスコアの履歴に残します。
+- D-BATTLE / BATTLE ASの`chart.mode`・`rule.key_mode`は元譜面の5K / 7Kです。`chart.notes`と既定TOTALも複製前の情報を使い、倍増した採点ノーツ数は`result.notes`に入れます。一括送信も同じ区分を使います。
 - `play_options.option`は初期のpayloadとの互換用で、`arrange_1p`と同じ値です。
 - `seed` / `random_seed`は10進数の文字列で送ります。数値も過去のpayloadとの互換のために受け付けます。
 - `result.ghost`には、通常のプレイでbeatoraja形式のghostを入れます。
