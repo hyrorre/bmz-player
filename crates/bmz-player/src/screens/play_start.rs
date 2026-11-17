@@ -56,8 +56,37 @@ pub enum BattleTargetPlayback {
         arrange: ArrangeOption,
         arrange_2p: ArrangeOption,
         double_option: DoubleOption,
+        /// IRが返した生のseed値。形式は `seed_scheme` で判別する。
         packed_seed: Option<i64>,
+        seed_scheme: SeedScheme,
     },
+}
+
+/// IRランキング行が持つ配置seedの形式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeedScheme {
+    /// beatoraja互換の、side別24bitに詰めたseed。
+    Beatoraja24,
+    /// LR2形式のseed（`0..=0x7ffe` の単一値）。譜面の `#RANDOM` と RANDOM の
+    /// レーン配置をLR2と同じ乱数列で再現する。
+    Lr2,
+    /// 形式を判別できないseed。
+    Unknown,
+}
+
+impl SeedScheme {
+    /// IRの `seed_scheme` 値を解釈する。欠落・空文字の場合は `fallback` を返す。
+    pub fn from_ir_value(value: Option<&str>, fallback: Self) -> Self {
+        let Some(value) = value else {
+            return fallback;
+        };
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" => fallback,
+            "beatoraja" | "beatoraja_24bit_v1" => Self::Beatoraja24,
+            "lr2" => Self::Lr2,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +97,8 @@ pub(crate) struct BattleTargetArrangement {
     pub(crate) arrange_seed: Option<i64>,
     pub(crate) arrange_seed_2p: Option<i64>,
     pub(crate) packed_seed: Option<i64>,
+    /// LR2形式のseed。`#RANDOM` の解決と RANDOM のレーン配置をLR2方式にする。
+    pub(crate) lr2_seed: Option<u32>,
     pub(crate) arrange_pattern: Option<Vec<u8>>,
     pub(crate) legacy_arrange_seed: bool,
     pub(crate) s_random_scheme: SRandomScheme,
@@ -85,20 +116,27 @@ impl BattleTargetPlayback {
                 arrange_seed: replay.arrange_seed,
                 arrange_seed_2p: replay.arrange_seed_2p,
                 packed_seed: None,
+                lr2_seed: replay.lr2_seed,
                 arrange_pattern: replay.lane_shuffle_pattern.clone(),
                 legacy_arrange_seed: replay.uses_legacy_seed_scheme(),
                 s_random_scheme: replay.effective_s_random_scheme().unwrap_or_default(),
                 s_random_scheme_2p: replay.effective_s_random_scheme_2p().ok(),
                 h_random_threshold_ms: replay.h_random_threshold_ms,
             },
-            Self::Seed { arrange, arrange_2p, double_option, packed_seed } => {
+            Self::Seed { arrange, arrange_2p, double_option, packed_seed, seed_scheme } => {
                 BattleTargetArrangement {
                     arrange: *arrange,
                     arrange_2p: *arrange_2p,
                     double_option: *double_option,
                     arrange_seed: None,
                     arrange_seed_2p: None,
-                    packed_seed: *packed_seed,
+                    // beatoraja形式のseedはBMZの配置seedへ展開し、LR2形式のseedは
+                    // LR2方式で配置を再現する。それ以外はseedを渡さず、
+                    // ローカルseedにフォールバックする。
+                    packed_seed: packed_seed.filter(|_| *seed_scheme == SeedScheme::Beatoraja24),
+                    lr2_seed: packed_seed
+                        .filter(|_| *seed_scheme == SeedScheme::Lr2)
+                        .and_then(lr2_seed_from_ir),
                     arrange_pattern: None,
                     legacy_arrange_seed: false,
                     s_random_scheme: SRandomScheme::default(),
@@ -112,6 +150,11 @@ impl BattleTargetPlayback {
             }
         }
     }
+}
+
+/// IRが返したLR2形式のseed。範囲外は `None` にし、ローカルseedへフォールバックさせる。
+fn lr2_seed_from_ir(seed: i64) -> Option<u32> {
+    u32::try_from(seed).ok().filter(|&seed| seed <= bmz_chart::lr2_random::LR2_SEED_MAX)
 }
 
 /// G-BATTLEの相手は元譜面のプレイヤー側入力だけを再生する。
@@ -191,9 +234,14 @@ pub struct PlayStartOptions {
     pub s_random_scheme_2p: Option<SRandomScheme>,
     pub h_random_threshold_ms: Option<u32>,
     pub bms_random_seed: Option<u64>,
+    /// LR2 branch seed from a battle target or previously played arrangement.
+    pub lr2_seed: Option<u32>,
+    pub mirror_lr2_arrangement: bool,
     pub bms_random_choices: Option<Vec<i32>>,
     pub bms_switch_choices: Option<Vec<u64>>,
     pub arrange_pattern: Option<Vec<u8>>,
+    /// Start from the previous play's resolved arrangement.
+    pub reuse_applied_arrangement: bool,
     /// Override the starting gauge value (used to carry the gauge between
     /// charts in a course).  None means use the gauge's default `init`.
     pub initial_gauge_value: Option<f32>,
@@ -266,6 +314,13 @@ pub fn play_session_options_from_start(
         .unwrap_or_default();
     let battle_opponent = start_options.battle_target.as_ref().map(|target| {
         let arrangement = target.playback.arrangement();
+        if let BattleTargetPlayback::Seed { packed_seed, seed_scheme, .. } = &target.playback
+            && *seed_scheme == SeedScheme::Lr2
+            && let Some(seed) = packed_seed
+            && arrangement.lr2_seed.is_none()
+        {
+            tracing::warn!(seed, "ignoring out-of-range LR2 battle target seed");
+        }
         let (replay_player, bms_random_choices, bms_switch_choices) = match &target.playback {
             BattleTargetPlayback::Replay(replay) => (
                 Some(replay.player()),
@@ -290,6 +345,7 @@ pub fn play_session_options_from_start(
             arrange_seed_2p: arrangement.arrange_seed_2p,
             legacy_arrange_seed: arrangement.legacy_arrange_seed,
             packed_seed: arrangement.packed_seed,
+            lr2_seed: arrangement.lr2_seed,
             bms_random_choices,
             bms_switch_choices,
             arrange_pattern: arrangement.arrange_pattern,
@@ -347,9 +403,12 @@ pub fn play_session_options_from_start(
         s_random_scheme_2p: start_options.s_random_scheme_2p,
         h_random_threshold_ms: start_options.h_random_threshold_ms,
         bms_random_seed: start_options.bms_random_seed,
+        lr2_seed: start_options.lr2_seed,
+        mirror_lr2_arrangement: start_options.mirror_lr2_arrangement,
         bms_random_choices: start_options.bms_random_choices,
         bms_switch_choices: start_options.bms_switch_choices,
         arrange_pattern: start_options.arrange_pattern,
+        reuse_applied_arrangement: start_options.reuse_applied_arrangement,
         initial_gauge_value: start_options.initial_gauge_value,
         initial_gauge_values: start_options.initial_gauge_values,
         initial_course_combo: start_options.initial_course_combo,
@@ -684,13 +743,24 @@ pub fn apply_arrange_override(
     options.double_option = arrange.double_option;
     options.arrange_seed = arrange.seed;
     options.arrange_seed_2p = arrange.seed_2p;
+    options.random_trainer_seed = None;
     options.legacy_arrange_seed = arrange.legacy_seed;
     options.s_random_scheme = arrange.s_random_scheme;
     options.s_random_scheme_2p = arrange.s_random_scheme_2p;
     options.h_random_threshold_ms = arrange.h_random_threshold_ms;
     options.bms_random_choices = Some(arrange.bms_random_choices.clone());
     options.bms_switch_choices = Some(arrange.bms_switch_choices.clone());
-    options.arrange_pattern = arrange.pattern.clone();
+    options.lr2_seed = arrange.lr2_seed;
+    options.mirror_lr2_arrangement = false;
+    // A partial DP pattern would skip the per-note side. Use the applied seeds
+    // for both sides, as for LR2 plays whose layout was converted to side seeds.
+    options.arrange_pattern =
+        if arrange.pattern_is_partial || (arrange.lr2_seed.is_some() && arrange.seed.is_some()) {
+            None
+        } else {
+            arrange.pattern.clone()
+        };
+    options.reuse_applied_arrangement = true;
     options.key_mode_conversion = arrange.key_mode_conversion;
     options.seven_to_nine_pattern = arrange.seven_to_nine_pattern;
     options.seven_to_nine_type = arrange.seven_to_nine_type;
@@ -716,6 +786,7 @@ pub fn apply_queued_replay(
     options.replay_gauge_override = replay.replay.recorded_gauge_type();
     options.bms_random_choices = replay.replay.bms_random_choices.clone();
     options.bms_switch_choices = replay.replay.bms_switch_choices.clone();
+    options.lr2_seed = replay.replay.lr2_seed;
     options.arrange_pattern = replay.replay.lane_shuffle_pattern.clone();
     // Play back at the recorded rate, not the player's current FREQ.
     options.freq_semitones = replay.replay.recorded_freq_semitones();
@@ -751,9 +822,11 @@ mod tests {
             s_random_scheme: SRandomScheme::Legacy40MsV1,
             s_random_scheme_2p: Some(SRandomScheme::Lm120HzV1),
             h_random_threshold_ms: Some(125),
+            lr2_seed: None,
             bms_random_choices: vec![2],
             bms_switch_choices: vec![2_000_000_000_000],
             pattern: Some(vec![3, 1, 2, 0]),
+            pattern_is_partial: false,
             key_mode_conversion: KeyModeConversionConfig::SevenToSix,
             seven_to_nine_pattern: SevenToNinePattern::default(),
             seven_to_nine_type: SevenToNineType::default(),
@@ -799,6 +872,71 @@ mod tests {
         assert!(arrangement.legacy_arrange_seed);
         assert_eq!(arrangement.s_random_scheme, SRandomScheme::Legacy40MsV1);
         assert_eq!(arrangement.s_random_scheme_2p, Some(SRandomScheme::Lm120HzV1));
+    }
+
+    #[test]
+    fn battle_target_arrangement_passes_only_beatoraja_seeds() {
+        let seed_playback = |seed_scheme| BattleTargetPlayback::Seed {
+            arrange: ArrangeOption::Random,
+            arrange_2p: ArrangeOption::Normal,
+            double_option: DoubleOption::Off,
+            packed_seed: Some(123),
+            seed_scheme,
+        };
+
+        let beatoraja = seed_playback(SeedScheme::Beatoraja24);
+        assert_eq!(beatoraja.arrangement().packed_seed, Some(123));
+        assert_eq!(beatoraja.arrangement().lr2_seed, None);
+        assert_eq!(seed_playback(SeedScheme::Lr2).arrangement().lr2_seed, Some(123));
+        assert_eq!(seed_playback(SeedScheme::Unknown).arrangement().lr2_seed, None);
+        for out_of_range in [-1, 0x7fff] {
+            let playback = BattleTargetPlayback::Seed {
+                arrange: ArrangeOption::Random,
+                arrange_2p: ArrangeOption::Normal,
+                double_option: DoubleOption::Off,
+                packed_seed: Some(out_of_range),
+                seed_scheme: SeedScheme::Lr2,
+            };
+            assert_eq!(playback.arrangement().lr2_seed, None, "{out_of_range}");
+            assert_eq!(playback.arrangement().packed_seed, None);
+        }
+
+        for seed_scheme in [SeedScheme::Lr2, SeedScheme::Unknown] {
+            let playback = seed_playback(seed_scheme);
+            assert_eq!(playback.arrangement().packed_seed, None);
+            assert_eq!(playback.arrangement().arrange, ArrangeOption::Random);
+            let BattleTargetPlayback::Seed { packed_seed, seed_scheme: kept, .. } = playback else {
+                panic!("expected seed playback");
+            };
+            assert_eq!(packed_seed, Some(123));
+            assert_eq!(kept, seed_scheme);
+        }
+    }
+
+    #[test]
+    fn seed_scheme_reads_ir_values_with_fallback() {
+        for (value, expected) in [
+            ("beatoraja", SeedScheme::Beatoraja24),
+            ("beatoraja_24bit_v1", SeedScheme::Beatoraja24),
+            (" Beatoraja ", SeedScheme::Beatoraja24),
+            ("lr2", SeedScheme::Lr2),
+            ("LR2", SeedScheme::Lr2),
+            ("", SeedScheme::Beatoraja24),
+            ("  ", SeedScheme::Beatoraja24),
+            ("legacy_shared_v3", SeedScheme::Unknown),
+        ] {
+            assert_eq!(
+                SeedScheme::from_ir_value(Some(value), SeedScheme::Beatoraja24),
+                expected,
+                "{value:?}"
+            );
+        }
+        assert_eq!(
+            SeedScheme::from_ir_value(None, SeedScheme::Beatoraja24),
+            SeedScheme::Beatoraja24
+        );
+        assert_eq!(SeedScheme::from_ir_value(None, SeedScheme::Unknown), SeedScheme::Unknown);
+        assert_eq!(SeedScheme::from_ir_value(Some(""), SeedScheme::Unknown), SeedScheme::Unknown);
     }
 
     #[test]
@@ -862,6 +1000,36 @@ mod tests {
         let opponent = options.battle_opponent.expect("battle opponent");
         assert!(opponent.legacy_arrange_seed);
         assert_eq!(opponent.replay_judge_rate_percent, 200);
+    }
+
+    #[test]
+    fn play_session_options_give_an_lr2_seed_only_to_the_opponent() {
+        let target = BattleTarget {
+            provider: "lr2ir".to_string(),
+            score_id: "1".to_string(),
+            player_id: "rival".to_string(),
+            player_name: "RIVAL".to_string(),
+            rank: 1,
+            ex_score: 0,
+            gauge: None,
+            playback: BattleTargetPlayback::Seed {
+                arrange: ArrangeOption::Random,
+                arrange_2p: ArrangeOption::Normal,
+                double_option: DoubleOption::Off,
+                packed_seed: Some(2179),
+                seed_scheme: SeedScheme::Lr2,
+            },
+        };
+
+        let options = play_session_options_from_start(
+            &AppConfig::default(),
+            PlayStartOptions { battle_target: Some(target), ..Default::default() },
+        );
+
+        let opponent = options.battle_opponent.expect("battle opponent");
+        assert_eq!(opponent.lr2_seed, Some(2179));
+        assert_eq!(opponent.packed_seed, None);
+        assert_eq!(options.lr2_seed, None);
     }
 
     #[test]

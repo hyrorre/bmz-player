@@ -671,6 +671,7 @@ fn course_normalizes_battle_session_modes() {
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
                 packed_seed: None,
+                seed_scheme: crate::screens::play_start::SeedScheme::Beatoraja24,
             },
         }),
         ..PlayStartOptions::default()

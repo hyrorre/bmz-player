@@ -58,6 +58,7 @@ pub(super) fn assert_battle_session_mode_snapshots(app: &mut WinitApp) {
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
                 packed_seed: None,
+                seed_scheme: crate::screens::play_start::SeedScheme::Beatoraja24,
             },
         });
         let chart = app.selected_chart_row().unwrap().chart.clone().unwrap();

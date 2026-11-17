@@ -21,6 +21,7 @@ use crate::config::profile_config::{
 use crate::ir::ranking::ChartRankingQuery as ResultIrQuery;
 use crate::ir::types::{IrCourseRankingResult, IrRankingResult, IrRankingScope};
 use crate::ln_policy::LnScorePolicy;
+use crate::screens::play_start::SeedScheme;
 use crate::screens::result_ir::{
     ResultIrRanking, chart_ranking_to_result_ir_ranking, course_ranking_to_result_ir_ranking,
     ranking_to_ir_snapshot, result_ir_ranking_to_skin_snapshot,
@@ -48,6 +49,7 @@ pub struct SelectIrBattleEntry {
     pub arrange_1p: Option<String>,
     pub arrange_2p: Option<String>,
     pub random_seed: Option<i64>,
+    pub seed_scheme: SeedScheme,
     pub double_option: Option<String>,
 }
 
@@ -401,6 +403,7 @@ mod tests {
                         arrange_1p: Some("Normal".to_string()),
                         arrange_2p: None,
                         random_seed: None,
+                        seed_scheme: None,
                         double_option: None,
                         verification: Some("verified_play".to_string()),
                         judges: None,
@@ -781,9 +784,10 @@ mod tests {
     fn result_global_ranking_updates_cached_snapshot() {
         let mut select_ir = SelectIrRanking::default();
         let sha = [7u8; 32];
-        let old_global_battle_entries = battle_entries(&raw_global_ranking(sha, 9, 1200, 10));
+        let old_global_battle_entries =
+            battle_entries(&raw_global_ranking(sha, 9, 1200, 10), SeedScheme::Beatoraja24);
         let old_rival_battle_entries =
-            battle_entries(&raw_self_and_rivals_ranking(sha, 4, 1500, 5));
+            battle_entries(&raw_self_and_rivals_ranking(sha, 4, 1500, 5), SeedScheme::Beatoraja24);
         select_ir.cache.insert(
             sha,
             CachedChartIr {
@@ -970,7 +974,7 @@ mod tests {
             arrange_1p: String::new(),
             arrange_2p: String::new(),
             double_option: String::new(),
-            play_seed: None,
+            play_seed: Some(2179),
         };
         select_ir.rival_in_flight = Some((first.clone(), requested_at));
         select_ir
@@ -981,6 +985,13 @@ mod tests {
         let snapshot = rival_snapshot(&select_ir, sha).unwrap();
         assert_eq!(snapshot.display_name, "A");
         assert_eq!(snapshot.ex_score, 1500);
+        assert_eq!(
+            select_ir
+                .active_rival_score(sha, 0, LnScorePolicy::ForceLn, DoubleOptionScoreBucket::Off)
+                .unwrap()
+                .play_seed,
+            None
+        );
         assert!(rival_snapshot(&select_ir, [8; 32]).is_none());
         assert_eq!(select_ir.active_rival_display_name(), Some("A"));
 

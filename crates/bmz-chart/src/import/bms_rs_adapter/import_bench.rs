@@ -271,6 +271,7 @@ fn import_output_digest() {
         let mut warnings = Vec::new();
         let mut bms_random_choices = Vec::new();
         let mut bms_switch_choices = Vec::new();
+        let mut lr2_random_state = None;
         let format = crate::import::chart_file_format(path);
         let import_bytes = match format {
             crate::import::ChartFileFormat::Pms => import_pms_bytes_to_intermediate,
@@ -282,6 +283,7 @@ fn import_output_digest() {
             random_source,
             &mut bms_random_choices,
             &mut bms_switch_choices,
+            &mut lr2_random_state,
             &mut warnings,
         )?;
         intermediate.resources.wavs.sort_by_key(|wav| wav.key);
@@ -293,7 +295,13 @@ fn import_output_digest() {
             crate::import::AssetLookup::Declared,
         )?;
         chart.metadata.source_format = format.source_format();
-        Ok(crate::import::ImportResult { chart, warnings, bms_random_choices, bms_switch_choices })
+        Ok(crate::import::ImportResult {
+            chart,
+            warnings,
+            bms_random_choices,
+            bms_switch_choices,
+            lr2_random_state,
+        })
     };
     let describe = |path: &Path, random_source: &BmsRandomSource| -> String {
         let bytes = std::fs::read(path).unwrap();

@@ -383,6 +383,17 @@ mod tests {
     }
 
     #[test]
+    fn score_request_distinguishes_missing_seed_from_zero() {
+        let mut payload = sample_payload();
+        payload.play_options.remove("seed");
+        payload.play_options.remove("random_seed");
+        assert!(score_request(&payload, "player", "token").unwrap().get("play_seed").is_none());
+
+        payload.play_options.insert("random_seed".into(), serde_json::json!("0"));
+        assert_eq!(score_request(&payload, "player", "token").unwrap()["play_seed"], 0);
+    }
+
+    #[test]
     fn score_request_sends_random_flag_without_zeroing_length() {
         let mut payload = sample_payload();
         payload.chart.features.random = true;

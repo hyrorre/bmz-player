@@ -119,9 +119,12 @@ pub(in crate::app) fn preloaded_matches_start(
         && preloaded.session_options.s_random_scheme == options.s_random_scheme
         && preloaded.session_options.s_random_scheme_2p == options.s_random_scheme_2p
         && preloaded.session_options.bms_random_seed == options.bms_random_seed
+        && preloaded.session_options.lr2_seed == options.lr2_seed
+        && preloaded.session_options.mirror_lr2_arrangement == options.mirror_lr2_arrangement
         && preloaded.session_options.bms_random_choices == options.bms_random_choices
         && preloaded.session_options.bms_switch_choices == options.bms_switch_choices
         && preloaded.session_options.arrange_pattern == options.arrange_pattern
+        && preloaded.session_options.reuse_applied_arrangement == options.reuse_applied_arrangement
         && preloaded.session_options.initial_gauge_value == options.initial_gauge_value
         && preloaded.session_options.initial_gauge_values == options.initial_gauge_values
         && preloaded.session_options.initial_course_combo == options.initial_course_combo

@@ -25,6 +25,56 @@ struct SwitchControlState {
     skipped: bool,
 }
 
+/// The `#RANDOM` / `#SWITCH` resolution for the random source: LR2 for
+/// [`BmsRandomSource::Lr2Seed`], beatoraja otherwise.
+pub(super) enum BmsRandomResolver<'a> {
+    Beatoraja(BeatorajaRandomResolver<'a>),
+    Lr2(Lr2RandomResolver),
+}
+
+impl<'a> BmsRandomResolver<'a> {
+    pub(super) fn new(random_source: &'a BmsRandomSource) -> Self {
+        match random_source {
+            BmsRandomSource::Lr2Seed(seed) => Self::Lr2(Lr2RandomResolver::new(*seed)),
+            _ => Self::Beatoraja(BeatorajaRandomResolver::new(random_source)),
+        }
+    }
+
+    /// Applies line `line_number` and returns whether it stays in the resolved text.
+    pub(super) fn keep_line(
+        &mut self,
+        line: &str,
+        line_number: usize,
+        bms_random_choices: &mut Vec<i32>,
+        bms_switch_choices: &mut Vec<u64>,
+        warnings: &mut Vec<ImportWarning>,
+    ) -> bool {
+        match self {
+            Self::Beatoraja(resolver) => resolver.keep_line(
+                line,
+                line_number,
+                bms_random_choices,
+                bms_switch_choices,
+                warnings,
+            ),
+            Self::Lr2(resolver) => {
+                resolver.keep_line(line, line_number, bms_random_choices, warnings)
+            }
+        }
+    }
+
+    /// Finishes after the last line. LR2 returns the sequence after every `#RANDOM`.
+    pub(super) fn finish(self, warnings: &mut Vec<ImportWarning>) -> Option<Lr2Mt19937> {
+        match self {
+            Self::Beatoraja(resolver) => {
+                resolver.finish(warnings);
+                None
+            }
+            Self::Lr2(resolver) => Some(resolver.finish()),
+        }
+    }
+}
+
 /// beatoraja 互換の `#RANDOM` / `#SWITCH` 解決。区切り文字を正規化したテキストを
 /// 1行ずつ [`Self::keep_line`] に渡し、分岐を解決したテキストに残る行を決める。
 pub(super) struct BeatorajaRandomResolver<'a> {
@@ -87,7 +137,9 @@ impl<'a> BeatorajaRandomResolver<'a> {
                         max
                     };
                     let selected = match random_source {
-                        BmsRandomSource::Seed(_) => rng.next_int_bound(max) + 1,
+                        BmsRandomSource::Seed(_) | BmsRandomSource::Lr2Seed(_) => {
+                            rng.next_int_bound(max) + 1
+                        }
                         BmsRandomSource::Choices { random, .. } => {
                             let current_index = *random_choice_index;
                             *random_choice_index += 1;
@@ -186,7 +238,9 @@ impl<'a> BeatorajaRandomResolver<'a> {
                     max = 1;
                 }
                 let selected = match random_source {
-                    BmsRandomSource::Seed(_) => select_switch_value(rng, max),
+                    BmsRandomSource::Seed(_) | BmsRandomSource::Lr2Seed(_) => {
+                        select_switch_value(rng, max)
+                    }
                     BmsRandomSource::Choices { switches, .. } => {
                         let current_index = *switch_choice_index;
                         *switch_choice_index += 1;
@@ -338,10 +392,12 @@ impl<'a> BeatorajaRandomResolver<'a> {
     }
 }
 
+/// Seed of the `JavaRandom` given to bms-rs. The resolvers drop every control line they
+/// recognize, so bms-rs normally has no branch left to draw for.
 pub(super) fn random_source_seed(random_source: &BmsRandomSource) -> u64 {
     match random_source {
         BmsRandomSource::Seed(seed) => seed.unwrap_or(0),
-        BmsRandomSource::Choices { .. } => 0,
+        BmsRandomSource::Choices { .. } | BmsRandomSource::Lr2Seed(_) => 0,
     }
 }
 

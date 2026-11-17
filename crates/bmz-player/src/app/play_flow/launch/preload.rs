@@ -831,7 +831,7 @@ fn apply_rival_score_replication(
 ) {
     use crate::config::profile_config::ChartReplicationModeConfig;
 
-    if replication == ChartReplicationModeConfig::None {
+    if options.reuse_applied_arrangement || replication == ChartReplicationModeConfig::None {
         return;
     }
     if score.bmz_identity.is_some() && score.arrange_1p.trim().is_empty() {
@@ -872,7 +872,7 @@ fn apply_battle_target_replication(
 ) {
     use crate::config::profile_config::ChartReplicationModeConfig;
 
-    if replication == ChartReplicationModeConfig::None {
+    if options.reuse_applied_arrangement || replication == ChartReplicationModeConfig::None {
         return;
     }
 
@@ -881,6 +881,8 @@ fn apply_battle_target_replication(
     options.double_option = arrangement.double_option.normalize_for_key_mode(key_mode);
     options.arrange_pattern = None;
     options.random_trainer_seed = None;
+    options.lr2_seed = None;
+    options.mirror_lr2_arrangement = false;
 
     if !replication.copies_chart() {
         return;
@@ -906,11 +908,13 @@ fn apply_battle_target_replication(
             tracing::warn!(packed_seed, ?key_mode, "ignoring invalid battle target play seed");
         }
     }
+    // The LR2 resolver is needed even if the replay already carries a lane pattern.
+    options.lr2_seed = arrangement.lr2_seed;
 
     if arrangement.arrange_pattern.is_some() {
         copied_chart = true;
     }
-    if copied_chart {
+    if copied_chart || options.lr2_seed.is_some() {
         options.arrange_pattern = arrangement.arrange_pattern.clone();
         options.legacy_arrange_seed = arrangement.legacy_arrange_seed;
         options.s_random_scheme = arrangement.s_random_scheme;
@@ -924,7 +928,11 @@ fn apply_battle_target_replication(
         );
     }
     if replication == ChartReplicationModeConfig::RivalChartMirror {
-        mirror_replicated_chart(options, key_mode, copied_chart);
+        if options.lr2_seed.is_some() {
+            options.mirror_lr2_arrangement = true;
+        } else {
+            mirror_replicated_chart(options, key_mode, copied_chart);
+        }
     }
 }
 
@@ -1110,6 +1118,7 @@ mod rival_replication_tests {
             arrange_seed: None,
             arrange_seed_2p: None,
             packed_seed: None,
+            lr2_seed: None,
             arrange_pattern: None,
             legacy_arrange_seed: false,
             s_random_scheme: SRandomScheme::Lm120HzV1,
@@ -1136,6 +1145,7 @@ mod rival_replication_tests {
                     arrange_2p: ArrangeOption::Normal,
                     double_option: DoubleOption::Off,
                     packed_seed: None,
+                    seed_scheme: crate::screens::play_start::SeedScheme::Beatoraja24,
                 },
             }),
             ..Default::default()
@@ -1299,6 +1309,146 @@ mod rival_replication_tests {
 
         assert_eq!(options.arrange, ArrangeOption::Random);
         assert_eq!(options.arrange_seed, Some(77));
+    }
+
+    #[test]
+    fn battle_rival_chart_copies_an_lr2_seed_only_with_the_chart() {
+        let mut arrangement = battle_arrangement();
+        arrangement.arrange_2p = ArrangeOption::Normal;
+        arrangement.double_option = DoubleOption::Off;
+        arrangement.lr2_seed = Some(2179);
+
+        let mut options = PlayStartOptions { arrange_seed: Some(77), ..Default::default() };
+        apply_battle_target_replication(
+            &mut options,
+            &arrangement,
+            ChartReplicationModeConfig::RivalChart,
+            KeyMode::K7,
+        );
+        assert_eq!(options.arrange, ArrangeOption::Random);
+        assert_eq!(options.lr2_seed, Some(2179));
+        assert_eq!(options.arrange_pattern, None);
+
+        let mut options = PlayStartOptions { arrange_seed: Some(77), ..Default::default() };
+        apply_battle_target_replication(
+            &mut options,
+            &arrangement,
+            ChartReplicationModeConfig::RivalOption,
+            KeyMode::K7,
+        );
+        assert_eq!(options.lr2_seed, None);
+        assert_eq!(options.arrange_seed, Some(77));
+
+        // Both the LR2 branch and the mirror request reach the chart loader.
+        let mut options = PlayStartOptions { arrange_seed: Some(77), ..Default::default() };
+        apply_battle_target_replication(
+            &mut options,
+            &arrangement,
+            ChartReplicationModeConfig::RivalChartMirror,
+            KeyMode::K7,
+        );
+        assert_eq!(options.lr2_seed, Some(2179));
+        assert!(options.mirror_lr2_arrangement);
+        assert_eq!(options.arrange, ArrangeOption::Random);
+    }
+
+    #[test]
+    fn archive_same_arrange_retry_keeps_mixed_dp_layout() {
+        use crate::screens::play_session::preload_play_session_for_chart;
+        use crate::screens::play_start::{BattleTarget, BattleTargetPlayback, SeedScheme};
+        use crate::storage::migration::{LIBRARY_MIGRATIONS, run_migrations};
+        use std::io::Write as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("songs.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        zip.start_file("chart.bms", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(
+            b"#PLAYER 3\n#BPM 120\n#WAV01 missing.wav\n#RANDOM 3\n#00021:01\n#IF 1\n\
+              #00111:01\n#00212:01\n#00313:01\n#00414:01\n#00515:01\n#00618:01\n#00719:01\n\
+              #00121:01010101\n#00221:01010101\n#00329:01\n#ENDIF\n",
+        )
+        .unwrap();
+        zip.finish().unwrap();
+        let locator = PathBuf::from(format!("{}!/chart.bms", archive.display()));
+        let mut library = LibraryDatabase::open(Path::new(":memory:")).unwrap();
+        run_migrations(library.conn_mut(), LIBRARY_MIGRATIONS).unwrap();
+        let chart_id =
+            crate::storage::import::import_chart_file(&mut library, &locator, None, None, 0)
+                .unwrap()
+                .chart_id;
+
+        let preload = |options| {
+            let options = play_session_options_from_start(&Default::default(), options);
+            preload_play_session_for_chart(&library, chart_id, options, 1.0).unwrap()
+        };
+        for (seed_scheme, packed_seed, mode, expected_seed, lr2_seed) in [
+            (SeedScheme::Lr2, 2179, ChartReplicationModeConfig::RivalChartMirror, 2975, Some(2179)),
+            (
+                SeedScheme::Beatoraja24,
+                77 | (89 << 24),
+                ChartReplicationModeConfig::RivalChart,
+                77,
+                None,
+            ),
+        ] {
+            let target = BattleTarget {
+                provider: "bms-ir".into(),
+                score_id: "score".into(),
+                player_id: "player".into(),
+                player_name: "RIVAL".into(),
+                rank: 1,
+                ex_score: 100,
+                gauge: None,
+                playback: BattleTargetPlayback::Seed {
+                    arrange: ArrangeOption::Random,
+                    arrange_2p: ArrangeOption::SRandom,
+                    double_option: DoubleOption::Off,
+                    packed_seed: Some(packed_seed),
+                    seed_scheme,
+                },
+            };
+            let arrangement = target.playback.arrangement();
+            let mut start = PlayStartOptions {
+                battle_target: Some(target.clone()),
+                arrange_seed: Some(77),
+                arrange_seed_2p: Some(89),
+                read_archive_assets: true,
+                ..Default::default()
+            };
+            apply_battle_target_replication(&mut start, &arrangement, mode, KeyMode::K14);
+            let first = preload(start);
+            assert!(first.archive_resources.is_some());
+            assert_eq!(first.applied_arrange.seed, Some(expected_seed));
+            assert_eq!(first.applied_arrange.seed_2p, Some(89));
+            assert_eq!(first.applied_arrange.bms_random_choices, [1]);
+            assert!(first.applied_arrange.pattern.is_some());
+            assert!(first.applied_arrange.pattern_is_partial);
+            assert!(first.chart.notes_for_lane(Lane::Key8).len() < 8);
+
+            let mut retry = PlayStartOptions {
+                battle_target: Some(target),
+                read_archive_assets: true,
+                ..Default::default()
+            };
+            apply_arrange_override(&mut retry, &first.applied_arrange);
+            apply_battle_target_replication(&mut retry, &arrangement, mode, KeyMode::K14);
+            assert!(!retry.mirror_lr2_arrangement);
+            assert_eq!(retry.lr2_seed, lr2_seed);
+            assert!(retry.arrange_pattern.is_none());
+
+            let reloaded = preload(retry);
+            assert!(reloaded.archive_resources.is_some());
+            for (lane, (first_lane, retried_lane)) in
+                first.chart.lane_notes.iter().zip(&reloaded.chart.lane_notes).enumerate()
+            {
+                let notes = |lane: &[bmz_chart::model::NoteEvent]| {
+                    lane.iter().map(|note| (note.id, note.time)).collect::<Vec<_>>()
+                };
+                assert_eq!(notes(first_lane), notes(retried_lane), "{seed_scheme:?}, lane {lane}");
+            }
+            assert_eq!(reloaded.applied_arrange, first.applied_arrange);
+        }
     }
 
     #[test]

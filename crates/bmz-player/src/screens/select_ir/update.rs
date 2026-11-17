@@ -75,7 +75,18 @@ impl SelectIrRanking {
         spawn_rival_fetch(target, profile_root, requested_at, self.rival_sender.clone());
     }
 
-    fn install_rival_scores(&mut self, scores: Vec<IrRivalScoreRecord>) {
+    fn install_rival_scores(&mut self, mut scores: Vec<IrRivalScoreRecord>) {
+        // The BMS-IR rival snapshot has no seed format in our cache contract.
+        // Both cached and fresh rows would otherwise be treated as beatoraja.
+        if self
+            .active_rival
+            .as_ref()
+            .is_some_and(|rival| crate::ir::bms_ir::is_bms_ir_provider(&rival.provider))
+        {
+            for score in &mut scores {
+                score.play_seed = None;
+            }
+        }
         self.active_rival_scores = scores
             .into_iter()
             .map(|score| ((score.chart_sha256, score.ln_mode, score.bmz_identity), score))
@@ -274,6 +285,7 @@ impl SelectIrRanking {
             let completed_at = Instant::now();
             let supports_battle = !crate::ir::provider_key::primary_provider_config(ir_config)
                 .is_some_and(crate::ir::bokutachi::is_config);
+            let default_seed_scheme = default_seed_scheme(ir_config);
             let entry = match result {
                 Ok((global, self_and_rivals, rivals)) => {
                     let global_ranking = chart_ranking_to_result_ir_ranking(&global);
@@ -288,13 +300,13 @@ impl SelectIrRanking {
                         self_and_rivals_scroll_offset: 0,
                         rival: rivals.as_ref().and_then(top_rival_snapshot),
                         global_battle_entries: if supports_battle {
-                            battle_entries(&global)
+                            battle_entries(&global, default_seed_scheme)
                         } else {
                             Vec::new()
                         },
                         self_and_rivals_battle_entries: self_and_rivals
                             .as_ref()
-                            .map(battle_entries)
+                            .map(|ranking| battle_entries(ranking, default_seed_scheme))
                             .unwrap_or_default(),
                         battle_entries_loaded: true,
                         global_targets: ranking_targets(&global),

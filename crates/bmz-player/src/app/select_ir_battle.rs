@@ -400,15 +400,30 @@ impl WinitApp {
         };
         let key_mode =
             self.select_ir_battle_source().map(|(_, _, key_mode)| key_mode).unwrap_or_default();
-        if entry.score_id.as_deref().is_none_or(str::is_empty) && entry.random_seed.is_some() {
-            let provider =
-                crate::ir::provider_key::primary_provider_config(&self.boot.profile_config.ir)
-                    .and_then(crate::ir::provider_key::configured_provider_key)
-                    .unwrap_or("rianIR")
-                    .to_string();
-            let target = seed_battle_target(provider, entry);
-            self.launch_battle_target(chart_id, target);
-            return;
+        let is_bms_ir =
+            crate::ir::provider_key::primary_provider_config(&self.boot.profile_config.ir)
+                .is_some_and(crate::ir::bms_ir::is_bms_ir_config);
+        let has_score_id = entry.score_id.as_deref().is_some_and(|value| !value.is_empty());
+        match ir_ranking_battle_route(is_bms_ir, has_score_id, entry.random_seed.is_some()) {
+            IrRankingBattleRoute::Replay => {}
+            IrRankingBattleRoute::Seed => {
+                let provider =
+                    crate::ir::provider_key::primary_provider_config(&self.boot.profile_config.ir)
+                        .and_then(crate::ir::provider_key::configured_provider_key)
+                        .unwrap_or("rianIR")
+                        .to_string();
+                let target = seed_battle_target(provider, entry);
+                self.launch_battle_target(chart_id, target);
+                return;
+            }
+            IrRankingBattleRoute::Missing => {
+                self.show_ir_battle_error(if is_bms_ir {
+                    "ranking entry has no arrangement seed"
+                } else {
+                    "ranking entry has neither replay nor arrangement seed"
+                });
+                return;
+            }
         }
         let Some(score_id) = entry.score_id.clone().filter(|value| !value.is_empty()) else {
             self.show_ir_battle_error("ranking entry has neither replay nor arrangement seed");
@@ -604,6 +619,7 @@ impl WinitApp {
                 arrange_2p,
                 double_option,
                 packed_seed: score.play_seed,
+                seed_scheme: crate::screens::play_start::SeedScheme::Beatoraja24,
             },
         };
         self.launch_battle_target(chart_id, target);
@@ -831,7 +847,29 @@ fn seed_battle_target(
                 .map(super::play_flow_launch_preload::double_option_from_rian)
                 .unwrap_or_default(),
             packed_seed: entry.random_seed,
+            seed_scheme: entry.seed_scheme,
         },
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IrRankingBattleRoute {
+    Replay,
+    Seed,
+    Missing,
+}
+
+/// IRランキング行からG-BATTLEの相手を作る経路を選ぶ。
+/// BMS-IRはリプレイAPIを持たないため、score_idがあってもseedから配置を再現する。
+fn ir_ranking_battle_route(
+    is_bms_ir: bool,
+    has_score_id: bool,
+    has_seed: bool,
+) -> IrRankingBattleRoute {
+    match (is_bms_ir, has_score_id, has_seed) {
+        (true, _, true) | (false, false, true) => IrRankingBattleRoute::Seed,
+        (false, true, _) => IrRankingBattleRoute::Replay,
+        _ => IrRankingBattleRoute::Missing,
     }
 }
 
@@ -895,6 +933,7 @@ mod tests {
                     arrange_1p: None,
                     arrange_2p: None,
                     random_seed: None,
+                    seed_scheme: crate::screens::play_start::SeedScheme::Beatoraja24,
                     double_option: None,
                 },
             ))],
@@ -939,6 +978,28 @@ mod tests {
     fn ir_gauge_names_are_normalized() {
         assert_eq!(gauge_type_from_ir("EX-HARD"), Some(GaugeType::ExHard));
         assert_eq!(gauge_type_from_ir("groove"), Some(GaugeType::Normal));
+    }
+
+    #[test]
+    fn bms_ir_rankings_use_seed_even_with_score_id() {
+        use IrRankingBattleRoute::{Missing, Replay, Seed};
+
+        for (is_bms_ir, has_score_id, has_seed, expected) in [
+            (true, true, true, Seed),
+            (true, false, true, Seed),
+            (true, true, false, Missing),
+            (true, false, false, Missing),
+            (false, true, true, Replay),
+            (false, true, false, Replay),
+            (false, false, true, Seed),
+            (false, false, false, Missing),
+        ] {
+            assert_eq!(
+                ir_ranking_battle_route(is_bms_ir, has_score_id, has_seed),
+                expected,
+                "bms_ir={is_bms_ir} score_id={has_score_id} seed={has_seed}"
+            );
+        }
     }
 
     #[test]

@@ -32,6 +32,8 @@ pub(super) struct PreparedBmsSource {
     pub(super) source_texts: SourceTexts,
     pub(super) sparse_messages: Vec<SparseBmsMessage>,
     pub(super) lnobj_lines: Vec<LnobjLine>,
+    /// For [`BmsRandomSource::Lr2Seed`], the LR2 sequence after every `#RANDOM`.
+    pub(super) lr2_random_state: Option<Lr2Mt19937>,
 }
 
 /// Prepares `raw_text` for bms-rs. `pms_standard` drops the BME-type upper channels
@@ -48,7 +50,7 @@ pub(super) fn prepare_bms_source(
         parse_text: String::with_capacity(raw_text.len() + 1),
         ..PreparedBmsSource::default()
     };
-    let mut random = BeatorajaRandomResolver::new(random_source);
+    let mut random = BmsRandomResolver::new(random_source);
     // Sparse message warnings follow every `#RANDOM` warning.
     let mut sparse_warnings = Vec::new();
     let mut line_number = 0;
@@ -111,12 +113,13 @@ pub(super) fn prepare_bms_source(
         prepared.parse_text.push('\n');
     }
 
-    random.finish(warnings);
+    prepared.lr2_random_state = random.finish(warnings);
     warnings.extend(sparse_warnings);
     prepared
 }
 
 /// Resolve static branches before Kaleid compilation; choices are consumed once.
+/// Also returns the LR2 sequence after every `#RANDOM`, as [`prepare_bms_source`] does.
 pub(super) fn resolve_kaleid_source(
     raw_text: &str,
     pms_standard: bool,
@@ -124,9 +127,9 @@ pub(super) fn resolve_kaleid_source(
     bms_random_choices: &mut Vec<i32>,
     bms_switch_choices: &mut Vec<u64>,
     warnings: &mut Vec<ImportWarning>,
-) -> String {
+) -> (String, Option<Lr2Mt19937>) {
     let mut text = String::with_capacity(raw_text.len());
-    let mut random = BeatorajaRandomResolver::new(random_source);
+    let mut random = BmsRandomResolver::new(random_source);
     let mut line_number = 0;
     for raw_line in raw_text.lines() {
         if pms_standard && is_pms_bme_upper_channel_line(raw_line) {
@@ -140,8 +143,8 @@ pub(super) fn resolve_kaleid_source(
         }
         text.push('\n');
     }
-    random.finish(warnings);
-    text
+    let lr2_random_state = random.finish(warnings);
+    (text, lr2_random_state)
 }
 
 /// What `str::lines` leaves of `line + "\n"`.

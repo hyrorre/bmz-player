@@ -93,6 +93,7 @@ fn battle_target_start_policy_preserves_every_session_mode() {
                     arrange_2p: ArrangeOption::Normal,
                     double_option: DoubleOption::Off,
                     packed_seed: None,
+                    seed_scheme: crate::screens::play_start::SeedScheme::Beatoraja24,
                 },
             }),
             ..Default::default()

@@ -263,7 +263,22 @@ fn target_player_name(name: &str) -> String {
     if name.is_empty() { "YOU".to_string() } else { name.to_string() }
 }
 
-pub(super) fn battle_entries(ranking: &IrRankingResult) -> Vec<SelectIrBattleEntry> {
+/// `seed_scheme` を返さないランキング行の seed 形式。
+/// BMS-IR は形式を明示するため、無い行は判別不能として扱う。
+pub(super) fn default_seed_scheme(ir_config: &IrConfig) -> SeedScheme {
+    if crate::ir::provider_key::primary_provider_config(ir_config)
+        .is_some_and(crate::ir::bms_ir::is_bms_ir_config)
+    {
+        SeedScheme::Unknown
+    } else {
+        SeedScheme::Beatoraja24
+    }
+}
+
+pub(super) fn battle_entries(
+    ranking: &IrRankingResult,
+    default_seed_scheme: SeedScheme,
+) -> Vec<SelectIrBattleEntry> {
     ranking
         .ranking
         .entries
@@ -282,6 +297,10 @@ pub(super) fn battle_entries(ranking: &IrRankingResult) -> Vec<SelectIrBattleEnt
             arrange_1p: entry.score.arrange_1p.clone(),
             arrange_2p: entry.score.arrange_2p.clone(),
             random_seed: entry.score.random_seed,
+            seed_scheme: SeedScheme::from_ir_value(
+                entry.score.seed_scheme.as_deref(),
+                default_seed_scheme,
+            ),
             double_option: entry.score.double_option.clone(),
         })
         .collect()

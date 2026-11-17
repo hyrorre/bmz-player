@@ -9,6 +9,7 @@ pub mod normalize;
 
 use std::path::Path;
 
+use crate::lr2_random::Lr2Mt19937;
 use crate::model::{ChartSourceFormat, PlayableChart};
 
 use self::error::{ImportError, ImportWarning};
@@ -38,15 +39,22 @@ pub struct ImportResult {
     pub bms_random_choices: Vec<i32>,
     /// BMS `#SWITCH` ごとの実際の選択値。BMSON では常に空。
     pub bms_switch_choices: Vec<u64>,
+    /// [`BmsRandomSource::Lr2Seed`] で BMS を読んだとき、`#RANDOM` を解決した後の
+    /// 乱数列の続き。LR2 の RANDOM オプションはこの続きでレーンを抽選する。
+    /// それ以外の source と BMSON では `None`。
+    pub lr2_random_state: Option<Lr2Mt19937>,
 }
 
 /// BMS の `#RANDOM` / `#SWITCH` 分岐を選ぶ方法。
 ///
 /// `Choices` はリプレイ時に、記録済みの選択値を出現順に強制するために使う。
+/// `Lr2Seed` は LR2 の seed（`0..=0x7ffe`）から LR2 と同じ方式で `#RANDOM` を選ぶ。
+/// LR2 は `#SWITCH` を扱わないため、その行は分岐として解釈しない。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BmsRandomSource {
     Seed(Option<u64>),
     Choices { random: Vec<i32>, switches: Vec<u64> },
+    Lr2Seed(u32),
 }
 
 /// 拡張子に応じて BMS / BMSON を import する。
@@ -126,6 +134,7 @@ pub fn import_chart_bytes_with_assets(
     let mut warnings = Vec::new();
     let mut bms_random_choices = Vec::new();
     let mut bms_switch_choices = Vec::new();
+    let mut lr2_random_state = None;
     let file_format = chart_file_format(path);
     let intermediate = match file_format {
         ChartFileFormat::Bmson => {
@@ -137,6 +146,7 @@ pub fn import_chart_bytes_with_assets(
             &random_source,
             &mut bms_random_choices,
             &mut bms_switch_choices,
+            &mut lr2_random_state,
             &mut warnings,
         )?,
         ChartFileFormat::Pms => bms_rs_adapter::import_pms_bytes_to_intermediate(
@@ -145,6 +155,7 @@ pub fn import_chart_bytes_with_assets(
             &random_source,
             &mut bms_random_choices,
             &mut bms_switch_choices,
+            &mut lr2_random_state,
             &mut warnings,
         )?,
     };
@@ -163,7 +174,7 @@ pub fn import_chart_bytes_with_assets(
             message: message.clone(),
         });
     }
-    Ok(ImportResult { chart, warnings, bms_random_choices, bms_switch_choices })
+    Ok(ImportResult { chart, warnings, bms_random_choices, bms_switch_choices, lr2_random_state })
 }
 
 pub fn import_bms_chart(

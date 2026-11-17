@@ -187,11 +187,18 @@ pub struct PlaySessionOptions {
     pub h_random_threshold_ms: Option<u32>,
     /// Independent seed used only while selecting BMS `#RANDOM` branches.
     pub bms_random_seed: Option<u64>,
+    /// LR2 seed of a battle target. `#RANDOM` is resolved as LR2 does, and RANDOM
+    /// takes its lanes from the same LR2 sequence when a pattern has not been recorded.
+    pub lr2_seed: Option<u32>,
+    /// Reflect the copied layout after resolving the LR2 branch and lane sequence.
+    pub mirror_lr2_arrangement: bool,
     /// Recorded `#RANDOM` decisions, in source order, for exact replay.
     pub bms_random_choices: Option<Vec<i32>>,
     /// Recorded `#SWITCH` decisions, in source order, for exact replay.
     pub bms_switch_choices: Option<Vec<u64>>,
     pub arrange_pattern: Option<Vec<u8>>,
+    /// Use the previously applied layout while still resolving the chart's branches.
+    pub reuse_applied_arrangement: bool,
     /// When set, overrides the gauge's starting value.  Used to carry the
     /// gauge between charts during a course.
     pub initial_gauge_value: Option<f32>,
@@ -235,6 +242,8 @@ pub struct BattleOpponentOptions {
     /// rianIR-compatible packed side seeds. Expanded after the source key mode
     /// is known during preload.
     pub packed_seed: Option<i64>,
+    /// LR2 seed (`0..=0x7ffe`). See [`PlaySessionOptions::lr2_seed`].
+    pub lr2_seed: Option<u32>,
     pub bms_random_choices: Option<Vec<i32>>,
     pub bms_switch_choices: Option<Vec<u64>>,
     pub arrange_pattern: Option<Vec<u8>>,
@@ -262,11 +271,15 @@ pub struct AppliedArrange {
     /// 2P generation for DP charts. `None` means this is an SP chart.
     pub s_random_scheme_2p: Option<SRandomScheme>,
     pub h_random_threshold_ms: Option<u32>,
+    /// Seed of the LR2 resolver used to import the chart, including its branch semantics.
+    pub lr2_seed: Option<u32>,
     /// BMS `#RANDOM` decisions applied before the arrange modifier.
     pub bms_random_choices: Vec<i32>,
     /// BMS `#SWITCH` decisions applied before the arrange modifier.
     pub bms_switch_choices: Vec<u64>,
     pub pattern: Option<Vec<u8>>,
+    /// The lane pattern omits a DP side that was arranged per note.
+    pub(crate) pattern_is_partial: bool,
     /// Key-mode conversion actually applied to the source chart.
     pub key_mode_conversion: KeyModeConversionConfig,
     pub seven_to_nine_pattern: SevenToNinePattern,
@@ -460,9 +473,12 @@ impl Default for PlaySessionOptions {
             s_random_scheme_2p: None,
             h_random_threshold_ms: Some(DEFAULT_H_RANDOM_THRESHOLD_MS),
             bms_random_seed: None,
+            lr2_seed: None,
+            mirror_lr2_arrangement: false,
             bms_random_choices: None,
             bms_switch_choices: None,
             arrange_pattern: None,
+            reuse_applied_arrangement: false,
             initial_gauge_value: None,
             initial_gauge_values: None,
             initial_course_combo: None,
@@ -488,6 +504,8 @@ pub(crate) const LEGACY_H_RANDOM_THRESHOLD_MS: u32 = 100;
 
 #[path = "play_session/arrange/algorithm.rs"]
 mod arrange_algorithm;
+#[path = "play_session/arrange/lr2.rs"]
+mod arrange_lr2;
 #[path = "play_session/arrange/mirror.rs"]
 mod arrange_mirror;
 #[path = "play_session/arrange/permutation.rs"]
@@ -531,6 +549,7 @@ pub use seven_to_six::{apply_seven_to_six, normalize_arrange_for_seven_to_six};
 pub use sp_to_dp::apply_sp_to_dp;
 
 use arrange_algorithm::*;
+use arrange_lr2::*;
 use arrange_permutation::*;
 use arrange_pipeline::*;
 use arrange_rng::*;

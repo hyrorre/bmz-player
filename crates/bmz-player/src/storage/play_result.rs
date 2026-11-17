@@ -51,6 +51,7 @@ pub struct StorePlayResultRequest {
     pub arrange_2p: ArrangeOption,
     pub arrange_seed: Option<i64>,
     pub arrange_seed_2p: Option<i64>,
+    pub lr2_seed: Option<u32>,
     pub bms_random_choices: Vec<i32>,
     pub bms_switch_choices: Vec<u64>,
     pub seed_scheme: String,
@@ -158,6 +159,7 @@ pub fn store_play_result(
             request.h_random_threshold_ms,
         )
         .with_freq_semitones(request.freq_semitones);
+        replay.lr2_seed = request.lr2_seed;
         replay.judge_algorithm = Some(request.judge_algorithm);
         let hash = save_replay_with_hash(&path, &replay)?;
         (format!("replay/{file_name}"), Some(hash))
@@ -249,6 +251,7 @@ pub fn store_play_result(
                 request.h_random_threshold_ms,
             )
             .with_freq_semitones(request.freq_semitones);
+            replay.lr2_seed = request.lr2_seed;
             replay.judge_algorithm = Some(request.judge_algorithm);
             save_replay(&path, &replay)?;
             let rel_path = format!("replay/{file_name}");

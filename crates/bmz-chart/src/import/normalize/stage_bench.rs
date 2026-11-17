@@ -72,6 +72,7 @@ fn normalize_stage_timing() {
             &super::super::BmsRandomSource::Seed(None),
             &mut Vec::new(),
             &mut Vec::new(),
+            &mut None,
             &mut warnings,
         ) else {
             continue;
