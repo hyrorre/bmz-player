@@ -490,6 +490,7 @@ G-BATTLEの相手を指定したプレイでは、`CHART REPLICATION`で自分�
 - S-RANDOM / SPIRAL / H-RANDOM / ALL-SCR / S-RANDOM-EXは反転せず、`RIVALCHART`と同じ譜面でプレイします。
 - 相手のseedが取得できない場合は、seedの要らない正規とMIRRORだけを入れ替えます。
 - 7で選択中のIRライバルにも同じ規則で適用します。
+- 自分がDOUBLE BATTLE（BATTLE / BATTLE AUTO SCRATCH）を選んでいる場合は反転しません。`RIVALCHART`と同じ譜面でプレイします。
 
 IRランキングの相手がLR2形式のseedを持つ場合は、LR2と同じ乱数列で相手の譜面を再現します。
 
