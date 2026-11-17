@@ -1,5 +1,9 @@
 # Frame pacing と計測
 
+描画周期の待機方式、surface再設定の復旧、描画まわりの遅延を診断するログと回帰テストをまとめた文書です。
+プレイ中の入力・判定・音声の時計は[Gameplay runtime](gameplay-runtime.md)で扱います。
+過去の計測結果は末尾の[計測・検証記録](#計測検証記録)からnotesを参照してください。
+
 ## 待機方式
 
 描画周期は`FramePacer`のmonotonic deadlineで管理します。通常の起床ジッターでは

@@ -1,11 +1,8 @@
 # LN / CN / HCN / HLNの扱い
 
-HLN（LNMODE 4、HLNOBJ、BMSON ln_type/t=4）の状態遷移・終端音・IR条件は
-[Kaleid拡張](kaleid.md)を参照します。AUTOは元HLNを維持し、FORCE LN/CN/HCNは
-HLNも変換します。設定は既存6個のままで、内部ForceHlnは集約用の値です。
-
 BMZはbeatoraja完全互換ではなく、譜面が宣言したLNMODEとユーザーの希望するLNMODEを分けて扱います。
 ユーザーはprofileの設定で、譜面のLN宣言を尊重するか、特定のLN種別へ強制するかを選べます。
+KaleidBeat拡張のHLNの扱いは[HLN（KaleidBeat拡張）](#hlnkaleidbeat拡張)を参照してください。
 
 ## 用語
 
@@ -30,6 +27,15 @@ BMZはbeatoraja完全互換ではなく、譜面が宣言したLNMODEとユー�
 
 `auto_*`は譜面の明示LN種別を尊重し、未定義LNだけをユーザー設定の種別として解釈します。
 `force_*`は譜面の明示LN種別に関係なく、指定した種別としてプレイします。
+
+### HLN（KaleidBeat拡張）
+
+HLN（LNMODE 4、HLNOBJ、BMSONの`ln_type` / `t=4`）にも、上記の6個の設定をそのまま使います。
+HLNを選ぶ設定は追加していません。状態遷移・終端音・IR条件は[KaleidBeat拡張](kaleid.md)を参照してください。
+
+- `auto_*`は、譜面が定義したHLNを維持します。
+- `force_ln` / `force_cn` / `force_hcn`は、元のHLNも指定した種別へ変換します。
+- スコア区分の`LnScorePolicy::ForceHln`は、区分を集約するための内部の値です。プロファイルの設定値にはありません。
 
 ## ライブラリDB
 

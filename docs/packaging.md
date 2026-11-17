@@ -1,5 +1,9 @@
 # 配布パッケージ
 
+Windows / macOS / Linuxの配布パッケージの作り方と、リリースビルドの手順をまとめた文書です。
+アプリのアイコン、Windowsインストーラー、macOS `.app`、Flatpak、GitHub Actionsのリリースビルドを扱います。
+更新の適用は[自動更新](auto-update.md)、Linux tar.gzは[Linux tar.gz配布](linux-tar.md)、同梱物のライセンスは[License Notes](licenses.md)を参照してください。
+
 ## アプリのアイコン
 
 BMZ Playerのdesktop app iconは`scripts/generate-app-icons.sh`で生成します。

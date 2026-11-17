@@ -1,15 +1,9 @@
 # rianIR互換プロバイダー
 
-Kaleid拡張はED-rian実装と添付サーバーソースの契約に合わせます。canonical LNは
-0=なし/1=LN/2=CN/3=HCN/4=HLN、CONDITIONALはhas_conditionalを送信します。
-部分対応で同じ解釈を確認できない結果は送信を保留します。BATTLE等の既存制限は維持。
-比較ソースの識別情報・FORCE・時間検査・ランキング区分は[Kaleid拡張](kaleid.md)を参照。
-添付コードと本番デプロイの同一性、配布ビルドのclient_hash受入は実測未確認です。
-
-BMZ Playerからbeatoraja向けIRのrianIRへ接続するための設計・実装計画です。
-BMZ公式IRの設計は`docs/ir.md`、LN正規化は`docs/ln.md`、判定・ゲージの
-ruleは`docs/rule.md`、アシストを含む保存・送信条件は
-`docs/score-persistence.md`を正とし、本ドキュメントではrianIRとの互換境界だけを扱います。
+BMZ Playerからbeatoraja向けIRのrianIRへ接続する、互換プロバイダーの仕様と実装方針をまとめた文書です。
+本書ではrianIRとの互換境界だけを扱います。BMZ公式IRは[BMZ IR](ir.md)、LNの正規化は[LN / CN / HCN / HLNの扱い](ln.md)、
+判定・ゲージは[ルールモード](rule.md)、アシストを含む保存・送信条件は[スコア保存・アシスト・IR送信条件](score-persistence.md)を正とします。
+KaleidBeat拡張を含むスコアの送信条件は[KaleidBeat拡張の送信](#kaleidbeat拡張の送信)にまとめています。
 
 ## 目的
 
@@ -194,13 +188,23 @@ Battle / Battle ASはレーン・ノーツ数とランキング条件を変え�
 通常スコア区分で安全に表現できないためです。`Off`と`Flip`はrianIRの通常
 DP契約で扱います。
 
+### KaleidBeat拡張の送信
+
+KaleidBeat拡張は、ED-rianの実装と添付されたrianIRサーバーソースの契約に合わせます。
+比較したソースの識別情報、FORCE、時間の検査、ランキングの区分は[KaleidBeat拡張](kaleid.md#機能別ir条件)を参照してください。
+
+- LN種別はcanonical値（[LNの契約](#lnの契約)）で送り、HLNは`4`とします。
+- CONDITIONALを使った譜面では`has_conditional`を送ります。
+- 部分対応の結果で、ED-rianと同じ解釈を確認できないものは送信を保留します。
+- BATTLE等の既存の送信制限は、KaleidBeat拡張の譜面にもそのまま適用します。
+
 ## LNの契約
 
 BMZは単曲score requestへ`ln_mode_format=canonical-v1`を必ず付けます。
 FORCE変換後のchartから元譜面の構成を逆算せず、import直後に取得したLN profileを
 プレイ終了まで保持します。
 
-`song_ln_mode`は譜面に含まれるLN種別を表し、混在時はHCN > CN > LNの順で
+`song_ln_mode`は譜面に含まれるLN種別を表し、混在時はHLN > HCN > CN > LNの順で
 上位種を採用します。
 
 | 元譜面 | `song_ln_mode` |
@@ -208,12 +212,13 @@ FORCE変換後のchartから元譜面の構成を逆算せず、import直後に�
 | LN系ノートなし | `0` |
 | 定義LNのみ、未定義LNのみ、またはその混在 | `1` |
 | CNを含み、HCNを含まない | `2` |
-| HCNを含む | `3` |
+| HCNを含み、HLNを含まない | `3` |
+| HLNを含む（KaleidBeat拡張） | `4` |
 
 `ln_mode`は実際に適用された譜面のLN種別を表します。LN系ノートがなければ設定に
-かかわらず`0`、FORCE LN/CN/HCNならそれぞれ`1` / `2` / `3`とします。AUTOでは
+かかわらず`0`、FORCE LN/CN/HCNならそれぞれ`1` / `2` / `3`、元HLNを維持した場合は`4`とします。AUTOでは
 定義済みLNの種別を維持し、未定義LNに適用するfallbackを加えた結果から
-HCN > CN > LNの上位種を採用します。したがって、定義CN譜面をFORCE LNで
+HLN > HCN > CN > LNの上位種を採用します。したがって、定義CN譜面をFORCE LNで
 プレイした場合は`song_ln_mode=2, ln_mode=1`、LN+CN混在譜面をAUTO LNで
 プレイした場合は`song_ln_mode=2, ln_mode=2`となります。
 
@@ -522,6 +527,8 @@ Flatpakは配布`.flatpak`全体ではなく、`flatpak-builder`が最終配置�
   constraintsだけが異なるcourseは現行rianIRと同様に同じランキングへ混在します。
 - courseの`ln_mode`は現行connectorで複合値になり得ます。BMZ初期版はForce LN/CN/HCN
   の実効値1/2/3を送るが、既存beatoraja scoreとの分類互換は後続課題とします。
+- KaleidBeat拡張の送信は添付されたサーバーソースに基づきます。添付コードと本番のデプロイが同一であることと、
+  配布ビルドの`client_hash`が受け付けられることは、実測で確認していません。
 - 初期実装ではserver-side replay verificationが無く、送信内容の正当性を完全には
   証明できません。
 

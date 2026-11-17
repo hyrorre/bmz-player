@@ -1,14 +1,11 @@
 # スキン仕様
 
-Kaleidノーツの追加定義・既存スキンへのフォールバックは[Kaleid拡張](kaleid.md)を参照。
-HLNは専用→HCN→LN画像、ポーションは通常ノーツのRGB反転（alpha維持）、
-フリーゾーンは暗赤色の領域、ダミーは対応する既存ノーツの外観を使います。
-
 BMZはbeatoraja JSON / Lua skinの互換を基本にします。既存beatoraja skin typeは
 そのまま扱い、BMZ独自のkey modeだけ拡張skin typeを予約します。
 
 JSON / Lua / LR2 / Qwilight skinの対応範囲と残課題は[skin-compatibility.md](skin-compatibility.md)を参照してください。
 この文書ではIDや各機能の動作契約を管理します。
+KaleidBeat拡張のノーツの外観は[KaleidBeat拡張のノーツ](#kaleidbeat拡張のノーツ)を参照してください。
 
 ## Qwilightのプレイスキン
 
@@ -818,6 +815,18 @@ LR2 CSVから変換したdestinationは、各dst行の`lr2Style`にblend/filter/
 
 LR2の画像合成`blend=3`は減算を使います。描画先RGBからsource RGB×alphaを引き、
 描画先alphaは保持します。`blend=2`の加算、`blend=4`の乗算と区別します。
+
+## KaleidBeat拡張のノーツ
+
+KaleidBeat拡張のノーツは、スキンに専用の定義がなくても既存のノーツ画像で描画します。
+追加の定義とフォールバックの詳細は[KaleidBeat拡張](kaleid.md)を参照してください。
+
+| ノーツ | 外観 |
+| --- | --- |
+| HLN | 専用の画像、無ければHCN、次にLNの画像 |
+| ポーション | 通常ノーツの画像のRGBを反転（alphaは維持） |
+| フリーゾーン | 暗赤色の領域 |
+| ダミー各種 | 対応する既存ノーツと同じ外観 |
 
 ## Playの見逃しノーツと判定領域
 

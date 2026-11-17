@@ -1,5 +1,9 @@
 # 自動更新
 
+BMZ Playerの更新確認・ダウンロード・適用の動作と、更新の署名・公開設定・検証手順をまとめた文書です。
+アプリ内の更新はWindows portableとmacOSの配布`.app`が対象です。Linux tar.gzの更新は[手動](linux-tar.md#更新とflatpakからの移行)です。
+更新確認の設定は[配布パッケージ](packaging.md#アプリの更新確認)、Release添付の`release.json`は[Releaseメタデータ](release-metadata.md)を参照してください。
+
 ## 利用者向けの動作
 
 - Windows portableは現在の配置を更新します。installerへの切替はしません。

@@ -1,8 +1,12 @@
 # KaleidBeat拡張の実装契約
 
-2026-11-07の仕様合意に基づく。実装と検証の進捗はこの契約と区別する。
-対象はrian-eimu版LR2oraja Endless Dream（ED-rian）の実装済み拡張。
-EDとの比較はKaleidBeat本体との完全互換を意味しない。
+KaleidBeat拡張の譜面について、BMZ Playerの解釈・判定・保存・Replay・IR送信が守る契約をまとめた文書です。
+対象はrian-eimu版LR2oraja Endless Dream（ED-rian）で実装済みの拡張です。KaleidBeat本体との完全互換は扱いません。
+IR・スコア保存・LN・スキン・EXTRA NOTEの各文書では、Kaleidに関わる節から本書へリンクしています。
+
+本書は2026-11-07の仕様合意に基づきます。実装と検証の経緯は[ED-rian統合記録](../notes/2026/2026-11-07-kaleidbeat-ed-rian.md)、
+[main統合記録](../notes/2026/2026-11-13-kaleid-main-bokutachi.md)、
+[レビュー対応記録](../notes/2026/2026-11-14-kaleid-playback-review-fixes.md)を参照してください。
 
 ## 参照と対象範囲
 

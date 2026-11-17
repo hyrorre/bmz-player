@@ -1,16 +1,10 @@
 # BMZ IR（Internet Ranking）
 
-Kaleid拡張・部分対応もBMZ IRの原本単位ランキングへ集約します。HLN構成、
-解釈情報、採択経路を保持し、ノーツ数が異なる枝の独立ベストを許容します。
-実プレイのEX・判定数等の整合性検査は維持します。サーバー変更はSQLite migration
-0017が必要です。機能別のBMS-IR・rianIR・Bokutachi条件は[Kaleid拡張](kaleid.md)を参照。
-play_options.kaleidはdevice evidenceとは別の署名対象です。play_options上限は128KiB、
-リクエスト全体の既存256KiB上限は維持します。
-
 BMZ公式IRのAPIと、BMZ Player側のIRクライアントの現在の仕様をまとめた文書です。
 rianIRとの互換は[rianIR互換プロバイダー](rian-ir.md)、アシスト・特殊モードを含むスコアの保存・送信条件は[スコア保存・アシスト・IR送信条件](score-persistence.md)を参照してください。
 Bokutachiへの新規7K／14K／9K単曲・コース各曲の送信、譜面別ランキング、BMS 7K／14Kの段位更新は[Bokutachi](bokutachi.md)を参照してください。
 設計時の案・未決事項・実装タスクの経緯は[BMZ IRの設計記録](../notes/2026/2026-06-04-bmz-ir-design.md)にあります。
+KaleidBeat拡張を含むスコアの扱いは[KaleidBeat拡張のスコア](#kaleidbeat拡張のスコア)にまとめています。
 
 ## 概要
 
@@ -345,12 +339,23 @@ Cloudflare WorkerではNitroが本文をbuffer化する前に、Nodeの開発用
 | 譜面のurlsの各値、コースのsource_url | 各2,048文字 |
 | subartists | 32件、各1,024文字 |
 | コースのcharts | 64件 |
-| play_options | JSONのUTF-8で32 KiB |
+| play_options | JSONのUTF-8で128 KiB |
 | evidence（後からの署名も含む） | JSONのUTF-8で16 KiB |
 
 `play_options`は既存のキーを保持します。64曲の`entry_randomizations`等を含むクライアントの
-送信を受け付けるため、4 KiBより大きい上限にしています。取り込み（`local_backfill`）にも同じ上限を適用します。
+送信と、Kaleid解析情報（`play_options.kaleid`）を受け付けるため、4 KiBより大きい上限にしています。取り込み（`local_backfill`）にも同じ上限を適用します。
 登録とプロフィール変更の表示名は、trim後に1〜64文字で、制御文字を含まない値に限定します。
+
+### KaleidBeat拡張のスコア
+
+KaleidBeat拡張を使った譜面と、拡張に部分対応した結果も、原本の譜面単位のランキングへ集約します。
+機能ごとの解釈とBMS-IR・rianIR・Bokutachiでの条件は[KaleidBeat拡張](kaleid.md#機能別ir条件)を参照してください。
+
+- HLNの構成、解釈情報、動的分岐の採択経路を保存します。
+- ノーツ数が異なる分岐ごとに、独立したベストを許容します。
+- 実際のプレイのEX・判定数などの整合性検査は、通常の譜面と同じく適用します。
+- `play_options.kaleid`はdevice evidenceとは別に署名の対象へ含めます。
+- サーバーにはSQLite migration 0017が必要です。
 
 ### idempotency key
 

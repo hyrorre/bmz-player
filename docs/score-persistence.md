@@ -1,14 +1,10 @@
 # スコア保存・アシスト・IR送信条件
 
-Kaleid拡張・部分対応結果も、下記の既存モード／アシスト制限を満たせばローカル保存と
-BMZ公式IR送信の対象です。原本ハッシュと既存LN/rule等の区分へ集約し、採択枝の差で
-ランキングを分けません。独立ベストの各元プレイと履歴証拠を保持します。
-score.db 36のscore_kaleid_plays、Replay 8、provider別条件は[Kaleid拡張](kaleid.md)を参照。
-
 この文書は、通常プレイ・アシスト・譜面オプション・特殊モードについて、
 BMZがクリアランプ、数値ベスト、履歴、リプレイ、IRを更新する条件を整理します。
 beatoraja互換を判断するときはこの文書を入口とし、IR固有の詳細は
-`docs/ir.md`と`docs/rian-ir.md`、新規単曲・コース各曲送信と段位更新の[Bokutachi](bokutachi.md)を参照します。
+[BMZ IR](ir.md)と[rianIR互換プロバイダー](rian-ir.md)、新規単曲・コース各曲送信と段位更新の[Bokutachi](bokutachi.md)を参照します。
+KaleidBeat拡張の結果の扱いは[KaleidBeat拡張の結果](#kaleidbeat拡張の結果)にまとめています。
 
 レビュー基準日は2026-08-27です。BMZの現行実装と、`.local/beatoraja/`の
 参照ソースを静的に比較した結果です。未解決の差は「互換差分」に明記します。
@@ -401,6 +397,16 @@ BMZのCB改善だけでも`UpdateScore`が送信候補になる点が差です�
 その後、provider固有条件を適用します。現行rianIR providerは`BATTLE` / `BATTLE AS`を
 除外し、譜面時間の妥当性も検査します。BMZ公式IRとBMS-IRはBATTLE bucketを表現できます。
 BMS-IRはBeatoraja/LR2oraja ruleと実効LN/CN/HCNも分離し、DXは送りません。
+
+## KaleidBeat拡張の結果
+
+KaleidBeat拡張の譜面と、拡張に部分対応した結果も、本書の既存のモード・アシスト制限を満たせば
+ローカル保存とBMZ公式IR送信の対象です。
+score.db 36の`score_kaleid_plays`、Replay 8の形式、provider別の条件は[KaleidBeat拡張](kaleid.md)を参照してください。
+
+- 原本の譜面ハッシュと、既存のLN・rule等の区分へ集約します。
+- 動的分岐で採択した枝の違いでは、ランキングを分けません。
+- 独立したベストごとに、元のプレイと履歴の証拠を保持します。
 
 ## アシスト時の補助データ差
 
