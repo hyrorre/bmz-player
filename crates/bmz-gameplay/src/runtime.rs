@@ -84,6 +84,7 @@ impl GameplayRuntime {
     }
 
     pub fn advance(&mut self, audio: &AudioEngineHandle) -> SessionFrame {
+        self.session.apply_play_end_request();
         if self.session.state == PlayState::Failed {
             // Manual abort may also pause the clock (Practice). Stop chart
             // audio before the paused-clock early return, independently of SE.

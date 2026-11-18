@@ -723,6 +723,7 @@ settings-audio-exclusive-help = 只有 BMZ Player 發聲，延遲最低。其他
 settings-video-primary-monitor = 主要顯示器
 settings-video-monitor = 全螢幕顯示器
 settings-video-monitor-disconnected = 未連接：{ $name }
+settings-video-monitor-position-fallback = { $name }（未連接，備用顯示器 { $fallback }）
 settings-video-target-fps-unlimited = 目標 FPS 設為 0 時不設上限
 toast-chart-hash-unavailable-sha256 = 無法取得 SHA256
 toast-chart-hash-md5-local-only = MD5 只適用於本機譜面

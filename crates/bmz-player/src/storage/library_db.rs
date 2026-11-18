@@ -26,11 +26,13 @@ mod analysis_helpers;
 mod database_catalog;
 mod database_query;
 mod database_write;
+mod encodings;
 mod path_helpers;
 mod query_helpers;
 mod scope;
 mod sources;
 
+pub(super) use encodings::check_encoding_revision;
 pub(crate) use scope::configured_song_roots;
 pub(crate) use scope::{RootScope, scope_key};
 pub use sources::ChartSource;
@@ -45,8 +47,8 @@ pub(crate) fn library_path_key(path: &Path) -> String {
     path_helpers::path_key(path)
 }
 
-// v11 re-imports unchanged files using LR2 negative BPM timing.
-pub const CHART_IMPORT_VERSION: i64 = 11;
+// v13 re-imports unchanged charts with the extended CJK text detection.
+pub const CHART_IMPORT_VERSION: i64 = 13;
 // v4 excludes muted battle presentation lanes from chart analysis.
 pub const CHART_LOUDNESS_ANALYSIS_VERSION: i64 = 4;
 const MAX_ANALYSIS_DISTRIBUTION_SECONDS: usize = 10 * 60;

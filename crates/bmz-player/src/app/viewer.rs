@@ -70,12 +70,13 @@ impl WinitApp {
         preserved_options: Option<PlayStartOptions>,
         paused_play_elapsed: Option<TimeUs>,
     ) -> Result<()> {
-        let imported = crate::storage::import::import_chart_file(
+        let imported = crate::storage::import::import_chart_file_with_encoding_source(
             &mut self.boot.library_db,
             path,
             None,
             Some(bms_random_seed),
             now_unix_seconds(),
+            self.boot.chart_encoding_source.as_deref(),
         )?;
         let start_time = bootstrap::viewer_measure_start_time(&imported.chart, measure)?;
 

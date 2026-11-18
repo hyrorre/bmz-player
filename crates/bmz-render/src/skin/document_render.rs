@@ -803,6 +803,7 @@ pub(super) trait SkinDocumentRenderInternal {
     fn graph_render_item(
         &self,
         graph: &SkinGraphDef,
+        destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,

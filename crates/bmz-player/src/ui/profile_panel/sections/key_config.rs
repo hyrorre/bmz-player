@@ -1,8 +1,8 @@
 use super::*;
 use crate::config::key_config::{
-    COMMON_KEY_BINDING_SLOTS, KEY_BINDING_SLOTS, KEY_CONFIG_MODES, KeyBindingGroup, KeyBindingSlot,
-    KeyBindingTarget, binding_target_label, format_play_binding, key_binding_conflict_description,
-    key_binding_targets_for_group, key_mode_binding_targets,
+    COMMON_KEY_BINDING_SLOTS, KEY_BINDING_SLOTS, KEY_CONFIG_MODES, KeyBindingSlot,
+    KeyBindingTarget, binding_target_label, common_select_binding_targets, format_play_binding,
+    key_binding_conflict_description, key_binding_targets_for_group, key_mode_binding_targets,
 };
 
 pub(in crate::ui::profile_panel) fn build_profile_key_config_section(
@@ -85,27 +85,22 @@ pub(in crate::ui::profile_panel) fn build_profile_key_config_section(
             }
 
             let slot = section.key_config.slot;
-            if let EguiKeyConfigSection::KeyMode(key_mode) = section.key_config.section {
-                build_key_binding_rows(
-                    ui,
-                    section,
-                    key_mode,
-                    None,
-                    key_mode_binding_targets(key_mode, slot),
-                );
-            } else {
-                let groups = section.key_config.section.action_groups();
-                for &group in groups {
-                    let targets = key_binding_targets_for_group(group, slot);
-                    if groups.len() > 1 {
-                        if targets.is_empty() {
-                            continue;
-                        }
-                        ui.heading(section.text.text(group.label_key()));
-                    }
-                    build_key_binding_rows(ui, section, KeyMode::K7, Some(group), targets);
+            let (key_mode, targets) = match section.key_config.section {
+                EguiKeyConfigSection::CommonSelect => {
+                    (KeyMode::K7, common_select_binding_targets(&[slot]))
                 }
-            }
+                EguiKeyConfigSection::KeyMode(key_mode) => {
+                    (key_mode, key_mode_binding_targets(key_mode, slot))
+                }
+                page => (
+                    KeyMode::K7,
+                    page.action_groups()
+                        .iter()
+                        .flat_map(|&group| key_binding_targets_for_group(group, slot))
+                        .collect(),
+                ),
+            };
+            build_key_binding_rows(ui, section, key_mode, targets);
 
             if ui.button(tr!(section.text, "profile-key-config-defaults")).clicked() {
                 section.key_config.listening = None;
@@ -140,7 +135,6 @@ fn build_key_binding_rows(
     ui: &mut egui::Ui,
     section: &mut ProfileSectionContext<'_>,
     key_mode: KeyMode,
-    group: Option<KeyBindingGroup>,
     targets: Vec<KeyBindingTarget>,
 ) {
     if targets.is_empty() {
@@ -148,7 +142,7 @@ fn build_key_binding_rows(
         return;
     }
 
-    egui::Grid::new(("profile_key_config_bindings", group))
+    egui::Grid::new(("profile_key_config_bindings", section.key_config.section))
         .num_columns(4)
         .striped(true)
         .spacing([8.0, 4.0])

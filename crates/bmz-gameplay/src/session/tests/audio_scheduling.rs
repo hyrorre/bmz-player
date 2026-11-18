@@ -2,6 +2,35 @@ use super::*;
 use std::time::{Duration, Instant};
 
 #[test]
+fn manual_stop_interrupts_auto_keysound_scheduling_before_judgement() {
+    struct StopAfterFirstSound {
+        play_end: Arc<PlayEndSignal>,
+        scheduled: usize,
+    }
+
+    impl AudioScheduler for StopAfterFirstSound {
+        fn schedule(&mut self, _: ScheduledSound) {
+            self.scheduled += 1;
+            self.play_end.request(PlayEndRequest::ManualStop);
+        }
+    }
+
+    let mut chart = chart_with_keysound();
+    let notes = &mut chart.lane_notes[Lane::Key1.index()];
+    notes.push(NoteEvent { id: NoteId(2), ..notes[0].clone() });
+    chart.total_notes = 2;
+    let mut session = session_with_autoplay(chart);
+    let mut audio = StopAfterFirstSound { play_end: session.play_end.clone(), scheduled: 0 };
+
+    let frame = advance_session_frame(&mut session, &mut audio);
+
+    assert_eq!(audio.scheduled, 1);
+    assert_eq!(frame.state, PlayState::Failed);
+    assert!(frame.judgements.is_empty());
+    assert!(session.manually_stopped);
+}
+
+#[test]
 fn both_modes_use_system_time_for_bgm_and_auto_keysounds_at_every_speed() {
     for ahead in [false, true] {
         for rate in [25, 100, 300] {

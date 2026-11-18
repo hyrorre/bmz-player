@@ -12,6 +12,7 @@ use std::path::Path;
 use crate::lr2_random::Lr2Mt19937;
 use crate::model::{ChartSourceFormat, PlayableChart};
 
+pub use self::decode::BmsTextEncoding;
 use self::error::{ImportError, ImportWarning};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +132,17 @@ pub fn import_chart_bytes_with_assets(
     random_source: BmsRandomSource,
     assets: AssetLookup,
 ) -> Result<ImportResult, ImportError> {
+    import_chart_bytes_with_encoding(path, bytes, random_source, assets, None)
+}
+
+/// Import with an optional explicit encoding for BMS-family text. Identity hashes the raw bytes.
+pub fn import_chart_bytes_with_encoding(
+    path: &Path,
+    bytes: &[u8],
+    random_source: BmsRandomSource,
+    assets: AssetLookup,
+    encoding: Option<BmsTextEncoding>,
+) -> Result<ImportResult, ImportError> {
     let mut warnings = Vec::new();
     let mut bms_random_choices = Vec::new();
     let mut bms_switch_choices = Vec::new();
@@ -142,7 +154,7 @@ pub fn import_chart_bytes_with_assets(
         }
         ChartFileFormat::Bms => bms_rs_adapter::import_bms_bytes_to_intermediate(
             path,
-            bytes,
+            (bytes, encoding),
             &random_source,
             &mut bms_random_choices,
             &mut bms_switch_choices,
@@ -151,7 +163,7 @@ pub fn import_chart_bytes_with_assets(
         )?,
         ChartFileFormat::Pms => bms_rs_adapter::import_pms_bytes_to_intermediate(
             path,
-            bytes,
+            (bytes, encoding),
             &random_source,
             &mut bms_random_choices,
             &mut bms_switch_choices,

@@ -1,5 +1,6 @@
 use super::{ArchiveControl, ArchiveEntry, ArchiveLimits};
 use anyhow::{Result, ensure};
+use bmz_chart::import::decode::decode_cjk_fallback;
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -13,8 +14,14 @@ pub(super) fn decode_name(bytes: &[u8], unicode: bool) -> Result<String> {
         return Ok(name.to_owned());
     }
     let (name, _, errors) = encoding_rs::SHIFT_JIS.decode(bytes);
-    ensure!(!errors, "archive filename is neither UTF-8 nor CP932");
-    Ok(name.into_owned())
+    if !errors {
+        return Ok(name.into_owned());
+    }
+    // Only reached for unmarked legacy names rejected by both fast paths.
+    // Callers still normalize the result and check all entries for collisions.
+    decode_cjk_fallback(bytes)
+        .map(|(_, name)| name.into_owned())
+        .ok_or_else(|| anyhow::anyhow!("unsupported archive filename encoding"))
 }
 
 pub(super) fn normalize_name(name: &str, directory: bool) -> Result<String> {

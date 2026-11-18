@@ -14,6 +14,7 @@ pub(super) struct WgpuRenderer {
     pub(super) image_pipeline: wgpu::RenderPipeline,
     pub(super) image_add_pipeline: wgpu::RenderPipeline,
     pub(super) image_multiply_pipeline: wgpu::RenderPipeline,
+    pub(super) image_invert_destination_pipeline: wgpu::RenderPipeline,
     pub(super) image_subtract_pipeline: wgpu::RenderPipeline,
     pub(super) image_premultiplied_pipeline: wgpu::RenderPipeline,
     pub(super) image_layer_pipeline: wgpu::RenderPipeline,

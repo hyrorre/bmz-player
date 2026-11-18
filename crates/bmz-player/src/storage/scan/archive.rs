@@ -2,7 +2,7 @@ use super::content_cache::{ChartContentCache, ImportWork, ScanImportError};
 use super::*;
 use crate::chart_source::{ChartLocator, archive_preview_file};
 use crate::song_archive::{self, ArchiveControl};
-use crate::storage::library_db::ChartImportSource;
+use crate::storage::library_db::{ChartImportSource, check_encoding_revision};
 use rusqlite::OptionalExtension;
 
 /// A failed decoder/CRC must roll back the whole container, including earlier members.
@@ -15,7 +15,7 @@ pub(super) fn import_archive<'a>(
     fingerprints: &HashMap<String, super::super::library_db::ChartFileFingerprint>,
     entries: &[&str],
     expected: &song_archive::ArchiveGeneration,
-    cache: impl FnOnce() -> &'a ChartContentCache,
+    (encoding_revision, cache): (i64, impl FnOnce() -> &'a ChartContentCache),
 ) -> Result<ScanReport> {
     let control = ArchiveControl::default();
     // Discovery already listed the archive. Its metadata stamp still mapping to the same
@@ -69,6 +69,7 @@ pub(super) fn import_archive<'a>(
     let started = Instant::now();
     let cache = cache();
     let tx = db.conn_mut().transaction()?;
+    check_encoding_revision(&tx, encoding_revision)?;
     let scanned = song_archive::scan_charts(container, &control, |entry, bytes| {
         let path =
             ChartLocator::Archive { container: container.to_path_buf(), entry: entry.name.clone() }

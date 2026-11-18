@@ -228,6 +228,10 @@ workerの停止はatomic flagとunparkで要求します。UIは終了済みのw
 まだ終了していないworkerの後始末を待ちません。audio commandも停止flagを保持し、
 enqueue時とcallbackの適用時に検査します。旧workerの遅い送信を次のplayに適用しません。
 
+プレイ中の中断・退出要求は通常の設定変更用channelの空きに依存せず、世代ごとのシグナルで送ります。
+gameplay側は更新の開始時や、入力・自動キー音のまとめ処理の途中で要求を確認します。
+適用時点の判定状態を使って中断の可否を決め、処理済みの判定を保持して結果を確定します。
+
 workerはスコア確定時・終端遷移時にimmutable `FinishSessionSnapshot`とgraphを発行します。
 通常play、course、replay、abort、結果画面への遷移はこの結果からstorage / IRの保存・送信経路を呼びます。
 UIは終了要求を送った直後の古い観測値を保存せず、workerの確定結果を待ちます。

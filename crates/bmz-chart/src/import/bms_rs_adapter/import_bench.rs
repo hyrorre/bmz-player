@@ -279,7 +279,7 @@ fn import_output_digest() {
         };
         let mut intermediate = import_bytes(
             path,
-            bytes,
+            (bytes, None),
             random_source,
             &mut bms_random_choices,
             &mut bms_switch_choices,

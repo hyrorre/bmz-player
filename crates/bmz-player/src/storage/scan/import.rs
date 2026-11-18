@@ -3,7 +3,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use super::content_cache::{ChartContentCache, ImportWork, ScanChart, ScanImportError};
-use crate::storage::library_db::{ChartImportSource, library_path_key};
+use crate::storage::library_db::{ChartImportSource, check_encoding_revision, library_path_key};
 
 /// 1回のバッチで並列パースするファイル数
 pub(super) const IMPORT_BATCH_SIZE: usize = 256;
@@ -54,6 +54,7 @@ pub fn scan_song_roots_with_progress(
     }
 
     let total_start = Instant::now();
+    let (encoding_revision, encodings) = db.chart_encodings()?;
     let mut report = ScanReport::default();
     let enabled_roots: Vec<&PathEntry> = roots.iter().filter(|r| r.enabled).collect();
     let root_count = enabled_roots.len();
@@ -154,6 +155,7 @@ pub fn scan_song_roots_with_progress(
                 discovered_roots
                     .iter()
                     .flat_map(|root| root.entries.iter().map(|(_, entry)| entry.file_size)),
+                encodings.clone(),
             )
         })
     };
@@ -269,7 +271,7 @@ pub fn scan_song_roots_with_progress(
                 &fingerprints,
                 &archive_entries,
                 generation,
-                cache_for_import,
+                (encoding_revision, cache_for_import),
             ) {
                 Ok(archive) => {
                     report.summary.imported += archive.summary.imported;
@@ -416,6 +418,7 @@ pub fn scan_song_roots_with_progress(
                 let commit_ms;
                 {
                     let tx = db.conn_mut().transaction()?;
+                    check_encoding_revision(&tx, encoding_revision)?;
                     for p in &parsed {
                         match &p.result {
                             Ok((chart, preview_file)) => {

@@ -322,7 +322,7 @@ macro_rules! skin_document_render_core_resolve_methods {
                     })
                 {
                     return self
-                        .graph_render_item(graph, frame, state, sources)
+                        .graph_render_item(graph, destination, frame, state, sources)
                         .map(|item| vec![item]);
                 }
 
@@ -746,7 +746,8 @@ macro_rules! skin_document_render_core_resolve_methods {
             }
 
             if let Some(graph) = self.graph.iter().find(|graph| graph.id == destination.id)
-                && let Some(item) = self.graph_render_item(graph, frame, state, sources)
+                && let Some(item) =
+                    self.graph_render_item(graph, destination, frame, state, sources)
             {
                 return Some(vec![item]);
             }

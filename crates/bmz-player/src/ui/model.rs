@@ -525,7 +525,7 @@ pub struct EguiLayer {
     pub(super) directory_open_status: Option<DirectoryOpenStatus>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum EguiKeyConfigSection {
     #[default]
     CommonSelect,

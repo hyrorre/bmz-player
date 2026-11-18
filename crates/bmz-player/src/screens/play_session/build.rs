@@ -597,6 +597,7 @@ pub fn build_game_session_with_input_backend(
     let result_wait_end_time = (profile.play.wait_all_notes_result && !session_mode.is_practice())
         .then(|| result_wait_end_time(&chart));
     GameSession {
+        play_end: Arc::default(),
         conditional: bmz_gameplay::session::conditional::ConditionalRuntime::from_player(
             replay_player.as_ref(),
         ),

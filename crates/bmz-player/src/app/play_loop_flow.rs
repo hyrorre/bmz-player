@@ -1,4 +1,5 @@
 use super::*;
+use bmz_gameplay::session::PlayEndRequest;
 
 impl WinitApp {
     pub(super) fn consume_active_play(&mut self) {
@@ -827,16 +828,16 @@ impl WinitApp {
             // Practice pauses the clock and ends the round right after this, so a
             // refused stop there becomes an explicit finish instead of staying
             // Playing with no reachable result.
-            let practice = practice_phase == Some(PracticePhase::Playing);
-            active_play.running.gameplay.edit(move |session| {
-                if practice {
-                    session.request_practice_round_end();
-                } else {
-                    session.request_manual_stop();
-                }
-            });
-            true
+            let request = if practice_phase == Some(PracticePhase::Playing) {
+                PlayEndRequest::PracticeRoundEnd
+            } else {
+                PlayEndRequest::ManualStop
+            };
+            active_play.running.gameplay.request_play_end(request)
         };
+        if !stopped {
+            return false;
+        }
         self.clear_play_control_holds();
         if practice_phase == Some(PracticePhase::Playing) {
             if let Some(active_play) = &mut self.play.active_play

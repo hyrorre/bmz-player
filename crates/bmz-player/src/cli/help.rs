@@ -102,6 +102,7 @@ Commands:
                                                  Scan song roots (incremental)
   songs reload [PATH|NAME] [--everything|--no-everything]
                                                  Force rescan song roots
+  songs encoding <CHART|SHA256> [ENCODING|auto]  Show, set or clear a BMS text encoding override
 
   course import <PATH>                           Import beatoraja course JSON (file or directory)
   course list                                    List stored courses

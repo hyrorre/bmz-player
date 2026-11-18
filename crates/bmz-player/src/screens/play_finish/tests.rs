@@ -1693,6 +1693,7 @@ fn session() -> GameSession {
         &chart.timing_events,
     );
     GameSession {
+        play_end: Arc::default(),
         conditional: Default::default(),
         session_mode_index: 0,
         chart: Arc::clone(&chart),

@@ -1,5 +1,131 @@
 use super::*;
 
+const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
+
+fn encoded_chart(title: &str) -> String {
+    format!(
+        "#TITLE {title}\r\n#BPM 120\r\n#TOTAL 200\r\n#WAV01 {title}.wav\r\n#BMP01 {title}.png\r\n\
+         #00111:01\r\n#00104:01\r\n"
+    )
+}
+
+fn assert_encoded_chart(path: &str, bytes: &[u8], title: &str) -> Vec<ImportWarning> {
+    let result = import_chart_bytes_with_assets(
+        Path::new(path),
+        bytes,
+        BmsRandomSource::Seed(None),
+        AssetLookup::Declared,
+    )
+    .unwrap();
+    assert_eq!(result.chart.identity, compute_chart_identity(bytes));
+    assert_eq!(result.chart.metadata.title, title);
+    assert_eq!(result.chart.total_notes, 1);
+    assert!(result.chart.sounds[0].path.ends_with(format!("{title}.wav")));
+    assert!(result.chart.bga_assets[0].path.ends_with(format!("{title}.png")));
+    result.warnings
+}
+
+#[test]
+fn utf8_bom_preserves_the_first_command_for_utf8_and_cp932_bodies() {
+    let title = "日本語の試験";
+    let text = encoded_chart(title);
+    for (encoding, path) in [(encoding_rs::UTF_8, "song.bms"), (encoding_rs::SHIFT_JIS, "song.pms")]
+    {
+        let (body, _, unmappable) = encoding.encode(&text);
+        assert!(!unmappable);
+        let bytes = [UTF8_BOM, &body].concat();
+        let warnings = assert_encoded_chart(path, &bytes, title);
+        assert!(
+            !warnings
+                .iter()
+                .any(|warning| matches!(warning, ImportWarning::TextReplacementOccurred))
+        );
+    }
+}
+
+#[test]
+fn utf16_and_utf32_both_byte_orders_import_with_and_without_bom() {
+    type Encode = fn(&str) -> Vec<u8>;
+    let encoders: [(Encode, &[u8]); 4] = [
+        (|s| s.encode_utf16().flat_map(u16::to_le_bytes).collect(), b"\xFF\xFE"),
+        (|s| s.encode_utf16().flat_map(u16::to_be_bytes).collect(), b"\xFE\xFF"),
+        (|s| s.chars().flat_map(|c| (c as u32).to_le_bytes()).collect(), b"\xFF\xFE\x00\x00"),
+        (|s| s.chars().flat_map(|c| (c as u32).to_be_bytes()).collect(), b"\x00\x00\xFE\xFF"),
+    ];
+    for (encode, bom) in encoders {
+        for title in ["ASCII", "日本語🎵"] {
+            let body = encode(&encoded_chart(title));
+            let warnings = assert_encoded_chart("song.bms", &body, title);
+            assert!(warnings.is_empty(), "{warnings:?}");
+
+            let bytes = [bom, &body].concat();
+            let warnings = assert_encoded_chart("song.bms", &bytes, title);
+            assert!(warnings.is_empty(), "{warnings:?}");
+        }
+    }
+}
+
+#[test]
+fn malformed_wide_characters_report_replacements() {
+    for (bytes, expected) in [
+        (&b"\xFF\xFEA\x00\x00\xD8"[..], "A�"),
+        (&b"\x00\x00\xFE\xFF\x00\x00\x00A\x00\x00\xD8\x00\x00"[..], "A��"),
+    ] {
+        let mut warnings = Vec::new();
+        assert_eq!(crate::import::decode::decode_bms_text(bytes, &mut warnings), expected);
+        assert!(matches!(&warnings[..], [ImportWarning::TextReplacementOccurred]));
+    }
+}
+
+#[test]
+fn ms949_fallback_recovers_metadata_and_asset_references_without_redecoding_valid_cp932() {
+    for (encoding, title) in [(encoding_rs::EUC_KR, "겖한글음악"), (encoding_rs::SHIFT_JIS, "ｶﾅ")]
+    {
+        let text = encoded_chart(title);
+        let (bytes, _, unmappable) = encoding.encode(&text);
+        assert!(!unmappable);
+        let warnings = assert_encoded_chart("song.bms", &bytes, title);
+        if encoding == encoding_rs::EUC_KR {
+            assert!(
+                matches!(
+                    &warnings[..],
+                    [ImportWarning::CjkEncodingFallback(BmsTextEncoding::Ms949)]
+                ),
+                "{warnings:?}"
+            );
+        } else {
+            assert!(matches!(&warnings[..], [ImportWarning::EncodingFallback]), "{warnings:?}");
+        }
+    }
+}
+
+#[test]
+fn chinese_fallback_recovers_text_and_asset_names_when_cp932_fails() {
+    for (codec, detected, title) in [
+        (encoding_rs::GBK, BmsTextEncoding::Gb18030, "喆简体音乐"),
+        (encoding_rs::GB18030, BmsTextEncoding::Gb18030, "简体音乐𠀀"),
+        (encoding_rs::BIG5, BmsTextEncoding::Big5, "繁體中文音樂歡迎來到台灣"),
+    ] {
+        let text = encoded_chart(title);
+        let (body, _, unmappable) = codec.encode(&text);
+        assert!(!unmappable);
+        assert!(BmsTextEncoding::Cp932.decode_strict(&body).is_none());
+        let warnings = assert_encoded_chart("song.bms", &body, title);
+        assert!(
+            matches!(&warnings[..], [ImportWarning::CjkEncodingFallback(encoding)] if *encoding == detected),
+            "{warnings:?}"
+        );
+    }
+}
+
+#[test]
+fn valid_cp932_keeps_half_width_kana_that_the_detector_guesses_as_big5() {
+    let text = encoded_chart("ﾒｶﾞﾃﾞﾘｯｸ");
+    let (body, _, unmappable) = encoding_rs::SHIFT_JIS.encode(&text);
+    assert!(!unmappable);
+    assert_encoded_chart("song.bms", &body, "ﾒｶﾞﾃﾞﾘｯｸ");
+}
+
 #[test]
 fn byte_import_matches_file_import_and_keeps_raw_identity_for_all_formats() {
     let fixtures = [

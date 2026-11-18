@@ -68,7 +68,7 @@ fn normalize_stage_timing() {
         let mut warnings = Vec::new();
         let Ok(intermediate) = super::super::bms_rs_adapter::import_bms_bytes_to_intermediate(
             path,
-            &bytes,
+            (&bytes, None),
             &super::super::BmsRandomSource::Seed(None),
             &mut Vec::new(),
             &mut Vec::new(),

@@ -245,6 +245,37 @@ fn wait_until(mut condition: impl FnMut() -> bool) {
     }
 }
 
+#[test]
+fn manual_stop_reaches_gameplay_with_a_full_control_queue() {
+    let mut session = prepared(SharedInputBackend::default());
+    session.state = PlayState::Playing;
+    let config = config(&session, Arc::default());
+    let mut client = GameplayClient::new(session);
+    client.start(AudioEngineHandle::new(AudioEngine::new(48_000)), config).unwrap();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    assert!(client.edit(move |session| {
+        entered_tx.send(()).unwrap();
+        release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        session.audio_clock.current_frame.store(500_000, Ordering::Relaxed);
+    }));
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    for _ in 0..COMMAND_CAPACITY {
+        assert!(client.edit(|_| {}));
+    }
+    assert!(!client.edit(|_| {}));
+    assert!(client.request_play_end(PlayEndRequest::ManualStop));
+    release_tx.send(()).unwrap();
+
+    wait_until(|| {
+        client.poll();
+        client.result.is_some()
+    });
+    assert_eq!(client.session.state, PlayState::Failed);
+    assert!(client.result.as_ref().unwrap().graph.snapshot().timing_points.is_empty());
+}
+
 fn run_with_render_stall(stall_ms: u64) -> (String, u64) {
     run_mode_with_render_stall(stall_ms, 0)
 }

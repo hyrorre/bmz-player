@@ -722,6 +722,7 @@ settings-audio-exclusive-help = BMZ Player만 소리를 내서 지연을 가장 
 settings-video-primary-monitor = 주 모니터
 settings-video-monitor = 전체 화면 디스플레이
 settings-video-monitor-disconnected = 연결 끊김: { $name }
+settings-video-monitor-position-fallback = { $name } (연결 끊김, 대체 화면 { $fallback })
 settings-video-target-fps-unlimited = 목표 FPS가 0이면 무제한
 toast-chart-hash-unavailable-sha256 = SHA256을 가져올 수 없습니다
 toast-chart-hash-md5-local-only = MD5는 로컬 채보에서만 사용할 수 있습니다

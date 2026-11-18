@@ -148,9 +148,8 @@ pub(crate) fn match_configured_monitor(
 
 /// 一致したモニターの保存値が設定値と異なる場合、置き換え後の値を返す。
 ///
-/// 従来形式や座標一致で見つかった設定値を新しい識別子へ移行するために使う。
-/// ただし、設定値が安定した識別子なのに一致先の識別子が取得できていない場合は
-/// 従来形式へ退行してしまうため、設定値をそのまま保つ。
+/// 従来形式の設定値は選択先の保存値へ移行する。安定した識別子で指定済みの場合は、
+/// 同じ識別子が確認できたときだけ座標を更新する。
 pub(crate) fn migrated_monitor_config_value(
     configured: &str,
     matched: &MonitorFacts,
@@ -160,7 +159,12 @@ pub(crate) fn migrated_monitor_config_value(
         return None;
     }
     let (head, _) = split_position_suffix(configured);
-    if matched.identity.is_none() && is_device_path(head) {
+    if is_device_path(head)
+        && !matched
+            .identity
+            .as_ref()
+            .is_some_and(|identity| identity.device_path.eq_ignore_ascii_case(head))
+    {
         return None;
     }
     let value = matched.config_value();
@@ -573,9 +577,12 @@ mod tests {
             stable_monitor(r"\\.\DISPLAY3", 0, 0, DELL_PATH, "DELL"),
             stable_monitor(r"\\.\DISPLAY1", 1920, 0, LG_PATH, "LG"),
         ];
+        let configured = r"\\.\DISPLAY2 [1920, 0]";
+        let (index, matched) = match_configured_monitor(configured, &monitors).unwrap();
+        assert_eq!((index, matched), (1, MonitorMatch::Position));
         assert_eq!(
-            match_configured_monitor(r"\\.\DISPLAY2 [1920, 0]", &monitors),
-            Some((1, MonitorMatch::Position))
+            migrated_monitor_config_value(configured, &monitors[index]),
+            Some(format!("{LG_PATH} [1920, 0]"))
         );
         // 識別子が変わった新形式の値も、座標が一意なら同じモニターを選ぶ。
         let unknown_path = DELL_PATH.replace("UID4353", "UID9999");
@@ -625,11 +632,24 @@ mod tests {
         // 識別子を従来形式へ退行させない。
         let legacy = legacy_monitor(Some(r"\\.\DISPLAY2"), 1920, 0);
         assert_eq!(migrated_monitor_config_value(&format!("{LG_PATH} [1920, 0]"), &legacy), None);
-        // 識別子が取れている相手へは、別の安定した識別子への移行を従来どおり行う。
-        let stable = stable_monitor(r"\\.\DISPLAY1", 1920, 0, DELL_PATH, "DELL");
+    }
+
+    #[test]
+    fn position_fallback_keeps_configured_stable_identifier() {
+        let configured = format!("{LG_PATH} [1920, 0]");
+        let fallback = stable_monitor(r"\\.\DISPLAY1", 1920, 0, DELL_PATH, "DELL");
+        let monitors = [fallback];
+        let (index, matched) = match_configured_monitor(&configured, &monitors).unwrap();
+        assert_eq!((index, matched), (0, MonitorMatch::Position));
+        let saved = migrated_monitor_config_value(&configured, &monitors[index])
+            .unwrap_or_else(|| configured.clone());
+        assert_eq!(saved, configured);
+
+        let [fallback] = monitors;
+        let reconnected = stable_monitor(r"\\.\DISPLAY2", -2560, 0, LG_PATH, "LG");
         assert_eq!(
-            migrated_monitor_config_value(&format!("{LG_PATH} [1920, 0]"), &stable),
-            Some(format!("{DELL_PATH} [1920, 0]"))
+            match_configured_monitor(&saved, &[fallback, reconnected]),
+            Some((1, MonitorMatch::StableId))
         );
     }
 

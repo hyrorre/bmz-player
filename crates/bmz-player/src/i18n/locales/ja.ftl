@@ -722,6 +722,7 @@ settings-audio-exclusive-help = BMZ Player だけが音を出し、遅れを最�
 settings-video-primary-monitor = プライマリモニター
 settings-video-monitor = フルスクリーン画面
 settings-video-monitor-disconnected = 未接続: { $name }
+settings-video-monitor-position-fallback = { $name }（未接続・代替先 { $fallback }）
 settings-video-target-fps-unlimited = 目標 FPS は 0 で無制限
 toast-chart-hash-unavailable-sha256 = SHA256 を取得できません
 toast-chart-hash-md5-local-only = MD5 はローカル譜面でのみ利用できます

@@ -85,6 +85,7 @@ pub enum SongsCommand {
     List,
     Load { target: Option<String>, use_everything: Option<bool> },
     Reload { target: Option<String>, use_everything: Option<bool> },
+    Encoding { chart: String, label: Option<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

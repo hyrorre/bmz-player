@@ -21,6 +21,9 @@ pub fn schedule_keysounds(session: &mut GameSession, audio: &mut dyn AudioSchedu
         });
     }
     for event in pending {
+        if session.play_end_reached() {
+            break;
+        }
         let note_id = event.note_id;
         let Some(note) = session.judge.note_by_id(&session.chart, note_id) else {
             continue;

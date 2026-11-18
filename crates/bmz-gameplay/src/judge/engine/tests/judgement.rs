@@ -304,6 +304,30 @@ fn duration_candidate_prefers_closest_note() {
 }
 
 #[test]
+fn duration_exact_hit_keeps_tie_order_and_falls_back_after_exact_notes() {
+    let time = TimeUs(1_040_000);
+    let mut chart = chart_with_two_taps(time, time);
+    let notes = &mut chart.lane_notes[Lane::Key1.index()];
+    notes.insert(0, NoteEvent { id: NoteId(3), time: TimeUs(1_010_000), ..notes[0].clone() });
+    let mut engine = JudgeEngine::new_with_window_set_and_algorithm(
+        JudgeWindows::uniform(windows()),
+        RuleMode::Beatoraja,
+        JudgeAlgorithm::Duration,
+    );
+    engine.bad_attempted_notes.insert(NoteId(1));
+
+    for (id, delta, judge) in [
+        (NoteId(1), 0, Judge::PGreat),
+        (NoteId(2), 0, Judge::PGreat),
+        (NoteId(3), 30_000, Judge::Great),
+    ] {
+        let outcome = engine.process_input(&chart, press_at(time));
+        let event = &outcome.events[0];
+        assert_eq!((event.note_id, event.delta, event.judge), (Some(id), TimeUs(delta), judge));
+    }
+}
+
+#[test]
 fn lowest_candidate_keeps_first_note() {
     let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_040_000));
     let mut engine = JudgeEngine::new_with_window_set_and_algorithm(

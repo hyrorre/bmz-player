@@ -145,6 +145,7 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
     let timing_map =
         TimingMap::from_chart_timing_events(chart.metadata.initial_bpm, &chart.timing_events);
     GameSession {
+        play_end: Arc::default(),
         conditional: Default::default(),
         session_mode_index: 0,
         chart: Arc::clone(&chart),

@@ -615,6 +615,7 @@ dependencies = [
  "bms-rs",
  "bmz-core",
  "bmz-song-resource",
+ "chardetng",
  "encoding_rs",
  "md5",
  "serde",
@@ -1057,6 +1058,17 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "chardetng"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14b8f0b65b7b08ae3c8187e8d77174de20cb6777864c6b832d8ad365999cf1ea"
+dependencies = [
+ "cfg-if",
+ "encoding_rs",
+ "memchr",
 ]
 
 [[package]]
