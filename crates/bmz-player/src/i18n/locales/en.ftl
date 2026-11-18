@@ -725,6 +725,7 @@ settings-audio-exclusive-help = Only BMZ Player plays sound, for the lowest dela
 settings-video-primary-monitor = Primary monitor
 settings-video-monitor = Fullscreen display
 settings-video-monitor-disconnected = Disconnected: { $name }
+settings-video-monitor-position-fallback = { $name } (disconnected, fallback { $fallback })
 settings-video-target-fps-unlimited = Set target FPS to 0 for unlimited
 toast-chart-hash-unavailable-sha256 = SHA256 is unavailable
 toast-chart-hash-md5-local-only = MD5 is only available for local charts

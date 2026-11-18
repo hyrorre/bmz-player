@@ -577,9 +577,12 @@ mod tests {
             stable_monitor(r"\\.\DISPLAY3", 0, 0, DELL_PATH, "DELL"),
             stable_monitor(r"\\.\DISPLAY1", 1920, 0, LG_PATH, "LG"),
         ];
+        let configured = r"\\.\DISPLAY2 [1920, 0]";
+        let (index, matched) = match_configured_monitor(configured, &monitors).unwrap();
+        assert_eq!((index, matched), (1, MonitorMatch::Position));
         assert_eq!(
-            match_configured_monitor(r"\\.\DISPLAY2 [1920, 0]", &monitors),
-            Some((1, MonitorMatch::Position))
+            migrated_monitor_config_value(configured, &monitors[index]),
+            Some(format!("{LG_PATH} [1920, 0]"))
         );
         // 識別子が変わった新形式の値も、座標が一意なら同じモニターを選ぶ。
         let unknown_path = DELL_PATH.replace("UID4353", "UID9999");
