@@ -23,8 +23,12 @@ const DESTINATION_LANES: [Lane; 8] = [
     Lane::Key7,
     Lane::Key8,
 ];
-/// Destination lanes 1..=LEFT_HAND_LANES are counted as the left hand.
-const LEFT_HAND_LANES: usize = 4;
+/// Load weight of each destination lane in tenths (2.0, 1.4, 1.1, 1.0, ...).
+/// Lanes 1-4 are the left little, ring, middle and index fingers and lanes 5-8
+/// the right index, middle, ring and little fingers; weaker fingers weigh
+/// more. Experimental; tune it after trying the conversion on charts. Integer
+/// tenths keep mirrored gaps (such as 1 and 8) exactly tied.
+const LANE_LOAD_WEIGHTS: [u64; 8] = [20, 14, 11, 10, 10, 11, 14, 20];
 
 /// Converts a source 7K chart into eight scratch-less lanes (experimental).
 ///
@@ -285,18 +289,22 @@ fn best_gap(counts: &[u32; 7], total: u32, previous: Option<usize>) -> usize {
     best.map_or(INITIAL_GAP, |best| best.2)
 }
 
-/// Load term of the gap cost: the squared note counts of the two hands
-/// (destination lanes 1-4 and 5-8) after embedding.
+/// Load term of the gap cost: the squared note count of every destination lane
+/// after embedding, weighted by the finger on that lane (`LANE_LOAD_WEIGHTS`).
+/// The gap lane itself counts zero.
 ///
-/// Per-lane squared counts are the same for every gap because the embedding
-/// only moves whole lanes, so the hand split is what makes gaps comparable.
+/// A block heavy on Key1 therefore prefers gap 1, which moves Key1 from the
+/// little finger to the ring finger, and an even block prefers an edge gap.
 fn gap_load_score(counts: &[u32; 7], gap: usize) -> f64 {
-    let mut hands = [0u64; 2];
-    for (index, count) in counts.iter().enumerate() {
-        let hand = usize::from(embed(index + 1, gap) > LEFT_HAND_LANES);
-        hands[hand] += u64::from(*count);
-    }
-    hands.iter().map(|count| (count * count) as f64).sum()
+    let tenths = counts
+        .iter()
+        .enumerate()
+        .map(|(index, count)| {
+            let count = u64::from(*count);
+            LANE_LOAD_WEIGHTS[embed(index + 1, gap) - 1] * count * count
+        })
+        .sum::<u64>();
+    tenths as f64 / 10.0
 }
 
 /// Destination lane number (1..=8) of source key `key` (1..=7) around `gap`.
@@ -492,14 +500,16 @@ mod tests {
         });
     }
 
-    /// Measure 1 presses Key1..Key4 twice each (left heavy) and measure 2
-    /// presses Key4..Key7 twice each (right heavy). Ids are 100 + key * 10 + n.
+    /// Measure 1 presses Key1..Key4 six times each (left heavy) and measure 2
+    /// presses Key4..Key7 six times each (right heavy). Ids are
+    /// 100 + measure * 100 + key * 10 + n. Six presses make the load gain of
+    /// moving the gap outweigh the switch penalty in measure 2.
     fn left_then_right_chart() -> PlayableChart {
         let mut chart = chart();
         for (keys, measure) in [(1..=4, 1), (4..=7, 2)] {
             for key in keys {
-                for step in 0..2 {
-                    let time = measure * MEASURE_US + (key as i64) * 50_000 + step * 400_000;
+                for step in 0..6 {
+                    let time = measure * MEASURE_US + (key as i64) * 50_000 + step * 100_000;
                     let id = 100 + measure as u32 * 100 + key as u32 * 10 + step as u32;
                     push(&mut chart, note(id, SOURCE_KEYS[key - 1], NoteKind::Tap, time));
                 }
@@ -533,14 +543,44 @@ mod tests {
         let mut chart = left_then_right_chart();
         assert!(apply_seven_to_eight(&mut chart, 1, false, DEFAULT_H_RANDOM_THRESHOLD_MS));
 
-        // Measure 1: Key4 goes to the lighter right hand, gap at lane 4.
-        assert_eq!(lane_of(&chart, 210), Lane::Key1);
+        // Measure 1: the heavy left edge is left empty (gap 1), so Key1 moves
+        // to the ring finger.
+        assert_eq!(lane_of(&chart, 210), Lane::Key2);
         assert_eq!(lane_of(&chart, 240), Lane::Key5);
-        assert!(!lanes_in(&chart, 1).contains(&Lane::Key4));
-        // Measure 2: Key4 goes to the lighter left hand, gap at lane 5.
+        assert!(!lanes_in(&chart, 1).contains(&Lane::Key1));
+        // Measure 2: the heavy right edge is left empty (gap 8), so Key7 moves
+        // to the ring finger.
         assert_eq!(lane_of(&chart, 340), Lane::Key4);
-        assert_eq!(lane_of(&chart, 370), Lane::Key8);
-        assert!(!lanes_in(&chart, 2).contains(&Lane::Key5));
+        assert_eq!(lane_of(&chart, 370), Lane::Key7);
+        assert!(!lanes_in(&chart, 2).contains(&Lane::Key8));
+    }
+
+    #[test]
+    fn heavy_key1_measure_leaves_lane_1_empty() {
+        let mut chart = chart();
+        // Measure 1 leans on Key7 and measure 2 on Key1; the other keys press
+        // once. Ids are measure * 100 + key * 10 + n.
+        for (measure, heavy) in [(1i64, 7usize), (2, 1)] {
+            for key in 1..=7usize {
+                let presses = if key == heavy { 6 } else { 1 };
+                for step in 0..presses {
+                    let time = measure * MEASURE_US + key as i64 * 50_000 + step * 100_000;
+                    let id = measure as u32 * 100 + key as u32 * 10 + step as u32;
+                    push(&mut chart, note(id, SOURCE_KEYS[key - 1], NoteKind::Tap, time));
+                }
+            }
+        }
+        apply_seven_to_eight(&mut chart, 1, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
+
+        assert_eq!(lane_of(&chart, 170), Lane::Key7);
+        assert!(!lanes_in(&chart, 1).contains(&Lane::Key8));
+        // Measure 2 switches to gap 1 despite the penalty: no keyboard note on
+        // lane 1, and every Key1 note is on lane 2.
+        assert!(!lanes_in(&chart, 2).contains(&Lane::Key1));
+        for id in 210..216 {
+            assert_eq!(lane_of(&chart, id), Lane::Key2);
+        }
+        assert_eq!(lane_of(&chart, 220), Lane::Key3);
     }
 
     #[test]
@@ -557,8 +597,11 @@ mod tests {
         }
         apply_seven_to_eight(&mut chart, 1, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
 
+        // Gap 1 in the first window and gap 8 in the second.
+        assert_eq!(lane_of(&chart, 210), Lane::Key2);
         assert_eq!(lane_of(&chart, 240), Lane::Key5);
         assert_eq!(lane_of(&chart, 340), Lane::Key4);
+        assert_eq!(lane_of(&chart, 370), Lane::Key7);
     }
 
     #[test]
@@ -567,13 +610,14 @@ mod tests {
         push_long(&mut chart, 1, Lane::Key1, MEASURE_US + 900_000, 2 * MEASURE_US + 500_000);
         apply_seven_to_eight(&mut chart, 1, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
 
-        // Measure 2 is locked to the gap of measure 1 (lane 4).
+        // Measure 2 is locked to the gap of measure 1 (lane 1) instead of
+        // switching to gap 8.
         assert_eq!(lane_of(&chart, 340), Lane::Key5);
         assert_eq!(lane_of(&chart, 370), Lane::Key8);
-        assert!(!lanes_in(&chart, 2).contains(&Lane::Key4));
-        assert_eq!(lane_of(&chart, 1), Lane::Key1);
-        assert_eq!(lane_of(&chart, 2), Lane::Key1);
-        assert_eq!(chart.long_notes[0].lane, Lane::Key1);
+        assert!(!lanes_in(&chart, 2).contains(&Lane::Key1));
+        assert_eq!(lane_of(&chart, 1), Lane::Key2);
+        assert_eq!(lane_of(&chart, 2), Lane::Key2);
+        assert_eq!(chart.long_notes[0].lane, Lane::Key2);
     }
 
     #[test]
@@ -597,8 +641,9 @@ mod tests {
 
         apply_seven_to_eight(&mut chart, 7, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
 
-        assert_eq!(lane_of(&chart, 1), Lane::Key4);
-        assert_eq!(lane_of(&chart, 2), Lane::Key4);
+        // An even chord ties gaps 1 and 8 (both edges); the tie keeps lane 1.
+        assert_eq!(lane_of(&chart, 1), Lane::Key1);
+        assert_eq!(lane_of(&chart, 2), Lane::Key1);
         assert!(!chart.lane_notes.iter().flatten().any(|note| note.id == NoteId(3)));
         assert_eq!(
             chart.bgm_events.iter().map(|event| event.sound).collect::<Vec<_>>(),
@@ -615,7 +660,8 @@ mod tests {
         apply_seven_to_eight(&mut chart, 3, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
 
         let pair = &chart.long_notes[0];
-        // Gap 4 is the first choice, and Key4 moved to lane 5.
+        // Key4 weighs the same on lanes 4 and 5, so the centre tie-break picks
+        // gap 4 and Key4 moves to lane 5.
         assert_eq!(pair.lane, Lane::Key4);
         assert_eq!(lane_of(&chart, 1), pair.lane);
         assert_eq!(lane_of(&chart, 2), pair.lane);
@@ -642,8 +688,8 @@ mod tests {
         assert!(!chart.lane_notes.iter().flatten().any(|note| note.id == NoteId(2)));
         let kept = chart.lane_notes.iter().flatten().filter(|note| note.id != NoteId(3)).count();
         assert_eq!(kept, keyboard_notes);
-        // 16 keyboard taps plus the placed scratch.
-        assert_eq!(chart.total_notes, 17);
+        // 48 keyboard taps plus the placed scratch.
+        assert_eq!(chart.total_notes, 49);
 
         let mut not_seven = self::chart();
         not_seven.metadata.key_mode = KeyMode::K5;
