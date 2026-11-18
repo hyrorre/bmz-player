@@ -118,6 +118,7 @@ pub(super) fn format_rule_mode(value: RuleMode) -> String {
         RuleMode::Beatoraja => "BEATORAJA".to_string(),
         RuleMode::Lr2Oraja => "LR2ORAJA".to_string(),
         RuleMode::Dx => "DX".to_string(),
+        RuleMode::Legacy => "LEGACY".to_string(),
     }
 }
 
@@ -372,7 +373,8 @@ pub(super) fn cycle_language(current: AppLocale, forward: bool) -> AppLocale {
 }
 
 pub(super) fn cycle_rule_mode(current: RuleMode, forward: bool) -> RuleMode {
-    const VALUES: [RuleMode; 3] = [RuleMode::Beatoraja, RuleMode::Lr2Oraja, RuleMode::Dx];
+    const VALUES: [RuleMode; 4] =
+        [RuleMode::Beatoraja, RuleMode::Lr2Oraja, RuleMode::Dx, RuleMode::Legacy];
     cycle_in_slice(&VALUES, current, forward)
 }
 

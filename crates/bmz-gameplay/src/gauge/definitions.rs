@@ -25,7 +25,7 @@ pub fn gauge_definitions_for_rule_mode_and_keymode(
 ) -> Vec<GaugeDefinition> {
     match rule_mode {
         RuleMode::Beatoraja => gauge_definitions_for(property),
-        RuleMode::Lr2Oraja => lr2oraja_gauge_definitions(),
+        RuleMode::Lr2Oraja | RuleMode::Legacy => lr2oraja_gauge_definitions(),
         RuleMode::Dx => {
             if key_mode == KeyMode::K9 {
                 dx_pop_gauge_definition_table().to_vec()

@@ -36,14 +36,16 @@ pub fn judge_rank_to_percent_optional(rank: Option<i32>) -> i32 {
 
 pub fn judge_rank_to_percent_for_rule_mode(rank: i32, rule_mode: RuleMode) -> i32 {
     match rule_mode {
-        RuleMode::Lr2Oraja => lr2oraja_judge_rank_to_percent(rank),
+        RuleMode::Lr2Oraja | RuleMode::Legacy => lr2oraja_judge_rank_to_percent(rank),
         RuleMode::Beatoraja | RuleMode::Dx => judge_rank_to_percent(rank),
     }
 }
 
 pub fn judge_rank_to_percent_optional_for_rule_mode(rank: Option<i32>, rule_mode: RuleMode) -> i32 {
     match rule_mode {
-        RuleMode::Lr2Oraja => rank.map(lr2oraja_judge_rank_to_percent).unwrap_or(75),
+        RuleMode::Lr2Oraja | RuleMode::Legacy => {
+            rank.map(lr2oraja_judge_rank_to_percent).unwrap_or(75)
+        }
         RuleMode::Beatoraja | RuleMode::Dx => judge_rank_to_percent_optional(rank),
     }
 }
@@ -61,7 +63,7 @@ pub fn judge_rank_spec_to_percent_optional_for_keymode_and_rule_mode(
     rule_mode: RuleMode,
 ) -> i32 {
     match rule_mode {
-        RuleMode::Lr2Oraja => lr2oraja_judge_rank_spec_to_percent(spec),
+        RuleMode::Lr2Oraja | RuleMode::Legacy => lr2oraja_judge_rank_spec_to_percent(spec),
         RuleMode::Beatoraja | RuleMode::Dx => beatoraja_judge_rank_spec_to_percent(spec, key_mode),
     }
 }
@@ -188,6 +190,7 @@ pub fn judge_window_for_rule_mode_and_keymode(
     match rule_mode {
         RuleMode::Beatoraja => beatoraja_judge_window_for_rank_and_keymode(base, percent, key_mode),
         RuleMode::Lr2Oraja => lr2oraja_judge_window_for_rank(base, percent),
+        RuleMode::Legacy => legacy_window(percent),
         RuleMode::Dx => base,
     }
 }
@@ -223,6 +226,7 @@ pub fn judge_windows_for_rule_mode_and_keymode(
             long_note_release_margin_us: base.long_note_release_margin_us,
             long_scratch_release_margin_us: base.long_scratch_release_margin_us,
         },
+        RuleMode::Legacy => JudgeWindows::uniform(legacy_window(percent)),
         RuleMode::Lr2Oraja => JudgeWindows {
             note: lr2oraja_judge_window_for_rank(base.note, percent),
             scratch: lr2oraja_judge_window_for_rank(base.scratch, percent),
@@ -258,6 +262,7 @@ pub const fn note_judge_window_for_rule_mode(
     match rule_mode {
         RuleMode::Beatoraja => beatoraja_note_judge_window_for_keymode(key_mode),
         RuleMode::Lr2Oraja => lr2oraja_note_judge_window(),
+        RuleMode::Legacy => legacy_window(75),
         RuleMode::Dx => match key_mode {
             KeyMode::K9 => dx_pop_note_judge_window(),
             _ => dx_note_judge_window(),
@@ -272,6 +277,7 @@ pub const fn judge_windows_for_keymode_and_rule_mode(
     match rule_mode {
         RuleMode::Beatoraja => beatoraja_judge_windows_for_keymode(key_mode),
         RuleMode::Lr2Oraja => lr2oraja_judge_windows(),
+        RuleMode::Legacy => JudgeWindows::uniform(legacy_window(75)),
         RuleMode::Dx => match key_mode {
             KeyMode::K9 => dx_pop_judge_windows(),
             _ => dx_judge_windows(),
@@ -501,6 +507,24 @@ fn beatoraja_fixjudge_for_keymode(key_mode: KeyMode) -> [bool; 5] {
     if key_mode == KeyMode::K9 { BEATORAJA_PMS_FIX_JUDGE } else { BEATORAJA_NORMAL_FIX_JUDGE }
 }
 
+const fn legacy_window(percent: i32) -> JudgeWindow {
+    let (pgreat_ms, great_ms, good_ms) = match percent {
+        25 => (8, 24, 40),
+        50 => (15, 30, 60),
+        100 => (21, 60, 120),
+        _ => (18, 40, 100),
+    };
+    JudgeWindow::symmetric(
+        pgreat_ms * 1_000,
+        great_ms * 1_000,
+        good_ms * 1_000,
+        200_000,
+        1_000_000,
+        0,
+        great_ms * 1_000,
+    )
+}
+
 /// LR2oraja `JudgeProperty.LR2` NOTE window.
 pub const fn lr2oraja_note_judge_window() -> JudgeWindow {
     JudgeWindow {
@@ -645,7 +669,7 @@ pub fn judge_percent_at_time_for_keymode(
         // DX MODE uses JudgeProperty.IIDX with fixed windows; rank headers/events are ignored.
         return 100;
     }
-    if matches!(rule_mode, RuleMode::Beatoraja | RuleMode::Lr2Oraja) {
+    if matches!(rule_mode, RuleMode::Beatoraja | RuleMode::Lr2Oraja | RuleMode::Legacy) {
         // Compatibility: beatoraja/LR2oraja keep #EXRANK/A0 out of the runtime rank path.
         // BMZ still imports those events, but does not apply them to compatible modes.
         return percent;

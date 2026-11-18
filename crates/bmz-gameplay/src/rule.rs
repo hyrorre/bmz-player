@@ -7,6 +7,7 @@ pub enum RuleMode {
     Beatoraja,
     Lr2Oraja,
     Dx,
+    Legacy,
 }
 
 impl RuleMode {
@@ -15,6 +16,7 @@ impl RuleMode {
             Self::Beatoraja => "Beatoraja",
             Self::Lr2Oraja => "Lr2Oraja",
             Self::Dx => "Dx",
+            Self::Legacy => "Legacy",
         }
     }
 
@@ -23,6 +25,7 @@ impl RuleMode {
             "Beatoraja" => Some(Self::Beatoraja),
             "Lr2Oraja" => Some(Self::Lr2Oraja),
             "Dx" => Some(Self::Dx),
+            "Legacy" => Some(Self::Legacy),
             _ => None,
         }
     }

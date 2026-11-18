@@ -11,6 +11,10 @@ pub(super) async fn ranking(
     scope: &str,
     limit: u32,
 ) -> Result<()> {
+    anyhow::ensure!(
+        profile.play.rule_mode != bmz_gameplay::rule::RuleMode::Legacy,
+        "LEGACY rankings are local only"
+    );
     let provider = primary_provider(profile)?;
     if crate::ir::bms_ir::is_bms_ir_config(provider)
         || crate::ir::rian_ir::is_rian_ir_config(provider)

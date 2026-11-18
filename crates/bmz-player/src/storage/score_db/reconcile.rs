@@ -240,7 +240,7 @@ pub(super) fn rebuild_score_aggregates(conn: &Connection) -> Result<()> {
         AND CASE h.rule_mode
             WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
             WHEN 'Dx' THEN 'Dx'
-            ELSE 'Beatoraja'
+            WHEN 'Legacy' THEN 'Legacy' ELSE 'Beatoraja'
         END = score_best.rule_mode";
     const CLEAR_RANK: &str = "CASE h.clear_type
         WHEN 'NoPlay' THEN 0
@@ -418,7 +418,7 @@ pub(super) fn preserve_cleanup_aggregates(conn: &Connection, ids: &[i64]) -> Res
              WHERE h.chart_sha256 = o.chart_sha256 AND h.ln_policy = o.ln_policy
              AND h.double_option = o.double_option
              AND CASE h.rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja' WHEN 'Dx' THEN 'Dx'
-                 ELSE 'Beatoraja' END = o.rule_mode);",
+                 WHEN 'Legacy' THEN 'Legacy' ELSE 'Beatoraja' END = o.rule_mode);",
     )?;
     Ok(())
 }
@@ -427,7 +427,7 @@ pub(super) fn restore_cleanup_aggregates(conn: &Connection) -> Result<()> {
     const MATCH: &str = "h.chart_sha256 = o.chart_sha256 AND h.ln_policy = o.ln_policy
         AND h.double_option = o.double_option
         AND CASE h.rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja' WHEN 'Dx' THEN 'Dx'
-            ELSE 'Beatoraja' END = o.rule_mode";
+            WHEN 'Legacy' THEN 'Legacy' ELSE 'Beatoraja' END = o.rule_mode";
     const BEST_MATCH: &str = "o.chart_sha256 = score_best.chart_sha256
         AND o.ln_policy = score_best.ln_policy AND o.double_option = score_best.double_option
         AND o.rule_mode = score_best.rule_mode";

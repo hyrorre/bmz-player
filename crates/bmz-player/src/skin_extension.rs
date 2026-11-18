@@ -18,6 +18,7 @@ pub(crate) const fn rule_mode_index(mode: RuleMode) -> usize {
         RuleMode::Beatoraja => 0,
         RuleMode::Lr2Oraja => 1,
         RuleMode::Dx => 2,
+        RuleMode::Legacy => 3,
     }
 }
 
@@ -177,6 +178,7 @@ mod tests {
         assert_eq!(rule_mode_index(RuleMode::Beatoraja), 0);
         assert_eq!(rule_mode_index(RuleMode::Lr2Oraja), 1);
         assert_eq!(rule_mode_index(RuleMode::Dx), 2);
+        assert_eq!(rule_mode_index(RuleMode::Legacy), 3);
         assert_eq!(session_mode_index(SessionMode::Normal), 0);
         assert_eq!(session_mode_index(SessionMode::Practice), 1);
         assert_eq!(session_mode_index(SessionMode::Autoplay), 2);

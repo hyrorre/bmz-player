@@ -139,6 +139,7 @@ pub(super) fn timing_judge_areas(state: &SkinDrawState) -> [TimingJudgeArea; 5] 
     let rule_mode = match state.rule_mode_index {
         1 => RuleMode::Lr2Oraja,
         2 => RuleMode::Dx,
+        3 => RuleMode::Legacy,
         _ => return beatoraja_timing_judge_areas(state),
     };
     let base = judge_windows_for_keymode_and_rule_mode(state.key_mode, rule_mode).note;
