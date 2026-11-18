@@ -648,13 +648,18 @@ impl WinitApp {
         }
         options.score_save_disabled |=
             options.key_mode_conversion.score_persistence_disabled(options.seven_to_nine_rule_mode);
-        if options.key_mode_conversion == KeyModeConversionConfig::SevenToSix {
+        if matches!(
+            options.key_mode_conversion,
+            KeyModeConversionConfig::SevenToSix | KeyModeConversionConfig::SevenToEight
+        ) {
             options.arrange =
                 crate::screens::play_session::normalize_arrange_for_seven_to_six(options.arrange);
         }
         if matches!(
             options.key_mode_conversion,
-            KeyModeConversionConfig::SevenToNine | KeyModeConversionConfig::SevenToSix
+            KeyModeConversionConfig::SevenToNine
+                | KeyModeConversionConfig::SevenToSix
+                | KeyModeConversionConfig::SevenToEight
         ) {
             options.arrange_2p = ArrangeOption::Normal;
         }

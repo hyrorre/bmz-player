@@ -222,6 +222,7 @@ E1 hold＝通常、E2 hold＝アシスト、E1+E2 hold＝詳細の3パネル方�
 - 7K/14Kのキーボード操作で、7Kと14Kの2P側に同じキーを割り当てた場合は、7K側を優先します。
 - 選曲入力が7K/14Kの場合、4K / 5K / 6K / 7K / 8K / 9KのSPでは、左右どちらのKEY1 / KEY2でも自分の配置を変更します。
   7K→6K / 7K→9K変換もSPとして扱います。
+  試験的な7K→8K変換（`SevenToEight`）もSPとして扱います。
   10K / 14K、SP-TO-DP（5K→10K / 7K→14K）、D-BATTLE / BATTLE ASでは左右それぞれの配置を変更します。
   SPのG-BATTLE / AUTOPLAY BATTLEでは、右側からも自分の配置を変更します。
   ALLフィルターでも選択譜面と適用される変換・BATTLE設定で判定します。

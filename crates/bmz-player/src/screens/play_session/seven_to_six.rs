@@ -6,13 +6,13 @@ const DESTINATION_LANES: [Lane; 6] =
     [Lane::Key1, Lane::Key2, Lane::Key3, Lane::Key4, Lane::Key5, Lane::Key6];
 
 #[derive(Debug)]
-struct MovableUnit {
-    notes: Vec<NoteEvent>,
-    long_note: Option<LongNotePair>,
+pub(super) struct MovableUnit {
+    pub(super) notes: Vec<NoteEvent>,
+    pub(super) long_note: Option<LongNotePair>,
 }
 
 impl MovableUnit {
-    fn start_time(&self) -> TimeUs {
+    pub(super) fn start_time(&self) -> TimeUs {
         self.long_note.as_ref().map_or(self.notes[0].time, |pair| pair.start_time)
     }
 
@@ -229,7 +229,7 @@ fn best_assignments(
     best
 }
 
-fn can_place(
+pub(super) fn can_place(
     unit: &MovableUnit,
     lane: Lane,
     notes: &[Vec<NoteEvent>; LANE_COUNT],
@@ -262,11 +262,11 @@ fn can_place(
     true
 }
 
-fn jack_relevant(note: &NoteEvent) -> bool {
+pub(super) fn jack_relevant(note: &NoteEvent) -> bool {
     !matches!(note.kind, NoteKind::Invisible | NoteKind::Mine)
 }
 
-fn push_note_sounds_as_bgm(bgm_events: &mut Vec<SoundEvent>, note: &NoteEvent) {
+pub(super) fn push_note_sounds_as_bgm(bgm_events: &mut Vec<SoundEvent>, note: &NoteEvent) {
     bgm_events.extend(note.sounds().map(|sound| SoundEvent {
         tick: note.tick,
         time: note.time,

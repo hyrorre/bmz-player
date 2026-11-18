@@ -631,7 +631,7 @@ LR2の2人対戦BATTLE（値1）は選べません。
 | OFF (0) | 上記以外 | — |
 
 どの値を選んでも、他の値に当たる設定は解除します（G-BATTLE / AUTOPLAY BATTLEはNORMAL、BATTLE系のDP OPTIONはOFF、SP TO DPはOFF）。
-PRACTICE・AUTOPLAY・FLIP・7K TO 9K / 6KはLR2に無い値のため、置き換える場合を除いて維持します。
+PRACTICE・AUTOPLAY・FLIP・7K TO 9K / 6K / 8KはLR2に無い値のため、置き換える場合を除いて維持します。
 優先順はプレイ開始時の扱い（バトルがKEY CONVERSIONより優先）と同じです。譜面のキー数で使えない値は、これまでどおり開始時に無効化します。
 D-BATTLE中はFLIPがOFFとして表示されます（button 54 / text 70）。option 10 / 12はDPのキーフィルターに加え、D-BATTLE / SP-TO-DPでも成立します。
 

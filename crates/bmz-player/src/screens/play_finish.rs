@@ -288,9 +288,9 @@ impl FinishSessionSnapshot {
                 KeyMode::K14 => KeyMode::K7,
                 mode => mode,
             },
-            KeyModeConversionConfig::SevenToNine | KeyModeConversionConfig::SevenToSix => {
-                KeyMode::K7
-            }
+            KeyModeConversionConfig::SevenToNine
+            | KeyModeConversionConfig::SevenToSix
+            | KeyModeConversionConfig::SevenToEight => KeyMode::K7,
             KeyModeConversionConfig::Off
                 if matches!(
                     applied_arrange.double_option,

@@ -144,7 +144,7 @@ BATTLE専用ランキングを持たないためclient側で除外します。BM
 
 H-RANDOM / ALL-SCRの鍵盤は、同じレーンの直前ノーツから閾値以内の間隔にならないよう配置します。
 閾値はbeatorajaの既定`hranThresholdBPM = 120`を`ceil(15000 / BPM)`で換算した125msです。
-境界と等しい間隔も避けます。7K→6K変換のスクラッチ・KEY4の移動先と、
+境界と等しい間隔も避けます。7K→6K変換のスクラッチ・KEY4の移動先、7K→8K変換のスクラッチの移動先と、
 7K→9K変換のスクラッチ振り分けも同じ閾値を使います。
 
 新しいプレイは閾値をreplayへ記録します。閾値の記録が無い過去のreplayでは、
@@ -172,8 +172,8 @@ beatorajaの入力時刻は先頭ノーツを1秒まで繰り下げる余白を�
 
 ## Key mode 変換
 
-BMZは`SpToDp`と`SevenToSix`を`score_save_disabled`とし、ランプ・回数を含めて
-何も保存しません。`SevenToNine`は`seven_to_nine_rule_mode`で規則を選びます。
+BMZは`SpToDp`、`SevenToSix`、試験的な`SevenToEight`を`score_save_disabled`とし、
+ランプ・回数を含めて何も保存しません。`SevenToNine`は`seven_to_nine_rule_mode`で規則を選びます。
 
 - `7K`（既定）: 表示と入力は9Kへ変換するが、判定窓・ゲージ・スコアidentityは元の
   7Kを使います。通常7Kとしてランプ・スコア・replayを保存し、IR送信候補にできます。
@@ -181,7 +181,7 @@ BMZは`SpToDp`と`SevenToSix`を`score_save_disabled`とし、ランプ・回数
 - `9K`: 9Kの判定窓・ゲージを使い、ランプ・回数・スコア・replay・IRをすべて
   保存しません。Light Assistのclear-only保存にはしません。
 
-replay再生時は、replayを保存しない`SpToDp`、`SevenToSix`、9K規則の`SevenToNine`を
+replay再生時は、replayを保存しない`SpToDp`、`SevenToSix`、`SevenToEight`、9K規則の`SevenToNine`を
 無効化します。7K規則の`SevenToNine`だけは変換を維持し、通常7K形式で保存された入力を
 現在の7K→9K設定へ投影します。
 

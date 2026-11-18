@@ -518,6 +518,8 @@ mod arrange_pipeline;
 mod arrange_rng;
 mod build;
 mod preload;
+#[path = "play_session/seven_to_eight.rs"]
+mod seven_to_eight;
 #[path = "play_session/seven_to_nine.rs"]
 mod seven_to_nine;
 #[path = "play_session/seven_to_six.rs"]
@@ -546,6 +548,7 @@ pub use preload::{
     preload_play_session_reloading_audio_with_progress, scored_chart_metrics_for_chart,
     scored_chart_metrics_from_prepared, scored_note_count_for_chart,
 };
+pub use seven_to_eight::apply_seven_to_eight;
 pub use seven_to_nine::{apply_seven_to_nine, seven_to_nine_replay_lane_projection};
 pub use seven_to_six::{apply_seven_to_six, normalize_arrange_for_seven_to_six};
 pub use sp_to_dp::apply_sp_to_dp;

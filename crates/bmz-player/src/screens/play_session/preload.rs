@@ -1016,6 +1016,7 @@ fn transform_chart_for_play(
         KeyModeConversionConfig::Off
     };
     let seven_to_six = key_mode_conversion == KeyModeConversionConfig::SevenToSix;
+    let seven_to_eight = key_mode_conversion == KeyModeConversionConfig::SevenToEight;
     let seven_to_nine = key_mode_conversion == KeyModeConversionConfig::SevenToNine;
     let sp_to_dp = key_mode_conversion == KeyModeConversionConfig::SpToDp;
     // SessionMode のbattle、または明示したbattle targetは表示用に2P側を作るが、
@@ -1048,7 +1049,7 @@ fn transform_chart_for_play(
         options.assist,
         options.arrange_seed.unwrap_or(0),
     );
-    let arrange = if seven_to_six {
+    let arrange = if seven_to_six || seven_to_eight {
         normalize_arrange_for_seven_to_six(options.arrange)
     } else {
         options.arrange
@@ -1060,11 +1061,18 @@ fn transform_chart_for_play(
         options.random_trainer_seed,
         options.arrange_pattern.as_deref(),
     )
-    .or_else(|| seven_to_six.then(generate_arrange_seed));
+    .or_else(|| (seven_to_six || seven_to_eight).then(generate_arrange_seed));
     if seven_to_six {
         apply_seven_to_six(
             &mut chart,
             arrange_seed.expect("7K to 6K seed"),
+            options.legacy_arrange_seed,
+            options.h_random_threshold_ms.unwrap_or(DEFAULT_H_RANDOM_THRESHOLD_MS),
+        );
+    } else if seven_to_eight {
+        apply_seven_to_eight(
+            &mut chart,
+            arrange_seed.expect("7K to 8K seed"),
             options.legacy_arrange_seed,
             options.h_random_threshold_ms.unwrap_or(DEFAULT_H_RANDOM_THRESHOLD_MS),
         );
@@ -1090,7 +1098,9 @@ fn transform_chart_for_play(
         && options.battle_opponent.is_none();
     let second_arrange = if matches!(
         key_mode_conversion,
-        KeyModeConversionConfig::SevenToNine | KeyModeConversionConfig::SevenToSix
+        KeyModeConversionConfig::SevenToNine
+            | KeyModeConversionConfig::SevenToSix
+            | KeyModeConversionConfig::SevenToEight
     ) {
         ArrangeOption::Normal
     } else {
