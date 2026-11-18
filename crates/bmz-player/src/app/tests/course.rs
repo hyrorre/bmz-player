@@ -262,7 +262,7 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
         20_000, 60_000, 150_000, 200_000, 500_000, 150_000, 0,
     );
     let last_window = bmz_gameplay::judge::model::JudgeWindow::symmetric(
-        25_000, 50_000, 87_500, 100_000, 500_000, 112_500, 0,
+        25_000, 50_000, 116_667, 183_333, 529_167, 183_333, 0,
     );
     course.entry_summaries[0].note_judge_window = Some(first_window);
     course.entry_summaries[1].note_judge_window = Some(last_window);

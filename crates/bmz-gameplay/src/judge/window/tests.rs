@@ -11,6 +11,8 @@ fn playback_rate_scales_chart_windows_to_keep_wall_time_fixed() {
         scratch: base_window(),
         long_note_end: base_window(),
         long_scratch_end: base_window(),
+        long_note_end_fast: Some(base_window()),
+        long_scratch_end_fast: None,
         long_note_release_margin_us: 200_000,
         long_scratch_release_margin_us: 150_000,
     };
@@ -20,6 +22,8 @@ fn playback_rate_scales_chart_windows_to_keep_wall_time_fixed() {
 
     assert_eq!(slow.note.pgreat_us, 8_000);
     assert_eq!(slow.note.empty_poor_fast_us, 250_000);
+    assert_eq!(slow.long_note_end_fast.map(|window| window.good_us), Some(40_000));
+    assert_eq!(slow.long_scratch_end_fast, None);
     assert_eq!(slow.long_note_release_margin_us, 100_000);
     assert_eq!(fast.note.pgreat_us, 32_000);
     assert_eq!(fast.note.empty_poor_fast_us, 1_000_000);
@@ -319,6 +323,8 @@ fn dx_mode_uses_iidx_long_note_end_window() {
     assert_eq!(windows.long_note_end.bad_fast_us, 200_000);
     assert_eq!(windows.long_note_end.empty_poor_fast_us, 0);
     assert_eq!(windows.long_scratch_end, windows.long_note_end);
+    assert_eq!(windows.long_note_end_fast, None);
+    assert_eq!(windows.long_scratch_end_fast, None);
     assert_eq!(windows.long_note_release_margin_us, 0);
 }
 
@@ -328,19 +334,41 @@ fn dx_9key_uses_fixed_pop_windows_and_release_margin() {
 
     assert_eq!(windows.note.pgreat_us, 25_000);
     assert_eq!(windows.note.great_us, 50_000);
-    assert_eq!(windows.note.good_us, 87_500);
-    assert_eq!(windows.note.bad_fast_us, 100_000);
-    assert_eq!(windows.note.bad_slow_us, 100_000);
-    assert_eq!(windows.note.empty_poor_fast_us, 500_000);
-    assert_eq!(windows.note.empty_poor_slow_us, 112_500);
-    assert_eq!(windows.long_note_end.pgreat_us, 120_000);
-    assert_eq!(windows.long_note_end.great_us, 150_000);
-    assert_eq!(windows.long_note_end.good_us, 217_000);
-    assert_eq!(windows.long_note_end.bad_fast_us, 283_000);
-    assert_eq!(windows.long_note_release_margin_us, 200_000);
+    assert_eq!(windows.note.good_us, 116_667);
+    assert_eq!(windows.note.bad_fast_us, 183_333);
+    assert_eq!(windows.note.bad_slow_us, 183_333);
+    assert_eq!(windows.note.empty_poor_fast_us, 529_167);
+    assert_eq!(windows.note.empty_poor_slow_us, 183_333);
+    // LN 終端: LATE 側は通常幅、EARLY 側だけ広い。
+    assert_eq!(windows.long_note_end.pgreat_us, 116_667);
+    assert_eq!(windows.long_note_end.great_us, 116_667);
+    assert_eq!(windows.long_note_end.good_us, 116_667);
+    assert_eq!(windows.long_note_end.bad_slow_us, 183_333);
+    let fast = windows.long_note_end_fast.expect("POP LN end has an EARLY-side window");
+    assert_eq!(fast.pgreat_us, 233_333);
+    assert_eq!(fast.great_us, 233_333);
+    assert_eq!(fast.good_us, 233_333);
+    assert_eq!(fast.bad_fast_us, 366_667);
+    assert_eq!(windows.long_note_end.bad_fast_us, fast.bad_fast_us);
+    assert_eq!(windows.long_scratch_end_fast, windows.long_note_end_fast);
+    assert_eq!(windows.long_note_release_margin_us, 116_667);
 
-    let scaled = judge_windows_for_rule_mode_and_keymode(windows, 25, RuleMode::Dx, KeyMode::K9);
-    assert_eq!(scaled, windows);
+    // 参照側 JudgePropertyPopLongNoteEndTest と同じく #RANK によらず固定。
+    for percent in [25, 50, 75, 125] {
+        let scaled =
+            judge_windows_for_rule_mode_and_keymode(windows, percent, RuleMode::Dx, KeyMode::K9);
+        assert_eq!(scaled, windows);
+    }
+}
+
+#[test]
+fn dx_5key_keeps_iidx_windows() {
+    // beatoraja 5K (K5) は POP 判定の対象外。PMS 5K は取り込み時に K9 になる。
+    assert_eq!(
+        judge_windows_for_keymode_and_rule_mode(KeyMode::K5, RuleMode::Dx),
+        dx_judge_windows()
+    );
+    assert_eq!(note_judge_window_for_rule_mode(KeyMode::K5, RuleMode::Dx), dx_note_judge_window());
 }
 
 #[test]

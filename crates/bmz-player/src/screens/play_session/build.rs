@@ -754,6 +754,12 @@ pub(super) fn apply_judge_constraint_to_windows(
         scratch: apply_judge_constraint_to_window(windows.scratch, constraint),
         long_note_end: apply_judge_constraint_to_window(windows.long_note_end, constraint),
         long_scratch_end: apply_judge_constraint_to_window(windows.long_scratch_end, constraint),
+        long_note_end_fast: windows
+            .long_note_end_fast
+            .map(|window| apply_judge_constraint_to_window(window, constraint)),
+        long_scratch_end_fast: windows
+            .long_scratch_end_fast
+            .map(|window| apply_judge_constraint_to_window(window, constraint)),
         long_note_release_margin_us: windows.long_note_release_margin_us,
         long_scratch_release_margin_us: windows.long_scratch_release_margin_us,
     }

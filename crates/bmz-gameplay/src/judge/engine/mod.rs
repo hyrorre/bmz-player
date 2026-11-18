@@ -23,8 +23,14 @@ fn press_window(window_set: JudgeWindows, scratch: bool) -> JudgeWindow {
     if scratch { window_set.scratch } else { window_set.note }
 }
 
-fn long_end_window(window_set: JudgeWindows, scratch: bool) -> JudgeWindow {
-    if scratch { window_set.long_scratch_end } else { window_set.long_note_end }
+/// LN 終端の離し時刻差 `delta_us`（負が早離し）に使う窓。
+fn long_end_window(window_set: JudgeWindows, scratch: bool, delta_us: i64) -> JudgeWindow {
+    let (window, fast) = if scratch {
+        (window_set.long_scratch_end, window_set.long_scratch_end_fast)
+    } else {
+        (window_set.long_note_end, window_set.long_note_end_fast)
+    };
+    if delta_us < 0 { fast.unwrap_or(window) } else { window }
 }
 
 fn long_release_margin_us(window_set: JudgeWindows, scratch: bool) -> i64 {
@@ -493,8 +499,11 @@ impl JudgeEngine {
                 && input.scratch_direction != active.scratch_direction
             {
                 let delta = input.time.0 - active.end.end_time.0;
-                let windows =
-                    long_end_window(self.window_set, self.scratch_lane_mask[input.lane.index()]);
+                let windows = long_end_window(
+                    self.window_set,
+                    self.scratch_lane_mask[input.lane.index()],
+                    delta,
+                );
                 let judge = classify_normal_delta(delta, windows).unwrap_or(Judge::Poor);
                 self.lanes[input.lane.index()].active_long = None;
                 self.judged_notes.insert(active.end.end_note_id, judge);
@@ -668,7 +677,7 @@ impl JudgeEngine {
             // suppression so the customary reverse edge cannot BAD a following scratch note.
             let delta = input.time.0 - active.end.end_time.0;
             let windows =
-                long_end_window(self.window_set, self.scratch_lane_mask[input.lane.index()]);
+                long_end_window(self.window_set, self.scratch_lane_mask[input.lane.index()], delta);
             if let Some(judge) = classify_normal_delta(delta, windows) {
                 let reverse_direction = match start_direction {
                     ScratchDirection::Up => ScratchDirection::Down,
@@ -705,6 +714,7 @@ impl JudgeEngine {
                     let windows = long_end_window(
                         self.window_set,
                         self.scratch_lane_mask[input.lane.index()],
+                        end_delta.0,
                     );
                     let end_judge =
                         classify_normal_delta(end_delta.0, windows).unwrap_or(Judge::Poor);
@@ -725,8 +735,11 @@ impl JudgeEngine {
             }
             LongNoteMode::Cn | LongNoteMode::Hcn => {
                 let delta = input.time.0 - active.end.end_time.0;
-                let windows =
-                    long_end_window(self.window_set, self.scratch_lane_mask[input.lane.index()]);
+                let windows = long_end_window(
+                    self.window_set,
+                    self.scratch_lane_mask[input.lane.index()],
+                    delta,
+                );
                 let judge = classify_normal_delta(delta, windows).unwrap_or(Judge::Poor);
                 if release_margin_us > 0 && delta < 0 && matches!(judge, Judge::Bad | Judge::Poor) {
                     active.pending_release = Some(PendingLongRelease {
