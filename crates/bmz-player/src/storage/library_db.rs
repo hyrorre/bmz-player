@@ -32,7 +32,7 @@ mod query_helpers;
 mod scope;
 mod sources;
 
-pub(super) use encodings::check_encoding_revision;
+pub(super) use encodings::{check_encoding_revision, encoding_revision_matches};
 pub(crate) use scope::configured_song_roots;
 pub(crate) use scope::{RootScope, scope_key};
 pub use sources::ChartSource;
