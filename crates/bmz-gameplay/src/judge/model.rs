@@ -80,6 +80,15 @@ pub struct JudgeWindows {
     pub scratch: JudgeWindow,
     pub long_note_end: JudgeWindow,
     pub long_scratch_end: JudgeWindow,
+    /// LN 終端を早離し (FAST) したときだけ使う窓。`None` なら `long_note_end` を両側に使う。
+    ///
+    /// PG/GR/GD 幅が FAST/SLOW で異なるルール用。FAST 側の値だけが判定に使われるため、
+    /// SLOW 側のフィールドも FAST 側と同じ値にしておく。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_note_end_fast: Option<JudgeWindow>,
+    /// スクラッチ LN 終端を早離し (FAST) したときだけ使う窓。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_scratch_end_fast: Option<JudgeWindow>,
     /// 通常レーンの LN/CN/HCN を早離しした後、押し直しを許す猶予。
     pub long_note_release_margin_us: i64,
     /// スクラッチ LN の早離し後、押し直しを許す猶予。
@@ -93,6 +102,8 @@ impl JudgeWindows {
             scratch: window,
             long_note_end: window,
             long_scratch_end: window,
+            long_note_end_fast: None,
+            long_scratch_end_fast: None,
             long_note_release_margin_us: 0,
             long_scratch_release_margin_us: 0,
         }
@@ -163,6 +174,8 @@ mod tests {
             scratch: window(110, 140, 16),
             long_note_end: window(180, 120, 16),
             long_scratch_end: window(150, 130, 16),
+            long_note_end_fast: None,
+            long_scratch_end_fast: None,
             long_note_release_margin_us: 0,
             long_scratch_release_margin_us: 0,
         };

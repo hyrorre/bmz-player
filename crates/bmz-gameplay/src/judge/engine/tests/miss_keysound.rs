@@ -72,7 +72,7 @@ fn miss_keysound_does_not_repeat_nonvanishing_bad_or_play_invisible_or_mine() {
         JudgeAlgorithm::Combo,
         KeyMode::K9,
     );
-    assert_eq!(engine.process_input(&chart, press_at(TimeUs(900_000))).events[0].judge, Judge::Bad);
+    assert_eq!(engine.process_input(&chart, press_at(TimeUs(850_000))).events[0].judge, Judge::Bad);
     assert!(
         engine.process_misses_with_keysounds(&chart, TimeUs(2_000_000), true).keysounds.is_empty()
     );

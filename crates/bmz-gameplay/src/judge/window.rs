@@ -125,6 +125,12 @@ pub fn judge_windows_for_rank(base: JudgeWindows, percent: i32) -> JudgeWindows 
         scratch: judge_window_for_rank(base.scratch, percent),
         long_note_end: judge_window_for_rank(base.long_note_end, percent),
         long_scratch_end: judge_window_for_rank(base.long_scratch_end, percent),
+        long_note_end_fast: base
+            .long_note_end_fast
+            .map(|window| judge_window_for_rank(window, percent)),
+        long_scratch_end_fast: base
+            .long_scratch_end_fast
+            .map(|window| judge_window_for_rank(window, percent)),
         long_note_release_margin_us: base.long_note_release_margin_us,
         long_scratch_release_margin_us: base.long_scratch_release_margin_us,
     }
@@ -145,6 +151,12 @@ pub fn scale_judge_windows_for_playback_rate(
         scratch: scale_judge_window_for_playback_rate(windows.scratch, rate),
         long_note_end: scale_judge_window_for_playback_rate(windows.long_note_end, rate),
         long_scratch_end: scale_judge_window_for_playback_rate(windows.long_scratch_end, rate),
+        long_note_end_fast: windows
+            .long_note_end_fast
+            .map(|window| scale_judge_window_for_playback_rate(window, rate)),
+        long_scratch_end_fast: windows
+            .long_scratch_end_fast
+            .map(|window| scale_judge_window_for_playback_rate(window, rate)),
         long_note_release_margin_us: scale_judge_time(windows.long_note_release_margin_us, rate),
         long_scratch_release_margin_us: scale_judge_time(
             windows.long_scratch_release_margin_us,
@@ -220,6 +232,12 @@ pub fn judge_windows_for_rule_mode_and_keymode(
                 percent,
                 key_mode,
             ),
+            long_note_end_fast: base.long_note_end_fast.map(|window| {
+                beatoraja_judge_window_for_rank_and_keymode(window, percent, key_mode)
+            }),
+            long_scratch_end_fast: base.long_scratch_end_fast.map(|window| {
+                beatoraja_judge_window_for_rank_and_keymode(window, percent, key_mode)
+            }),
             long_note_release_margin_us: base.long_note_release_margin_us,
             long_scratch_release_margin_us: base.long_scratch_release_margin_us,
         },
@@ -228,6 +246,12 @@ pub fn judge_windows_for_rule_mode_and_keymode(
             scratch: lr2oraja_judge_window_for_rank(base.scratch, percent),
             long_note_end: lr2oraja_judge_window_for_rank(base.long_note_end, percent),
             long_scratch_end: lr2oraja_judge_window_for_rank(base.long_scratch_end, percent),
+            long_note_end_fast: base
+                .long_note_end_fast
+                .map(|window| lr2oraja_judge_window_for_rank(window, percent)),
+            long_scratch_end_fast: base
+                .long_scratch_end_fast
+                .map(|window| lr2oraja_judge_window_for_rank(window, percent)),
             long_note_release_margin_us: base.long_note_release_margin_us,
             long_scratch_release_margin_us: base.long_scratch_release_margin_us,
         },
@@ -258,6 +282,7 @@ pub const fn note_judge_window_for_rule_mode(
     match rule_mode {
         RuleMode::Beatoraja => beatoraja_note_judge_window_for_keymode(key_mode),
         RuleMode::Lr2Oraja => lr2oraja_note_judge_window(),
+        // PMS 5K/9K はどちらも K9 として取り込まれる。beatoraja 5K (K5) は IIDX 判定。
         RuleMode::Dx => match key_mode {
             KeyMode::K9 => dx_pop_note_judge_window(),
             _ => dx_note_judge_window(),
@@ -419,6 +444,8 @@ pub const fn beatoraja_judge_windows_for_keymode(key_mode: KeyMode) -> JudgeWind
         scratch: beatoraja_scratch_judge_window_for_keymode(key_mode),
         long_note_end: beatoraja_long_note_end_judge_window_for_keymode(key_mode),
         long_scratch_end: beatoraja_long_scratch_end_judge_window_for_keymode(key_mode),
+        long_note_end_fast: None,
+        long_scratch_end_fast: None,
         long_note_release_margin_us: match key_mode {
             KeyMode::K9 => 200_000,
             _ => 0,
@@ -534,6 +561,8 @@ pub const fn lr2oraja_judge_windows() -> JudgeWindows {
         scratch: lr2oraja_note_judge_window(),
         long_note_end: lr2oraja_long_note_end_judge_window(),
         long_scratch_end: lr2oraja_long_note_end_judge_window(),
+        long_note_end_fast: None,
+        long_scratch_end_fast: None,
         long_note_release_margin_us: 0,
         long_scratch_release_margin_us: 0,
     }
@@ -575,38 +604,70 @@ pub const fn dx_judge_windows() -> JudgeWindows {
         scratch: dx_note_judge_window(),
         long_note_end: dx_long_note_end_judge_window(),
         long_scratch_end: dx_long_note_end_judge_window(),
+        long_note_end_fast: None,
+        long_scratch_end_fast: None,
         long_note_release_margin_us: 0,
         long_scratch_release_margin_us: 0,
     }
 }
 
-/// LR2oraja Endless Dream `JudgeProperty.POP` used by DX MODE 9KEY.
+/// LR2oraja Endless Dream (rian) `JudgeProperty.POP` の NOTE 窓。DX MODE の PMS 譜面で使う。
+///
+/// 参照側では POPN_5K / POPN_9K が対象で、BMZ は PMS 5K も `KeyMode::K9` として
+/// 取り込むため K9 で選ぶ。参照値 (PG, GR, GD, BD, MS の {LATE, EARLY}) は
+/// {-25000,25000}, {-50000,50000}, {-116667,116667}, {-183333,183333}, {-183333,529167}。
+/// MS の EARLY/LATE を空POORの FAST/SLOW 幅に対応付ける。
 pub const fn dx_pop_note_judge_window() -> JudgeWindow {
     JudgeWindow {
         pgreat_us: 25_000,
         great_us: 50_000,
-        good_us: 87_500,
-        bad_fast_us: 100_000,
-        bad_slow_us: 100_000,
-        empty_poor_fast_us: 500_000,
-        empty_poor_slow_us: 112_500,
+        good_us: 116_667,
+        bad_fast_us: 183_333,
+        bad_slow_us: 183_333,
+        empty_poor_fast_us: 529_167,
+        empty_poor_slow_us: 183_333,
         mine_hit_us: 16_000,
     }
 }
 
+/// `JudgeProperty.POP` の LN 終端窓のうち、終端以降に離した (SLOW / LATE) 側。
+///
+/// 参照値は PG/GR/GD が {-116667, 233333}、BD が {-183333, 366667} で、EARLY 側だけが広い。
+/// EARLY 側は [`dx_pop_long_note_end_fast_judge_window`] で表す。`bad_fast_us` は
+/// SLOW 側だけを見る利用者向けに EARLY 側の BD 幅と揃える。#RANK による拡縮はしない。
 pub const fn dx_pop_long_note_end_judge_window() -> JudgeWindow {
     JudgeWindow {
-        pgreat_us: 120_000,
-        great_us: 150_000,
-        good_us: 217_000,
-        bad_fast_us: 283_000,
-        bad_slow_us: 283_000,
+        pgreat_us: 116_667,
+        great_us: 116_667,
+        good_us: 116_667,
+        bad_fast_us: 366_667,
+        bad_slow_us: 183_333,
         empty_poor_fast_us: 0,
         empty_poor_slow_us: 0,
         mine_hit_us: 16_000,
     }
 }
 
+/// `JudgeProperty.POP` の LN 終端窓のうち、終端より前に離した (FAST / EARLY) 側。
+///
+/// 参照側の注記どおり、PG/GR/GD は判定幅 116667 + 離し猶予 116667 = 233333 まで、
+/// BD は 366667 まで。FAST 側だけで使うため SLOW 側フィールドも同じ値にする。
+/// 離し猶予 (`long_note_release_margin_us`) は参照側と同じく BD 以下の早離しの
+/// 押し直し猶予として別に効く。
+pub const fn dx_pop_long_note_end_fast_judge_window() -> JudgeWindow {
+    JudgeWindow {
+        pgreat_us: 233_333,
+        great_us: 233_333,
+        good_us: 233_333,
+        bad_fast_us: 366_667,
+        bad_slow_us: 366_667,
+        empty_poor_fast_us: 0,
+        empty_poor_slow_us: 0,
+        mine_hit_us: 16_000,
+    }
+}
+
+/// `JudgeProperty.POP` 一式。`longnoteMargin` は 116667。
 pub const fn dx_pop_judge_windows() -> JudgeWindows {
     JudgeWindows {
         note: dx_pop_note_judge_window(),
@@ -614,7 +675,9 @@ pub const fn dx_pop_judge_windows() -> JudgeWindows {
         scratch: dx_pop_note_judge_window(),
         long_note_end: dx_pop_long_note_end_judge_window(),
         long_scratch_end: dx_pop_long_note_end_judge_window(),
-        long_note_release_margin_us: 200_000,
+        long_note_end_fast: Some(dx_pop_long_note_end_fast_judge_window()),
+        long_scratch_end_fast: Some(dx_pop_long_note_end_fast_judge_window()),
+        long_note_release_margin_us: 116_667,
         long_scratch_release_margin_us: 0,
     }
 }

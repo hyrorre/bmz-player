@@ -403,7 +403,7 @@ fn timing_judge_bands_use_effective_window_instead_of_rank_and_rule() {
         bad_fast_us: 100_000,
         bad_slow_us: 125_000,
         ..bmz_gameplay::judge::model::JudgeWindow::symmetric(
-            25_000, 50_000, 87_500, 100_000, 500_000, 112_500, 0,
+            25_000, 50_000, 116_667, 183_333, 529_167, 183_333, 0,
         )
     };
     let state = SkinDrawState {
@@ -434,7 +434,7 @@ fn timing_judge_bands_use_effective_window_instead_of_rank_and_rule() {
 
 #[test]
 fn timing_judge_areas_without_session_follow_rule_mode() {
-    for (key_mode, pgreat, good) in [(KeyMode::K7, 16.666, 116.666), (KeyMode::K9, 25.0, 87.5)] {
+    for (key_mode, pgreat, good) in [(KeyMode::K7, 16.666, 116.666), (KeyMode::K9, 25.0, 116.667)] {
         for rank in [None, Some(0), Some(4), Some(150)] {
             let areas = timing_judge_areas(&SkinDrawState {
                 key_mode,
