@@ -41,8 +41,14 @@ pub fn prepare(
     run_migrations(library.conn_mut(), LIBRARY_MIGRATIONS)?;
     let seed = options.seed.unwrap_or(super::random_id()?.as_u128() as u64);
     let chart_path = crate::chart_asset::canonical_chart_path(&options.chart)?;
-    let imported =
-        crate::storage::import::import_chart_file(&mut library, &chart_path, None, Some(seed), 0)?;
+    let imported = crate::storage::import::import_chart_file_with_encoding_source(
+        &mut library,
+        &chart_path,
+        None,
+        Some(seed),
+        0,
+        Some(&paths.library_db),
+    )?;
     profile.activate_play_mode(imported.chart.metadata.key_mode);
     profile.set_cli_play(options.play_overrides.clone());
     let mut play_options = crate::app::offline_play_options(&profile);

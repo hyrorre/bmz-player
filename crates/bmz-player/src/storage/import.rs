@@ -23,6 +23,17 @@ pub fn import_chart_file(
     random_seed: Option<u64>,
     scanned_at: i64,
 ) -> Result<ImportedChart> {
+    import_chart_file_with_encoding_source(db, path, root_id, random_seed, scanned_at, None)
+}
+
+pub(crate) fn import_chart_file_with_encoding_source(
+    db: &mut LibraryDatabase,
+    path: &Path,
+    root_id: Option<i64>,
+    random_seed: Option<u64>,
+    scanned_at: i64,
+    encoding_source: Option<&Path>,
+) -> Result<ImportedChart> {
     let locator = crate::chart_source::ChartLocator::parse(path)?;
     let stable_path = locator.to_path_buf();
     let path = stable_path.as_path();
@@ -48,7 +59,11 @@ pub fn import_chart_file(
     } else {
         (locator.read_bytes()?, None, metadata.len())
     };
-    let (revision, encoding) = db.chart_encoding(&Sha256::digest(&bytes).into())?;
+    let sha256 = Sha256::digest(&bytes).into();
+    if let Some(source) = encoding_source {
+        db.sync_chart_encoding_from(source, &sha256)?;
+    }
+    let (revision, encoding) = db.chart_encoding(&sha256)?;
     let mut import = import_chart_bytes_with_encoding(
         path,
         &bytes,

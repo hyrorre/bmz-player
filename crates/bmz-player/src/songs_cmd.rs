@@ -53,6 +53,7 @@ fn chart_encoding(app_paths: &AppPaths, chart: &str, label: Option<&str>) -> Res
         let bytes = locator.read_bytes()?;
         (Sha256::digest(&bytes).into(), Some(bytes))
     };
+    app_paths.ensure_dirs()?;
     migrate_library_db(&app_paths.library_db)?;
     let mut db = LibraryDatabase::open(&app_paths.library_db)?;
     let encoding = if let Some(label) = label {

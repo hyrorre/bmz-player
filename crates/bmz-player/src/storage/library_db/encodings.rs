@@ -9,6 +9,24 @@ fn parse_label(label: &str) -> Result<BmsTextEncoding> {
 }
 
 impl LibraryDatabase {
+    pub(in crate::storage) fn sync_chart_encoding_from(
+        &mut self,
+        path: &Path,
+        sha256: &[u8; 32],
+    ) -> Result<()> {
+        let mut encoding = None;
+        if path.try_exists()? {
+            let source = Self::open_read_only(path)?;
+            if crate::storage::migration::table_exists(source.conn(), "chart_encoding_revision")? {
+                encoding = source.chart_encoding(sha256)?.1;
+            }
+        }
+        if self.chart_encoding(sha256)?.1 != encoding {
+            self.set_chart_encoding(sha256, encoding)?;
+        }
+        Ok(())
+    }
+
     pub fn chart_encoding(&self, sha256: &[u8; 32]) -> Result<(i64, Option<BmsTextEncoding>)> {
         let (revision, label): (i64, Option<String>) = self
             .conn

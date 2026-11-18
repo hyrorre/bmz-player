@@ -665,12 +665,13 @@ fn prepare_boot_chart_options(
     // An explicit PATH means the current file, even when a previous scan indexed
     // different contents or the containing song root has since been disabled.
     // Import as a standalone source, just like a previously unregistered PATH.
-    let chart_id = crate::storage::import::import_chart_file(
+    let chart_id = crate::storage::import::import_chart_file_with_encoding_source(
         &mut boot.library_db,
         &canonical,
         None,
         None,
         now_unix_seconds(),
+        boot.chart_encoding_source.as_deref(),
     )?
     .chart_id;
     if options.boot_start_time_us.is_none()
