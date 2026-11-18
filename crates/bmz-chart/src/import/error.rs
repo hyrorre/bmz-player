@@ -34,6 +34,7 @@ pub enum ImportError {
 #[derive(Debug, Clone)]
 pub enum ImportWarning {
     EncodingFallback,
+    Ms949Fallback,
     TextReplacementOccurred,
     /// bms-rs から返される [`bms_rs::bms::BmsWarning`] を表示用にラップしたもの。
     /// `code` は安定した分類タグ (e.g. `ParseSyntaxError`, `PlayingTotalUndefined`)、

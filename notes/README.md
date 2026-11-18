@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-19 | [BMS譜面のBOM・UTF-16/32・MS949対応と文字コード拡張計画](2026/2026-11-19-bms-chart-encodings.md) |
 | 2026-11-19 | [選曲画面のESC長押し終了の既定値](2026/2026-11-19-select-exit-hold-default.md) |
 | 2026-11-19 | [Antique Playのロード進捗表示](2026/2026-11-19-antique-loading-progress.md) |
 | 2026-11-19 | [高密度オートプレイの判定と中断](2026/2026-11-19-dense-autoplay-and-escape.md) |
