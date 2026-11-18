@@ -4,11 +4,10 @@ use bmz_core::time::ChartTick;
 use std::collections::{HashMap, HashSet};
 
 const RNG_DOMAIN: i64 = 0x0037_4b38;
-/// λ of the gap switch penalty: switching costs this much per keyboard note in
-/// the block. Experimental; tune it after trying the conversion on charts.
-const GAP_SWITCH_PENALTY_PER_NOTE: f64 = 1.0;
-/// Block length from the first note when the chart has no usable bar lines.
-const FALLBACK_BLOCK_US: i64 = 2_000_000;
+const MEASURES_PER_BLOCK: usize = 4;
+const FALLBACK_BLOCK_US: i64 = 8_000_000;
+const HISTORY_DECAY: f64 = 0.75;
+const GAP_DISTANCE_COST: f64 = 0.25;
 /// Gap used while no block has decided one yet (the lower of the two centre lanes).
 const INITIAL_GAP: usize = 4;
 const SOURCE_KEYS: [Lane; 7] =
@@ -23,25 +22,16 @@ const DESTINATION_LANES: [Lane; 8] = [
     Lane::Key7,
     Lane::Key8,
 ];
-/// Load weight of each destination lane in tenths (2.0, 1.4, 1.1, 1.0, ...).
-/// Lanes 1-4 are the left little, ring, middle and index fingers and lanes 5-8
-/// the right index, middle, ring and little fingers; weaker fingers weigh
-/// more. Experimental; tune it after trying the conversion on charts. Integer
-/// tenths keep mirrored gaps (such as 1 and 8) exactly tied.
-const LANE_LOAD_WEIGHTS: [u64; 8] = [20, 14, 11, 10, 10, 11, 14, 20];
-/// Cost of each pair of neighbouring lanes pressed at the same time by one
-/// hand (see `simultaneous_adjacency`). Experimental; tune it after trying the
-/// conversion on charts.
-const SIMULTANEOUS_ADJACENCY_WEIGHT: f64 = 16.0;
+const SIMULTANEOUS_ADJACENCY_WEIGHT: f64 = 0.15;
 /// Last lane number of the left hand (lanes 1-4); lanes 5-8 are the right hand.
 const LEFT_HAND_LAST_LANE: usize = 4;
 
 /// Converts a source 7K chart into eight scratch-less lanes (experimental).
 ///
-/// Each measure (or a fixed window when the chart has no bar lines) leaves one
-/// gap lane empty and spreads the seven keys over the others in order. The
-/// gap only changes between measures and never while a long note continues
-/// from the previous measure. Scratch notes then move to a free lane while
+/// The seven keys keep their order around one gap per four-measure block.
+/// Decaying destination-lane press counts guide the next gap. Long notes and
+/// fast trills or stairs can carry a layout across the boundary. Scratch
+/// notes then move to a free lane while
 /// avoiding press notes at intervals of `jack_threshold_ms` or less, the same
 /// way as 7K to 6K; a scratch that cannot be placed becomes BGM, and invisible
 /// scratch notes are discarded.
@@ -56,7 +46,7 @@ pub fn apply_seven_to_eight(
     }
     let jack_guard_us = u64::from(jack_threshold_ms).saturating_mul(1_000);
     let blocks = BlockIndex::new(chart);
-    let gaps = select_gaps(chart, &blocks);
+    let gaps = select_gaps(chart, &blocks, jack_guard_us);
 
     // Long notes take the gap of the block where they start for both ends.
     let mut long_end_gaps = HashMap::new();
@@ -190,10 +180,8 @@ pub fn apply_seven_to_eight(
 
 /// Splits the chart into gap blocks.
 ///
-/// Notes carry no measure number, so a note belongs to the measure of the last
-/// bar line at or before its tick (block 0 is anything before the first bar
-/// line). Charts with fewer than two distinct bar lines, such as BMSON without
-/// lines, use fixed windows from the first note instead.
+/// Group the source measures from the first real bar line. Charts with fewer
+/// than two distinct source bar lines use fixed windows from the first note.
 enum BlockIndex {
     Bars(Vec<u64>),
     Windows { origin_us: i64 },
@@ -201,7 +189,12 @@ enum BlockIndex {
 
 impl BlockIndex {
     fn new(chart: &PlayableChart) -> Self {
-        let mut ticks = chart.bar_lines.iter().map(|bar| bar.tick.0).collect::<Vec<_>>();
+        let mut ticks = chart
+            .bar_lines
+            .iter()
+            .filter(|bar| bar.time >= chart.metadata.start_note_margin)
+            .map(|bar| bar.tick.0)
+            .collect::<Vec<_>>();
         ticks.sort_unstable();
         ticks.dedup();
         if ticks.len() >= 2 {
@@ -218,7 +211,9 @@ impl BlockIndex {
 
     fn block_at(&self, tick: ChartTick, time: TimeUs) -> usize {
         match self {
-            Self::Bars(ticks) => ticks.partition_point(|bar| *bar <= tick.0),
+            Self::Bars(ticks) => {
+                ticks.partition_point(|bar| *bar <= tick.0).saturating_sub(1) / MEASURES_PER_BLOCK
+            }
             Self::Windows { origin_us } => {
                 (time.0.saturating_sub(*origin_us).max(0) / FALLBACK_BLOCK_US) as usize
             }
@@ -226,8 +221,17 @@ impl BlockIndex {
     }
 }
 
+#[derive(Clone, Default)]
+struct GapBlock {
+    counts: [u32; 7],
+    // Include LN releases in the boundary jack guard, but only count presses as load.
+    time_ranges: [Option<(i64, i64)>; 7],
+    chords: Vec<Vec<usize>>,
+    locked: bool,
+}
+
 /// Chooses the gap lane (1..=8) of every block in order without randomness.
-fn select_gaps(chart: &PlayableChart, blocks: &BlockIndex) -> Vec<usize> {
+fn select_gaps(chart: &PlayableChart, blocks: &BlockIndex, jack_guard_us: u64) -> Vec<usize> {
     let block_count = chart
         .lane_notes
         .iter()
@@ -238,106 +242,138 @@ fn select_gaps(chart: &PlayableChart, blocks: &BlockIndex) -> Vec<usize> {
         )
         .max()
         .unwrap_or(0);
-
-    let mut counts = vec![[0u32; 7]; block_count];
-    let mut timed_keys = vec![Vec::new(); block_count];
-    for (key, lane) in SOURCE_KEYS.iter().enumerate() {
+    let mut stats = vec![GapBlock::default(); block_count];
+    let mut presses = Vec::new();
+    for (index, lane) in SOURCE_KEYS.iter().enumerate() {
         for note in &chart.lane_notes[lane.index()] {
             let block = blocks.block_of(note);
-            if matches!(note.kind, NoteKind::Tap | NoteKind::LongStart | NoteKind::Mine) {
-                counts[block][key] += 1;
-            }
+            let time = note.time.0;
             if matches!(note.kind, NoteKind::Tap | NoteKind::LongStart) {
-                timed_keys[block].push((note.time.0, key + 1));
+                stats[block].counts[index] += 1;
+                presses.push((block, time, index + 1));
+            }
+            if super::seven_to_six::jack_relevant(note) {
+                let range = stats[block].time_ranges[index].get_or_insert((time, time));
+                range.0 = range.0.min(time);
+                range.1 = range.1.max(time);
             }
         }
     }
-    let groups = timed_keys.into_iter().map(simultaneous_groups).collect::<Vec<_>>();
-
-    // A long note started in an earlier block keeps the gap of that block.
-    let mut locked = vec![false; block_count];
+    collect_keyboard_patterns(&mut stats, presses, jack_guard_us);
     for pair in &chart.long_notes {
-        if pair.lane != Lane::Scratch && source_key_number(pair.lane).is_none() {
-            continue;
-        }
-        let start = blocks.block_at(pair.start_tick, pair.start_time);
-        let end = blocks.block_at(pair.end_tick, pair.end_time);
-        for flag in locked.iter_mut().take(end + 1).skip(start + 1) {
-            *flag = true;
+        if pair.lane == Lane::Scratch || source_key_number(pair.lane).is_some() {
+            let start = blocks.block_at(pair.start_tick, pair.start_time);
+            let end = blocks.block_at(pair.end_tick, pair.end_time);
+            for block in stats.iter_mut().take(end + 1).skip(start + 1) {
+                block.locked = true;
+            }
         }
     }
 
     let mut gaps = Vec::with_capacity(block_count);
+    let mut history = [0.0; 8];
+    let mut last_by_lane = [None; 8];
     let mut previous = None;
-    for (block, (counts, groups)) in counts.iter().zip(&groups).enumerate() {
-        let total = counts.iter().sum::<u32>();
-        let gap = match previous {
-            Some(previous) if locked[block] || total == 0 => Some(previous),
-            None if total == 0 => None,
-            _ => Some(best_gap(counts, groups, total, previous)),
-        };
-        previous = gap.or(previous);
-        gaps.push(gap);
+    for block in stats {
+        for load in &mut history {
+            *load *= HISTORY_DECAY;
+        }
+        let total = block.counts.iter().sum::<u32>();
+        if total > 0 && (previous.is_none() || !block.locked) {
+            previous =
+                Some(block.best_gap(&history, &last_by_lane, jack_guard_us, total, previous));
+        }
+        if let Some(gap) = previous {
+            for (index, count) in block.counts.iter().enumerate() {
+                let lane = embed(index + 1, gap) - 1;
+                history[lane] += f64::from(*count);
+                if let Some((_, last)) = block.time_ranges[index] {
+                    last_by_lane[lane] = Some((index, last));
+                }
+            }
+        }
+        gaps.push(previous);
     }
-    // Blocks before the first keyboard note follow the first decided gap.
+    // Leading scratch-only blocks use the first keyboard layout.
     let first = gaps.iter().flatten().copied().next().unwrap_or(INITIAL_GAP);
     gaps.into_iter().map(|gap| gap.unwrap_or(first)).collect()
 }
 
-/// Groups the `(start time, source key)` presses of one block by an exact
-/// start time match, the same way as the scratch units. Each group lists its
-/// distinct source keys (1..=7) in ascending order; single presses are left
-/// out because they cannot form a pair.
-fn simultaneous_groups(mut keys: Vec<(i64, usize)>) -> Vec<Vec<usize>> {
-    keys.sort_unstable();
-    keys.dedup();
-    keys.chunk_by(|a, b| a.0 == b.0)
-        .filter(|group| group.len() >= 2)
-        .map(|group| group.iter().map(|(_, key)| *key).collect())
-        .collect()
-}
-
-fn best_gap(
-    counts: &[u32; 7],
-    groups: &[Vec<usize>],
-    total: u32,
-    previous: Option<usize>,
-) -> usize {
-    let mut best: Option<(f64, usize, usize)> = None;
-    for gap in 1..=DESTINATION_LANES.len() {
-        let switch = previous.is_some_and(|previous| previous != gap);
-        let penalty = if switch { GAP_SWITCH_PENALTY_PER_NOTE * f64::from(total) } else { 0.0 };
-        let adjacency =
-            SIMULTANEOUS_ADJACENCY_WEIGHT * f64::from(simultaneous_adjacency(groups, gap));
-        let score = gap_load_score(counts, gap) + adjacency + penalty;
-        // Distance to the previous gap, or twice the distance to the centre
-        // (4.5) for the first block so both stay integers.
-        let distance = previous.map_or((2 * gap).abs_diff(9), |previous| previous.abs_diff(gap));
-        // Gaps are visited in ascending order, so a full tie keeps the lower one.
-        if best.is_none_or(|best| score < best.0 || (score == best.0 && distance < best.1)) {
-            best = Some((score, distance, gap));
+fn collect_keyboard_patterns(
+    blocks: &mut [GapBlock],
+    mut presses: Vec<(usize, i64, usize)>,
+    jack_guard_us: u64,
+) {
+    presses.sort_unstable();
+    presses.dedup();
+    let mut preceding: [Option<(usize, i64, usize)>; 2] = [None; 2];
+    for onset in presses.chunk_by(|a, b| (a.0, a.1) == (b.0, b.1)) {
+        let (block, time, key) = onset[0];
+        if onset.len() > 1 {
+            blocks[block].chords.push(onset.iter().map(|press| press.2).collect());
+            preceding = [None; 2];
+            continue;
         }
+        if let [Some((start, first_time, a)), Some((_, middle_time, b))] = preceding {
+            let trill = a == key;
+            let stair = (a + 1 == b && b + 1 == key) || (a == b + 1 && b == key + 1);
+            if start < block
+                && (trill || stair)
+                && middle_time.abs_diff(first_time) <= jack_guard_us
+                && time.abs_diff(middle_time) <= jack_guard_us
+            {
+                for locked in &mut blocks[start + 1..=block] {
+                    locked.locked = true;
+                }
+            }
+        }
+        preceding = [preceding[1], Some((block, time, key))];
     }
-    best.map_or(INITIAL_GAP, |best| best.2)
 }
 
-/// Load term of the gap cost: the squared note count of every destination lane
-/// after embedding, weighted by the finger on that lane (`LANE_LOAD_WEIGHTS`).
-/// The gap lane itself counts zero.
-///
-/// A block heavy on Key1 therefore prefers gap 1, which moves Key1 from the
-/// little finger to the ring finger, and an even block of single presses prefers an
-/// edge gap.
-fn gap_load_score(counts: &[u32; 7], gap: usize) -> f64 {
-    let tenths = counts
-        .iter()
-        .enumerate()
-        .map(|(index, count)| {
-            let count = u64::from(*count);
-            LANE_LOAD_WEIGHTS[embed(index + 1, gap) - 1] * count * count
-        })
-        .sum::<u64>();
-    tenths as f64 / 10.0
+impl GapBlock {
+    fn best_gap(
+        &self,
+        history: &[f64; 8],
+        last_by_lane: &[Option<(usize, i64)>; 8],
+        jack_guard_us: u64,
+        total: u32,
+        previous: Option<usize>,
+    ) -> usize {
+        let rank = |gap: usize| {
+            let mut boundary_jacks = 0u32;
+            let mut load = 0.0;
+            for (index, count) in self.counts.iter().enumerate() {
+                let lane = embed(index + 1, gap) - 1;
+                // Only the cross term of (history + count)^2 depends on the gap.
+                load += history[lane] * f64::from(*count);
+                if let (Some((first, _)), Some((source, last))) =
+                    (self.time_ranges[index], last_by_lane[lane])
+                    && source != index
+                    && first.abs_diff(last) <= jack_guard_us
+                {
+                    boundary_jacks += 1;
+                }
+            }
+            let movement = previous.map_or(0, |p| p.abs_diff(gap));
+            let score = 2.0 * load / f64::from(total)
+                + SIMULTANEOUS_ADJACENCY_WEIGHT
+                    * f64::from(simultaneous_adjacency(&self.chords, gap))
+                + GAP_DISTANCE_COST * movement as f64;
+            let distance = previous.map_or((2 * gap).abs_diff(9), |_| movement);
+            (boundary_jacks, score, distance, gap)
+        };
+        (1..=8)
+            .map(rank)
+            .min_by(|a, b| {
+                a.0.cmp(&b.0)
+                    .then_with(|| a.1.total_cmp(&b.1))
+                    .then(a.2.cmp(&b.2))
+                    .then(a.3.cmp(&b.3))
+            })
+            .expect("eight candidate gaps")
+            .3
+    }
 }
 
 /// Simultaneous adjacency term of the gap cost: the number of neighbouring
@@ -556,10 +592,7 @@ mod tests {
         });
     }
 
-    /// Measure 1 presses Key1..Key4 six times each (left heavy) and measure 2
-    /// presses Key4..Key7 six times each (right heavy). Ids are
-    /// 100 + measure * 100 + key * 10 + n. Six presses make the load gain of
-    /// moving the gap outweigh the switch penalty in measure 2.
+    /// Two runs with 48 keyboard presses in total.
     fn left_then_right_chart() -> PlayableChart {
         let mut chart = chart();
         for (keys, measure) in [(1..=4, 1), (4..=7, 2)] {
@@ -595,110 +628,117 @@ mod tests {
     }
 
     #[test]
-    fn gap_switches_between_left_and_right_heavy_measures() {
-        let mut chart = left_then_right_chart();
-        assert!(apply_seven_to_eight(&mut chart, 1, false, DEFAULT_H_RANDOM_THRESHOLD_MS));
-
-        // Measure 1: the heavy left edge is left empty (gap 1), so Key1 moves
-        // to the ring finger.
-        assert_eq!(lane_of(&chart, 210), Lane::Key2);
-        assert_eq!(lane_of(&chart, 240), Lane::Key5);
-        assert!(!lanes_in(&chart, 1).contains(&Lane::Key1));
-        // Measure 2: the heavy right edge is left empty (gap 8), so Key7 moves
-        // to the ring finger.
-        assert_eq!(lane_of(&chart, 340), Lane::Key4);
-        assert_eq!(lane_of(&chart, 370), Lane::Key7);
-        assert!(!lanes_in(&chart, 2).contains(&Lane::Key8));
-    }
-
-    #[test]
-    fn heavy_key1_measure_leaves_lane_1_empty() {
+    fn four_measures_use_one_layout_then_fill_a_previously_unused_lane() {
         let mut chart = chart();
-        // Measure 1 leans on Key7 and measure 2 on Key1; the other keys press
-        // once. Ids are measure * 100 + key * 10 + n.
-        for (measure, heavy) in [(1i64, 7usize), (2, 1)] {
-            for key in 1..=7usize {
-                let presses = if key == heavy { 6 } else { 1 };
-                for step in 0..presses {
-                    let time = measure * MEASURE_US + key as i64 * 50_000 + step * 100_000;
-                    let id = measure as u32 * 100 + key as u32 * 10 + step as u32;
-                    push(&mut chart, note(id, SOURCE_KEYS[key - 1], NoteKind::Tap, time));
+        for measure in 0..8u32 {
+            for (index, lane) in SOURCE_KEYS.into_iter().enumerate() {
+                let id = measure * 10 + index as u32;
+                let time = i64::from(measure) * MEASURE_US + index as i64 * 50_000;
+                push(&mut chart, note(id, lane, NoteKind::Tap, time));
+            }
+        }
+        let mut padded = chart.clone();
+        bmz_chart::start_margin::apply_fixed_start_margin(&mut padded, TimeUs(MEASURE_US));
+        for chart in [&mut chart, &mut padded] {
+            apply_seven_to_eight(chart, 1, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
+            for key in 0..7 {
+                for measure in 0..4 {
+                    assert_eq!(lane_of(chart, key), lane_of(chart, measure * 10 + key));
+                    assert_eq!(lane_of(chart, 40 + key), lane_of(chart, (measure + 4) * 10 + key));
                 }
             }
-        }
-        apply_seven_to_eight(&mut chart, 1, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
-
-        assert_eq!(lane_of(&chart, 170), Lane::Key7);
-        assert!(!lanes_in(&chart, 1).contains(&Lane::Key8));
-        // Measure 2 switches to gap 1 despite the penalty: no keyboard note on
-        // lane 1, and every Key1 note is on lane 2.
-        assert!(!lanes_in(&chart, 2).contains(&Lane::Key1));
-        for id in 210..216 {
-            assert_eq!(lane_of(&chart, id), Lane::Key2);
-        }
-        assert_eq!(lane_of(&chart, 220), Lane::Key3);
-    }
-
-    #[test]
-    fn gap_switches_with_fixed_windows_without_bar_lines() {
-        let mut chart = left_then_right_chart();
-        chart.bar_lines = vec![BarLine { measure: 0, tick: ChartTick(0), time: TimeUs(0) }];
-        // The first note at 1.05s starts the 2s windows, so stretch the right
-        // heavy part into the second window.
-        for lane in &mut chart.lane_notes {
-            for note in lane.iter_mut().filter(|note| note.time.0 >= 2 * MEASURE_US) {
-                note.time = TimeUs(note.time.0 + 2 * MEASURE_US);
-                note.tick = ChartTick(note.time.0 as u64);
+            for lane in DESTINATION_LANES {
+                assert!(!chart.lane_notes[lane.index()].is_empty());
             }
         }
-        apply_seven_to_eight(&mut chart, 1, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
-
-        // Gap 1 in the first window and gap 8 in the second.
-        assert_eq!(lane_of(&chart, 210), Lane::Key2);
-        assert_eq!(lane_of(&chart, 240), Lane::Key5);
-        assert_eq!(lane_of(&chart, 340), Lane::Key4);
-        assert_eq!(lane_of(&chart, 370), Lane::Key7);
+        for note in chart.lane_notes.iter().flatten() {
+            assert_eq!(lane_of(&padded, note.id.0), note.lane);
+        }
     }
 
     #[test]
-    fn left_hand_chords_put_the_gap_inside_the_chord() {
+    fn rests_decay_load_and_missing_bar_lines_use_eight_second_windows() {
         let mut chart = chart();
-        // Measure 1 repeats the chord Key1..Key4 eight times. Ids are
-        // key * 10 + n.
-        for step in 0..8i64 {
-            for key in 1..=4usize {
-                let id = key as u32 * 10 + step as u32;
-                let time = MEASURE_US + step * 100_000;
-                push(&mut chart, note(id, SOURCE_KEYS[key - 1], NoteKind::Tap, time));
-            }
+        chart.bar_lines.truncate(1);
+        for (id, seconds) in [(1, 1), (2, 8), (3, 9), (4, 10), (5, 200)] {
+            push(&mut chart, note(id, Lane::Key4, NoteKind::Tap, seconds * MEASURE_US));
         }
         apply_seven_to_eight(&mut chart, 1, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
-
-        // Load 64 * Σ W plus 16 * 8 * pairs per chord: gap 1 is 288.0 + 256
-        // = 544.0 (lanes 2-5, 2 pairs), gap 2 is 326.4 + 128 = 454.4 (lanes
-        // 1, 3-5, 1 pair), gap 3 is 345.6 + 128 = 473.6, gap 4 is 352.0 + 256
-        // and gaps 5-8 are 352.0 + 384. Gap 2 wins and lane 2 stays empty.
-        assert!(!lanes_in(&chart, 1).contains(&Lane::Key2));
-        assert_eq!(lane_of(&chart, 10), Lane::Key1);
-        assert_eq!(lane_of(&chart, 20), Lane::Key3);
-        assert_eq!(lane_of(&chart, 30), Lane::Key4);
-        assert_eq!(lane_of(&chart, 40), Lane::Key5);
+        assert_eq!(lane_of(&chart, 1), Lane::Key5);
+        assert_eq!(lane_of(&chart, 2), Lane::Key5);
+        assert_eq!(lane_of(&chart, 3), Lane::Key4);
+        assert_eq!(lane_of(&chart, 4), Lane::Key4);
+        // Lane 4 was busier in the second window. After the rest, its excess
+        // load has decayed below the cost of moving back to lane 5.
+        assert_eq!(lane_of(&chart, 5), Lane::Key4);
     }
 
     #[test]
-    fn long_note_across_a_measure_keeps_the_gap() {
-        let mut chart = left_then_right_chart();
-        push_long(&mut chart, 1, Lane::Key1, MEASURE_US + 900_000, 2 * MEASURE_US + 500_000);
-        apply_seven_to_eight(&mut chart, 1, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
+    fn gap_avoids_a_new_boundary_jack_including_the_threshold() {
+        let mut source = chart();
+        for id in 0..8 {
+            push(&mut source, note(id, Lane::Key5, NoteKind::Tap, i64::from(id) * 250_000));
+        }
+        push(&mut source, note(10, Lane::Key4, NoteKind::Tap, 4 * MEASURE_US - 125_000));
+        push(&mut source, note(11, Lane::Key5, NoteKind::Tap, 4 * MEASURE_US));
+        for (threshold, expected) in [(125, Lane::Key6), (124, Lane::Key5)] {
+            let mut chart = source.clone();
+            apply_seven_to_eight(&mut chart, 1, false, threshold);
+            assert_eq!(lane_of(&chart, 10), Lane::Key5);
+            assert_eq!(lane_of(&chart, 11), expected);
+        }
+    }
 
-        // Measure 2 is locked to the gap of measure 1 (lane 1) instead of
-        // switching to gap 8.
-        assert_eq!(lane_of(&chart, 340), Lane::Key5);
-        assert_eq!(lane_of(&chart, 370), Lane::Key8);
-        assert!(!lanes_in(&chart, 2).contains(&Lane::Key1));
-        assert_eq!(lane_of(&chart, 1), Lane::Key2);
-        assert_eq!(lane_of(&chart, 2), Lane::Key2);
-        assert_eq!(chart.long_notes[0].lane, Lane::Key2);
+    #[test]
+    fn fast_trills_and_stairs_keep_the_layout_across_a_boundary() {
+        for pattern in [[2, 4, 2], [2, 3, 4], [4, 3, 2]] {
+            let mut source = chart();
+            for id in 0..8 {
+                push(
+                    &mut source,
+                    note(id, Lane::Key4, NoteKind::Tap, MEASURE_US + i64::from(id) * 200_000),
+                );
+            }
+            for (i, key) in pattern.into_iter().enumerate() {
+                let time = 4 * MEASURE_US + (i as i64 - 1) * 100_000;
+                push(&mut source, note(10 + i as u32, SOURCE_KEYS[key - 1], NoteKind::Tap, time));
+            }
+            push(&mut source, note(20, Lane::Key4, NoteKind::Tap, 5 * MEASURE_US));
+            for (threshold, expected) in [(100, Lane::Key5), (99, Lane::Key4)] {
+                let mut chart = source.clone();
+                apply_seven_to_eight(&mut chart, 1, false, threshold);
+                assert_eq!(lane_of(&chart, 20), expected, "pattern {pattern:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn keyboard_and_scratch_holds_lock_the_four_measure_boundary() {
+        for lane in [Lane::Key1, Lane::Scratch] {
+            let mut chart = chart();
+            for (id, measure) in [(1, 1), (2, 5)] {
+                push(&mut chart, note(id, Lane::Key4, NoteKind::Tap, measure * MEASURE_US));
+            }
+            push_long(&mut chart, 10, lane, 3 * MEASURE_US, 4 * MEASURE_US);
+            apply_seven_to_eight(&mut chart, 1, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
+            assert_eq!(lane_of(&chart, 1), lane_of(&chart, 2));
+            assert_eq!(lane_of(&chart, 10), lane_of(&chart, 11));
+            assert_eq!(chart.long_notes[0].lane, lane_of(&chart, 10));
+        }
+    }
+
+    #[test]
+    fn chord_puts_the_gap_between_adjacent_keys_of_one_hand() {
+        let mut chart = chart();
+        for (i, lane) in SOURCE_KEYS[..4].iter().enumerate() {
+            push(&mut chart, note(i as u32, *lane, NoteKind::Tap, MEASURE_US));
+        }
+        apply_seven_to_eight(&mut chart, 1, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
+        // Gaps 2 and 3 split one adjacent pair. Gap 3 is closer to the centre.
+        assert_eq!(
+            lanes_in(&chart, 1),
+            HashSet::from([Lane::Key1, Lane::Key2, Lane::Key4, Lane::Key5])
+        );
     }
 
     #[test]
@@ -722,14 +762,11 @@ mod tests {
 
         apply_seven_to_eight(&mut chart, 7, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
 
-        // The 7-key chord forms 5 same-hand pairs around gap 1, 4, 5 or 8 but
-        // only 4 around gap 2, 3, 6 or 7. Gaps 2 and 7 then tie at the lowest
-        // cost (9.6 + 16 * 4 = 73.6, against 73.9 for gaps 3 and 6 and 89.0
-        // for the edges), and the tie keeps lane 2 for both measures.
+        // Gaps 2, 3, 6 and 7 minimize adjacency. The centre tie-break chooses 3.
         assert_eq!(lane_of(&chart, 10), Lane::Key1);
-        assert_eq!(lane_of(&chart, 11), Lane::Key3);
-        assert_eq!(lane_of(&chart, 1), Lane::Key2);
-        assert_eq!(lane_of(&chart, 2), Lane::Key2);
+        assert_eq!(lane_of(&chart, 11), Lane::Key2);
+        assert_eq!(lane_of(&chart, 1), Lane::Key3);
+        assert_eq!(lane_of(&chart, 2), Lane::Key3);
         assert!(!chart.lane_notes.iter().flatten().any(|note| note.id == NoteId(3)));
         assert_eq!(
             chart.bgm_events.iter().map(|event| event.sound).collect::<Vec<_>>(),
@@ -746,8 +783,7 @@ mod tests {
         apply_seven_to_eight(&mut chart, 3, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
 
         let pair = &chart.long_notes[0];
-        // Key4 weighs the same on lanes 4 and 5, so the centre tie-break picks
-        // gap 4 and Key4 moves to lane 5.
+        // With no previous load or chords, the initial gap is 4.
         assert_eq!(pair.lane, Lane::Key4);
         assert_eq!(lane_of(&chart, 1), pair.lane);
         assert_eq!(lane_of(&chart, 2), pair.lane);
