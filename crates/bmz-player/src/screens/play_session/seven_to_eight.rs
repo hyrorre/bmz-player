@@ -29,6 +29,12 @@ const DESTINATION_LANES: [Lane; 8] = [
 /// more. Experimental; tune it after trying the conversion on charts. Integer
 /// tenths keep mirrored gaps (such as 1 and 8) exactly tied.
 const LANE_LOAD_WEIGHTS: [u64; 8] = [20, 14, 11, 10, 10, 11, 14, 20];
+/// Cost of each pair of neighbouring lanes pressed at the same time by one
+/// hand (see `simultaneous_adjacency`). Experimental; tune it after trying the
+/// conversion on charts.
+const SIMULTANEOUS_ADJACENCY_WEIGHT: f64 = 16.0;
+/// Last lane number of the left hand (lanes 1-4); lanes 5-8 are the right hand.
+const LEFT_HAND_LAST_LANE: usize = 4;
 
 /// Converts a source 7K chart into eight scratch-less lanes (experimental).
 ///
@@ -234,13 +240,19 @@ fn select_gaps(chart: &PlayableChart, blocks: &BlockIndex) -> Vec<usize> {
         .unwrap_or(0);
 
     let mut counts = vec![[0u32; 7]; block_count];
+    let mut timed_keys = vec![Vec::new(); block_count];
     for (key, lane) in SOURCE_KEYS.iter().enumerate() {
         for note in &chart.lane_notes[lane.index()] {
+            let block = blocks.block_of(note);
             if matches!(note.kind, NoteKind::Tap | NoteKind::LongStart | NoteKind::Mine) {
-                counts[blocks.block_of(note)][key] += 1;
+                counts[block][key] += 1;
+            }
+            if matches!(note.kind, NoteKind::Tap | NoteKind::LongStart) {
+                timed_keys[block].push((note.time.0, key + 1));
             }
         }
     }
+    let groups = timed_keys.into_iter().map(simultaneous_groups).collect::<Vec<_>>();
 
     // A long note started in an earlier block keeps the gap of that block.
     let mut locked = vec![false; block_count];
@@ -257,12 +269,12 @@ fn select_gaps(chart: &PlayableChart, blocks: &BlockIndex) -> Vec<usize> {
 
     let mut gaps = Vec::with_capacity(block_count);
     let mut previous = None;
-    for (block, counts) in counts.iter().enumerate() {
+    for (block, (counts, groups)) in counts.iter().zip(&groups).enumerate() {
         let total = counts.iter().sum::<u32>();
         let gap = match previous {
             Some(previous) if locked[block] || total == 0 => Some(previous),
             None if total == 0 => None,
-            _ => Some(best_gap(counts, total, previous)),
+            _ => Some(best_gap(counts, groups, total, previous)),
         };
         previous = gap.or(previous);
         gaps.push(gap);
@@ -272,12 +284,32 @@ fn select_gaps(chart: &PlayableChart, blocks: &BlockIndex) -> Vec<usize> {
     gaps.into_iter().map(|gap| gap.unwrap_or(first)).collect()
 }
 
-fn best_gap(counts: &[u32; 7], total: u32, previous: Option<usize>) -> usize {
+/// Groups the `(start time, source key)` presses of one block by an exact
+/// start time match, the same way as the scratch units. Each group lists its
+/// distinct source keys (1..=7) in ascending order; single presses are left
+/// out because they cannot form a pair.
+fn simultaneous_groups(mut keys: Vec<(i64, usize)>) -> Vec<Vec<usize>> {
+    keys.sort_unstable();
+    keys.dedup();
+    keys.chunk_by(|a, b| a.0 == b.0)
+        .filter(|group| group.len() >= 2)
+        .map(|group| group.iter().map(|(_, key)| *key).collect())
+        .collect()
+}
+
+fn best_gap(
+    counts: &[u32; 7],
+    groups: &[Vec<usize>],
+    total: u32,
+    previous: Option<usize>,
+) -> usize {
     let mut best: Option<(f64, usize, usize)> = None;
     for gap in 1..=DESTINATION_LANES.len() {
         let switch = previous.is_some_and(|previous| previous != gap);
         let penalty = if switch { GAP_SWITCH_PENALTY_PER_NOTE * f64::from(total) } else { 0.0 };
-        let score = gap_load_score(counts, gap) + penalty;
+        let adjacency =
+            SIMULTANEOUS_ADJACENCY_WEIGHT * f64::from(simultaneous_adjacency(groups, gap));
+        let score = gap_load_score(counts, gap) + adjacency + penalty;
         // Distance to the previous gap, or twice the distance to the centre
         // (4.5) for the first block so both stay integers.
         let distance = previous.map_or((2 * gap).abs_diff(9), |previous| previous.abs_diff(gap));
@@ -294,7 +326,8 @@ fn best_gap(counts: &[u32; 7], total: u32, previous: Option<usize>) -> usize {
 /// The gap lane itself counts zero.
 ///
 /// A block heavy on Key1 therefore prefers gap 1, which moves Key1 from the
-/// little finger to the ring finger, and an even block prefers an edge gap.
+/// little finger to the ring finger, and an even block of single presses prefers an
+/// edge gap.
 fn gap_load_score(counts: &[u32; 7], gap: usize) -> f64 {
     let tenths = counts
         .iter()
@@ -305,6 +338,29 @@ fn gap_load_score(counts: &[u32; 7], gap: usize) -> f64 {
         })
         .sum::<u64>();
     tenths as f64 / 10.0
+}
+
+/// Simultaneous adjacency term of the gap cost: the number of neighbouring
+/// lane pairs inside one hand that every group of simultaneous presses reaches
+/// after embedding around `gap`. Lanes 4 and 5 belong to different hands and
+/// do not form a pair.
+///
+/// A gap inside a dense chord splits it, so chord-heavy blocks can prefer a
+/// gap off the edges. Blocks of single presses add zero.
+fn simultaneous_adjacency(groups: &[Vec<usize>], gap: usize) -> u32 {
+    groups
+        .iter()
+        .map(|keys| {
+            // `embed` keeps the order, so only consecutive keys can become
+            // neighbouring lanes.
+            keys.windows(2)
+                .filter(|pair| {
+                    let lower = embed(pair[0], gap);
+                    embed(pair[1], gap) == lower + 1 && lower != LEFT_HAND_LAST_LANE
+                })
+                .count() as u32
+        })
+        .sum()
 }
 
 /// Destination lane number (1..=8) of source key `key` (1..=7) around `gap`.
@@ -605,6 +661,31 @@ mod tests {
     }
 
     #[test]
+    fn left_hand_chords_put_the_gap_inside_the_chord() {
+        let mut chart = chart();
+        // Measure 1 repeats the chord Key1..Key4 eight times. Ids are
+        // key * 10 + n.
+        for step in 0..8i64 {
+            for key in 1..=4usize {
+                let id = key as u32 * 10 + step as u32;
+                let time = MEASURE_US + step * 100_000;
+                push(&mut chart, note(id, SOURCE_KEYS[key - 1], NoteKind::Tap, time));
+            }
+        }
+        apply_seven_to_eight(&mut chart, 1, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
+
+        // Load 64 * Σ W plus 16 * 8 * pairs per chord: gap 1 is 288.0 + 256
+        // = 544.0 (lanes 2-5, 2 pairs), gap 2 is 326.4 + 128 = 454.4 (lanes
+        // 1, 3-5, 1 pair), gap 3 is 345.6 + 128 = 473.6, gap 4 is 352.0 + 256
+        // and gaps 5-8 are 352.0 + 384. Gap 2 wins and lane 2 stays empty.
+        assert!(!lanes_in(&chart, 1).contains(&Lane::Key2));
+        assert_eq!(lane_of(&chart, 10), Lane::Key1);
+        assert_eq!(lane_of(&chart, 20), Lane::Key3);
+        assert_eq!(lane_of(&chart, 30), Lane::Key4);
+        assert_eq!(lane_of(&chart, 40), Lane::Key5);
+    }
+
+    #[test]
     fn long_note_across_a_measure_keeps_the_gap() {
         let mut chart = left_then_right_chart();
         push_long(&mut chart, 1, Lane::Key1, MEASURE_US + 900_000, 2 * MEASURE_US + 500_000);
@@ -641,9 +722,14 @@ mod tests {
 
         apply_seven_to_eight(&mut chart, 7, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
 
-        // An even chord ties gaps 1 and 8 (both edges); the tie keeps lane 1.
-        assert_eq!(lane_of(&chart, 1), Lane::Key1);
-        assert_eq!(lane_of(&chart, 2), Lane::Key1);
+        // The 7-key chord forms 5 same-hand pairs around gap 1, 4, 5 or 8 but
+        // only 4 around gap 2, 3, 6 or 7. Gaps 2 and 7 then tie at the lowest
+        // cost (9.6 + 16 * 4 = 73.6, against 73.9 for gaps 3 and 6 and 89.0
+        // for the edges), and the tie keeps lane 2 for both measures.
+        assert_eq!(lane_of(&chart, 10), Lane::Key1);
+        assert_eq!(lane_of(&chart, 11), Lane::Key3);
+        assert_eq!(lane_of(&chart, 1), Lane::Key2);
+        assert_eq!(lane_of(&chart, 2), Lane::Key2);
         assert!(!chart.lane_notes.iter().flatten().any(|note| note.id == NoteId(3)));
         assert_eq!(
             chart.bgm_events.iter().map(|event| event.sound).collect::<Vec<_>>(),
