@@ -14,6 +14,9 @@ use crate::screens::play_session::SRandomScheme;
 use crate::select_options::{ArrangeOption, DoubleOption, DoubleOptionScoreBucket};
 
 pub const REPLAY_FILE_VERSION: u32 = 8;
+/// Judge rule revision written by this build. 0 (missing) means a replay from
+/// before the DX MODE POP judge revision; 1 adopts the revised POP windows.
+pub const REPLAY_JUDGE_REVISION: u32 = 1;
 pub const SEED_SCHEME_BEATORAJA_24BIT_V1: &str = "beatoraja_24bit_v1";
 pub const SEED_SCHEME_LEGACY_SHARED_V3: &str = "legacy_shared_v3";
 pub const S_RANDOM_SCHEME_LEGACY_40MS_V1: &str = SRandomScheme::LEGACY_40MS_V1;
@@ -55,6 +58,9 @@ pub struct ReplayFile {
     pub freq_semitones: Option<i8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judge_algorithm: Option<JudgeAlgorithm>,
+    /// See [`REPLAY_JUDGE_REVISION`].
+    #[serde(default)]
+    pub judge_revision: u32,
     /// beatoraja input timestamps omit the chart's runtime start-note margin.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub input_excludes_start_margin: bool,
@@ -94,6 +100,7 @@ impl ReplayFile {
             kaleid: self.kaleid.clone(),
             events: self.events.clone(),
             judge_algorithm: self.judge_algorithm,
+            legacy_dx_pop_judge: self.judge_revision < 1,
             input_excludes_start_margin: self.input_excludes_start_margin,
             branch_decisions: self.branch_decisions.clone(),
             next_index: 0,
@@ -170,6 +177,7 @@ impl ReplayFile {
             h_random_threshold_ms: None,
             freq_semitones: None,
             judge_algorithm: None,
+            judge_revision: REPLAY_JUDGE_REVISION,
             input_excludes_start_margin: false,
             arrange_seed,
             arrange_seed_2p: None,
@@ -712,6 +720,19 @@ events = []
         assert_eq!(replay.h_random_threshold_ms, None);
         assert_eq!(replay.freq_semitones, None);
         assert_eq!(replay.recorded_freq_semitones(), 0);
+    }
+
+    #[test]
+    fn replays_without_judge_revision_use_the_earlier_dx_pop_windows() {
+        let replay = ReplayFile::new([7; 32], 1, None, ArrangeOption::Normal, None, None, vec![]);
+        assert_eq!(replay.judge_revision, REPLAY_JUDGE_REVISION);
+        assert!(!replay.player().legacy_dx_pop_judge);
+        let text = toml::to_string(&replay).unwrap();
+        let reloaded = parse_replay(&text).unwrap();
+        assert!(!reloaded.player().legacy_dx_pop_judge);
+        let legacy = text.replace(&format!("judge_revision = {REPLAY_JUDGE_REVISION}\n"), "");
+        assert_ne!(legacy, text);
+        assert!(parse_replay(&legacy).unwrap().player().legacy_dx_pop_judge);
     }
 
     #[test]

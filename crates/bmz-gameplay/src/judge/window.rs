@@ -682,6 +682,54 @@ pub const fn dx_pop_judge_windows() -> JudgeWindows {
     }
 }
 
+/// v0.5.2 以前の DX MODE POP 判定一式。この改訂より前に記録したリプレイの再生専用。
+///
+/// LN 終端は PMS 流用の対称幅で早離し専用の窓を持たず、`longnoteMargin` は 200000。
+pub const fn dx_pop_legacy_judge_windows() -> JudgeWindows {
+    const NOTE: JudgeWindow = JudgeWindow {
+        pgreat_us: 25_000,
+        great_us: 50_000,
+        good_us: 87_500,
+        bad_fast_us: 100_000,
+        bad_slow_us: 100_000,
+        empty_poor_fast_us: 500_000,
+        empty_poor_slow_us: 112_500,
+        mine_hit_us: 16_000,
+    };
+    const LONG_END: JudgeWindow = JudgeWindow {
+        pgreat_us: 120_000,
+        great_us: 150_000,
+        good_us: 217_000,
+        bad_fast_us: 283_000,
+        bad_slow_us: 283_000,
+        empty_poor_fast_us: 0,
+        empty_poor_slow_us: 0,
+        mine_hit_us: 16_000,
+    };
+    JudgeWindows {
+        note: NOTE,
+        scratch: NOTE,
+        long_note_end: LONG_END,
+        long_scratch_end: LONG_END,
+        long_note_end_fast: None,
+        long_scratch_end_fast: None,
+        long_note_release_margin_us: 200_000,
+        long_scratch_release_margin_us: 0,
+    }
+}
+
+/// リプレイ再生の基準判定窓。`legacy_dx_pop` のリプレイは DX MODE POP だけ旧判定で再現する。
+pub const fn replay_judge_windows_for_keymode_and_rule_mode(
+    key_mode: KeyMode,
+    rule_mode: RuleMode,
+    legacy_dx_pop: bool,
+) -> JudgeWindows {
+    match (rule_mode, key_mode, legacy_dx_pop) {
+        (RuleMode::Dx, KeyMode::K9, true) => dx_pop_legacy_judge_windows(),
+        _ => judge_windows_for_keymode_and_rule_mode(key_mode, rule_mode),
+    }
+}
+
 /// 譜面ヘッダ `#RANK` と `#EXRANK` イベントから、指定時刻の判定倍率 (%) を求める。
 pub fn judge_percent_at_time(
     header_rank: Option<JudgeRankSpec>,

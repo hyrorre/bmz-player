@@ -33,8 +33,8 @@ use bmz_gameplay::input::translator::DefaultInputTranslator;
 use bmz_gameplay::judge::engine::JudgeEngine;
 use bmz_gameplay::judge::model::{JudgeAlgorithm, JudgeWindow, JudgeWindows};
 use bmz_gameplay::judge::window::{
-    judge_percent_at_time_for_keymode, judge_windows_for_keymode_and_rule_mode,
-    judge_windows_for_rule_mode_and_keymode, scale_judge_windows_for_playback_rate,
+    judge_percent_at_time_for_keymode, judge_windows_for_rule_mode_and_keymode,
+    replay_judge_windows_for_keymode_and_rule_mode, scale_judge_windows_for_playback_rate,
 };
 use bmz_gameplay::replay::{ReplayPlayer, ReplayRecorder};
 use bmz_gameplay::rule::RuleMode;
