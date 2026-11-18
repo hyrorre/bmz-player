@@ -417,9 +417,10 @@ fn select_state_roundtrips_through_toml() {
 }
 
 #[test]
-fn missing_select_exit_duration_defaults_to_1200ms() {
+fn select_exit_duration_defaults_to_1000ms() {
+    assert_eq!(SelectStateConfig::default().exit_hold_ms, 1_000);
     let config: SelectStateConfig = toml::from_str("").unwrap();
-    assert_eq!(config.exit_hold_ms, 1_200);
+    assert_eq!(config.exit_hold_ms, 1_000);
 }
 
 #[test]

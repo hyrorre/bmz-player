@@ -191,7 +191,7 @@ impl Default for SelectStateConfig {
 }
 
 pub const fn default_select_exit_hold_ms() -> u32 {
-    1_200
+    1_000
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
