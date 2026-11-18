@@ -4,7 +4,9 @@ use super::*;
 mod tests;
 use crate::chart_source::{ChartLocator, ResolvedChartSource};
 use anyhow::{Context, bail};
-use bmz_chart::import::{BmsRandomSource, ImportResult, import_bms_chart_with_random_source};
+use bmz_chart::import::{
+    AssetLookup, BmsRandomSource, ImportResult, import_chart_bytes_with_encoding,
+};
 
 /// A single copy's identity, assets and metadata must travel together.
 #[derive(Debug, Clone)]
@@ -376,9 +378,8 @@ impl LibraryDatabase {
                 "archive playback requires an explicit cache root: {}",
                 source.path.display()
             );
-            let import = import_bms_chart_with_random_source(&source.path, random.clone(), true)?;
-            verify_import(source, &import)?;
-            Ok(import)
+            let bytes = source.locator()?.read_bytes()?;
+            self.import_chart_source(source, &source.path, &bytes, random.clone(), true)
         })
     }
 
@@ -390,14 +391,7 @@ impl LibraryDatabase {
     ) -> Result<(ChartSource, ImportResult)> {
         self.load_source_using(chart_id, |source| {
             let bytes = source.locator()?.read_bytes()?;
-            let import = bmz_chart::import::import_chart_bytes_with_random_source(
-                &source.path,
-                &bytes,
-                random.clone(),
-                false,
-            )?;
-            verify_import(source, &import)?;
-            Ok(import)
+            self.import_chart_source(source, &source.path, &bytes, random.clone(), false)
         })
     }
 
@@ -410,13 +404,34 @@ impl LibraryDatabase {
     ) -> Result<(ChartSource, ResolvedChartSource, ImportResult)> {
         let (source, (resolved, import)) = self.load_source_using(chart_id, |source| {
             let resolved = source.locator()?.resolve()?;
-            let import = import_bms_chart_with_random_source(&resolved.path, random.clone(), true)?;
-            verify_import(source, &import)?;
+            let bytes = bmz_song_resource::read_file(&resolved.path)?;
+            let import =
+                self.import_chart_source(source, &resolved.path, &bytes, random.clone(), true)?;
             resolved.validate_chart_assets(&import.chart)?;
             resolved.load_chart_assets(&import.chart)?;
             Ok((resolved, import))
         })?;
         Ok((source, resolved, import))
+    }
+
+    fn import_chart_source(
+        &self,
+        source: &ChartSource,
+        path: &Path,
+        bytes: &[u8],
+        random: BmsRandomSource,
+        warn_missing: bool,
+    ) -> Result<ImportResult> {
+        let (_, encoding) = self.chart_encoding(&source.chart.sha256)?;
+        let import = import_chart_bytes_with_encoding(
+            path,
+            bytes,
+            random,
+            AssetLookup::Resolve { warn_missing },
+            encoding,
+        )?;
+        verify_import(source, &import)?;
+        Ok(import)
     }
 
     fn load_source_using<T>(

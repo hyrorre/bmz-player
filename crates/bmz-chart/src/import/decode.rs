@@ -1,8 +1,66 @@
 use std::borrow::Cow;
 
-use encoding_rs::{EUC_KR, SHIFT_JIS, UTF_16BE, UTF_16LE};
+use encoding_rs::{BIG5, EUC_KR, GB18030, SHIFT_JIS, UTF_8, UTF_16BE, UTF_16LE};
 
 use super::error::ImportWarning;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BmsTextEncoding {
+    Utf8,
+    Cp932,
+    Ms949,
+    Gb18030,
+    Big5,
+}
+
+impl BmsTextEncoding {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Utf8 => "UTF-8",
+            Self::Cp932 => "CP932",
+            Self::Ms949 => "MS949",
+            Self::Gb18030 => "GB18030",
+            Self::Big5 => "Big5",
+        }
+    }
+
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label.to_ascii_lowercase().as_str() {
+            "utf-8" | "utf8" => Some(Self::Utf8),
+            "cp932" | "ms932" | "shift_jis" | "shift-jis" | "windows-31j" => Some(Self::Cp932),
+            "ms949" | "cp949" | "euc-kr" => Some(Self::Ms949),
+            "gb18030" | "gbk" | "gb2312" | "cp936" => Some(Self::Gb18030),
+            "big5" | "big5-hkscs" | "cp950" => Some(Self::Big5),
+            _ => None,
+        }
+    }
+
+    pub fn decode_strict(self, bytes: &[u8]) -> Option<Cow<'_, str>> {
+        let encoding = match self {
+            Self::Utf8 => UTF_8,
+            Self::Cp932 => SHIFT_JIS,
+            Self::Ms949 => EUC_KR,
+            Self::Gb18030 => GB18030,
+            Self::Big5 => BIG5,
+        };
+        encoding.decode_without_bom_handling_and_without_replacement(bytes)
+    }
+}
+
+const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
+
+pub(super) fn decode_bms_source<'a>(
+    path: &std::path::Path,
+    (bytes, encoding): (&'a [u8], Option<BmsTextEncoding>),
+    warnings: &mut Vec<ImportWarning>,
+) -> Result<Cow<'a, str>, super::error::ImportError> {
+    let Some(encoding) = encoding else { return Ok(decode_bms_text_cow(bytes, warnings)) };
+    let body = bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes);
+    encoding.decode_strict(body).ok_or_else(|| super::error::ImportError::Parse {
+        path: path.to_path_buf(),
+        message: format!("chart text is not valid {}", encoding.name()),
+    })
+}
 
 #[derive(Clone, Copy)]
 struct WideEncoding {
@@ -26,7 +84,7 @@ pub(super) fn decode_bms_text_cow<'a>(
     bytes: &'a [u8],
     warnings: &mut Vec<ImportWarning>,
 ) -> Cow<'a, str> {
-    let bytes = if let Some(body) = bytes.strip_prefix(b"\xEF\xBB\xBF") {
+    let bytes = if let Some(body) = bytes.strip_prefix(UTF8_BOM) {
         // Some charts have a UTF-8 BOM before a CP932 body.
         body
     } else {

@@ -1,6 +1,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use bmz_chart::import::BmsTextEncoding;
+use sha2::{Digest, Sha256};
 
 use crate::cli::SongsCommand;
 use crate::config::app_config::{AppConfig, PathEntry};
@@ -30,7 +32,48 @@ pub fn run_songs_command_with_paths(cmd: SongsCommand, app_paths: &AppPaths) -> 
         SongsCommand::Reload { target, use_everything } => {
             load_songs(app_paths, target.as_deref(), true, use_everything)
         }
+        SongsCommand::Encoding { chart, label } => {
+            chart_encoding(app_paths, &chart, label.as_deref())
+        }
     }
+}
+
+fn chart_encoding(app_paths: &AppPaths, chart: &str, label: Option<&str>) -> Result<()> {
+    let sha256 = if chart.len() == 64 && chart.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        crate::storage::common::hex_to_hash(chart)?
+    } else {
+        let path = Path::new(chart);
+        let locator = crate::chart_source::ChartLocator::parse(path)?;
+        anyhow::ensure!(
+            bmz_chart::import::chart_source_format(path)
+                != bmz_chart::model::ChartSourceFormat::Bmson,
+            "encoding overrides apply to BMS-family charts"
+        );
+        Sha256::digest(locator.read_bytes()?).into()
+    };
+    migrate_library_db(&app_paths.library_db)?;
+    let mut db = LibraryDatabase::open(&app_paths.library_db)?;
+    let encoding = if let Some(label) = label {
+        let encoding = if label.eq_ignore_ascii_case("auto") {
+            None
+        } else {
+            Some(BmsTextEncoding::from_label(label).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown BMS encoding {label}; use UTF-8, CP932, MS949, GB18030, Big5, or auto"
+                )
+            })?)
+        };
+        db.set_chart_encoding(&sha256, encoding)?;
+        encoding
+    } else {
+        db.chart_encoding(&sha256)?.1
+    };
+    println!(
+        "{} {}",
+        crate::storage::common::hash_to_hex(&sha256),
+        encoding.map_or("auto", BmsTextEncoding::name)
+    );
+    Ok(())
 }
 
 /// 曲ルート一覧へ 1 件追加する。重複パスはエラー。

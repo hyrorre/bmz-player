@@ -65,8 +65,19 @@ where
                     let (target, use_everything) = parse_songs_scan_args(&rest[1..])?;
                     Ok(Command::Songs(SongsCommand::Reload { target, use_everything }))
                 }
-                Some(sub) => bail!("unknown songs subcommand: {sub}. Use: add, list, load, reload"),
-                None => bail!("songs requires a subcommand: add, list, load, reload"),
+                Some("encoding") => {
+                    let chart = rest.get(1).filter(|_| rest.len() <= 3).ok_or_else(|| {
+                        anyhow::anyhow!("Use: songs encoding <CHART|SHA256> [ENCODING|auto]")
+                    })?;
+                    Ok(Command::Songs(SongsCommand::Encoding {
+                        chart: chart.clone(),
+                        label: rest.get(2).cloned(),
+                    }))
+                }
+                Some(sub) => {
+                    bail!("unknown songs subcommand: {sub}. Use: add, list, load, reload, encoding")
+                }
+                None => bail!("songs requires a subcommand: add, list, load, reload, encoding"),
             }
         }
         Some("course") => {

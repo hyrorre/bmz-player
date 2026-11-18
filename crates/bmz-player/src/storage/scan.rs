@@ -671,6 +671,58 @@ mod tests {
     }
 
     #[test]
+    fn chart_encoding_override_reimports_unchanged_bytes_and_is_shared_by_loaders() {
+        use bmz_chart::import::{BmsRandomSource, BmsTextEncoding};
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("song.bms");
+        let bytes = b"#TITLE \xC7\xD1\xB1\xDB\n#BPM 120\n#TOTAL 200\n#WAV01 \xC7\xD1\xB1\xDB.wav\n#00111:01\n";
+        std::fs::write(&path, bytes).unwrap();
+        std::fs::write(root.path().join("한글.wav"), []).unwrap();
+        let identity = bmz_chart::hash::compute_chart_identity(bytes);
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let roots = [PathEntry {
+            path: root.path().to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+        let scan = |db: &mut LibraryDatabase| {
+            scan_song_roots(db, &roots, &scan_config(), 1_700_000_022, false).unwrap().summary
+        };
+        db.set_chart_encoding(&identity.file_sha256, Some(BmsTextEncoding::Cp932)).unwrap();
+        assert_eq!(scan(&mut db).imported, 1);
+        let chart_id: i64 =
+            db.conn().query_row("SELECT id FROM charts", [], |row| row.get(0)).unwrap();
+        db.set_chart_encoding(&identity.file_sha256, Some(BmsTextEncoding::Ms949)).unwrap();
+        assert_eq!(scan(&mut db).imported, 1);
+        assert_eq!(scan(&mut db).skipped, 1);
+        let title: String = db
+            .conn()
+            .query_row("SELECT title FROM charts WHERE id = ?1", [chart_id], |row| row.get(0))
+            .unwrap();
+        assert_eq!(title, "한글");
+
+        let random = BmsRandomSource::Choices { random: Vec::new(), switches: Vec::new() };
+        let (_, saved) = db.load_chart_source_bytes(chart_id, random.clone()).unwrap();
+        let (_, _, play) = db.load_chart_source_with_assets(chart_id, random).unwrap();
+        let direct =
+            crate::storage::import::import_chart_file(&mut db, &path, None, None, 1).unwrap();
+        for chart in [saved.chart, play.chart, direct.chart] {
+            assert_eq!(chart.identity, identity);
+            assert_eq!(chart.metadata.title, "한글");
+            assert_eq!(chart.sounds[0].path, root.path().join("한글.wav"));
+        }
+        assert_eq!(direct.chart_id, chart_id);
+
+        db.set_chart_encoding(&identity.file_sha256, None).unwrap();
+        assert_eq!(db.chart_encoding(&identity.file_sha256).unwrap().1, None);
+        assert_eq!(scan(&mut db).imported, 1);
+    }
+
+    #[test]
     fn scan_song_roots_skips_unchanged_imported_files() {
         let root = make_temp_dir("scan-skip");
         let path = root.join("song.bms");

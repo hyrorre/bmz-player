@@ -53,7 +53,9 @@ use crate::hash::compute_chart_identity;
 use crate::lr2_random::Lr2Mt19937;
 
 use super::BmsRandomSource;
+#[cfg(test)]
 use super::decode::decode_bms_text_cow;
+use super::decode::{BmsTextEncoding, decode_bms_source};
 use super::error::{ImportError, ImportWarning};
 use super::intermediate::{
     BmpDef, BpmDef, IntermediateBgaKind, IntermediateChart, IntermediateMetadata,
@@ -147,7 +149,7 @@ pub fn import_bms_to_intermediate_with_random_source(
         .map_err(|source| ImportError::Io { path: source_path.to_path_buf(), source })?;
     import_bms_bytes_to_intermediate(
         source_path,
-        &bytes,
+        (&bytes, None),
         random_source,
         bms_random_choices,
         bms_switch_choices,
@@ -158,15 +160,15 @@ pub fn import_bms_to_intermediate_with_random_source(
 
 pub(super) fn import_bms_bytes_to_intermediate(
     source_path: &Path,
-    bytes: &[u8],
+    source: (&[u8], Option<BmsTextEncoding>),
     random_source: &BmsRandomSource,
     bms_random_choices: &mut Vec<i32>,
     bms_switch_choices: &mut Vec<u64>,
     lr2_random_state: &mut Option<Lr2Mt19937>,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
-    let identity = compute_chart_identity(bytes);
-    let text = decode_bms_text_cow(bytes, warnings);
+    let identity = compute_chart_identity(source.0);
+    let text = decode_bms_source(source_path, source, warnings)?;
     import_with_layout::<KeyLayoutBeat>(
         source_path,
         (&text, identity),
@@ -204,7 +206,7 @@ pub fn import_pms_to_intermediate_with_random_source(
         .map_err(|source| ImportError::Io { path: source_path.to_path_buf(), source })?;
     import_pms_bytes_to_intermediate(
         source_path,
-        &bytes,
+        (&bytes, None),
         random_source,
         bms_random_choices,
         bms_switch_choices,
@@ -215,7 +217,7 @@ pub fn import_pms_to_intermediate_with_random_source(
 
 pub(super) fn import_pms_bytes_to_intermediate(
     source_path: &Path,
-    bytes: &[u8],
+    source: (&[u8], Option<BmsTextEncoding>),
     random_source: &BmsRandomSource,
     bms_random_choices: &mut Vec<i32>,
     bms_switch_choices: &mut Vec<u64>,
@@ -223,7 +225,7 @@ pub(super) fn import_pms_bytes_to_intermediate(
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
     let decode_start = warnings.len();
-    let text = decode_bms_text_cow(bytes, warnings);
+    let text = decode_bms_source(source_path, source, warnings)?;
     let decode_end = warnings.len();
     let (variant, conflict) = detect_pms_variant(&text);
     if conflict {
@@ -237,7 +239,7 @@ pub(super) fn import_pms_bytes_to_intermediate(
     // PMS previously decoded once before layout detection and again after it.
     // Keep the existing diagnostic order while reusing the decoded text.
     warnings.extend_from_within(decode_start..decode_end);
-    let source = (&*text, compute_chart_identity(bytes));
+    let source = (&*text, compute_chart_identity(source.0));
     match variant {
         PmsKeyLayout::Standard => import_with_layout::<KeyLayoutPms>(
             source_path,

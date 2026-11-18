@@ -26,11 +26,13 @@ mod analysis_helpers;
 mod database_catalog;
 mod database_query;
 mod database_write;
+mod encodings;
 mod path_helpers;
 mod query_helpers;
 mod scope;
 mod sources;
 
+pub(super) use encodings::check_encoding_revision;
 pub(crate) use scope::configured_song_roots;
 pub(crate) use scope::{RootScope, scope_key};
 pub use sources::ChartSource;

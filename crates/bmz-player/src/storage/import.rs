@@ -3,9 +3,10 @@ use std::time::UNIX_EPOCH;
 
 use anyhow::Result;
 use bmz_chart::import::error::ImportWarning;
-use bmz_chart::import::import_bms_chart;
+use bmz_chart::import::{AssetLookup, BmsRandomSource, import_chart_bytes_with_encoding};
+use sha2::{Digest, Sha256};
 
-use super::library_db::{ChartImportRecord, LibraryDatabase};
+use super::library_db::{ChartImportRecord, LibraryDatabase, check_encoding_revision};
 
 #[derive(Debug, Clone)]
 pub struct ImportedChart {
@@ -33,35 +34,46 @@ pub fn import_chart_file(
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or(0);
 
-    let (mut import, archive_index, file_size) =
-        if let crate::chart_source::ChartLocator::Archive { container, entry } = &locator {
-            let read = crate::song_archive::read_chart(container, entry, &Default::default())?;
-            let bytes = read.bytes;
-            let index = crate::song_archive::inspect(container, &Default::default())?;
-            anyhow::ensure!(
-                read.generation == index.generation,
-                "archive changed during chart import"
-            );
-            let mut import = bmz_chart::import::import_chart_bytes_with_random_source(
-                path,
-                &bytes,
-                bmz_chart::import::BmsRandomSource::Seed(random_seed),
-                false,
-            )?;
-            import.chart.metadata.preview_file = crate::chart_source::archive_preview_file(
-                &index,
-                entry,
-                &import.chart.metadata.preview_file,
-            );
-            (import, Some(index), bytes.len() as u64)
-        } else {
-            (import_bms_chart(path, random_seed, true)?, None, metadata.len())
-        };
+    let (bytes, archive_index, file_size) = if let crate::chart_source::ChartLocator::Archive {
+        container,
+        entry,
+    } = &locator
+    {
+        let read = crate::song_archive::read_chart(container, entry, &Default::default())?;
+        let bytes = read.bytes;
+        let index = crate::song_archive::inspect(container, &Default::default())?;
+        anyhow::ensure!(read.generation == index.generation, "archive changed during chart import");
+        let len = bytes.len() as u64;
+        (bytes, Some(index), len)
+    } else {
+        (locator.read_bytes()?, None, metadata.len())
+    };
+    let (revision, encoding) = db.chart_encoding(&Sha256::digest(&bytes).into())?;
+    let mut import = import_chart_bytes_with_encoding(
+        path,
+        &bytes,
+        BmsRandomSource::Seed(random_seed),
+        AssetLookup::Resolve { warn_missing: archive_index.is_none() },
+        encoding,
+    )?;
+    if let (crate::chart_source::ChartLocator::Archive { entry, .. }, Some(index)) =
+        (&locator, &archive_index)
+    {
+        import.chart.metadata.preview_file = crate::chart_source::archive_preview_file(
+            index,
+            entry,
+            &import.chart.metadata.preview_file,
+        );
+    }
     let chart = &mut import.chart;
     let record =
         ChartImportRecord { root_id, file_path: path, file_size, modified_at, scanned_at, chart };
 
-    let chart_id = db.upsert_chart_import(&record)?;
+    let tx = db.conn_mut().transaction()?;
+    check_encoding_revision(&tx, revision)?;
+    let (chart_id, chart_file_id) = LibraryDatabase::write_chart_import(&tx, &record)?;
+    LibraryDatabase::write_scan_warnings(&tx, chart_file_id, &import.warnings, scanned_at)?;
+    tx.commit()?;
     if let Some(folder) = path.parent() {
         db.update_folder_document_flags(&[(
             folder.to_path_buf(),
@@ -73,10 +85,6 @@ pub fn import_chart_file(
             },
         )])?;
     }
-    let chart_file_id =
-        db.chart_file_id_by_path(path)?.expect("chart file must exist after import upsert");
-    db.replace_import_warnings(chart_file_id, &import.warnings, scanned_at)?;
-
     Ok(ImportedChart { chart_id, chart_file_id, chart: import.chart, warnings: import.warnings })
 }
 
@@ -90,6 +98,7 @@ mod tests {
     use crate::storage::common::configure_connection;
     use crate::storage::library_db::LibraryDatabase;
     use crate::storage::migration::{LIBRARY_MIGRATIONS, run_migrations};
+    use bmz_chart::import::import_bms_chart;
 
     #[test]
     fn import_chart_file_registers_chart_and_warnings() {

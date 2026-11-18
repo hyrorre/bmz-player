@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use bmz_chart::import::error::ImportWarning;
 use bmz_chart::import::{
-    AssetLookup, BmsRandomSource, chart_source_format, import_chart_bytes_with_assets,
+    AssetLookup, BmsRandomSource, BmsTextEncoding, chart_source_format,
+    import_chart_bytes_with_encoding,
 };
 use bmz_chart::model::ChartSourceFormat;
 use sha2::{Digest, Sha256};
@@ -17,7 +18,7 @@ use crate::storage::library_db::{ChartImportAnalysis, PreparedChartImport};
 const MAX_CACHE_BYTES: usize = 192 * 1024 * 1024;
 const MAX_CACHE_ENTRIES: usize = 65_536;
 
-type ContentKey = ([u8; 32], ChartSourceFormat);
+type ContentKey = ([u8; 32], ChartSourceFormat, Option<BmsTextEncoding>);
 type CacheSlot = Arc<Mutex<Option<Arc<ScanChart>>>>;
 
 pub(super) struct ScanChart {
@@ -47,14 +48,18 @@ struct Entries {
 /// A scan owns this cache across roots and drops it when the scan ends.
 pub(super) struct ChartContentCache {
     duplicate_sizes: HashSet<u64>,
+    encodings: HashMap<[u8; 32], BmsTextEncoding>,
     entries: Mutex<Entries>,
 }
 
 impl ChartContentCache {
-    pub fn new(sizes: impl IntoIterator<Item = u64>) -> Self {
+    pub fn new(
+        sizes: impl IntoIterator<Item = u64>,
+        encodings: HashMap<[u8; 32], BmsTextEncoding>,
+    ) -> Self {
         let mut seen = HashSet::new();
         let duplicate_sizes = sizes.into_iter().filter(|size| !seen.insert(*size)).collect();
-        Self { duplicate_sizes, entries: Mutex::default() }
+        Self { duplicate_sizes, encodings, entries: Mutex::default() }
     }
 
     pub fn import(
@@ -63,13 +68,19 @@ impl ChartContentCache {
         bytes: &[u8],
         work: &mut ImportWork,
     ) -> Result<Arc<ScanChart>, ScanImportError> {
-        if !self.duplicate_sizes.contains(&(bytes.len() as u64)) {
-            return parse_chart(path, bytes, work);
+        let duplicate_size = self.duplicate_sizes.contains(&(bytes.len() as u64));
+        if !duplicate_size && self.encodings.is_empty() {
+            return parse_chart(path, bytes, None, work);
         }
 
         // Size only gates the lookup. The bytes must match, and the extension must
         // select the same interpreter (.pms and .bmson have separate semantics).
-        let key = (Sha256::digest(bytes).into(), chart_source_format(path));
+        let hash = Sha256::digest(bytes).into();
+        let encoding = self.encodings.get(&hash).copied();
+        if !duplicate_size {
+            return parse_chart(path, bytes, encoding, work);
+        }
+        let key = (hash, chart_source_format(path), encoding);
         let slot = {
             let mut entries = self.entries.lock().unwrap();
             let may_insert = entries.by_content.len() < MAX_CACHE_ENTRIES
@@ -83,7 +94,7 @@ impl ChartContentCache {
             }
         };
         let Some(slot) = slot else {
-            return parse_chart(path, bytes, work);
+            return parse_chart(path, bytes, encoding, work);
         };
         // The first worker produces the result. Other workers with the same key
         // share it without serializing unrelated imports on the map lock.
@@ -92,7 +103,7 @@ impl ChartContentCache {
             work.reused = true;
             return Ok(Arc::clone(chart));
         }
-        let chart = parse_chart(path, bytes, work)?;
+        let chart = parse_chart(path, bytes, encoding, work)?;
         let bytes = chart.prepared.heap_bytes()
             + size_of::<ScanChart>()
             + chart.warnings.capacity() * size_of::<ImportWarning>()
@@ -124,15 +135,17 @@ fn warning_heap_bytes(warning: &ImportWarning) -> usize {
 fn parse_chart(
     path: &Path,
     bytes: &[u8],
+    encoding: Option<BmsTextEncoding>,
     work: &mut ImportWork,
 ) -> Result<Arc<ScanChart>, ScanImportError> {
     let started = Instant::now();
     let result = catch_unwind(AssertUnwindSafe(|| {
-        import_chart_bytes_with_assets(
+        import_chart_bytes_with_encoding(
             path,
             bytes,
             BmsRandomSource::Seed(None),
             AssetLookup::Declared,
+            encoding,
         )
     }));
     work.parse = started.elapsed();
@@ -165,7 +178,7 @@ mod tests {
     #[test]
     fn cache_keeps_bms_and_pms_separate_even_with_identical_bytes() {
         let bytes = b"#PLAYER 1\n#TITLE shared\n#BPM 120\n#WAV01 key.wav\n#00111:01\n";
-        let cache = ChartContentCache::new([bytes.len() as u64; 3]);
+        let cache = ChartContentCache::new([bytes.len() as u64; 3], HashMap::new());
         let import = |path, work: &mut ImportWork| {
             cache.import(Path::new(path), bytes, work).ok().expect("chart imports")
         };

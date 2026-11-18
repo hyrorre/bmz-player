@@ -16,6 +16,19 @@ UTF-8でもCP932でも置換なしに読めない場合は、MS949を試しま�
 同じバイト列をCP932とMS949の両方で読めるときはCP932を優先します。
 `#CHARSET`による切り替えには対応していません。
 
+自動判定で文字化けする場合は、元ファイルを編集せずに譜面ごとに指定できます。
+
+```text
+bmz-player songs encoding "C:/BMS/song/song.bms" MS949
+bmz-player songs encoding "C:/BMS/pack.zip!/song/song.bms" GB18030
+bmz-player songs encoding "C:/BMS/song/song.bms" auto
+```
+
+パスの代わりにSHA-256を指定できます。文字コードを省略すると現在の指定を表示します。
+指定可能な文字コードはUTF-8、CP932、MS949（EUC-KR）、GB18030（GBK・GB2312を含む）、
+Big5（CP950を含む）です。`auto` は指定を解除します。同じSHA-256のコピーには同じ指定が適用され、
+選曲一覧の情報は次回のスキャンで更新します。再生・Viewer・リプレイでは読み込む際に適用します。
+
 文字コードの変更は、更新後に曲rootをスキャンしたときに登録済みの譜面にも反映します。
 譜面本文のデコードと、書庫内のファイル名のデコードは別の処理です。
 
