@@ -49,6 +49,7 @@ mod judgement;
 pub mod latency;
 mod opponent;
 mod state;
+mod stop;
 
 pub use audio::*;
 pub use frame::*;
@@ -57,6 +58,7 @@ pub use input::*;
 pub use judgement::*;
 pub use opponent::*;
 pub use state::*;
+pub use stop::{PlayEndRequest, PlayEndSignal};
 
 #[cfg(test)]
 use frame::{sync_input_timestamp_anchor, update_full_combo_timer};

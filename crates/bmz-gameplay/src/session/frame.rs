@@ -58,6 +58,7 @@ pub fn advance_session_frame(
         schedule_chart_audio(session, times.audio_schedule_until, audio);
     }
 
+    session.apply_play_end_request();
     if session.state == PlayState::Playing {
         sync_judge_windows(session, times.audio_now);
         let ordered_timeline = super::input::uses_ordered_inputs(session);
@@ -76,6 +77,9 @@ pub fn advance_session_frame(
                 }
                 // A delayed wake can cross the boundary before all prefix audio is queued.
                 schedule_chart_audio(session, before, audio);
+                if session.play_end_reached() {
+                    break;
+                }
                 super::conditional::evaluate(session, at);
             }
             if session.state == PlayState::Playing {
@@ -89,11 +93,17 @@ pub fn advance_session_frame(
             let scoring_times =
                 session.replay_player.as_ref().unwrap().scoring_times_until(times.audio_now);
             for now in scoring_times {
+                if session.play_end_reached() {
+                    break;
+                }
                 sync_judge_windows(session, now);
                 judgements.extend(process_replay_inputs(session, now));
                 // Partial autoplay (D-BATTLE AS) is not recorded in the human
                 // input log. Run it on the same scoring clock as the replay.
                 judgements.extend(process_autoplay_inputs(session, now));
+                if session.play_end_reached() {
+                    break;
+                }
                 if session.autoplay.is_some() {
                     apply_auto_key_release(session, now);
                 }
@@ -130,7 +140,8 @@ pub fn advance_session_frame(
                 apply_auto_key_release(session, times.audio_now);
             }
         }
-        if session.scoring_closed_at.is_none()
+        if !session.play_end_reached()
+            && session.scoring_closed_at.is_none()
             && !ordered_timeline
             && (session.replay_player.is_none() || session.replay_lane_mask.is_some())
         {
@@ -147,13 +158,18 @@ pub fn advance_session_frame(
             update_failed_state_from_gauge(session);
         }
         update_failed_state_from_gauge(session);
-        if session.chart.metadata.conditional.is_some() {
+        if !session.play_end_reached() && session.chart.metadata.conditional.is_some() {
             schedule_chart_audio(session, times.audio_schedule_until, audio);
         }
-        schedule_keysounds(session, audio);
+        if !session.play_end_reached() {
+            schedule_keysounds(session, audio);
+        }
         update_recent_judgements(session, &judgements, times.audio_now);
         update_full_combo_timer(session, &judgements);
-        advance_battle_opponent(session, times.audio_now);
+        if !session.play_end_reached() {
+            advance_battle_opponent(session, times.audio_now);
+            session.apply_play_end_request();
+        }
 
         if session.replay_player.as_ref().and_then(|p| p.kaleid.as_ref()).is_some_and(|evidence| {
             evidence.manually_stopped && times.audio_now >= evidence.ended_at
@@ -428,7 +444,7 @@ fn advance_battle_opponent(session: &mut GameSession, now: TimeUs) {
         .and_then(|opponent| opponent.replay_player.as_ref())
         .map(|replay| replay.scoring_times_until(now));
     let mut replay_times = replay_times.map(Vec::into_iter);
-    loop {
+    while !session.play_end_reached() {
         let time = if let Some(times) = &mut replay_times {
             times.next()
         } else {
@@ -985,6 +1001,7 @@ fn schedule_chart_audio(session: &mut GameSession, until: TimeUs, audio: &mut dy
                 * session.audio_mix.effective_normalization_gain()
                 * session.audio_mix.key_volume,
             audio,
+            &session.play_end,
         );
     }
 }
