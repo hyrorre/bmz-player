@@ -2,7 +2,7 @@ use super::content_cache::{ChartContentCache, ImportWork, ScanImportError};
 use super::*;
 use crate::chart_source::{ChartLocator, archive_preview_file};
 use crate::song_archive::{self, ArchiveControl};
-use crate::storage::library_db::{ChartImportSource, check_encoding_revision};
+use crate::storage::library_db::{ChartImportSource, encoding_revision_matches};
 use rusqlite::OptionalExtension;
 
 /// A failed decoder/CRC must roll back the whole container, including earlier members.
@@ -69,7 +69,6 @@ pub(super) fn import_archive<'a>(
     let started = Instant::now();
     let cache = cache();
     let tx = db.conn_mut().transaction()?;
-    check_encoding_revision(&tx, encoding_revision)?;
     let scanned = song_archive::scan_charts(container, &control, |entry, bytes| {
         let path =
             ChartLocator::Archive { container: container.to_path_buf(), entry: entry.name.clone() }
@@ -133,6 +132,18 @@ pub(super) fn import_archive<'a>(
     tx.execute("INSERT INTO song_archive_scans (path, generation, import_version) VALUES (?1, ?2, ?3)
         ON CONFLICT(path) DO UPDATE SET generation = excluded.generation, import_version = excluded.import_version",
         rusqlite::params![archive_key, scanned.generation.fingerprint, CHART_IMPORT_VERSION])?;
+    if !encoding_revision_matches(&tx, encoding_revision)? {
+        // Decoded with outdated overrides: keep the previous registrations and the
+        // previous archive scan record, so the next scan imports the archive again.
+        drop(tx);
+        tracing::warn!(
+            archive = %container.display(),
+            "chart encoding overrides changed during the archive import; deferring it"
+        );
+        let mut deferred = ScanReport::default();
+        deferred.summary.deferred = usize_to_u32(entries.len());
+        return Ok(deferred);
+    }
     tx.commit()?;
     report.timing.parse_ms = started.elapsed().as_millis();
     Ok(report)

@@ -94,9 +94,22 @@ impl LibraryDatabase {
 }
 
 pub(in crate::storage) fn check_encoding_revision(conn: &Connection, expected: i64) -> Result<()> {
+    anyhow::ensure!(
+        encoding_revision_matches(conn, expected)?,
+        "chart encoding settings changed; retry the import"
+    );
+    Ok(())
+}
+
+/// Whether imports decoded with the overrides of `expected` may still be written.
+/// Check inside the write transaction, after its writes, so no override change can
+/// commit between the check and the import.
+pub(in crate::storage) fn encoding_revision_matches(
+    conn: &Connection,
+    expected: i64,
+) -> Result<bool> {
     let current: i64 = conn
         .prepare_cached("SELECT revision FROM chart_encoding_revision WHERE id = 1")?
         .query_row([], |row| row.get(0))?;
-    anyhow::ensure!(current == expected, "chart encoding settings changed; retry the import");
-    Ok(())
+    Ok(current == expected)
 }
