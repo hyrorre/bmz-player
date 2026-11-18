@@ -118,7 +118,7 @@ fn name(header: &LhaHeader, directory: bool) -> Result<String> {
             _ => {}
         }
     }
-    // 0xff separates LHA directory components. Decode CP932 before interpreting '\\'.
+    // 0xff separates LHA directory components. Decode before interpreting '\\'.
     let mut name = String::new();
     let folders = folders.strip_suffix(&[0xff]).unwrap_or(folders);
     if !folders.is_empty() {
