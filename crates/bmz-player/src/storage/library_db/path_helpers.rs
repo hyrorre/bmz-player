@@ -58,8 +58,8 @@ pub(super) fn warning_details(warning: &ImportWarning) -> (String, String) {
         ImportWarning::EncodingFallback => {
             ("EncodingFallback".into(), "decoded chart as Shift_JIS".to_string())
         }
-        ImportWarning::Ms949Fallback => {
-            ("EncodingFallback".into(), "decoded chart as MS949".to_string())
+        ImportWarning::CjkEncodingFallback(encoding) => {
+            ("EncodingFallback".into(), format!("decoded chart as {}", encoding.name()))
         }
         ImportWarning::TextReplacementOccurred => {
             ("TextReplacementOccurred".into(), "text decoder replaced invalid bytes".to_string())

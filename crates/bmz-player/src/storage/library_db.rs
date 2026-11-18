@@ -47,8 +47,8 @@ pub(crate) fn library_path_key(path: &Path) -> String {
     path_helpers::path_key(path)
 }
 
-// v12 re-imports unchanged charts using the corrected BOM and encoding detection.
-pub const CHART_IMPORT_VERSION: i64 = 12;
+// v13 re-imports unchanged charts with the extended CJK text detection.
+pub const CHART_IMPORT_VERSION: i64 = 13;
 // v4 excludes muted battle presentation lanes from chart analysis.
 pub const CHART_LOUDNESS_ANALYSIS_VERSION: i64 = 4;
 const MAX_ANALYSIS_DISTRIBUTION_SECONDS: usize = 10 * 60;

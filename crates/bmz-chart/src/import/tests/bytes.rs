@@ -86,11 +86,44 @@ fn ms949_fallback_recovers_metadata_and_asset_references_without_redecoding_vali
         assert!(!unmappable);
         let warnings = assert_encoded_chart("song.bms", &bytes, title);
         if encoding == encoding_rs::EUC_KR {
-            assert!(matches!(&warnings[..], [ImportWarning::Ms949Fallback]), "{warnings:?}");
+            assert!(
+                matches!(
+                    &warnings[..],
+                    [ImportWarning::CjkEncodingFallback(BmsTextEncoding::Ms949)]
+                ),
+                "{warnings:?}"
+            );
         } else {
             assert!(matches!(&warnings[..], [ImportWarning::EncodingFallback]), "{warnings:?}");
         }
     }
+}
+
+#[test]
+fn chinese_fallback_recovers_text_and_asset_names_when_cp932_fails() {
+    for (codec, detected, title) in [
+        (encoding_rs::GBK, BmsTextEncoding::Gb18030, "喆简体音乐"),
+        (encoding_rs::GB18030, BmsTextEncoding::Gb18030, "简体音乐𠀀"),
+        (encoding_rs::BIG5, BmsTextEncoding::Big5, "繁體中文音樂歡迎來到台灣"),
+    ] {
+        let text = encoded_chart(title);
+        let (body, _, unmappable) = codec.encode(&text);
+        assert!(!unmappable);
+        assert!(BmsTextEncoding::Cp932.decode_strict(&body).is_none());
+        let warnings = assert_encoded_chart("song.bms", &body, title);
+        assert!(
+            matches!(&warnings[..], [ImportWarning::CjkEncodingFallback(encoding)] if *encoding == detected),
+            "{warnings:?}"
+        );
+    }
+}
+
+#[test]
+fn valid_cp932_keeps_half_width_kana_that_the_detector_guesses_as_big5() {
+    let text = encoded_chart("ﾒｶﾞﾃﾞﾘｯｸ");
+    let (body, _, unmappable) = encoding_rs::SHIFT_JIS.encode(&text);
+    assert!(!unmappable);
+    assert_encoded_chart("song.bms", &body, "ﾒｶﾞﾃﾞﾘｯｸ");
 }
 
 #[test]

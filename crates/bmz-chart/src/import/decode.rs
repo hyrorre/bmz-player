@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use chardetng::EncodingDetector;
 use encoding_rs::{BIG5, EUC_KR, GB18030, SHIFT_JIS, UTF_8, UTF_16BE, UTF_16LE};
 
 use super::error::ImportWarning;
@@ -14,6 +15,8 @@ pub enum BmsTextEncoding {
 }
 
 impl BmsTextEncoding {
+    pub const ALL: [Self; 5] = [Self::Utf8, Self::Cp932, Self::Ms949, Self::Gb18030, Self::Big5];
+
     pub const fn name(self) -> &'static str {
         match self {
             Self::Utf8 => "UTF-8",
@@ -44,6 +47,43 @@ impl BmsTextEncoding {
             Self::Big5 => BIG5,
         };
         encoding.decode_without_bom_handling_and_without_replacement(bytes)
+    }
+}
+
+/// Additional strict decoders for text that already failed the UTF-8 and CP932 checks.
+/// Used for BMS text and unmarked archive names. The guess never substitutes characters.
+pub fn decode_cjk_fallback(bytes: &[u8]) -> Option<(BmsTextEncoding, Cow<'_, str>)> {
+    use BmsTextEncoding::{Big5, Gb18030, Ms949};
+
+    // Skip ASCII chart data before the first non-ASCII byte. Limit statistical
+    // detection, then validate the selected decoder against the entire input.
+    let start = bytes.iter().position(|byte| !byte.is_ascii())?;
+    let sample = &bytes[start..];
+    let mut detector = EncodingDetector::new();
+    let max_sample = 64 * 1024;
+    detector.feed(&sample[..sample.len().min(max_sample)], sample.len() <= max_sample);
+    let (guess, assessed) = detector.guess_assess(None, false);
+    let candidate = match guess.name() {
+        "EUC-KR" => Some(Ms949),
+        "GBK" => Some(Gb18030),
+        "Big5" => Some(Big5),
+        _ => None,
+    };
+    if assessed
+        && let Some(encoding) = candidate
+        && let Some(text) = encoding.decode_strict(bytes)
+    {
+        return Some((encoding, text));
+    }
+    // Retain the previous MS949 fallback when the statistical guess is unusable.
+    // With two valid Chinese interpretations, leave the decision to an override.
+    if let Some(text) = Ms949.decode_strict(bytes) {
+        return Some((Ms949, text));
+    }
+    match (Gb18030.decode_strict(bytes), Big5.decode_strict(bytes)) {
+        (Some(text), None) => Some((Gb18030, text)),
+        (None, Some(text)) => Some((Big5, text)),
+        _ => None,
     }
 }
 
@@ -108,13 +148,11 @@ pub(super) fn decode_bms_text_cow<'a>(
     }
 
     let (decoded, had_errors) = SHIFT_JIS.decode_without_bom_handling(bytes);
-    // Keep CP932 when both encodings can decode the same bytes. The WHATWG EUC-KR
-    // decoder includes the MS949 extensions.
-    if had_errors
-        && let Some(korean) = EUC_KR.decode_without_bom_handling_and_without_replacement(bytes)
-    {
-        warnings.push(ImportWarning::Ms949Fallback);
-        return korean;
+    // Keep CP932 when it can decode the whole file. Short Japanese metadata can
+    // score higher in a different encoding even when the CP932 decoding is correct.
+    if had_errors && let Some((encoding, text)) = decode_cjk_fallback(bytes) {
+        warnings.push(ImportWarning::CjkEncodingFallback(encoding));
+        return text;
     }
     warnings.push(ImportWarning::EncodingFallback);
     if had_errors {

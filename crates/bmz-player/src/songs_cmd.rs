@@ -39,8 +39,9 @@ pub fn run_songs_command_with_paths(cmd: SongsCommand, app_paths: &AppPaths) -> 
 }
 
 fn chart_encoding(app_paths: &AppPaths, chart: &str, label: Option<&str>) -> Result<()> {
-    let sha256 = if chart.len() == 64 && chart.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        crate::storage::common::hex_to_hash(chart)?
+    let (sha256, bytes) = if chart.len() == 64 && chart.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        (crate::storage::common::hex_to_hash(chart)?, None)
     } else {
         let path = Path::new(chart);
         let locator = crate::chart_source::ChartLocator::parse(path)?;
@@ -49,7 +50,8 @@ fn chart_encoding(app_paths: &AppPaths, chart: &str, label: Option<&str>) -> Res
                 != bmz_chart::model::ChartSourceFormat::Bmson,
             "encoding overrides apply to BMS-family charts"
         );
-        Sha256::digest(locator.read_bytes()?).into()
+        let bytes = locator.read_bytes()?;
+        (Sha256::digest(&bytes).into(), Some(bytes))
     };
     migrate_library_db(&app_paths.library_db)?;
     let mut db = LibraryDatabase::open(&app_paths.library_db)?;
@@ -73,7 +75,29 @@ fn chart_encoding(app_paths: &AppPaths, chart: &str, label: Option<&str>) -> Res
         crate::storage::common::hash_to_hex(&sha256),
         encoding.map_or("auto", BmsTextEncoding::name)
     );
+    if label.is_none()
+        && let Some(bytes) = bytes
+    {
+        print_encoding_previews(&bytes);
+    }
     Ok(())
+}
+
+fn print_encoding_previews(bytes: &[u8]) {
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    for encoding in BmsTextEncoding::ALL {
+        let Some(text) = encoding.decode_strict(bytes) else { continue };
+        let title = chart_header_for_preview(&text, "#TITLE");
+        let artist = chart_header_for_preview(&text, "#ARTIST");
+        println!("  {}  title={title:?}  artist={artist:?}", encoding.name());
+    }
+}
+
+fn chart_header_for_preview<'a>(text: &'a str, key: &str) -> &'a str {
+    text.lines()
+        .filter_map(|line| line.trim().split_once(char::is_whitespace))
+        .find_map(|(command, value)| command.eq_ignore_ascii_case(key).then_some(value.trim()))
+        .unwrap_or_default()
 }
 
 /// 曲ルート一覧へ 1 件追加する。重複パスはエラー。
