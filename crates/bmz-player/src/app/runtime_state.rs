@@ -301,6 +301,7 @@ pub(super) struct AppJobs {
 }
 
 pub(super) struct IntegrationRuntimeState {
+    pub(super) oraja_helper: super::oraja_helper::HelperClient,
     /// 演奏中に編集されたOBS設定は、録画の保存判定を守るため次回起動へ保留する。
     pub(super) obs_config_deferred: bool,
     pub(super) obs_controller: Option<crate::obs::ObsController>,

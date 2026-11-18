@@ -539,6 +539,7 @@ impl WinitApp {
         self.play.last_play_snapshot = Some(snapshot);
         self.play.play_lane_target = lane_target;
         self.play.active_play = Some(active_play);
+        self.publish_helper_play();
         if self.integrations.applied_obs_config.rules.is_some() {
             // Course stages/practice attempts may replace Play without another screen.
             self.integrations.last_obs_event_key = None;

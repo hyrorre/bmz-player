@@ -477,6 +477,7 @@ impl WinitApp {
                 maintenance_select_tx,
             },
             integrations: IntegrationRuntimeState {
+                oraja_helper: Default::default(),
                 obs_config_deferred: false,
                 obs_controller,
                 applied_obs_config,

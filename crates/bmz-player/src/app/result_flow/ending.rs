@@ -84,6 +84,7 @@ impl WinitApp {
             }
             PlayEndingCompletion::Result => {}
         }
+        self.publish_helper_play_end(false);
         let Some(mut started) = self.play.active_play.take() else {
             return;
         };
@@ -200,6 +201,7 @@ impl WinitApp {
             self.notify_obs_save_recording(crate::obs::ObsRecordingSaveReason::OnReplay);
         }
         self.result.finished_play = Some(finished);
+        self.publish_helper_result();
         self.result.result_gauge_graph_type = self
             .result
             .finished_play

@@ -317,6 +317,7 @@ impl WinitApp {
             options.chart_zero_time = self.play_skin_playstart_offset();
         }
         let media = self.take_play_media_cache_from_active(chart_id, mode);
+        self.publish_helper_play_end(true);
         tracing::info!(chart_id, ?mode, "quick retrying chart");
         self.notify_obs_retry_play();
         self.save_configs_after_play(

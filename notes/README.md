@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-18 | [oraja_helper の named pipe 連携](2026/2026-11-18-oraja-helper-pipe.md) |
 | 2026-11-17 | [BMS-IRのseed対戦とLR2譜面再現のレビュー（#120）](2026/2026-11-17-bms-ir-lr2-seed-review.md) |
 | 2026-11-17 | [選曲の検索欄への貼り付けとCtrlのスクロール（#117）](2026/2026-11-17-select-search-paste.md) |
 | 2026-11-17 | [選曲のスライダードラッグと同梱スキンのクリック座標](2026/2026-11-17-skin-scrollbar-drag.md) |

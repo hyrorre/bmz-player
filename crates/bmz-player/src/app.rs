@@ -225,6 +225,7 @@ mod integration_support;
 mod integrations;
 mod maintenance;
 mod meta_image_animation;
+mod oraja_helper;
 mod pending_state;
 mod play_control;
 #[path = "app/play_flow/audio.rs"]
