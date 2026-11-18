@@ -16,7 +16,6 @@ impl Lzh {
     ) -> Result<(Self, Vec<ArchiveEntry>)> {
         let file_size = file.file.metadata()?.len();
         let mut members = Vec::new();
-        let mut entries = Vec::new();
         let mut header_bytes = 0u64;
         loop {
             control.check()?;
@@ -31,7 +30,7 @@ impl Lzh {
             header_bytes = header_bytes.saturating_add(file.stream_position()? - before);
             ensure!(header_bytes <= control.limits.header_bytes, "LZH header bytes exceed limit");
             let Some(header) = header else { break };
-            ensure!(entries.len() < control.limits.entries, "archive entry count exceeds limit");
+            ensure!(members.len() < control.limits.entries, "archive entry count exceeds limit");
             let directory = header.is_directory();
             ensure!(!directory || header.compressed_size == 0, "LZH directory carries data");
             ensure!(
@@ -69,15 +68,25 @@ impl Lzh {
                 .checked_add(header.compressed_size)
                 .filter(|end| *end <= file_size)
                 .ok_or_else(|| anyhow::anyhow!("truncated LZH member"))?;
-            entries.push(ArchiveEntry {
-                name: name(&header, directory)?,
-                size: header.original_size,
-                is_directory: directory,
-            });
             members.push((header, offset));
             file.seek(SeekFrom::Start(end))?;
         }
-        ensure!(!entries.is_empty(), "empty LZH archive");
+        ensure!(!members.is_empty(), "empty LZH archive");
+        let names = safety::LegacyNames::detect(members.iter().flat_map(|(header, _)| {
+            let (folders, filename) = raw_name(header);
+            folders.chain([filename]).map(|bytes| (bytes, false))
+        }));
+        let entries = members
+            .iter()
+            .map(|(header, _)| {
+                let directory = header.is_directory();
+                Ok(ArchiveEntry {
+                    name: name(header, directory, &names)?,
+                    size: header.original_size,
+                    is_directory: directory,
+                })
+            })
+            .collect::<Result<_>>()?;
         Ok((Self { file, members }, entries))
     }
 
@@ -108,7 +117,9 @@ impl Lzh {
     }
 }
 
-fn name(header: &LhaHeader, directory: bool) -> Result<String> {
+/// Raw directory components and filename. 0xff separates LHA directory
+/// components, so names are decoded before interpreting '\\'.
+fn raw_name(header: &LhaHeader) -> (impl Iterator<Item = &[u8]>, &[u8]) {
     let mut filename = header.filename.as_ref();
     let mut folders: &[u8] = &[];
     for extra in header.iter_extra() {
@@ -118,15 +129,19 @@ fn name(header: &LhaHeader, directory: bool) -> Result<String> {
             _ => {}
         }
     }
-    // 0xff separates LHA directory components. Decode before interpreting '\\'.
-    let mut name = String::new();
     let folders = folders.strip_suffix(&[0xff]).unwrap_or(folders);
-    if !folders.is_empty() {
-        for component in folders.split(|byte| *byte == 0xff) {
-            name.push_str(&safety::decode_name(component, false)?);
-            name.push('/');
-        }
+    let components =
+        (!folders.is_empty()).then(|| folders.split(|byte| *byte == 0xff)).into_iter().flatten();
+    (components, filename)
+}
+
+fn name(header: &LhaHeader, directory: bool, names: &safety::LegacyNames) -> Result<String> {
+    let (folders, filename) = raw_name(header);
+    let mut name = String::new();
+    for component in folders {
+        name.push_str(&names.decode(component, false)?);
+        name.push('/');
     }
-    name.push_str(&safety::decode_name(filename, false)?);
+    name.push_str(&names.decode(filename, false)?);
     safety::normalize_name(&name, directory)
 }

@@ -2,6 +2,18 @@ use super::*;
 
 #[test]
 fn cjk_archive_entry_names_resolve_chart_assets_without_loading_unreferenced_entries() {
+    // One archive per encoding: unmarked names share one detected encoding per archive.
+    for (encoding, title) in [
+        (encoding_rs::EUC_KR, "겖한글음악"),
+        (encoding_rs::GB18030, "简体音乐𠀀"),
+        (encoding_rs::BIG5, "繁體中文音樂歡迎來到台灣"),
+    ] {
+        let titles: Vec<_> = (1..=3).map(|i| (encoding, format!("{title}{i}"))).collect();
+        cjk_archive_resolves_chart_assets(&titles);
+    }
+}
+
+fn cjk_archive_resolves_chart_assets(titles: &[(&'static encoding_rs::Encoding, String)]) {
     use crate::chart_source::ChartLocator;
     use crate::storage::{import::import_chart_file, library_db::LibraryDatabase, migration};
     use bmz_chart::import::BmsRandomSource;
@@ -9,14 +21,9 @@ fn cjk_archive_entry_names_resolve_chart_assets_without_loading_unreferenced_ent
     let temp = Temp::new();
     let path = temp.path("cjk.zip");
     let control = ArchiveControl::default();
-    let titles = [
-        (encoding_rs::EUC_KR, "겖한글음악"),
-        (encoding_rs::GB18030, "简体音乐𠀀"),
-        (encoding_rs::BIG5, "繁體中文音樂歡迎來到台灣"),
-    ];
     let mut bms = String::from("#TITLE CJK archive\n#BPM 120\n#TOTAL 200\n");
     let mut names = Vec::new();
-    for (i, (encoding, title)) in titles.into_iter().enumerate() {
+    for (i, (encoding, title)) in titles.iter().enumerate() {
         let id = i + 1;
         bms.push_str(&format!("#WAV0{id} {title}.wav\n#BMP0{id} {title}.png\n"));
         for suffix in ["wav", "png"] {
@@ -710,4 +717,19 @@ fn chart_listings_outlast_the_index_cache_until_the_stamp_changes() {
         rewritten.charts,
         [ListedChart { name: "chart.bms".into(), size: 10, has_document: false }]
     );
+}
+
+#[test]
+fn unmarked_legacy_archive_names_share_one_detected_encoding() {
+    let temp = Temp::new();
+    let path = temp.path("big5.zip");
+    let names = ["簡單.wav", "困難.wav"];
+    let raw: Vec<_> =
+        names.iter().map(|name| encoding_rs::BIG5.encode(name).0.into_owned()).collect();
+    // Detected alone, the short first name reads as MS949.
+    assert_ne!(safety::decode_name(&raw[0], false).unwrap(), names[0]);
+    zip(&path, &[(&raw[0], b"a", 0o100644), (&raw[1], b"b", 0o100644)]);
+    let index = inspect(&path, &ArchiveControl::default()).unwrap();
+    let decoded: Vec<_> = index.entries.iter().map(|entry| entry.name.as_str()).collect();
+    assert_eq!(decoded, names);
 }

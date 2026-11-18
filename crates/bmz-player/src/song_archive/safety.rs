@@ -1,27 +1,68 @@
 use super::{ArchiveControl, ArchiveEntry, ArchiveLimits};
 use anyhow::{Result, ensure};
-use bmz_chart::import::decode::decode_cjk_fallback;
+use bmz_chart::import::decode::{BmsTextEncoding, decode_cjk_fallback};
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use unicode_normalization::UnicodeNormalization;
 
 pub(super) fn decode_name(bytes: &[u8], unicode: bool) -> Result<String> {
-    if unicode {
-        return Ok(std::str::from_utf8(bytes)?.to_owned());
+    LegacyNames::default().decode(bytes, unicode)
+}
+
+/// Archive-wide choice for unmarked names that are neither UTF-8 nor CP932.
+///
+/// Detecting each short name separately can pick different encodings for a
+/// directory and the files inside it, so readers that see every name up front
+/// detect once over all such names and decode them with the same encoding.
+#[derive(Default)]
+pub(super) struct LegacyNames {
+    shared: Option<BmsTextEncoding>,
+}
+
+impl LegacyNames {
+    pub(super) fn detect<'a>(names: impl IntoIterator<Item = (&'a [u8], bool)>) -> Self {
+        let mut joined = Vec::new();
+        for (bytes, unicode) in names {
+            if !unicode && needs_fallback(bytes) {
+                // '\n' is never a trail byte in the fallback encodings, so a strict
+                // decode of the joined names validates every name on its own.
+                joined.extend_from_slice(bytes);
+                joined.push(b'\n');
+            }
+        }
+        let shared = if joined.is_empty() {
+            None
+        } else {
+            decode_cjk_fallback(&joined).map(|(encoding, _)| encoding)
+        };
+        Self { shared }
     }
-    if let Ok(name) = std::str::from_utf8(bytes) {
-        return Ok(name.to_owned());
+
+    pub(super) fn decode(&self, bytes: &[u8], unicode: bool) -> Result<String> {
+        if unicode {
+            return Ok(std::str::from_utf8(bytes)?.to_owned());
+        }
+        if let Ok(name) = std::str::from_utf8(bytes) {
+            return Ok(name.to_owned());
+        }
+        let (name, _, errors) = encoding_rs::SHIFT_JIS.decode(bytes);
+        if !errors {
+            return Ok(name.into_owned());
+        }
+        if let Some(name) = self.shared.and_then(|encoding| encoding.decode_strict(bytes)) {
+            return Ok(name.into_owned());
+        }
+        // Only reached for unmarked legacy names rejected by both fast paths.
+        // Callers still normalize the result and check all entries for collisions.
+        decode_cjk_fallback(bytes)
+            .map(|(_, name)| name.into_owned())
+            .ok_or_else(|| anyhow::anyhow!("unsupported archive filename encoding"))
     }
-    let (name, _, errors) = encoding_rs::SHIFT_JIS.decode(bytes);
-    if !errors {
-        return Ok(name.into_owned());
-    }
-    // Only reached for unmarked legacy names rejected by both fast paths.
-    // Callers still normalize the result and check all entries for collisions.
-    decode_cjk_fallback(bytes)
-        .map(|(_, name)| name.into_owned())
-        .ok_or_else(|| anyhow::anyhow!("unsupported archive filename encoding"))
+}
+
+fn needs_fallback(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes).is_err() && encoding_rs::SHIFT_JIS.decode(bytes).2
 }
 
 pub(super) fn normalize_name(name: &str, directory: bool) -> Result<String> {
