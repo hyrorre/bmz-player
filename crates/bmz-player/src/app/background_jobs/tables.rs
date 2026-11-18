@@ -69,7 +69,11 @@ impl WinitApp {
         let startup = self.smoke.startup_started_at;
         let phase = StartupPhase::begin(startup, "difficulty_tables_for_ui");
         match phase.result(self.boot.library_db.list_difficulty_tables()) {
-            Ok(tables) => self.select.difficulty_tables = tables,
+            Ok(tables) => {
+                self.select.difficulty_tables = tables;
+                // Frames drawn before this read cached URL-derived fallback names.
+                self.select.table_breadcrumb_cache.borrow_mut().clear();
+            }
             Err(error) => tracing::warn!(%error, "failed to list difficulty tables for egui"),
         }
         let urls = startup_difficulty_table_fetch_urls_for_boot(&self.boot, startup);
