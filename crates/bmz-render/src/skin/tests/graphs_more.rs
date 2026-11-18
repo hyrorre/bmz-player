@@ -365,6 +365,38 @@ fn graph_renders_horizontal_bar_for_load_progress() {
 }
 
 #[test]
+fn graph_destination_blend_matches_image_destinations() {
+    // beatoraja applies the destination blend to graphs as it does to images,
+    // so skins that set one on a graph now draw with it instead of Normal.
+    for (blend, expected) in [
+        (0, BlendMode::Normal),
+        (2, BlendMode::Add),
+        (3, BlendMode::Subtract),
+        (4, BlendMode::Multiply),
+        (9, BlendMode::InvertDestination),
+    ] {
+        let document: SkinDocument = serde_json::from_str(&format!(
+            r#"{{
+                "w": 640, "h": 480,
+                "source": [{{ "id": "bar-src", "path": "bar.png" }}],
+                "graph": [{{ "id": "rate", "src": "bar-src", "x": 0, "y": 0, "w": 100, "h": 8, "angle": 0, "type": 101 }}],
+                "destination": [
+                    {{ "id": "rate", "blend": {blend}, "dst": [{{ "time": 0, "x": 0, "y": 0, "w": 640, "h": 8 }}] }}
+                ]
+            }}"#
+        ))
+        .unwrap();
+        let sources = mock_source("bar-src", 100.0, 8.0);
+        let state = SkinDrawState { play_progress: 0.5, ..SkinDrawState::default() };
+        let items = document.static_image_render_items(&sources, &state);
+        let [SkinRenderItem::Image { blend: actual, .. }] = items.as_slice() else {
+            panic!("expected one graph for blend {blend}, got {items:?}");
+        };
+        assert_eq!(*actual, expected, "blend {blend}");
+    }
+}
+
+#[test]
 fn lua_graph_with_negative_width_fills_leftwards_from_destination_x() {
     let document: SkinDocument = serde_json::from_str(
         r#"
