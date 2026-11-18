@@ -4,7 +4,7 @@ use super::*;
 pub(super) fn graph_value(graph_type: i32, state: &SkinDrawState) -> f32 {
     match graph_type {
         101 => state.play_progress, // BARGRAPH_MUSIC_PROGRESS: elapsed / total playtime
-        102 => 1.0,                 // BARGRAPH_LOAD_PROGRESS: always complete during play
+        102 => state.resource_load_progress, // BARGRAPH_LOAD_PROGRESS
         SKIN_REF_BMZ_EXIT_HOLD_PERCENT => state.exit_hold.progress(),
         110 => {
             // BARGRAPH_SCORERATE: ex_score / max_ex_score

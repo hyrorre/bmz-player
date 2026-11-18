@@ -379,6 +379,8 @@ pub enum BlendMode {
     Subtract,
     /// LR2 / beatoraja `blend=4`。描画済みの色へソース色を乗算する。
     Multiply,
+    /// beatoraja `blend=9`。反転した描画先RGBにソースRGBを乗算する。
+    InvertDestination,
     /// 透明な render target へ通常 alpha 合成済みの offscreen texture 用。
     /// RGB は premultiplied 済みなので、再合成時に source alpha を掛け直さない。
     Premultiplied,

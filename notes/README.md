@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-19 | [Antique Playのロード進捗表示](2026/2026-11-19-antique-loading-progress.md) |
 | 2026-11-19 | [高密度オートプレイの判定と中断](2026/2026-11-19-dense-autoplay-and-escape.md) |
 | 2026-11-18 | [DX MODEのPOP判定を参照側の変更へ追従](2026/2026-11-18-dx-pop-judge.md) |
 | 2026-11-17 | [DOUBLE BATTLEの入力・リプレイ・IR送信（#119）](2026/2026-11-17-double-battle-review.md) |

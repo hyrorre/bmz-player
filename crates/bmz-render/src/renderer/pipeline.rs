@@ -227,6 +227,7 @@ pub(super) fn create_image_pipeline(
         | BlendMode::Add
         | BlendMode::Subtract
         | BlendMode::Multiply
+        | BlendMode::InvertDestination
         | BlendMode::Premultiplied
         | BlendMode::Composite(_) => IMAGE_SHADER,
     };
@@ -240,6 +241,7 @@ pub(super) fn create_image_pipeline(
         BlendMode::Add => "bmz-render additive image pipeline",
         BlendMode::Subtract => "bmz-render subtractive image pipeline",
         BlendMode::Multiply => "bmz-render multiply image pipeline",
+        BlendMode::InvertDestination => "bmz-render invert destination image pipeline",
         BlendMode::Premultiplied => "bmz-render premultiplied image pipeline",
         BlendMode::LayerMask => "bmz-render layer-mask image pipeline",
         BlendMode::Composite(_) => "bmz-render composite image pipeline",
@@ -405,6 +407,18 @@ pub(super) fn image_blend_state(blend_mode: BlendMode) -> wgpu::BlendState {
             alpha: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::Zero,
                 dst_factor: wgpu::BlendFactor::Src,
+                operation: wgpu::BlendOperation::Add,
+            },
+        },
+        BlendMode::InvertDestination => wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::OneMinusDst,
+                dst_factor: wgpu::BlendFactor::Zero,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::One,
                 operation: wgpu::BlendOperation::Add,
             },
         },

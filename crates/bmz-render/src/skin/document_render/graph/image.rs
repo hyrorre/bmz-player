@@ -175,6 +175,7 @@ macro_rules! skin_document_render_graph_image_methods {
         fn graph_render_item(
             &self,
             graph: &SkinGraphDef,
+            destination: &SkinDestinationDef,
             frame: ResolvedSkinFrame,
             state: &SkinDrawState,
             sources: &HashMap<String, SkinDocumentTexture>,
@@ -230,7 +231,7 @@ macro_rules! skin_document_render_graph_image_methods {
                     frame.b as f32 / 255.0,
                     frame.a as f32 / 255.0,
                 ),
-                blend: frame.blend(BlendMode::Normal),
+                blend: frame.blend(skin_blend_mode(destination.blend)),
                 scale: SkinImageScale::Stretch,
                 border: None,
                 source_size: Some(source.source_size),

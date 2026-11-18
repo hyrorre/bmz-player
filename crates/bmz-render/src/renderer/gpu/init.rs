@@ -195,6 +195,12 @@ impl WgpuRenderer {
             &image_bind_group_layout,
             BlendMode::Multiply,
         );
+        let image_invert_destination_pipeline = create_image_pipeline(
+            &device,
+            config.format,
+            &image_bind_group_layout,
+            BlendMode::InvertDestination,
+        );
         let image_premultiplied_pipeline = create_image_pipeline(
             &device,
             config.format,
@@ -258,6 +264,7 @@ impl WgpuRenderer {
             image_pipeline,
             image_add_pipeline,
             image_multiply_pipeline,
+            image_invert_destination_pipeline,
             image_subtract_pipeline,
             image_premultiplied_pipeline,
             image_layer_pipeline,

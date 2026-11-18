@@ -327,7 +327,6 @@ fn graph_renders_current_score_rate_against_past_notes() {
 
 #[test]
 fn graph_renders_horizontal_bar_for_load_progress() {
-    // BARGRAPH_LOAD_PROGRESS (102): always 1.0
     let document: SkinDocument = serde_json::from_str(
             r#"
             {
@@ -335,7 +334,7 @@ fn graph_renders_horizontal_bar_for_load_progress() {
                 "source": [{ "id": "bar-src", "path": "bar.png" }],
                 "graph": [{ "id": "load-bar", "src": "bar-src", "x": 0, "y": 0, "w": 100, "h": 8, "angle": 0, "type": 102 }],
                 "destination": [
-                    { "id": "load-bar", "dst": [{ "time": 0, "x": 0, "y": 0, "w": 640, "h": 8 }] }
+                    { "id": "load-bar", "blend": 9, "op": [80], "dst": [{ "time": 0, "x": 0, "y": 0, "w": 640, "h": 8 }] }
                 ]
             }
             "#,
@@ -343,13 +342,26 @@ fn graph_renders_horizontal_bar_for_load_progress() {
         .unwrap();
 
     let sources = mock_source("bar-src", 100.0, 8.0);
-    let state = SkinDrawState::default();
-    let items = document.static_image_render_items(&sources, &state);
+    let mut state = SkinDrawState {
+        skin_loaded: false,
+        resource_load_progress: 0.0,
+        ..SkinDrawState::default()
+    };
+    assert!(document.static_image_render_items(&sources, &state).is_empty());
 
-    assert_eq!(items.len(), 1, "expected one load bar");
-    let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
-    // value=1.0 → full width = 640/1280 = 0.5
-    assert!(approx_eq(rect.width, 640.0 / 1280.0), "full load bar width: got {}", rect.width);
+    for progress in [0.5, 1.0] {
+        state.resource_load_progress = progress;
+        let items = document.static_image_render_items(&sources, &state);
+        let [SkinRenderItem::Image { rect, uv, blend, .. }] = items.as_slice() else {
+            panic!("expected one load bar at {progress}, got {items:?}");
+        };
+        assert_eq!(*blend, BlendMode::InvertDestination);
+        assert!(approx_eq(rect.width, 0.5 * progress));
+        assert!(approx_eq(uv.width, progress));
+    }
+
+    state.skin_loaded = true;
+    assert!(document.static_image_render_items(&sources, &state).is_empty());
 }
 
 #[test]
