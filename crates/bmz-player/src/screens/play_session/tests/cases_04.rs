@@ -1,4 +1,5 @@
 use super::*;
+use bmz_gameplay::judge::window::judge_windows_for_keymode_and_rule_mode;
 
 #[test]
 fn build_game_session_maps_profile_bga_expand() {
@@ -288,6 +289,42 @@ fn build_freq_replay_keeps_recorded_windows_after_viewing_speed_changes() {
         assert_eq!(events[0].judge, bmz_core::judge::Judge::PGreat);
         assert_eq!(session.score.ex_score(), 2);
     }
+}
+
+#[test]
+fn dx_pop_replays_from_before_the_judge_revision_keep_the_earlier_windows() {
+    use bmz_gameplay::judge::window::{dx_pop_judge_windows, dx_pop_legacy_judge_windows};
+
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.play.rule_mode = RuleMode::Dx;
+    let build = |key_mode, legacy| {
+        let mut source = chart();
+        source.metadata.key_mode = key_mode;
+        build_game_session(
+            Arc::new(source),
+            &profile,
+            PlaySessionOptions {
+                replay_player: Some(ReplayPlayer {
+                    legacy_dx_pop_judge: legacy,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .base_judge_windows
+    };
+    // Profile judge settings still apply on top, so compare the LN fields they keep.
+    let (legacy, current) = (build(KeyMode::K9, true), build(KeyMode::K9, false));
+    let (old_pop, new_pop) = (dx_pop_legacy_judge_windows(), dx_pop_judge_windows());
+    assert_eq!(legacy.long_note_end, old_pop.long_note_end);
+    assert_eq!(legacy.long_note_end_fast, None);
+    assert_eq!(legacy.long_note_release_margin_us, old_pop.long_note_release_margin_us);
+    assert_eq!(current.long_note_end, new_pop.long_note_end);
+    assert_eq!(current.long_note_end_fast, new_pop.long_note_end_fast);
+    assert_eq!(current.long_note_release_margin_us, new_pop.long_note_release_margin_us);
+    assert_ne!(legacy.note, current.note);
+    // Only POP changed; other DX MODE key modes keep the current windows either way.
+    assert_eq!(build(KeyMode::K7, true), build(KeyMode::K7, false));
 }
 
 #[test]

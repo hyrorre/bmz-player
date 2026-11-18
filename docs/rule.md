@@ -209,6 +209,11 @@ MultiBadで付いたBADも同じく非消費とします。EMPTY POORはコン�
 release margin中だけ終端判定を保留します。その間に押し直せば早離しを取り消し、
 押し直さなければ保留した判定を確定します。long scratchのmarginは0です。
 
+v0.5.2以前に記録した9K DX MODEのリプレイは、記録時の判定で再現するため旧POP窓で再生します
+（通常ノートGOOD `±87500us`・BAD `±100000us`・EMPTY POOR FAST / SLOW `500000us` / `112500us`、
+LN end PGREAT / GREAT / GOOD / BAD `±120000` / `150000` / `217000` / `283000us`、release margin `200000us`）。
+リプレイファイルの`judge_revision`がないものを旧判定として扱い、新しく記録するリプレイには`judge_revision = 1`を書きます。
+
 `#RANK`, `#DEFEXRANK`, `#EXRANKxx` / chA0は固定IIDX / POP窓へ反映しません。
 BMZの実装でもDX modeの`judge_percent_at_time`は常に100%を返し、
 `judge_windows_for_rule_mode`は倍率を無視します。

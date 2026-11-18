@@ -416,7 +416,11 @@ pub fn build_game_session_with_input_backend(
     // = 0 path.
     let base_judge_windows = apply_judge_constraint_to_windows(
         crate::assist::apply_custom_judge_windows(
-            judge_windows_for_keymode_and_rule_mode(primary_key_mode, rule_mode),
+            replay_judge_windows_for_keymode_and_rule_mode(
+                primary_key_mode,
+                rule_mode,
+                replay_player.as_ref().is_some_and(|player| player.legacy_dx_pop_judge),
+            ),
             options.assist,
         ),
         options.judge_constraint,
@@ -494,7 +498,11 @@ pub fn build_game_session_with_input_backend(
                 .unwrap_or(profile_judge_algorithm);
             let key_mode = chart.metadata.key_mode;
             let scored_total_notes = scored_note_count(&chart);
-            let base_judge_windows = judge_windows_for_keymode_and_rule_mode(key_mode, rule_mode);
+            let base_judge_windows = replay_judge_windows_for_keymode_and_rule_mode(
+                key_mode,
+                rule_mode,
+                opponent.replay_player.as_ref().is_some_and(|player| player.legacy_dx_pop_judge),
+            );
             let base_judge_windows = opponent
                 .replay_player
                 .as_ref()
