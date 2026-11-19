@@ -24,9 +24,11 @@ pub(crate) fn current_refresh_rate(
 ) -> Option<RefreshRate> {
     #[cfg(target_os = "windows")]
     {
+        use winit::platform::windows::MonitorHandleExtWindows;
+
         let _ = exclusive_mode;
         // winit's Windows mHz value is based on the integer dmDisplayFrequency.
-        windows_display::current_refresh_rate(&monitor.name()?)
+        windows_display::current_refresh_rate(monitor.hmonitor() as _)
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -397,15 +399,33 @@ mod windows_display {
         QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
     };
     use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS};
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, HMONITOR, MONITORINFO, MONITORINFOEXW,
+    };
 
     use super::{PlatformMonitorIdentity, pick_platform_identities};
 
-    pub(super) fn current_refresh_rate(gdi_name: &str) -> Option<super::RefreshRate> {
+    pub(super) fn current_refresh_rate(monitor: HMONITOR) -> Option<super::RefreshRate> {
+        // winit's MonitorHandle::name unwraps GetMonitorInfoW, but a queued handle may be detached.
+        // SAFETY: MONITORINFOEXW is a C structure with valid zero initialization.
+        let mut info = unsafe { std::mem::zeroed::<MONITORINFOEXW>() };
+        info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
+        // SAFETY: info includes MONITORINFO and cbSize describes the full writable structure.
+        if unsafe {
+            GetMonitorInfoW(monitor, (&mut info as *mut MONITORINFOEXW).cast::<MONITORINFO>())
+        } == 0
+        {
+            return None;
+        }
+        let gdi_name = wide_to_string(&info.szDevice);
+        if gdi_name.is_empty() {
+            return None;
+        }
         let paths = active_paths().ok()?;
         let mut rates = paths
             .iter()
             .filter(|path| {
-                source_gdi_name(path).is_some_and(|name| name.eq_ignore_ascii_case(gdi_name))
+                source_gdi_name(path).is_some_and(|name| name.eq_ignore_ascii_case(&gdi_name))
             })
             .map(|path| super::RefreshRate {
                 numerator: path.targetInfo.refreshRate.Numerator,
@@ -552,6 +572,12 @@ mod tests {
         migrated_monitor_config_value, monitor_config_summary, pick_platform_identities,
         split_position_suffix,
     };
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn invalid_monitor_handle_returns_unknown_refresh_without_panicking() {
+        assert_eq!(super::windows_display::current_refresh_rate(std::ptr::null_mut()), None);
+    }
 
     const DELL_PATH: &str =
         r"\\?\DISPLAY#DEL4321#5&2a1b3c4d&0&UID4353#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}";

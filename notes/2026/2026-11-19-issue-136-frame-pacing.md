@@ -91,7 +91,25 @@ XWayland上で動く場合もX11として扱う。XRandRから直接取得する
 Linuxのwinitのmonitor / video mode handleが大きく、`TrySendError<RefreshRequest>`が280 bytes以上になるため。
 Windowsでは発生しない。worker宛ての要求を`Box`で送るように変更した。
 Linuxで`cargo clippy -p bmz-player --all-targets --locked -- -D warnings`と
-`cargo test -p bmz-player --locked --lib frame_runtime`（24件）が成功した。Windowsでの再確認はまだ行っていない。
+`cargo test -p bmz-player --locked --lib frame_runtime`（24件）が成功した。この時点ではWindowsでの再確認は未実施だった。
+統合後のWindows検証は末尾の記録を参照。
+
+## Windowsの予約済みmonitor切断（2026-11-19）
+
+`51e5ebe8`ではworkerのHz取得で`monitor.name()`を使っていた。
+winit 0.30.13のWindows実装は`GetMonitorInfoW`の結果をunwrapするため、予約後に切断されたHMONITORではpanicし得る。
+BMZ側もworker切断後は取得を停止するため、Hz不明として上限を維持したまま復帰しない経路が残っていた。
+[winitの実装](https://github.com/rust-windowing/winit/blob/v0.30.13/src/platform_impl/windows/monitor.rs#L135-L156)と、
+[HMONITORの有効期間](https://learn.microsoft.com/en-us/windows/win32/gdi/hmonitor-and-the-device-context)を確認した。
+
+WindowsのHz取得ではraw HMONITORから`GetMonitorInfoW`を直接呼び、失敗・空のdevice名は`None`を返す。
+この失敗はworkerを終了させず、同じworkerが次の問い合わせを受け付ける。問い合わせは従来どおりworker内で行う。
+有効なdevice名を取得できた後のQueryDisplayConfig失敗・対象path消失も既存のHz不明の経路で扱う。
+
+回帰テストは、実際のWindows APIへ無効なnull HMONITORを渡してpanicせずHz不明となることと、
+同じworkerへの「失敗 → monitor変更 → 有効なHz」という模擬応答で、設定上限の維持から待機省略へ戻ることを確認する。
+実機での抜き差し・再接続は未検証。再確認時はプレイ中に表示先を切断・再接続し、
+`display timing worker stopped`が出ないこと、取得不能時は設定上限、有効なHzの再取得後は条件に応じて実効上限0へ戻ることを確認する。
 
 ## 先行調査と限界
 
@@ -107,6 +125,8 @@ NVIDIA側はG-SYNC互換、垂直同期はアプリ設定、ドライバーFPS�
 
 ## 検証
 
+### 非同期取得への変更
+
 - Windowsで`cargo fmt --check`、`cargo check -p bmz-player --locked`、
   `cargo clippy -p bmz-player --all-targets --locked -- -D warnings`が成功。
 - レビュー修正後の`cargo test -p bmz-player --locked -- --test-threads=1`はlib 3,364成功・94 ignored。
@@ -120,6 +140,23 @@ NVIDIA側はG-SYNC互換、垂直同期はアプリ設定、ドライバーFPS�
 - 初回の制約下の全体テストでは通信・directory link系と上記サイズ制約の失敗を検出し、途中で停止した。
   cacheをヒープに移し、ローカル通信・ファイル参照の実行制約を外した再実行で上記の全体テストが成功した。
   問い合わせを意図的に止めたworker、イベント連続時の取得頻度と同一Hzの世代維持、古い結果の破棄を含む。
+
+### Windowsの切断対応
+
+- `cargo fmt --check`、`cargo check -p bmz-player --locked`、all-targets Clippy（`-D warnings`）が成功。
+- 全体libテストは3,365成功・1失敗・94 ignored。追加した無効HMONITORの実APIテストと、worker復帰の模擬テストは成功。
+  失敗した既存の`system_proxy_is_preserved_but_local_redirects_and_metadata_never_reach_it`は、
+  子プロセスによる試験用一時フォルダーへの保存で「アクセスが拒否されました」(os error 5)となった。
+  同じTEMP/TMP・実行条件でその1件だけを再実行すると成功した。ダウンロード処理への修正は行っていない。
+- libの失敗で未実行だったbin / startup integration / doctestを別途実行した。bin / doctestは成功、startupの2件は既存のignored。
+- `cargo build -p bmz-player --release --locked`が成功。
+- ログはmain checkoutの`.local/issue-136/A-hotplug-check.log`、`A-hotplug-clippy.log`、
+  `A-hotplug-test.log`、`A-hotplug-retry.log`、`A-hotplug-remaining.log`、`A-hotplug-doctest.log`、`A-hotplug-release.log`に保存した。
+- その後、先行したX11修正`0278ac54`を保持して統合し、追加テストもBox形式の要求へ合わせた。
+  統合後のWindowsでfmt / check / all-targets Clippy、`--lib frame_runtime`（25件）、`--lib window_config`（16件）が成功した。
+  統合後のrelease buildも成功した。
+  全体libテストの上記結果は統合前の実行であり、統合後は変更が重なる2モジュールを再確認した。
+  統合後のログは`.local/issue-136/A-hotplug-integrated-*.log`に保存した。
 
 再確認は`cargo test -p bmz-player --locked frame_runtime -- --test-threads=1`を使う。
 境界条件、取得不能、モード除外、background・suspend、無制限時の取得省略、表示世代変更時のdeadline/wake破棄を確認する。

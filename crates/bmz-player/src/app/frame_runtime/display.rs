@@ -244,6 +244,49 @@ mod tests {
     }
 
     #[test]
+    fn failed_refresh_query_keeps_worker_alive_and_recovers_after_monitor_change() {
+        let rate = Some(RefreshRate { numerator: 240_084, denominator: 1_000 });
+        let worker = RefreshWorker::spawn(move |request| {
+            // The old monitor lookup fails; the next monitor has valid timing.
+            if request.generation == 0 { None } else { rate }
+        })
+        .unwrap();
+        let mut state = DisplayQueryState::default();
+        state.set_rate(rate);
+        let policy = |state: &DisplayQueryState| {
+            resolve_display_frame_limit(241, true, false, Some(WgpuPresentMode::Fifo), || {
+                (state.rate, state.revision)
+            })
+            .0
+        };
+        assert_eq!(policy(&state), 0);
+        let now = Instant::now();
+        for (generation, expected_limit) in [(0, 241), (1, 0)] {
+            if generation != 0 {
+                state.monitor_changed();
+                assert_eq!(policy(&state), 241);
+            }
+            let at = now + QUERY_INTERVAL * generation as u32;
+            assert!(state.due(at));
+            assert!(
+                worker
+                    .requests
+                    .try_send(Box::new(RefreshRequest {
+                        generation,
+                        monitor: None,
+                        exclusive_mode: None,
+                    }))
+                    .is_ok()
+            );
+            state.started(at);
+            let result = worker.results.recv_timeout(Duration::from_secs(5)).unwrap();
+            state.complete(result);
+            assert_eq!(policy(&state), expected_limit);
+            assert!(state.pending.is_none());
+        }
+    }
+
+    #[test]
     fn event_bursts_preserve_display_revision_and_do_not_bypass_query_throttle() {
         let now = Instant::now();
         let rate = Some(RefreshRate { numerator: 60_000, denominator: 1_001 });

@@ -31,6 +31,7 @@ X11（Xlib / Xcb）では、既存ウィンドウのmonitor情報がxrandrによ
 表示世代はmonitorまたは取得Hzが実際に変化した場合だけ進めます。次の待機を予約する前に
 古いdeadline・wake情報とFPS sampleをリセットします。実効present modeの変更も同じ状態同期を通します。
 workerの起動・通信に失敗した場合は設定上限を維持し、同期問い合わせへ戻しません。
+Windowsで取得予約後にmonitorが切断されても、`GetMonitorInfoW`の失敗はHz不明として扱い、workerは次の取得を継続します。
 `bmz_player::app::frame_runtime::display=debug`で問い合わせ時間`query_us`と結果を記録できます。
 Waylandのframe callback待ちと、Windows Immediateの既存の短時間待機は維持します。
 
