@@ -204,4 +204,23 @@ Windows PowerShell 5からPowerShell 7のArchive moduleを読み込む際の
 `ExtractToDirectory` overloadエラーでSDKのヘッダーが不足したため、
 公式ASIO SDK 2.3.4のURLとSHA-256を固定し、CI側で明示的に展開して
 `CPAL_ASIO_DIR`を渡すようにした。同じZIPのhashと必須ヘッダーをローカルでも確認した。
-GitHub Actionsの結果は実行後に追記する。
+同SDKと日付指定toolchainでのplayer/updater互換releaseビルドもローカルで成功した。
+
+再実行した[Actions run 44508885046](https://github.com/hyrorre/bmz-player/actions/runs/44508885046)は成功。
+検証したコードは`886aeacdf1922a0e81c8bba044aee673c97b49ed`。
+
+- runner: Windows Server 2022、`windows-2022` image `20261112.366.7`。
+- Rust: `1.102.0-nightly (65ce8611f 2026-11-18)`、FFmpeg: vcpkg `9.0.2#7`。
+- VC `14.44.35211.0`、UCRT `10.0.10240.16384`の計42 DLLを同梱。
+  同梱DLLの1,942件のimport/export検査とupdaterのCRT非依存検査が成功。
+- updaterテスト19件、installerの既存ファイル保護、配布物のdata分離の検査が成功。
+- player/updaterのCLI、Auto/Raw Input各120 Result frames・正常終了を確認。
+  実効描画は両方ともDirectX 12 / Microsoft Basic Render Driver（CPU adapter）。
+  入力のAutoはgilrs、明示指定はRaw Inputだった。
+  WGIを利用できない場合のAuto経路や専コンのボタン・軸操作は、このCIでは確認していない。
+- 音声デバイスはなく、アプリは音声なしで実行された。Playと音声の動作確認には使わない。
+- `release-windows-x64`にDLL同梱portable ZIP、installer、provenance等を生成。
+  `windows-compat-startup`に起動ログを保存。GitHub Releaseへの公開は実行していない。
+
+Windows 8.1上のAPI、同梱UCRTの実際のロード、GPU、専コン、音声の確認は未実施。
+今回のCI成功をWindows 8.1の正式サポート確認とは扱わない。

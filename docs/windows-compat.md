@@ -29,9 +29,13 @@ VMへ持ち込むDLLも8.1でロードできる必要があります。
 
 ## リリースとCI
 
+以下の互換パッケージ作成とCI検証スクリプトはPowerShell 7で実行します。
 `.github/workflows/release-apps.yml`のWindows jobは`windows-2022`上で、
 `nightly-2026-11-19`と`rust-src`を使ってwin7ターゲットをビルドします。
 MSVCはv143、Inno Setupは6.7.1に固定し、installerの最低OSは6.3（Windows 8.1）です。
+ASIO SDKは公式の2.3.4（2025-10-15）をURLとSHA-256で固定し、
+CIのPowerShellで展開して`CPAL_ASIO_DIR`を渡します。
+`asio-sys`の自動取得時にWindows PowerShellとPowerShell 7のArchive moduleが混在する問題を避けます。
 `scripts/package-windows.ps1 -Target x86_64-win7-windows-msvc -SkipBuild`は
 VS 2022の`vcruntime140.dll`とWindows SDKのapp-local UCRT一式を追加します。
 UCRTは`Windows Kits/10/Redist/ucrt/DLLs/x64`の旧OS向けセットを使い、
