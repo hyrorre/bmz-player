@@ -123,3 +123,51 @@ Mutexだけの差を測定したものではなく、実操作・高密度譜面
 - 物理Windows 8.1、macOS、Linuxでの動作。
 
 生ログと試行データは`.local/windows-compat*`へ保存する。これらはローカルのみでGitへ含めない。
+
+## 2026-11-19: VM向け検証用ポータブルZIP
+
+ユーザーの依頼により、同じブランチのコード`19317b42`をcleanな状態で再ビルドし、
+Windows 8.1 x64 VMへコピーして試せるローカル成果物を作成した。
+exeの`--version`は`19317b42a6d9ff30106daa87afde4b06fa0e22ec`でdirty表示なし。
+
+- 出力: `dist/windows-8.1-test/bmz-player-v0.5.2-19317b42-windows81-x64-test.zip`
+- サイズ: 67,824,959 bytes。
+- SHA-256: `1738d28acf2a3d8203a23c20a58467ab3fede9e9cd2d0325dd859297a1afa3e0`
+- ZIP横に`.sha256`、ZIP内に`BUILD-INFO.json`と全ファイルの`SHA256SUMS.txt`を配置。
+
+構成:
+
+- `BMZ Player/`へplayer / updaterを配置し、legacy配置のportable manifestで保存先を指定。
+  両exeが同じapp-local DLLを使えるようにする。
+- FFmpeg 9.0.2の`avcodec-63` / `avformat-63` / `avutil-61` / `swresample-7` / `swscale-10`の5 DLL。
+- Visual Studio 2022の再配布用`vcruntime140.dll` 14.44.35211.0。
+- Windows SDKのapp-local x64 UCRT一式41 DLL、version 10.0.10240.16384。
+  Microsoftの[UCRT配置手順](https://learn.microsoft.com/en-us/cpp/windows/universal-crt-deployment)を参照。
+- 必要なDLLは計47本。OS DLL、GPUドライバー、実験用GameInputはコピーしない。
+- 標準スキン、サンプル曲、Noto Sans CJKを同梱し、大きな外部スキンは含めない。
+- Rust依存のライセンス一覧をcargo-about 0.9.3で対象target向けに生成。
+  FFmpegのライセンス、SHA-512確認済みの対応upstreamソースtarball、
+  インストール済みSPDXと照合したvcpkg port/patch、configureコマンド、ASIO/フォントのライセンスを同梱。
+- READMEと起動用cmdをZIPの先頭フォルダーへ配置。
+  `01_OpenGL_RawInput.cmd`、`02_Auto.cmd`、`03_Sample_OpenGL_RawInput.cmd`を用意。
+  検証用の新規configを初回だけ作り、Raw InputとAutoは別の`test-data`へ保存する。
+  個人の設定・DB・曲・認証情報は含めず、検証用configでは自動更新を無効にする。
+
+検証:
+
+- ZIPを別フォルダーへ展開し、全ファイルのSHA-256を照合。
+- exeと全同梱DLLのimportをたどり、同梱先のexportに1,480件の関数が存在することを確認。
+- 開発用vcpkg等をPATHから外し、Windowsディレクトリだけにした状態で実行。
+  作業フォルダーもexeやリポジトリのresourceとは別の空フォルダーにした。
+- playerの`--version`とupdaterの`--help`が正常終了。
+- OpenGL + Raw Input、Auto、Vulkanを利用不可にしたフォールバックの各試行で、
+  120 Play framesを完走して終了コード0・成功ログを確認。
+- 同梱の`03_Sample_OpenGL_RawInput.cmd`を実際に起動してPlayに到達し、
+  当該テストウィンドウを閉じて正常終了することを確認。
+  FFmpeg 5 DLLとVCRUNTIME140が展開先のファイルからロードされていることも確認。
+- ZIPにDB・`.env`・`.git`・実行時`test-data`が混入していないことを確認。
+
+以上はWindows 11上の結果。Windows 11は同梱UCRTよりOSのUCRTを使うため、
+同梱UCRTのWindows 8.1上での実際のロード・実行はVMでの確認が必要。
+今回のimport/export照合も、Windows 8.1のOS API・GPU・音声・専コンの実動作を証明するものではない。
+成果物・展開テスト・生ログはGitへ含めない。
