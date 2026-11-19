@@ -80,21 +80,43 @@ impl WinitApp {
     }
 
     pub(super) fn current_frame_limit(&self) -> u32 {
-        let frame_limit = if self.ui.focused {
+        self.current_frame_pacing_state().effective_frame_limit
+    }
+
+    fn current_frame_pacing_state(&self) -> FramePacingState {
+        let configured_limit = if self.ui.focused {
             self.boot.app_config.video.target_fps
         } else {
             self.boot.app_config.video.frame_limit_in_background
         };
+        let suspended = self.renderer.surface_drawing_suspended();
         // Keep CPU/egui updates alive without raising a lower user limit,
         // including when a zero-size surface has suspended presentation.
-        if self.renderer.surface_drawing_suspended() {
-            suspended_frame_limit(frame_limit, self.boot.app_config.video.frame_limit_in_background)
+        let frame_limit = if suspended {
+            suspended_frame_limit(
+                configured_limit,
+                self.boot.app_config.video.frame_limit_in_background,
+            )
         } else {
-            frame_limit
-        }
-    }
-
-    fn current_frame_pacing_state(&self) -> FramePacingState {
+            configured_limit
+        };
+        let effective_mode = self.renderer.surface_presentation_status().and_then(|status| {
+            match status.effective_mode {
+                "Fifo" => Some(WgpuPresentMode::Fifo),
+                "FifoRelaxed" => Some(WgpuPresentMode::FifoRelaxed),
+                "Immediate" => Some(WgpuPresentMode::Immediate),
+                "Mailbox" => Some(WgpuPresentMode::Mailbox),
+                _ => None,
+            }
+        });
+        let (effective_frame_limit, display_revision) =
+            frame_runtime::display::resolve_display_frame_limit(
+                frame_limit,
+                self.ui.focused,
+                suspended,
+                effective_mode,
+                || self.frame.display_timing.refresh_rate(self.window.as_deref()),
+            );
         let window_mode = match &self.ui.applied_window_mode {
             WindowMode::Windowed => FrameWindowMode::Windowed,
             WindowMode::BorderlessFullscreen => FrameWindowMode::BorderlessFullscreen,
@@ -102,16 +124,10 @@ impl WinitApp {
         };
         FramePacingState {
             focused: self.ui.focused,
-            effective_frame_limit: self.current_frame_limit(),
-            present_mode: self.renderer.surface_presentation_status().map_or_else(
-                || config_present_mode(&self.boot.app_config.video),
-                |status| match status.effective_mode {
-                    "Immediate" => WgpuPresentMode::Immediate,
-                    "Mailbox" => WgpuPresentMode::Mailbox,
-                    "FifoRelaxed" => WgpuPresentMode::FifoRelaxed,
-                    _ => WgpuPresentMode::Fifo,
-                },
-            ),
+            effective_frame_limit,
+            display_revision,
+            present_mode: effective_mode
+                .unwrap_or_else(|| config_present_mode(&self.boot.app_config.video)),
             window_mode,
         }
     }
@@ -153,15 +169,17 @@ impl WinitApp {
 
     /// 次の frame deadline まで winit に待機させ、到達時に redraw を要求する。
     /// FPS が 0、設定変更直後、明示的な skip 時は即座に次フレームを要求する。
-    pub(super) fn schedule_next_frame(&self, event_loop: &ActiveEventLoop) {
+    pub(super) fn schedule_next_frame(&mut self, event_loop: &ActiveEventLoop) {
+        let state = self.current_frame_pacing_state();
         let now = Instant::now();
-        let fps = self.current_frame_limit();
+        self.frame.sync_pacing_state(now, state);
+        let fps = state.effective_frame_limit;
         let deadline = earlier_frame_deadline(
             self.frame.next_deadline(now, fps),
             self.renderer.surface_retry_deadline(),
         );
         if let Some(deadline) = deadline.filter(|deadline| *deadline > now) {
-            match self.current_frame_pacing_state().wait_plan(
+            match state.wait_plan(
                 now,
                 deadline,
                 cfg!(windows) && !self.renderer.surface_drawing_suspended(),
@@ -968,6 +986,7 @@ impl WinitApp {
         selection.log("video config changed");
         let mut effective_video = self.boot.app_config.video.clone();
         effective_video.mode = desired_mode.clone();
+        self.frame.display_timing.invalidate();
         window.set_fullscreen(fullscreen_from_config(&effective_video, selection.handle()));
         tracing::info!(
             requested_window_mode = ?configured_mode,
