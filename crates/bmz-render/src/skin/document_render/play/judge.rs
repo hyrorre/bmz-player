@@ -134,24 +134,27 @@ macro_rules! skin_document_render_play_judge_public_methods {
             } else {
                 skin_image_texture_region(image, source.source_size, image_elapsed_ms)
             };
-            let (rect, uv) = stretch_skin_image_geometry(
-                image_destination.stretch,
-                normalize_skin_frame_rect(image_frame, self.w, self.h),
-                uv,
-                source.source_size,
-                self.w,
-                self.h,
-            );
-            let mut items = vec![skin_image_item_for_frame(
-                source.texture,
-                rect,
-                uv,
-                image_frame,
-                image_destination.center,
-                BlendMode::Normal,
-                Some(source.source_size),
-                image_destination.filter != 0,
-            )];
+            let mut items = Vec::new();
+            if let Some(uv) = uv {
+                let (rect, uv) = stretch_skin_image_geometry(
+                    image_destination.stretch,
+                    normalize_skin_frame_rect(image_frame, self.w, self.h),
+                    uv,
+                    source.source_size,
+                    self.w,
+                    self.h,
+                );
+                items.push(skin_image_item_for_frame(
+                    source.texture,
+                    rect,
+                    uv,
+                    image_frame,
+                    image_destination.center,
+                    BlendMode::Normal,
+                    Some(source.source_size),
+                    image_destination.filter != 0,
+                ));
+            }
             if combo > 0
                 && let Some(number_destination) = number_destination
                 && let Some(number_frame) = number_frame

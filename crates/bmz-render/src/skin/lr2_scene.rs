@@ -149,7 +149,9 @@ pub(super) fn chart_items(
     };
     let width = chart.width.min(16384);
     let step = frame.w.max(1);
-    let uv = skin_image_texture_region(image, source.source_size, state.elapsed_ms);
+    let Some(uv) = skin_image_texture_region(image, source.source_size, state.elapsed_ms) else {
+        return Vec::new();
+    };
     let mut cumulative = Vec::new();
     if chart.score {
         let mut score = 0_u64;

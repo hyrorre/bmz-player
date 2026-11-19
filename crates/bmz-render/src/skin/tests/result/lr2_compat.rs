@@ -134,7 +134,8 @@ fn lr2_buttons_select_flat_cells_while_json_buttons_keep_row_selection() {
             SkinImageSize { width: 120.0, height: 60.0 },
             &state,
             (0, 0, 120, 60),
-        );
+        )
+        .unwrap();
         assert!(approx_eq(uv.x, expected_x));
         assert!(approx_eq(uv.y, expected_y));
     }
@@ -144,7 +145,8 @@ fn lr2_buttons_select_flat_cells_while_json_buttons_keep_row_selection() {
         SkinImageSize { width: 120.0, height: 60.0 },
         &SkinDrawState { gauge_type: 5, ..Default::default() },
         (0, 0, 120, 60),
-    );
+    )
+    .unwrap();
     assert_eq!(uv.x, 0.0);
 }
 

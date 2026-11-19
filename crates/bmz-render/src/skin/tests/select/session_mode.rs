@@ -61,7 +61,8 @@ fn session_mode_image_refs_match_numbers_and_events_in_every_scene() {
                     SkinImageSize { width: 210.0, height: 250.0 },
                     &state,
                     (0, 0, 210, 250),
-                );
+                )
+                .unwrap();
                 assert!(approx_eq(uv.y, index as f32 / 5.0));
                 assert!(approx_eq(uv.height, 0.2));
             }
