@@ -137,6 +137,48 @@ pub(super) struct PendingPlayStart {
 }
 
 impl PendingPlayStart {
+    /// 実譜面の準備ができたら、ロード中のレーン状態を実sessionと同じ初期値と設定対象
+    /// キーモードから作り直し、ロード中の操作を最初から適用し直す。Play画面に入る前に
+    /// 準備が済んだ場合も、入った後に済んだ場合も、この処理を通す。
+    pub(super) fn rebase_lane_to_prepared_chart(
+        &mut self,
+        chart: &bmz_chart::model::PlayableChart,
+        snapshot: &mut RenderSnapshot,
+        profile: &ProfileConfig,
+        app_config: &AppConfig,
+        speed_locked: bool,
+    ) {
+        let mut session_options = crate::screens::play_start::play_session_options_from_start(
+            app_config,
+            self.options.clone(),
+        );
+        session_options.play_config_key_mode = Some(self.play_config_key_mode);
+        let initial =
+            crate::screens::play_session::initial_session_hispeed(chart, profile, &session_options);
+        let mode_config = profile.play_mode_config(self.play_config_key_mode);
+        let now_bpm = snapshot.now_bpm;
+        let actions = &self.lane_actions;
+        self.lane.rebase_to_prepared_chart(
+            snapshot,
+            &mode_config,
+            self.options.hs_fix,
+            initial,
+            |lane| {
+                for &action in actions {
+                    let _ = apply_pending_play_lane_action_to_state(
+                        lane,
+                        action,
+                        profile,
+                        now_bpm,
+                        speed_locked,
+                    );
+                }
+            },
+        );
+        self.lane.apply_to_snapshot(snapshot);
+        self.prepared_chart_applied = true;
+    }
+
     pub(super) fn from_snapshot(
         chart_id: i64,
         options: PlayStartOptions,
@@ -178,6 +220,8 @@ impl PendingPlayStart {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PendingPlayLaneState {
     pub(super) hispeed: f32,
+    /// プレイ画面に入った時点の表示上のHS値。比率方式のHS変更の基準にする。
+    pub(super) hispeed_change_base: f32,
     pub(super) hispeed_mode: HispeedMode,
     pub(super) base_hispeed_mode: HispeedMode,
     pub(super) floating_policy: FloatingPolicy,
@@ -216,8 +260,9 @@ impl PendingPlayLaneState {
         };
         let hsfix_base_bpm = hsfix_base_bpm_from_snapshot(snapshot, hs_fix);
         let lr2_hispeed = mode_config.base_hispeed == BaseHispeedConfig::Lr2;
-        Self {
+        let mut lane = Self {
             hispeed: snapshot.hispeed,
+            hispeed_change_base: snapshot.hispeed,
             hispeed_mode: if snapshot.hispeed_mode_index == 0 {
                 base_hispeed_mode
             } else {
@@ -259,7 +304,9 @@ impl PendingPlayLaneState {
             ),
             hispeed_auto_adjust: mode_config.hispeed_auto_adjust,
             playback_rate_percent,
-        }
+        };
+        lane.hispeed_change_base = lane.display_hispeed();
+        lane
     }
 
     /// skin表示とprofile保存に使うHS値。LR2 + HS-FIXではBPM150基準の値を返す。
@@ -324,22 +371,31 @@ impl PendingPlayLaneState {
         self.refresh_floating_hispeed(target_bpm, speed_locked);
     }
 
-    pub(super) fn sync_chart_bpm(&mut self, snapshot: &RenderSnapshot, hs_fix: HsFixOption) {
-        // Classicの表示HSを保ったまま、譜面の基準BPMで実効倍率を求め直す。
-        let display_hispeed = self.display_hispeed();
-        self.hsfix_base_bpm = hsfix_base_bpm_from_snapshot(snapshot, hs_fix);
-        self.classic_hsfix_scale = crate::screens::play_snapshot::classic_hsfix_scale_for_option(
-            self.lr2_hispeed,
-            hs_fix,
-            f64::from(self.hsfix_base_bpm),
-            self.playback_rate_percent,
-        );
-        if self.hispeed_mode == HispeedMode::Classic {
-            self.hispeed = crate::config::play::classic_effective_hispeed(
-                display_hispeed,
-                self.classic_hsfix_scale,
-            );
-        }
+    /// 実譜面の準備ができたときに、placeholderの初期HSを実sessionと同じ値へ置き換え、
+    /// ロード中の操作を最初から適用し直す。比率方式の基準も実sessionと揃う。
+    pub(super) fn rebase_to_prepared_chart(
+        &mut self,
+        snapshot: &RenderSnapshot,
+        mode_config: &PlayModeConfig,
+        hs_fix: HsFixOption,
+        initial: crate::screens::play_session::InitialSessionHispeed,
+        replay: impl FnOnce(&mut Self),
+    ) {
+        let lane_cover_changing = self.lane_cover_changing;
+        let mut lane =
+            Self::from_snapshot(snapshot, mode_config, hs_fix, self.playback_rate_percent);
+        lane.hispeed = initial.hispeed;
+        lane.hispeed_mode = initial.hispeed_mode;
+        lane.hispeed_change_base = initial.display_hispeed;
+        // snapshotのLIFT / SUDDEN+はロード中の操作を反映済みなので、初期値へ戻してから適用し直す。
+        lane.lift = initial.lift;
+        lane.lane_cover = initial.lane_cover;
+        // snapshotのMAIN BPMは初期BPMのことがあるため、実効倍率と同じ計算の値を使う。
+        lane.hsfix_base_bpm = initial.hsfix_base_bpm;
+        lane.classic_hsfix_scale = initial.classic_hsfix_scale;
+        lane.lane_cover_changing = lane_cover_changing;
+        replay(&mut lane);
+        *self = lane;
     }
 
     pub(super) fn current_green_number(self, now_bpm: f32) -> u32 {

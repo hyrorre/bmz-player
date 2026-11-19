@@ -220,6 +220,7 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
             auto_keysound_mine: true,
         },
         hispeed: 2.0,
+        hispeed_change_base: 2.0,
         hispeed_mode: HispeedMode::Classic,
         base_hispeed_mode: HispeedMode::Classic,
         floating_policy: FloatingPolicy::Toggle,

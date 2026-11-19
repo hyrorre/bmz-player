@@ -68,6 +68,8 @@ settings-entry-description-hispeed-mode = 하이스피드를 정하는 방법입
 settings-entry-description-normal-hispeed-level = NORMAL에서 사용하는 속도 단계입니다. 1~20 단계마다 녹색 숫자가 정해져 있습니다.
 settings-entry-description-classic-hispeed-step = CLASSIC에서 하이스피드를 한 번 바꿀 때 늘거나 주는 양입니다.
 settings-entry-description-floating-hispeed-step = FLOATING에서 하이스피드를 한 번 바꿀 때 늘거나 주는 양입니다.
+settings-entry-description-hispeed-change-type = 플레이 중에 E1+건반이나 ← / →로 하이스피드를 바꿀 때 변경량을 정하는 방식입니다. FIXED는 위의 변경 단위, RATIO는 플레이 시작 시의 HS에 HS RATIO를 곱한 양만큼 바뀝니다. 곡 선택 화면의 HS 변경은 항상 변경 단위를 사용합니다.
+settings-entry-description-hispeed-change-ratio = HS CHANGE가 RATIO일 때 플레이 시작 시의 HS에 곱하는 비율입니다. 1.00이면 HS 3.00에서 3.00→6.00→9.00으로 바뀝니다.
 settings-entry-description-sudden-enabled = 레인 위쪽을 가리는 커버(SUDDEN+)를 사용할 수 있게 합니다.
 settings-entry-description-sudden = SUDDEN+로 레인 위쪽을 가리는 양입니다.
 settings-entry-description-lift = LIFT로 판정선을 올리는 양입니다.
@@ -537,6 +539,11 @@ profile-display-normal-hispeed = Normal HS
 profile-display-classic-hispeed-step = Classic HS 변경 단위
 profile-display-floating-hispeed-step = Floating HS 변경 단위
 profile-display-step-range = HS 변경 단위 범위: Classic 0.01..=1.00 / Floating 0.05..=1.00
+profile-display-hispeed-change-type = HS 변경 방식
+profile-display-hispeed-change-type-fixed = 고정
+profile-display-hispeed-change-type-ratio = 비율
+profile-display-hispeed-change-ratio = HS 변경 비율
+profile-display-hispeed-change-ratio-help = 비율에서는 플레이 중 E1+건반이나 ← / →의 1회 변경량이 "플레이 시작 시의 HS × 비율"이 됩니다. 범위는 0.01..=10.00입니다. 곡 선택 화면의 HS 변경과 커버 조작에 의한 HS 변경은 변경 단위를 사용합니다.
 profile-display-sudden-enabled = SUDDEN+ 사용
 profile-display-lift-enabled = LIFT 사용
 profile-display-auto-adjust-hispeed = 레인 커버 변경 시 현재 BPM에 맞춰 HS 자동 조정

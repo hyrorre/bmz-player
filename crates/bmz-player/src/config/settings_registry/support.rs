@@ -247,6 +247,14 @@ pub(crate) fn format_hispeed_mode(value: HispeedConfigPreset) -> String {
     }
 }
 
+pub(crate) fn format_hispeed_change_type(value: HispeedChangeTypeConfig) -> String {
+    match value {
+        HispeedChangeTypeConfig::Fixed => "FIXED",
+        HispeedChangeTypeConfig::Ratio => "RATIO",
+    }
+    .to_string()
+}
+
 pub(super) fn format_replay_slot_rule(value: ReplaySlotRule) -> String {
     match value {
         ReplaySlotRule::Disabled => "DISABLED".to_string(),
@@ -510,6 +518,13 @@ pub(super) fn cycle_hispeed_mode(
     forward: bool,
 ) -> HispeedConfigPreset {
     cycle_in_slice(&HispeedConfigPreset::ORDER, current, forward)
+}
+
+pub(super) fn cycle_hispeed_change_type(
+    current: HispeedChangeTypeConfig,
+    forward: bool,
+) -> HispeedChangeTypeConfig {
+    cycle_in_slice(&HispeedChangeTypeConfig::ORDER, current, forward)
 }
 
 pub(super) fn cycle_select_input_mode(

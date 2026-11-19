@@ -100,6 +100,8 @@ settings-entry-description-hispeed-mode = How hi-speed is set. FLOATING uses a g
 settings-entry-description-normal-hispeed-level = The speed level used in NORMAL. Each level from 1 to 20 has a fixed green number.
 settings-entry-description-classic-hispeed-step = How much one hi-speed change adds or removes in CLASSIC.
 settings-entry-description-floating-hispeed-step = How much one hi-speed change adds or removes in FLOATING.
+settings-entry-description-hispeed-change-type = How each hi-speed change during play (E1 + key or Left / Right) is sized. FIXED uses the adjustment steps above; RATIO uses the HS at the start of play multiplied by HS RATIO. HS changes on the song select screen always use the adjustment steps.
+settings-entry-description-hispeed-change-ratio = When HS CHANGE is RATIO, the HS at the start of play is multiplied by this ratio. At 1.00, HS 3.00 changes 3.00 → 6.00 → 9.00.
 settings-entry-description-sudden-enabled = Enables the cover that hides the top of the lane (SUDDEN+).
 settings-entry-description-sudden = How much of the top of the lane SUDDEN+ hides.
 settings-entry-description-lift-enabled = Enables raising the judgement line (LIFT).
@@ -540,6 +542,11 @@ profile-display-normal-hispeed = Normal HS
 profile-display-classic-hispeed-step = Classic HS adjustment step
 profile-display-floating-hispeed-step = Floating HS adjustment step
 profile-display-step-range = HS adjustment step range: Classic 0.01..=1.00 / Floating 0.05..=1.00
+profile-display-hispeed-change-type = HS change type
+profile-display-hispeed-change-type-fixed = Fixed
+profile-display-hispeed-change-type-ratio = Ratio
+profile-display-hispeed-change-ratio = HS change ratio
+profile-display-hispeed-change-ratio-help = With Ratio, each change during play with E1 + key or Left / Right is the HS at the start of play multiplied by the ratio. The range is 0.01..=10.00. HS changes on the song select screen and through lane cover controls use the adjustment steps.
 profile-display-sudden-enabled = Enable SUDDEN+
 profile-display-lift-enabled = Enable LIFT
 profile-display-auto-adjust-hispeed = Adjust HS to the current BPM when lane cover changes

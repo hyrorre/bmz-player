@@ -249,6 +249,8 @@ pub struct GameSession {
     pub input_offset_auto_adjust: Option<InputOffsetAutoAdjustState>,
     pub audio_mix: PlayAudioMix,
     pub hispeed: f32,
+    /// プレイ開始時の表示上のHS値。比率方式のHS変更で、1回の変化量の基準にする。
+    pub hispeed_change_base: f32,
     pub hispeed_mode: HispeedMode,
     pub base_hispeed_mode: HispeedMode,
     pub floating_policy: FloatingPolicy,

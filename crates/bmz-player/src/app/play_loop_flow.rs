@@ -671,9 +671,10 @@ impl WinitApp {
         let Some(active_play) = &mut self.play.active_play else {
             return false;
         };
-        let hispeed_step = hispeed_step_for_profile(
+        let hispeed_steps = PlayHispeedSteps::for_profile(
             &self.boot.profile_config,
             active_play.running.session.hispeed_mode,
+            active_play.running.session.hispeed_change_base,
         );
         if speed_locked {
             tracing::debug!("play lane change ignored: course NoSpeed constraint");
@@ -693,7 +694,7 @@ impl WinitApp {
                         &mut target,
                         action,
                         speed_locked,
-                        hispeed_step,
+                        hispeed_steps,
                     );
                 }) {
                     return false;
@@ -705,7 +706,7 @@ impl WinitApp {
                 lane_target,
                 action,
                 speed_locked,
-                hispeed_step,
+                hispeed_steps,
             )
         }) {
             return false;

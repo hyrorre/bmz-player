@@ -333,7 +333,7 @@ fn disabled_covers_use_zero_cover_as_auto_adjust_trigger() {
         &mut lane_target,
         PlayLaneAction::LaneCoverDelta(0.1),
         false,
-        0.5,
+        PlayHispeedSteps::uniform(0.5),
     ));
     assert!(!toggle_lane_cover_visibility(&mut session, false));
     assert!((session.hispeed - 4.0).abs() < 0.000_1, "hispeed={}", session.hispeed);
@@ -377,7 +377,7 @@ fn disabled_cover_trigger_recalculates_with_current_bpm() {
         &mut lane_target,
         PlayLaneAction::LaneCoverDelta(LANE_COVER_STEP),
         false,
-        0.5,
+        PlayHispeedSteps::uniform(0.5),
     ));
 
     assert!((session.hispeed - 2.0).abs() < 0.000_1, "hispeed={}", session.hispeed);
@@ -404,7 +404,7 @@ fn disabled_covers_without_auto_adjust_change_hispeed_directly() {
         &mut lane_target,
         PlayLaneAction::LaneCoverDelta(LANE_COVER_STEP),
         false,
-        0.25,
+        PlayHispeedSteps::uniform(0.25),
     ));
     assert_eq!(session.hispeed, 2.25);
 
@@ -413,7 +413,7 @@ fn disabled_covers_without_auto_adjust_change_hispeed_directly() {
         &mut lane_target,
         PlayLaneAction::AnalogLaneCoverDelta(3.0 * LANE_COVER_STEP),
         false,
-        0.25,
+        PlayHispeedSteps::uniform(0.25),
     ));
     assert!((session.hispeed - 2.28).abs() < 0.000_1, "hispeed={}", session.hispeed);
     assert!((session.lane_cover - 0.25).abs() < f32::EPSILON);
@@ -442,7 +442,7 @@ fn lift_and_hidden_share_lane_actions_with_an_explicit_target() {
         &mut lane_target,
         PlayLaneAction::ToggleHispeedMode,
         false,
-        0.25,
+        PlayHispeedSteps::uniform(0.25),
     ));
     assert_eq!(lane_target, PlayLaneTarget::Hidden);
     assert_eq!(session.hispeed_mode, HispeedMode::Classic);
@@ -452,7 +452,7 @@ fn lift_and_hidden_share_lane_actions_with_an_explicit_target() {
         &mut lane_target,
         PlayLaneAction::LaneCoverDelta(0.1),
         false,
-        0.25,
+        PlayHispeedSteps::uniform(0.25),
     ));
     assert!((session.hidden_cover - 0.4).abs() < f32::EPSILON);
 
@@ -461,7 +461,7 @@ fn lift_and_hidden_share_lane_actions_with_an_explicit_target() {
         &mut lane_target,
         PlayLaneAction::AnalogLaneCoverDelta(-0.1),
         false,
-        0.25,
+        PlayHispeedSteps::uniform(0.25),
     ));
     assert!((session.hidden_cover - 0.3).abs() < f32::EPSILON);
 }
@@ -584,7 +584,7 @@ fn active_lane_state_rejects_all_no_speed_controls() {
             &mut lane_target,
             action,
             true,
-            0.25,
+            PlayHispeedSteps::uniform(0.25),
         ));
     }
     assert_eq!(session.hispeed_mode, HispeedMode::Classic);
@@ -656,7 +656,7 @@ fn e1_hispeed_change_keeps_target_green_during_play() {
         &mut session,
         PlayOptionControl::Hispeed(HispeedChange::Up),
         false,
-        0.5,
+        PlayHispeedSteps::uniform(0.5),
     ));
 
     assert_eq!(session.target_green_number, 300);
@@ -743,7 +743,7 @@ fn analog_lane_cover_zero_delta_recalculates_floating_at_current_bpm() {
         &mut lane_target,
         PlayLaneAction::AnalogLaneCoverDelta(0.0),
         false,
-        0.5,
+        PlayHispeedSteps::uniform(0.5),
     ));
 
     assert_eq!(session.lane_cover, lane_cover);

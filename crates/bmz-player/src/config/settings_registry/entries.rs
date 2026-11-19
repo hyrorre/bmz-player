@@ -732,6 +732,32 @@ define_settings! {
             format!("{:.2}", profile.lane.floating_hispeed_step)
         },
     }
+    HispeedChangeType(HispeedChangeTypeConfig) {
+        value: [field lane.hispeed_change_type],
+        adjust: |profile, delta| {
+            cycle_enum(delta, profile.lane.hispeed_change_type, cycle_hispeed_change_type)
+                .map(|next| profile.lane.hispeed_change_type = next)
+                .is_some()
+        },
+        format: |profile| format_hispeed_change_type(profile.lane.hispeed_change_type),
+    }
+    HispeedChangeRatio(f32) {
+        value: [field lane.hispeed_change_ratio],
+        adjust: |profile, delta| {
+            let before = profile.lane.hispeed_change_ratio;
+            let current = normalize_hispeed_change_ratio(before);
+            let unit = HISPEED_CHANGE_RATIO_UNIT;
+            let next = ((current / unit).round() as i32 + delta).clamp(
+                (HISPEED_CHANGE_RATIO_MIN / unit).round() as i32,
+                (HISPEED_CHANGE_RATIO_MAX / unit).round() as i32,
+            );
+            profile.lane.hispeed_change_ratio = next as f32 / (1.0 / unit).round();
+            (profile.lane.hispeed_change_ratio - before).abs() > f32::EPSILON
+        },
+        format: |profile| {
+            format!("{:.2}", normalize_hispeed_change_ratio(profile.lane.hispeed_change_ratio))
+        },
+    }
     SuddenEnabled(LaneEffectConfig) {
         value: [field play.lane_effect],
         adjust: |profile, _delta| {
