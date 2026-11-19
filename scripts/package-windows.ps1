@@ -473,6 +473,9 @@ foreach ($dir in $dllDirs) {
 }
 
 $arch = Resolve-InstallerArch $Target
+if ($Target -eq "x86_64-win7-windows-msvc") {
+    & (Join-Path $PSScriptRoot "copy-windows-compat-runtime.ps1") -Destination $stageDir
+}
 $updateMetadataScript = Join-Path $repoRoot "scripts\generate-update-metadata.mjs"
 Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "portable", "windows-$arch", $version, $UpdaterLayout)
 

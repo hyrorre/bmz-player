@@ -28,6 +28,7 @@
 #endif
 
 [Setup]
+MinVersion=6.3
 AppId={#AppId}
 AppName={#AppName}
 AppVersion={#AppVersion}
