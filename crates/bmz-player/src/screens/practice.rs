@@ -21,7 +21,9 @@ use crate::select_options::ArrangeOption;
 
 mod persistence;
 
-const PRACTICE_PROPERTY_FORMAT_VERSION: u32 = 1;
+/// 1: the judge rank is saved as a percentage.
+/// 2: the gauge category also applies in LR2oraja mode.
+const PRACTICE_PROPERTY_FORMAT_VERSION: u32 = 2;
 const PRACTICE_PLAYBACK_RATE_MIN: u16 = 50;
 const PRACTICE_PLAYBACK_RATE_MAX: u16 = 200;
 
@@ -325,11 +327,18 @@ fn migrate_legacy_practice_property(
     // BMZ の旧形式は初回値に BMS の生 #RANK / #DEFEXRANK を保存し、
     // 次回開始時に BMSON の倍率 (%) として再解釈していた。譜面由来の
     // 旧初期値と一致する場合だけ移行し、ユーザーが変更した値は保持する。
-    if let Some(spec) = chart.metadata.judge_rank_spec
+    if property.format_version < 1
+        && let Some(spec) = chart.metadata.judge_rank_spec
         && matches!(spec.kind, JudgeRankKind::BmsRank | JudgeRankKind::DefExRank)
         && property.judgerank == spec.value.clamp(1, 400)
     {
         property.judgerank = practice_judgerank_percent(chart, rule_mode);
+    }
+    // 形式1までは LR2oraja でもキーモード別の区分を補完して保存していたが、
+    // 実際のゲージは常に LR2 だった。保存値が効くようになっても、旧ファイルは
+    // それまでと同じ LR2 のまま遊べるようにする。
+    if property.format_version < 2 && rule_mode == RuleMode::Lr2Oraja {
+        property.gauge_category = Some(GaugeProperty::Lr2);
     }
     property.format_version = PRACTICE_PROPERTY_FORMAT_VERSION;
 }
@@ -832,6 +841,45 @@ mod tests {
         migrate_legacy_practice_property(&mut customized, &chart, RuleMode::Beatoraja);
         assert_eq!(customized.judgerank, 2);
         assert_eq!(customized.format_version, PRACTICE_PROPERTY_FORMAT_VERSION);
+    }
+
+    #[test]
+    fn format_1_practice_keeps_the_lr2_gauge_in_lr2oraja_mode() {
+        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+        let paths = crate::paths::resolve_profile_paths(&data.paths, "default").unwrap();
+        let mut chart = empty_chart(120_000);
+        chart.metadata.key_mode = KeyMode::K9;
+        for (format_version, rule_mode, expected) in [
+            (1, RuleMode::Lr2Oraja, GaugeProperty::Lr2),
+            (1, RuleMode::Beatoraja, GaugeProperty::Pms),
+            (2, RuleMode::Lr2Oraja, GaugeProperty::Pms),
+        ] {
+            // Format 1 filled in the key-mode category even in LR2oraja mode.
+            let saved = PracticeProperty {
+                format_version,
+                gauge_category: Some(GaugeProperty::Pms),
+                start_gauge: 20,
+                ..Default::default()
+            };
+            save_practice_property(&paths, &chart.identity.file_sha256, &saved).unwrap();
+            let rules = PracticeRuleContext { rule_mode, key_mode: KeyMode::K9 };
+            let loaded = load_practice_property(
+                &paths,
+                &chart.identity.file_sha256,
+                &chart,
+                GaugeTypeConfig::Normal,
+                rules,
+                &Default::default(),
+            )
+            .unwrap();
+            assert_eq!(loaded.gauge_category, Some(expected), "{format_version} {rule_mode:?}");
+            assert_eq!(loaded.format_version, PRACTICE_PROPERTY_FORMAT_VERSION);
+            assert_eq!(loaded.start_gauge, 20);
+        }
+        let lr2 = PracticeRuleContext { rule_mode: RuleMode::Lr2Oraja, key_mode: KeyMode::K9 };
+        let migrated =
+            PracticeProperty { gauge_category: Some(GaugeProperty::Lr2), ..Default::default() };
+        assert_eq!(lr2.gauge_bounds(&migrated).max, 100);
     }
 
     #[test]
