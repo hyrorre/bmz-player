@@ -218,13 +218,20 @@ impl PackageManifest {
     /// Reads the manifest of one layout only, even when the other layout's manifest also exists.
     pub(crate) fn read_at(root: &Path, relative: &str) -> Result<Option<Self>> {
         let path = checked_path(root, relative)?;
+        let manifest = Self::read_file(&path)?;
+        if let Some(manifest) = &manifest {
+            ensure!(manifest.manifest_path() == relative, "package layout mismatch");
+        }
+        Ok(manifest)
+    }
+
+    pub(crate) fn read_file(path: &Path) -> Result<Option<Self>> {
         if !path.try_exists()? {
             return Ok(None);
         }
         ensure!(path.metadata()?.len() <= 16 * 1024 * 1024, "package manifest too large");
         let manifest: Self = serde_json::from_reader(File::open(path)?)?;
         manifest.validate()?;
-        ensure!(manifest.manifest_path() == relative, "package layout mismatch");
         Ok(Some(manifest))
     }
 
@@ -319,14 +326,23 @@ impl PackageManifest {
         for entry in &self.files {
             checkpoint()?;
             let path = checked_path(root, &entry.path)?;
-            if !path.is_file()
-                || path.metadata()?.len() != entry.size
-                || !hash_file_checked(&path, &mut checkpoint)?.eq_ignore_ascii_case(&entry.sha256)
-            {
+            if !entry.matches(&path, &mut checkpoint)? {
                 bail!("package file verification failed: {}", entry.path);
             }
         }
         Ok(())
+    }
+}
+
+impl PackageFile {
+    pub(crate) fn matches(
+        &self,
+        path: &Path,
+        checkpoint: &mut impl FnMut() -> Result<()>,
+    ) -> Result<bool> {
+        Ok(path.is_file()
+            && path.metadata()?.len() == self.size
+            && hash_file_checked(path, checkpoint)?.eq_ignore_ascii_case(&self.sha256))
     }
 }
 

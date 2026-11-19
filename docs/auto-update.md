@@ -16,14 +16,20 @@ BMZ Playerの更新確認・ダウンロード・適用の動作と、更新の�
 - 再起動は同じデータ・キャッシュ・ログ・リソースの保存先とプロファイルを引き継ぎ、Selectへ戻ります。譜面起動・Viewer・export等の元の引数は再実行しません。
 - 既存の旧版からは、この機能を搭載する版まで一度手動更新します。
 
-## Windows portable
+## Windows installer
 
 Windows Setupは配布ファイルのみを上書きし、`resources`を一括削除しません。
 配布物に含まれない追加スキン・フォント等は、同梱スキン内の追加ファイルも含めて残します。
-旧版にだけ含まれるファイルもSetupでは残します。アンインストールでも未知ファイルとユーザーデータは削除しません。
+SxS 版への上書きでは、新しい本体と `dll/` のハッシュを確認してから、旧 installer manifest に記録された
+exe 横 DLL のうち SHA-256 が一致するものを `updater/installer-dll-backup/` へ退避します。
+旧 manifest で確認できない DLL、利用者が変更した DLL、ほかの旧配布ファイルは保持します。
+使用中の DLL は元の場所に残り、アプリを閉じて同じ Setup を再実行すると退避を再試行します。
+配布ファイルのインストールが完了しなかった場合や、新しい本体と `dll/` の検証に失敗した場合は、旧 DLL を保持します。
+アンインストールでも未知ファイル、退避した DLL、ユーザーデータは削除しません。
 配布物と同じパスの編集済みファイルはSetupの上書き対象なので、編集用コピーは`data_dir/skins`へ置きます。
 この仕様は修正版Setupから適用され、旧Setupによって既に消えたファイルを復元するものではありません。
 
+## Windows portable
 
 `updater/bmz-package.json`は配布形式・target・version・updater protocol・配布物のファイル一覧とSHA256を持ちます。
 `data`の有無やカレントディレクトリから配布形式を推測しません。メタデータのない旧版・開発ビルドは自動適用しません。
@@ -123,8 +129,8 @@ protocol 3は統合Releaseメタデータへの対応を示します。grouped�
    `BMZ_MIN_UPDATER_PROTOCOL=4`、`BMZ_UPDATE_BRIDGE_TAG=橋渡し版のタグ` を使います。
    旧版向けに橋渡し版と `updates.json` を保持します。
 
-初期設定は `flat` です。SxS の公開 CI は、橋渡しタグの updater protocol、公開済み portable ZIP、
-互換 `updates.json` の最低 protocol を照合します。Windows-only 検証の `windows_sxs` は、
+初期設定は `flat` です。SxS の公開 CI は、橋渡しタグの updater protocol、公開済み portable ZIP と Setup、
+互換 `updates.json` の両形式の最低 protocol を照合します。Windows-only 検証の `windows_sxs` は、
 repository variable にかかわらず検証対象の配置を選びます。
 
 ## 更新の署名と公開設定

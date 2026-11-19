@@ -1,5 +1,6 @@
-//! Portable package validation and recoverable replacement. No audio/GPU dependencies.
+//! Windows package validation, replacement and cleanup. No audio/GPU dependencies.
 pub mod archive;
+pub mod installer;
 pub mod manifest;
 pub mod process;
 pub mod release;

@@ -237,8 +237,9 @@ jobs:
           }
           $bridge = gh release view $tag --json isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $bridge.isDraft -or ($env:BMZ_VERSION -notlike '*-*' -and $bridge.isPrerelease) -or
-              "bmz-player-$tag-windows-x64-portable.zip" -notin $bridge.assets.name -or 'updates.json' -notin $bridge.assets.name) {
-            throw "Publish the bridge portable ZIP and updates.json for this release channel before publishing dll/ packages"
+              "bmz-player-$tag-windows-x64-portable.zip" -notin $bridge.assets.name -or
+              "bmz-player-$tag-windows-x64-setup.exe" -notin $bridge.assets.name -or 'updates.json' -notin $bridge.assets.name) {
+            throw "Publish the bridge portable ZIP, Setup, and updates.json for this release channel before publishing dll/ packages"
           }
           $source = git show "refs/tags/${tag}:crates/bmz-updater/src/lib.rs"
           if ($LASTEXITCODE -ne 0 -or ($source -join "`n") -notmatch '(?m)^pub const PROTOCOL: u32 = 4;$') {
@@ -247,9 +248,11 @@ jobs:
           $envelope = gh release download $tag --pattern updates.json --output - | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or -not $envelope.signature) { throw "The bridge must publish signed updates.json" }
           $legacy = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($envelope.payload)) | ConvertFrom-Json
-          $portable = @($legacy.packages | Where-Object { $_.target -eq 'windows-x64' -and $_.kind -eq 'portable' })
-          if ($legacy.schema -ne 1 -or $portable.Count -ne 1 -or $portable[0].min_updater_protocol -ne 1) {
-            throw "The bridge must be readable by protocol-1 clients"
+          foreach ($kind in @('portable', 'installer')) {
+            $package = @($legacy.packages | Where-Object { $_.target -eq 'windows-x64' -and $_.kind -eq $kind })
+            if ($legacy.schema -ne 1 -or $package.Count -ne 1 -or $package[0].min_updater_protocol -ne 1) {
+              throw "The $kind bridge must be readable by protocol-1 clients"
+            }
           }
 
       - name: Package Windows app
@@ -279,7 +282,11 @@ jobs:
 
       - name: Test installer file preservation
         shell: pwsh
-        run: .\scripts\test-windows-installer.ps1
+        run: |
+          $package = "dist\windows\BMZ Player"
+          $helper = Join-Path $package "updater\bmz-updater.exe"
+          if (-not (Test-Path -LiteralPath $helper)) { $helper = Join-Path $package "bmz-updater.exe" }
+          .\scripts\test-windows-installer.ps1 -UpdaterPath $helper
 
       - name: Test packaged data isolation
         shell: pwsh

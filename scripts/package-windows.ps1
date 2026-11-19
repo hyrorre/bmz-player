@@ -523,14 +523,15 @@ if ($Installer) {
 
     Write-Host "==> Building Inno Setup installer"
     Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "installer", "windows-$arch", $version, $UpdaterLayout, $DllLayout)
-    Invoke-Native $iscc @(
+    $installerArguments = @(
         "/DAppVersion=$version",
         "/DSourceDir=$stageDir",
         "/DOutputDir=$installerOutDir",
         "/DIconFile=$appIcon",
-        "/DAppArch=$arch",
-        $issPath
+        "/DAppArch=$arch"
     )
+    if ($DllLayout -eq 'sxs') { $installerArguments += '/DSxsDllLayout=1' }
+    Invoke-Native $iscc ($installerArguments + $issPath)
     # Keep staging ready for the portable ZIP after building the installer.
     Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "portable", "windows-$arch", $version, $UpdaterLayout, $DllLayout)
 }

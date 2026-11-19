@@ -88,6 +88,8 @@ BMZ Player/
 
 SxS の公開設定と橋渡し版の順序は [protocol 4 の配布順](auto-update.md#protocol-4-の配布順)を参照してください。
 既定の flat 配置と橋渡し版では同梱 DLL を `bmz-player.exe` の横に置きます。
+SxS 版の Setup は上書き完了後、以前の installer の manifest と SHA-256 が一致する直下 DLL を
+`updater/installer-dll-backup/` へ退避します。追加 DLL と編集済み DLL は元の場所に残ります。
 
 `bmz-player.exe`の隣の`resources`がruntimeの`resource_dir`になります。
 `config.toml`, `library.db`, `profiles`, `score.db`, `replay`などのユーザー状態は

@@ -120,3 +120,28 @@ raw CSV・JSON・イベントログは `.local/windows-sxs-server/server2012r2-c
 旧クライアントが読める protocol 4 橋渡し版を先に公開してから設定する。
 追試時点で公開済みの最新版は v0.5.2 で、橋渡し版は未公開。
 候補のアーカイブと結果は CI artifact で確認し、公開用タグ・更新フィード・repository variables は変更していない。
+
+### Installer のルート DLL 退避
+
+`codex/windows-8.1-compat` の `44a228a9` を基点に、SxS 用 Setup の上書きも退避に対応した。
+旧 installer の有効な manifest をインストール前に記録し、新しい本体と `dll/` のハッシュを
+インストール後に確認する。旧 manifest のファイル名と SHA-256 が一致する直下 DLL を
+`updater/installer-dll-backup/` へ移す。以前の manifest と退避 DLL は再実行・復旧用に保持する。
+Setup は保持したファイルや退避できなかったファイルをログに記録する。
+
+- Inno Setup 6.7.3 の隔離 fixture で、初回導入、ハッシュ不一致時の旧 DLL 保持、
+  共有ロック中にほかの DLL を退避、ロック解除後の再実行、再インストール、アンインストールを確認した。
+  変更済み DLL、追加 DLL、スキン、設定、スコア用ファイルを上書き時に保持し、退避 DLL はアンインストール後も残った。
+- 実行ファイルと同梱ランタイムを含む比較パッケージを Inno Setup 6.7.3 で再包装し、Windows 11 build 26300 と
+  中央導入の VC/UCRT がない Server 2012 R2 build 9600 で `flat → dll/` を試験した。
+  空白・日本語を含むパスへ上書きし、両環境で 52 本の旧 DLL の退避前後の SHA-256 が一致した。
+  管理対象 DLL はルートに残らず、追加 DLL とデータを保持し、空の作業ディレクトリから更新後の `--version` が成功した。
+  本体は既存のローカル比較ビルド、退避 helper は新規に `nightly-2026-11-19` の
+  `x86_64-win7-windows-msvc`・CRT 静的リンクでビルドした。
+- Rust updater の check、Clippy、25 テスト、更新メタデータ 14 テストを確認した。
+  公開 workflow の橋渡し条件は、installer が不足する場合と旧 protocol から読めない場合も拒否することを試験した。
+- 通常の `package-windows.ps1` の SxS 経路で import/export 検査とフル Setup の生成も確認した。
+  上書き試験では別 AppId の比較用 Setup を使用した。
+
+Windows 8.1 クライアントと公開済みの更新フィード経由の installer 更新は未試験。
+生ログと検証素材は `.local/installer-dll-real/` と `.local/installer-dll-test-temp/` に保存した。
