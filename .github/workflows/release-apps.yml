@@ -25,7 +25,7 @@ name: Release Apps
         default: false
         type: boolean
       windows_sxs:
-        description: Build the Windows dll/ layout for validation without publishing
+        description: Build the dll/ layout in a Windows-only test
         required: true
         default: false
         type: boolean
@@ -41,10 +41,10 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   BMZ_UPDATE_PUBLIC_KEY: ${{ vars.BMZ_UPDATE_PUBLIC_KEY }}
-  BMZ_WINDOWS_DLL_LAYOUT: ${{ inputs.windows_sxs && 'sxs' || 'flat' }}
-  BMZ_WINDOWS_UPDATER_LAYOUT: ${{ inputs.windows_sxs && 'grouped' || vars.BMZ_WINDOWS_UPDATER_LAYOUT || 'grouped' }}
+  BMZ_WINDOWS_DLL_LAYOUT: ${{ inputs.windows_only && (inputs.windows_sxs && 'sxs' || 'flat') || vars.BMZ_WINDOWS_DLL_LAYOUT || 'flat' }}
+  BMZ_WINDOWS_UPDATER_LAYOUT: ${{ (inputs.windows_only && inputs.windows_sxs) && 'grouped' || vars.BMZ_WINDOWS_UPDATER_LAYOUT || 'grouped' }}
   BMZ_UPDATE_BRIDGE_TAG: ${{ vars.BMZ_UPDATE_BRIDGE_TAG }}
-  BMZ_MIN_UPDATER_PROTOCOL: ${{ inputs.windows_sxs && '4' || vars.BMZ_MIN_UPDATER_PROTOCOL }}
+  BMZ_MIN_UPDATER_PROTOCOL: ${{ (inputs.windows_only && inputs.windows_sxs) && '4' || vars.BMZ_MIN_UPDATER_PROTOCOL }}
 
 jobs:
   metadata:
@@ -225,12 +225,36 @@ jobs:
             throw "BMZ_RIANIR_DEV_CLIENT_HASH must not be set for official releases"
           }
 
+      - name: Verify the published Windows SxS bridge
+        if: needs.metadata.outputs.should_upload == 'true' && env.BMZ_WINDOWS_DLL_LAYOUT == 'sxs'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:BMZ_UPDATE_BRIDGE_TAG
+          if ($tag -notmatch '^v\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?$') {
+            throw "Set BMZ_UPDATE_BRIDGE_TAG to the published protocol-4 bridge tag"
+          }
+          $bridge = gh release view $tag --json isDraft,isPrerelease,assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $bridge.isDraft -or ($env:BMZ_VERSION -notlike '*-*' -and $bridge.isPrerelease) -or
+              "bmz-player-$tag-windows-x64-portable.zip" -notin $bridge.assets.name -or 'updates.json' -notin $bridge.assets.name) {
+            throw "Publish the bridge portable ZIP and updates.json for this release channel before publishing dll/ packages"
+          }
+          $source = git show "refs/tags/${tag}:crates/bmz-updater/src/lib.rs"
+          if ($LASTEXITCODE -ne 0 -or ($source -join "`n") -notmatch '(?m)^pub const PROTOCOL: u32 = 4;$') {
+            throw "The bridge tag must ship a protocol-4 updater"
+          }
+          $envelope = gh release download $tag --pattern updates.json --output - | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $envelope.signature) { throw "The bridge must publish signed updates.json" }
+          $legacy = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($envelope.payload)) | ConvertFrom-Json
+          $portable = @($legacy.packages | Where-Object { $_.target -eq 'windows-x64' -and $_.kind -eq 'portable' })
+          if ($legacy.schema -ne 1 -or $portable.Count -ne 1 -or $portable[0].min_updater_protocol -ne 1) {
+            throw "The bridge must be readable by protocol-1 clients"
+          }
+
       - name: Package Windows app
         shell: pwsh
         run: |
-          if ("${{ needs.metadata.outputs.should_upload }}" -eq "true" -and $env:BMZ_WINDOWS_DLL_LAYOUT -eq "sxs") {
-            throw "Publishing dll/ packages is blocked pending Windows 8.1 app-local UCRT verification"
-          }
           if ("${{ needs.metadata.outputs.should_upload }}" -eq "true" -and -not $env:BMZ_UPDATE_PUBLIC_KEY) {
             throw "BMZ_UPDATE_PUBLIC_KEY must be configured before publishing automatic updates"
           }
