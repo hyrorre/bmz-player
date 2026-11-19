@@ -1,6 +1,7 @@
 # Windows 8.1向けの検証
 
-Windows 8.1は検証中です。ビルドの成功だけでは正式サポートとしません。
+Windowsリリースのx64バイナリはWindows 8.1互換を目標にビルドします。
+Windows 8.1自体は検証中です。ビルドや新しいWindowsでの起動成功だけでは正式サポートとしません。
 VMでの起動、GPUドライバ、音声、USBパススルーした実際の専コンを確認してから判断します。
 作業結果は[2026-11-19の記録](../notes/2026/2026-11-19-windows-81-compat.md)へ残します。
 
@@ -9,7 +10,7 @@ VMでの起動、GPUドライバ、音声、USBパススルーした実際の専
 64bit WindowsのMSVC / Windows SDK / FFmpeg / ASIOの準備は[README](../README.md)と共通です。
 `x86_64-win7-windows-msvc`はWindows 7以降向けのTier 3ターゲットです。
 標準ライブラリが配布されないため、nightlyの`build-std`でビルドします。
-通常リリースのターゲットや自動更新の配布先は変更しません。
+通常リリースもこのRustターゲットを使います。自動更新の配布先IDは`windows-x64`を維持します。
 
 ```powershell
 rustup toolchain install nightly --profile minimal --component rust-src
@@ -18,12 +19,40 @@ rustup toolchain install nightly --profile minimal --component rust-src
 ```
 
 スクリプトはplayerとupdaterを同じターゲットでビルドします。
+updaterはCRTを静的リンクし、`updater/`だけから起動してもVC/UCRTの別途インストールを必要としない構成にします。
 出力先は`target/<target>/release/`です。`-Profile Debug`も指定できます。
 vcpkg-rs 0.2.15がwin7ターゲットからMSVC ABIを判別できないため、
 未指定時は`VCPKGRS_TRIPLET=x64-windows`をコマンド実行中だけ設定します。
 独自のFFmpegは`FFMPEG_DIR`、独自tripletは`VCPKGRS_TRIPLET`で指定します。
 Rustターゲットを変更してもFFmpegやVCランタイムなどのDLLの最低OSは変わりません。
 VMへ持ち込むDLLも8.1でロードできる必要があります。
+
+## リリースとCI
+
+`.github/workflows/release-apps.yml`のWindows jobは`windows-2022`上で、
+`nightly-2026-11-19`と`rust-src`を使ってwin7ターゲットをビルドします。
+MSVCはv143、Inno Setupは6.7.1に固定し、installerの最低OSは6.3（Windows 8.1）です。
+`scripts/package-windows.ps1 -Target x86_64-win7-windows-msvc -SkipBuild`は
+VS 2022の`vcruntime140.dll`とWindows SDKのapp-local UCRT一式を追加します。
+UCRTは`Windows Kits/10/Redist/ucrt/DLLs/x64`の旧OS向けセットを使い、
+build番号が14393を超えるものやVC runtime 14.44を超えるものは包装を失敗させます。
+使用したDLLのversionとSHA-256を`resources/licenses/windows-runtime.json`へ記録します。
+
+CIの確認は次の2段階です。
+
+- `scripts/verify-windows-compat-imports.ps1`: 同梱DLLのimport/export、updaterのCRT非依存、
+  既知のWindows 10以降の直接importを検査します。すべてのOS APIを網羅するものではありません。
+- `scripts/test-windows-compat.ps1`: 配布物の一時コピーを作り、開発用DLLのPATHと保存先overrideを外して、
+  player/updaterのCLI、AutoとRaw Inputでそれぞれ120 Play framesのサンプル再生・正常終了を確認します。
+  配布用stagingへ実行時dataを作らず、診断ログを`windows-compat-startup` artifactへ残します。
+
+GitHub提供のWindowsランナーには8.1がないため、起動試験はWindows Server 2022上で行います。
+同ランナーのsoftware adapterも利用できますが、確認できるGPU/backendはその試行のログを基準にします。
+8.1のAPI、同梱UCRTの実際のロード、専コン、音声の実機確認を代替しません。
+
+Release Appsの手動実行では`windows_only=true`、`tag`にブランチ等のGit refを指定すると、
+Windowsだけをビルド・起動確認できます。このモードでは`upload_to_release`の値に関係なく公開せず、
+通常のrelease asset名でActions artifactだけを生成します。
 
 ## 実行経路
 

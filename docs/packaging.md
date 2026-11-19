@@ -39,6 +39,13 @@ binaryに埋め込みます。Windows buildでは`bmz-player-window-windows.png`
 Windowsのstaging directoryとInno Setup installerは`scripts/package-windows.ps1`
 で作ります。
 
+GitHub ReleaseのWindows x64はWindows 8.1互換を目標に、固定したnightlyと
+`x86_64-win7-windows-msvc`でビルドします。先に`build-windows-compat.ps1`を実行し、
+package scriptへ`-Target x86_64-win7-windows-msvc -SkipBuild`を渡します。
+VC/UCRTの同梱、CRTを静的リンクしたupdater、CI起動試験の範囲は
+[Windows互換ビルド](windows-compat.md#リリースとci)を参照してください。
+installerはWindows 8.1以降を対象にします。8.1自体での動作確認は未実施です。
+
 PowerShell 5.1以降で実行する:
 
 ```powershell

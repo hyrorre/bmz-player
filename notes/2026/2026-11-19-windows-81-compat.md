@@ -171,3 +171,28 @@ exeの`--version`は`19317b42a6d9ff30106daa87afde4b06fa0e22ec`でdirty表示な�
 同梱UCRTのWindows 8.1上での実際のロード・実行はVMでの確認が必要。
 今回のimport/export照合も、Windows 8.1のOS API・GPU・音声・専コンの実動作を証明するものではない。
 成果物・展開テスト・生ログはGitへ含めない。
+
+## 2026-11-19: Release workflowとCI起動確認
+
+Windows 8.1 VMを用意できなかったため、ユーザーの依頼で通常Windows releaseを
+互換ターゲットでビルドし、GitHub Actions上で配布物を起動する構成へ変更した。
+Windows 8.1自体の結果は引き続き未確認で、正式サポートの確認とは区別する。
+
+- Windows jobは`windows-2022`、`nightly-2026-11-19` + rust-src、
+  `x86_64-win7-windows-msvc`、MSVC v143、Inno Setup 6.7.1を使用する。
+- playerには旧OS向けapp-local VC/UCRTを同梱し、runtime versionとhashを記録する。
+- grouped配置のupdaterはCRTを静的リンクし、外部VC/UCRTへの依存をimportから検査する。
+  更新プロトコル、manifestの許可パス、自動更新の`windows-x64` IDは維持する。
+- installerは`MinVersion=6.3`を明示する。
+- `verify-windows-compat-imports.ps1`で同梱DLLの関数と既知のWindows 10以降の直接importを検査する。
+  OS APIの完全な互換性検査ではない。
+- `test-windows-compat.ps1`で配布物の一時コピーを別の作業フォルダーから起動し、
+  開発用PATHと保存先overrideなしでCLI、updater、Auto/Raw Inputの各120 Play framesを確認する。
+  user dataを持つ入力は拒否し、配布stagingは変更しない。診断ログをActions artifactへ残す。
+- 手動実行の`windows_only=true`では`tag`にGit refを指定してWindowsだけ検証できる。
+  `upload_to_release`に関係なく公開を無効にし、macOS/Linux/publish jobも実行しない。
+
+ローカルで互換ビルド、2,013件のDLL import/export、updaterのCRT非依存、
+配布物のCLIとAuto/Raw Inputの各サンプル再生・正常終了を確認した（Windows 11）。
+build flagの通常/encoded/失敗時の復旧をスクリプトテストで確認した。
+GitHub Actionsの結果は実行後に追記する。
