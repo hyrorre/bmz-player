@@ -52,6 +52,9 @@ region・scheduler・判定状態は引き継ぎません。cacheはプロセス
   foreground windowを入力スレッドでも確認します。キーのrepeat / releaseとscancodeは
   winitのPhysicalKeyと既存の共通`DeviceInputEvent`へ正規化します。
 - Windows HID Raw Inputは同じmessage threadが取得します。
+  ゲームパッドのAutoはWGIのRawGameController APIを利用できる場合にgilrsを選び、
+  利用できない場合はRaw Inputを選びます。設定の候補・読み込み時の補正・再初期化は
+  同じ利用可否判定を使い、HID登録は実際に生成したバックエンドに従います。
 - gilrs / experimental GameInputとanalog scratchのpolling・停止検知も入力スレッドで行います。
   GameInputの構築、COM使用、破棄は同じowner thread上に保ちます。
 - macOS GameControllerは専用の直列dispatch queueから直接SharedInputBackendへ配送します。

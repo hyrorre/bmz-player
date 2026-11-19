@@ -508,7 +508,7 @@ impl WinitApp {
                     == WindowMode::ExclusiveFullscreen
                     && effective_mode == WindowMode::BorderlessFullscreen;
                 let effective_backend = self.renderer.effective_backend();
-                if backend == bmz_render::WgpuBackend::Gl
+                if backend != bmz_render::WgpuBackend::Auto
                     && let Some(effective) =
                         effective_backend.filter(|effective| *effective != backend)
                 {

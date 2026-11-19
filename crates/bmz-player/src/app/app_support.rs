@@ -427,7 +427,12 @@ pub(super) fn initialize_gamepad_backend(
 pub(super) fn initialize_gilrs_backend(
     configs: [crate::input::gamepad::GamepadScratchConfig; 2],
 ) -> Option<crate::input::capture::InputCapture> {
-    initialize_gamepad_backend(GamepadBackendKind::Gilrs, configs, None)
+    let kind = crate::input::availability::BackendAvailability::current()
+        .gamepads()
+        .find(|kind| *kind == GamepadBackendKind::Gilrs);
+    crate::input::capture::InputCapture::new(kind, configs, None)
+        .map_err(|error| tracing::error!(%error, "failed to start fallback input capture"))
+        .ok()
 }
 
 pub(super) fn gamepad_scratch_configs(

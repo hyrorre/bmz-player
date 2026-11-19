@@ -290,6 +290,10 @@ impl WinitApp {
                 update_dialog,
                 obs_connection_status: &obs_connection_status,
                 connected_gamepads: &connected_gamepads,
+                active_gamepad_backend: self
+                    .gamepad
+                    .as_ref()
+                    .map(crate::input::capture::InputCapture::name),
                 audio_stream_info: self.audio.audio_runtime.as_ref().map(AudioRuntime::stream_info),
                 audio_open_error: self.audio.audio_open_error.as_deref(),
             },

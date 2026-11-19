@@ -729,6 +729,7 @@ dependencies = [
  "unicode-normalization",
  "uuid",
  "webbrowser",
+ "windows 0.62.0",
  "windows-sys 0.61.2",
  "winit",
  "winres",
