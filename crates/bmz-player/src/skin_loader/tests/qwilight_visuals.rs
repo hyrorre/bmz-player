@@ -329,7 +329,7 @@ fn qwilight_timing_coordinates_use_fixed_milliseconds_in_every_direction() {
                 note_judge_window: Some(JudgeWindow {
                     bad_fast_us: fast,
                     bad_slow_us: slow,
-                    ..JudgeWindow::symmetric(10_000, 30_000, 40_000, 50_000, 500_000, 500_000, 0)
+                    ..JudgeWindow::symmetric(10_000, 30_000, 40_000, 50_000, 500_000, 500_000)
                 }),
                 judge_timing_offset_ms: offset,
                 qwilight_timing: [-500.0, -250.0, -125.0, 0.0, 125.0, 250.0, 500.0]

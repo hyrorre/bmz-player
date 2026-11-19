@@ -403,7 +403,7 @@ fn timing_judge_bands_use_effective_window_instead_of_rank_and_rule() {
         bad_fast_us: 100_000,
         bad_slow_us: 125_000,
         ..bmz_gameplay::judge::model::JudgeWindow::symmetric(
-            25_000, 50_000, 116_667, 183_333, 529_167, 183_333, 0,
+            25_000, 50_000, 116_667, 183_333, 529_167, 183_333,
         )
     };
     let state = SkinDrawState {

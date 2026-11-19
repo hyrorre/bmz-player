@@ -1,7 +1,7 @@
 use super::*;
 
 fn base_window() -> JudgeWindow {
-    JudgeWindow::symmetric(16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000)
+    JudgeWindow::symmetric(16_000, 40_000, 80_000, 120_000, 500_000, 200_000)
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn maps_bms_rank_levels_to_percent() {
     assert_eq!(judge_rank_to_percent(2), 75);
     assert_eq!(judge_rank_to_percent(3), 100);
     assert_eq!(judge_rank_to_percent(4), 125);
-    assert_eq!(judge_rank_to_percent(120), 120);
+    assert_eq!(judge_rank_to_percent(120), 75);
     assert_eq!(judge_rank_to_percent(-1), 75);
     assert_eq!(judge_rank_to_percent(9), 75);
 }
@@ -58,7 +58,7 @@ fn beatoraja_pms_rank_levels_follow_pms_table() {
     assert_eq!(beatoraja_judge_rank_to_percent_for_keymode(2, KeyMode::K9), 70);
     assert_eq!(beatoraja_judge_rank_to_percent_for_keymode(3, KeyMode::K9), 100);
     assert_eq!(beatoraja_judge_rank_to_percent_for_keymode(4, KeyMode::K9), 133);
-    assert_eq!(beatoraja_judge_rank_to_percent_for_keymode(120, KeyMode::K9), 120);
+    assert_eq!(beatoraja_judge_rank_to_percent_for_keymode(120, KeyMode::K9), 70);
     assert_eq!(beatoraja_judge_rank_to_percent_for_keymode(-1, KeyMode::K9), 70);
 }
 
@@ -169,7 +169,6 @@ fn scales_timing_judges_only() {
     assert_eq!(scaled.bad_slow_us, 60_000);
     assert_eq!(scaled.empty_poor_fast_us, 500_000);
     assert_eq!(scaled.empty_poor_slow_us, 200_000);
-    assert_eq!(scaled.mine_hit_us, 16_000);
 }
 
 #[test]

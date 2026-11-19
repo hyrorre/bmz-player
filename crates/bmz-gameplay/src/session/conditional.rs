@@ -238,6 +238,7 @@ pub(super) fn evaluate(session: &mut GameSession, at: TimeUs) {
     };
     chart.metadata.source_format = session.chart.metadata.source_format;
     chart.metadata.total = session.chart.metadata.total;
+    chart.metadata.bmson_total_percent = session.chart.metadata.bmson_total_percent;
     for diagnostic in &session.chart.metadata.kaleid.diagnostics {
         if !chart.metadata.kaleid.diagnostics.contains(diagnostic) {
             chart.metadata.kaleid.diagnostics.push(diagnostic.clone());
@@ -315,6 +316,7 @@ pub(super) fn evaluate_opponent(opponent: &mut BattleOpponentSession, at: TimeUs
     };
     chart.metadata.source_format = opponent.chart.metadata.source_format;
     chart.metadata.total = opponent.chart.metadata.total;
+    chart.metadata.bmson_total_percent = opponent.chart.metadata.bmson_total_percent;
     chart.metadata.conditional_revision = opponent.chart.metadata.conditional_revision + 1;
     chart.metadata.conditional = Some(program);
     retain_preloaded_sounds(&opponent.chart, &mut chart);
@@ -471,7 +473,7 @@ pub(super) fn advance_before_boundary(
     session: &mut GameSession,
     at: TimeUs,
 ) -> Vec<JudgementEvent> {
-    let mut events = super::input::process_hln_inputs(session, at);
+    let mut events = super::input::process_timed_inputs(session, at);
     events.extend(advance_time(session, at));
     events
 }

@@ -26,6 +26,7 @@ pub const REPLAY_SCORING_STEP_US: i64 = 1_000;
 
 #[derive(Debug, Clone, Default)]
 pub struct ReplayPlayer {
+    pub judge_window_rates: Option<crate::judge::window::JudgeWindowRates>,
     pub kaleid: Option<bmz_chart::kaleid::KaleidPlayEvidence>,
     pub branch_decisions: Option<Vec<bmz_core::replay::BranchDecision>>,
     pub events: Vec<ReplayEvent>,

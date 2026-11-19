@@ -696,6 +696,7 @@ fn text00_hiding_follows_the_order_of_same_time_judgements() {
         delta: TimeUs(0),
         time: TimeUs(1_500_000),
         affects_score: true,
+        advances_score: true,
     };
     // LR2oraja / DX multi-BAD: one input emits BAD then GOOD at the same time,
     // which hides the miss message; GOOD then BAD keeps it.

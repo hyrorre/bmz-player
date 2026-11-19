@@ -163,14 +163,14 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
             bounce_filter: Default::default(),
         },
         judge: JudgeEngine::new(JudgeWindow::symmetric(
-            16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000,
+            16_000, 40_000, 80_000, 120_000, 500_000, 200_000,
         ))
         .with_chart_index(chart.clone()),
         base_judge_window: JudgeWindow::symmetric(
-            16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000,
+            16_000, 40_000, 80_000, 120_000, 500_000, 200_000,
         ),
         base_judge_windows: JudgeWindows::uniform(JudgeWindow::symmetric(
-            16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000,
+            16_000, 40_000, 80_000, 120_000, 500_000, 200_000,
         )),
         rule_mode: RuleMode::Beatoraja,
         score: ScoreState::default(),
@@ -346,6 +346,7 @@ fn judgement_event(judge: Judge, delta_us: i64) -> JudgementEvent {
         delta: TimeUs(delta_us),
         time: TimeUs(0),
         affects_score: true,
+        advances_score: true,
     }
 }
 

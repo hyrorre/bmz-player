@@ -42,6 +42,76 @@ fn gauge_total_for_chart_and_rule_mode_uses_lr2oraja_default() {
 }
 
 #[test]
+fn bmson_total_percent_is_resolved_against_the_selected_rules_scored_note_count() {
+    use bmz_chart::model::ChartMetadata;
+    for (percent, expected) in [(100.0, 352.0), (0.0, 352.0), (-1.0, 352.0), (150.0, 528.0)] {
+        let metadata = ChartMetadata {
+            bmson_total_percent: Some(percent),
+            total: Some(460.909),
+            ..Default::default()
+        };
+        let total = gauge_total_for_play(&metadata, 1000, RuleMode::Lr2Oraja);
+        assert_eq!(total, expected);
+        let gauge = GaugeState::new_with_property_and_rule_mode(
+            GaugeType::Normal,
+            total,
+            1000,
+            GaugeProperty::Lr2,
+            RuleMode::Lr2Oraja,
+        );
+        assert_eq!(gauge.current().definition.values[0], (expected / 1000.0) as f32);
+    }
+    let bms = ChartMetadata { total: Some(100.0), ..Default::default() };
+    assert_eq!(gauge_total_for_play(&bms, 1000, RuleMode::Lr2Oraja), 100.0);
+}
+
+#[test]
+fn beatoraja_modify_damage_matches_upstream_thresholds_and_signed_note_terms() {
+    let gauge = definition_for_property(GaugeType::ExHard, GaugeProperty::FiveKeys);
+    for (total, notes, expected) in
+        [(200.0, 1000, -15.0), (128.0, 1000, -50.0), (260.0, 100, -10.0)]
+    {
+        let compiled = compile_gauge_definition(&gauge, total, notes);
+        assert_eq!(compiled.values[GaugeJudgeIndex::Bd as usize], expected);
+    }
+}
+
+#[test]
+fn beatoraja_lr2_guts_start_below_30_percent() {
+    for ty in [GaugeType::Hard, GaugeType::Class, GaugeType::ExClass] {
+        for (value, rate) in [(29.999, 0.6), (30.0, 1.0), (30.001, 1.0)] {
+            let mut gauge = GaugeState::new_with_property(ty, 260.0, 1000, GaugeProperty::Lr2);
+            gauge.set_initial_value(value);
+            let damage = gauge.current().definition.values[GaugeJudgeIndex::Bd as usize];
+            gauge.apply_judge(Judge::Bad, 1.0);
+            assert!((gauge.current().value - (value + damage * rate)).abs() < 0.0001);
+        }
+    }
+}
+
+#[test]
+fn lr2oraja_exhardclass_closes_below_but_not_at_two_percent() {
+    for (value, expected) in [(3.5, 0.0), (3.999, 0.0), (4.0, 2.0), (4.001, 2.001)] {
+        let mut gauge = GaugeState::new_with_property_and_rule_mode(
+            GaugeType::ExHardClass,
+            352.0,
+            1000,
+            GaugeProperty::Lr2,
+            RuleMode::Lr2Oraja,
+        );
+        gauge.set_initial_value(value);
+        gauge.apply_judge(Judge::EmptyPoor, 1.0);
+        assert!((gauge.current().value - expected).abs() < 0.0001);
+    }
+    assert_eq!(definition_for_property(GaugeType::ExHardClass, GaugeProperty::Lr2).death, 0.0);
+    assert_eq!(
+        definition_for_rule_mode_and_keymode(GaugeType::ExHardClass, RuleMode::Dx, KeyMode::K9)
+            .death,
+        0.0
+    );
+}
+
+#[test]
 fn modify_damage_scale_matches_lr2oraja_formula() {
     assert!((modify_damage_scale(225.0, 1000) - 10.0 / 9.0).abs() < 0.000_1);
     assert!((modify_damage_scale(205.0, 1000) - 10.0 / 7.0).abs() < 0.000_1);
@@ -181,10 +251,13 @@ fn definition_for_property(gauge_type: GaugeType, property: GaugeProperty) -> Ga
 }
 
 fn definition_for_rule_mode(gauge_type: GaugeType, rule_mode: RuleMode) -> GaugeDefinition {
-    gauge_definitions_for_rule_mode(GaugeProperty::SevenKeys, rule_mode)
-        .into_iter()
-        .find(|def| def.gauge_type == gauge_type)
-        .expect("definition exists")
+    gauge_definitions_for_rule_mode(
+        GaugeProperty::for_rule_mode(KeyMode::K7, rule_mode, None),
+        rule_mode,
+    )
+    .into_iter()
+    .find(|def| def.gauge_type == gauge_type)
+    .expect("definition exists")
 }
 
 fn definition_for_rule_mode_and_keymode(
@@ -259,7 +332,7 @@ fn class_gauge_values_differ_per_property() {
     let exhardclass_lr2 = definition_for_property(GaugeType::ExHardClass, GaugeProperty::Lr2);
     assert_eq!(exhardclass_lr2.values[3], -12.0);
     let class_lr2 = definition_for_property(GaugeType::Class, GaugeProperty::Lr2);
-    assert_eq!(class_lr2.guts, LR2_CLASS_GUTS);
+    assert_eq!(class_lr2.guts, BEATORAJA_LR2_GUTS);
 
     // KEYBOARD CLASS は PG/GR 回復が 0.20 と高い。
     let class_kb = definition_for_property(GaugeType::Class, GaugeProperty::Keyboard);
@@ -307,7 +380,7 @@ fn lr2oraja_hard_gauge_uses_32_percent_guts_and_2_percent_death() {
         GaugeType::Hard,
         160.0,
         1000,
-        GaugeProperty::SevenKeys,
+        GaugeProperty::Lr2,
         RuleMode::Lr2Oraja,
     );
     let hard_at_threshold = at_threshold
@@ -324,7 +397,7 @@ fn lr2oraja_hard_gauge_uses_32_percent_guts_and_2_percent_death() {
         GaugeType::Hard,
         160.0,
         1000,
-        GaugeProperty::SevenKeys,
+        GaugeProperty::Lr2,
         RuleMode::Lr2Oraja,
     );
     let hard_below_threshold = below_threshold

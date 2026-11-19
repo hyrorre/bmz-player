@@ -44,6 +44,7 @@ pub struct StorePlayResultRequest {
     pub assist_mask: u32,
     pub replay_events: Vec<ReplayEvent>,
     pub judge_algorithm: JudgeAlgorithm,
+    pub judge_window_rates: Option<bmz_gameplay::judge::window::JudgeWindowRates>,
     pub branch_decisions: Option<Vec<bmz_core::replay::BranchDecision>>,
     pub kaleid: Option<bmz_chart::kaleid::KaleidPlayEvidence>,
     pub arrange: ArrangeOption,
@@ -140,6 +141,7 @@ pub fn store_play_result(
                 request.replay_events,
             )
             .with_branch_decisions(request.branch_decisions)
+            .with_judge_window_rates(request.judge_window_rates)
             .with_kaleid_evidence(request.kaleid.clone())
             .with_randomization(
                 request.arrange_seed_2p,

@@ -285,6 +285,7 @@ fn imports_bmson_into_playable_chart() {
     assert_eq!(result.chart.metadata.title, "Bmson Song");
     assert_eq!(result.chart.metadata.difficulty_name, "BEGINNER");
     assert_eq!(result.chart.metadata.total, Some(520.0));
+    assert_eq!(result.chart.metadata.bmson_total_percent, Some(200.0));
     assert_eq!(result.chart.metadata.judge_rank, Some(100));
     assert_eq!(
         result.chart.metadata.judge_rank_spec,

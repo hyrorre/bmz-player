@@ -637,6 +637,70 @@ fn build_game_session_uses_gauge_property_override() {
 }
 
 #[test]
+fn lr2oraja_course_gauge_override_reaches_gas_and_carried_gauge() {
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.play.rule_mode = RuleMode::Lr2Oraja;
+    let lr2 = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+    assert_eq!(class_gauge_values(&lr2)[3], -2.0);
+
+    let mut options =
+        PlaySessionOptions { gauge_property: Some(GaugeProperty::SevenKeys), ..Default::default() };
+    options.gauge_auto_shift = bmz_gameplay::gauge::GaugeAutoShiftMode::BestClear;
+    let mut session = build_game_session(Arc::new(chart()), &profile, options);
+    assert_eq!(class_gauge_values(&session), [0.15, 0.12, 0.06, -1.5, -3.0, -1.5]);
+    session.gauge.set_initial_value(25.0);
+    let carry = session.gauge.carry_values();
+    session.gauge.set_initial_values(&carry);
+    assert_eq!(session.gauge.carry_values(), carry);
+}
+
+#[test]
+fn course_and_custom_rates_apply_after_rank_on_both_sides() {
+    use bmz_chart::model::{JudgeRankKind, JudgeRankSpec};
+    use bmz_core::course::CourseJudgeConstraint;
+
+    let mut chart = chart();
+    chart.metadata.judge_rank_spec = Some(JudgeRankSpec { value: 2, kind: JudgeRankKind::BmsRank });
+    let chart = Arc::new(chart);
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    let mut options = PlaySessionOptions::default();
+    options.assist.expand_judge = true;
+    options.assist.key_pgreat_rate = 100;
+    options.assist.key_great_rate = 100;
+    options.assist.key_good_rate = 200;
+    options.assist.scratch_pgreat_rate = 100;
+    options.assist.scratch_great_rate = 100;
+    options.assist.scratch_good_rate = 100;
+    let session = build_game_session(chart.clone(), &profile, options.clone());
+    assert_eq!(session.judge.windows.bands(true)[2], 165_000);
+    assert_eq!(session.judge.windows.bands(false)[2], 210_000);
+
+    profile.play.rule_mode = RuleMode::Lr2Oraja;
+    for (constraint, expected) in [
+        (CourseJudgeConstraint::NoGood, [18_000, 40_000, 40_000]),
+        (CourseJudgeConstraint::NoGreat, [18_000, 18_000, 18_000]),
+    ] {
+        options.judge_constraint = constraint;
+        let session = build_game_session(chart.clone(), &profile, options.clone());
+        let set = session.judge.window_set;
+        assert_eq!(set.note.bands(false), expected);
+        assert_eq!(set.scratch.bands(true), expected);
+        assert_eq!(set.long_note_end.bands(false), [100_000; 3]);
+        assert_eq!(set.long_scratch_end.bands(true), [100_000; 3]);
+    }
+    profile.play.rule_mode = RuleMode::Dx;
+    for rate in [50, 200] {
+        options.assist.key_good_rate = rate;
+        options.judge_constraint = CourseJudgeConstraint::Normal;
+        let session = build_game_session(chart.clone(), &profile, options.clone());
+        assert_eq!(session.judge.windows.bands(false), [16_666, 33_333, 116_666]);
+        options.judge_constraint = CourseJudgeConstraint::NoGood;
+        let session = build_game_session(chart.clone(), &profile, options.clone());
+        assert_eq!(session.judge.windows.bands(false), [16_666, 33_333, 33_333]);
+    }
+}
+
+#[test]
 fn build_game_session_applies_lr2oraja_rule_mode() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
     profile.play.rule_mode = RuleMode::Lr2Oraja;

@@ -52,6 +52,7 @@ pub(super) fn finalize_long_release(
                 delta,
                 time,
                 affects_score: true,
+                advances_score: true,
             }],
             keysounds: vec![KeySoundEvent {
                 note_id: active.end.end_note_id,
@@ -86,27 +87,11 @@ pub(super) fn active_scored_note_id(active: ActiveLongNote) -> NoteId {
     }
 }
 
-pub(super) fn suppresses_long_start_late_bad(
-    rule_mode: RuleMode,
-    windows: JudgeWindow,
-    note: &NoteEvent,
-    delta: i64,
-    judge: Judge,
-) -> bool {
-    matches!(rule_mode, RuleMode::Lr2Oraja | RuleMode::Dx)
-        && note.kind == NoteKind::LongStart
-        && judge == Judge::Bad
-        && delta > windows.good_us
-}
-
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PressCandidate {
-    pub(super) note_id: Option<NoteId>,
-    pub(super) keysound_note_id: Option<NoteId>,
+    pub(super) note_id: NoteId,
     pub(super) judge: Judge,
-    pub(super) side: TimingSide,
     pub(super) delta: TimeUs,
-    pub(super) consumes_note: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -117,167 +102,110 @@ pub(super) struct MultiBadCandidate {
 }
 
 pub(super) fn select_press_candidate(
+    engine: &JudgeEngine,
     chart: &PlayableChart,
     lane: Lane,
     input_time: TimeUs,
     windows: JudgeWindow,
-    rule_mode: RuleMode,
-    algorithm: JudgeAlgorithm,
-    judged_notes: &HashMap<NoteId, Judge>,
-    bad_attempted_notes: &HashSet<NoteId>,
 ) -> Option<PressCandidate> {
-    let mut normal: Option<PressCandidate> = None;
-    let mut slow_empty_poor: Option<PressCandidate> = None;
-    let mut fast_empty_poor: Option<PressCandidate> = None;
-    let scan_fast_us = windows.bad_fast_us.max(windows.empty_poor_fast_us);
-    let scan_slow_us = windows.bad_slow_us.max(windows.empty_poor_slow_us);
-
+    let mut selected: Option<PressCandidate> = None;
+    let (scan_slow, scan_fast) = engine.window_set.press_scan_limits();
     let notes = chart.notes_for_lane(lane);
-    if algorithm == JudgeAlgorithm::Duration
+    if engine.algorithm == JudgeAlgorithm::Duration
         && windows.pgreat_us >= 0
-        && scan_fast_us >= 0
-        && scan_slow_us >= 0
+        && scan_fast > 0
+        && scan_slow >= 0
     {
         // A normal hit at zero distance wins over every other candidate.
         // Start at the first equal timestamp to preserve the original tie order.
         let exact = notes.partition_point(|note| note.time < input_time);
-        if let Some(note) = notes[exact..]
-            .iter()
-            .take_while(|note| note.time == input_time)
-            .find(|note| is_press_reference_note(note) && !judged_notes.contains_key(&note.id))
+        if let Some(note) =
+            notes[exact..].iter().take_while(|note| note.time == input_time).find(|note| {
+                is_press_reference_note(note) && !engine.judged_notes.contains_key(&note.id)
+            })
         {
             return Some(PressCandidate {
-                note_id: Some(note.id),
-                keysound_note_id: Some(note.id),
+                note_id: note.id,
                 judge: Judge::PGreat,
-                side: side_from_delta(0),
                 delta: TimeUs(0),
-                consumes_note: true,
             });
         }
     }
-    let earliest = input_time.0.saturating_sub(scan_slow_us);
+    let earliest = input_time.0.saturating_sub(scan_slow);
     let start = notes.partition_point(|note| note.time.0 < earliest);
     for note in &notes[start..] {
-        if note.time.0 - input_time.0 > scan_fast_us {
+        let delta = input_time.0 - note.time.0;
+        if delta <= -scan_fast {
             break;
         }
-        if input_time.0 - note.time.0 > scan_slow_us || !is_press_reference_note(note) {
+        if !is_press_reference_note(note) {
             continue;
         }
 
-        let delta = input_time.0 - note.time.0;
-        let already_judged = judged_notes.contains_key(&note.id);
-        let bad_attempted = bad_attempted_notes.contains(&note.id);
-        if !already_judged
-            && let Some(judge) = classify_normal_delta(delta, windows).filter(|judge| {
-                !suppresses_long_start_late_bad(rule_mode, windows, note, delta, *judge)
-                    || hln::is_hln_head(chart, note.id)
-            })
+        let consumed = engine.judged_notes.contains_key(&note.id);
+        if !engine.bad_judge_vanish
+            && (consumed
+                || (engine.attempted_notes.contains(&note.id) && !in_good_range(delta, windows)))
         {
-            if bad_attempted && judge == Judge::Bad {
-                continue;
-            }
-            let candidate = PressCandidate {
-                note_id: Some(note.id),
-                keysound_note_id: Some(note.id),
-                judge,
-                side: side_from_delta(delta),
-                delta: TimeUs(delta),
-                consumes_note: true,
-            };
-            if normal.as_ref().is_none_or(|current| {
-                judge_algorithm_prefers_new_candidate(algorithm, *current, candidate, windows)
-            }) {
-                normal = Some(candidate);
-            }
             continue;
         }
-
-        if bad_attempted {
+        let mut judge = if consumed { None } else { classify_normal_delta(delta, windows) };
+        if !consumed
+            && note.kind == NoteKind::LongStart
+            && matches!(engine.rule_mode, RuleMode::Lr2Oraja | RuleMode::Dx)
+            && delta > good_width(delta, windows)
+            && !hln::is_hln_head(chart, note.id)
+        {
+            judge = None;
+        } else if judge.is_none()
+            && delta >= -windows.empty_poor_fast_us
+            && delta <= windows.empty_poor_slow_us
+        {
+            judge = Some(Judge::EmptyPoor);
+        }
+        if selected.is_some_and(|current| {
+            let current_consumed = engine.judged_notes.contains_key(&current.note_id);
+            !current_consumed
+                && (consumed
+                    || !judge_algorithm_prefers_new_candidate(
+                        engine.algorithm,
+                        current.delta.0,
+                        delta,
+                        windows,
+                    ))
+        }) {
             continue;
         }
-
-        let empty_poor_candidate = if already_judged {
-            if delta >= 0 && delta <= windows.empty_poor_slow_us {
-                Some(PressCandidate {
-                    note_id: None,
-                    keysound_note_id: Some(note.id),
-                    judge: Judge::EmptyPoor,
-                    side: TimingSide::Slow,
-                    delta: TimeUs(delta),
-                    consumes_note: false,
-                })
-            } else if delta < 0 && -delta <= windows.empty_poor_fast_us {
-                Some(PressCandidate {
-                    note_id: None,
-                    keysound_note_id: Some(note.id),
-                    judge: Judge::EmptyPoor,
-                    side: TimingSide::Fast,
-                    delta: TimeUs(delta),
-                    consumes_note: false,
-                })
-            } else {
-                None
+        match judge {
+            None => selected = None,
+            Some(judge)
+                if judge != Judge::EmptyPoor
+                    || selected.is_none_or(|current| delta.abs() < current.delta.0.abs()) =>
+            {
+                selected = Some(PressCandidate { note_id: note.id, judge, delta: TimeUs(delta) });
             }
-        } else if delta > windows.bad_slow_us && delta <= windows.empty_poor_slow_us {
-            Some(PressCandidate {
-                note_id: None,
-                keysound_note_id: Some(note.id),
-                judge: Judge::EmptyPoor,
-                side: TimingSide::Slow,
-                delta: TimeUs(delta),
-                consumes_note: false,
-            })
-        } else if delta < -windows.bad_fast_us && -delta <= windows.empty_poor_fast_us {
-            Some(PressCandidate {
-                note_id: None,
-                keysound_note_id: Some(note.id),
-                judge: Judge::EmptyPoor,
-                side: TimingSide::Fast,
-                delta: TimeUs(delta),
-                consumes_note: false,
-            })
-        } else {
-            None
-        };
-
-        let Some(candidate) = empty_poor_candidate else {
-            continue;
-        };
-        match candidate.side {
-            TimingSide::Slow => choose_closest_empty_poor(&mut slow_empty_poor, candidate),
-            TimingSide::Fast => choose_closest_empty_poor(&mut fast_empty_poor, candidate),
+            Some(_) => {}
         }
     }
 
-    normal.or(slow_empty_poor).or(fast_empty_poor)
+    selected
 }
 
 pub(super) fn judge_algorithm_prefers_new_candidate(
     algorithm: JudgeAlgorithm,
-    current: PressCandidate,
-    candidate: PressCandidate,
+    current_delta: i64,
+    candidate_delta: i64,
     windows: JudgeWindow,
 ) -> bool {
     match algorithm {
         JudgeAlgorithm::Combo => {
-            current.delta.0 > windows.good_us && candidate.delta.0 >= -windows.good_us
+            current_delta > windows.good_us && candidate_delta >= -windows.bands(true)[2]
         }
-        JudgeAlgorithm::Duration => candidate.delta.0.abs() < current.delta.0.abs(),
+        JudgeAlgorithm::Duration => candidate_delta.abs() < current_delta.abs(),
         JudgeAlgorithm::Lowest => false,
         JudgeAlgorithm::Score => {
-            current.delta.0 > windows.great_us && candidate.delta.0 >= -windows.great_us
+            current_delta > windows.great_us && candidate_delta >= -windows.bands(true)[1]
         }
-    }
-}
-
-pub(super) fn choose_closest_empty_poor(
-    slot: &mut Option<PressCandidate>,
-    candidate: PressCandidate,
-) {
-    if slot.as_ref().is_none_or(|current| candidate.delta.0.abs() < current.delta.0.abs()) {
-        *slot = Some(candidate);
     }
 }
 
@@ -390,48 +318,15 @@ pub(super) fn is_press_reference_note(note: &NoteEvent) -> bool {
     matches!(note.kind, NoteKind::Tap | NoteKind::LongStart)
 }
 
-/// 指定レーンに置かれた Mine の中から、入力時刻と `window_us` 以内に一致するものを探す。
-/// 直近に同じ time の Mine をヒット済みなら無視する（二重ヒット防止）。
-pub(super) fn detect_mine_hit(
-    chart: &PlayableChart,
-    lane: Lane,
-    input_time: TimeUs,
-    window_us: i64,
-    lane_state: &LaneJudgeState,
-    minimum_index: Option<usize>,
-) -> Option<MineHitEvent> {
-    if window_us < 0 {
-        return None;
-    }
-    let notes = chart.notes_for_lane(lane);
-    let earliest = input_time.0.saturating_sub(window_us);
-    let latest = input_time.0.saturating_add(window_us);
-    let start = notes
-        .partition_point(|note| note.time.0 < earliest)
-        .max(minimum_index.unwrap_or(0))
-        .min(notes.len());
-    notes[start..]
-        .iter()
-        .take_while(|note| note.time.0 <= latest)
-        .filter(|note| note.kind == NoteKind::Mine)
-        .find(|note| Some(note.time) != lane_state.last_mine_hit_time)
-        .map(|note| MineHitEvent {
-            note_id: note.id,
-            lane,
-            damage: note.damage.unwrap_or(0.0),
-            sound: note.sound,
-            time: note.time,
-        })
-}
-
 pub(super) fn classify_normal_delta(delta_us: i64, windows: JudgeWindow) -> Option<Judge> {
     let abs = delta_us.abs();
 
-    if abs <= windows.pgreat_us {
+    let [pgreat, great, good] = windows.bands(delta_us < 0);
+    if abs <= pgreat {
         Some(Judge::PGreat)
-    } else if abs <= windows.great_us {
+    } else if abs <= great {
         Some(Judge::Great)
-    } else if abs <= windows.good_us {
+    } else if abs <= good {
         Some(Judge::Good)
     } else if (delta_us < 0 && abs <= windows.bad_fast_us)
         || (delta_us >= 0 && abs <= windows.bad_slow_us)
@@ -443,7 +338,11 @@ pub(super) fn classify_normal_delta(delta_us: i64, windows: JudgeWindow) -> Opti
 }
 
 pub(super) fn in_good_range(delta_us: i64, windows: JudgeWindow) -> bool {
-    delta_us.abs() <= windows.good_us
+    delta_us.abs() <= good_width(delta_us, windows)
+}
+
+fn good_width(delta_us: i64, windows: JudgeWindow) -> i64 {
+    windows.bands(delta_us < 0)[2]
 }
 
 pub(super) fn in_bad_range(delta_us: i64, windows: JudgeWindow) -> bool {
@@ -496,11 +395,19 @@ pub(super) fn missed_charge_end_for_start(
     chart: &PlayableChart,
     start_note_id: NoteId,
 ) -> Option<NoteId> {
-    chart.long_notes.iter().find_map(|pair| {
-        let mode = pair.mode.unwrap_or(chart.metadata.long_note_mode);
-        (pair.start_note_id == start_note_id
-            && matches!(mode, LongNoteMode::Cn | LongNoteMode::Hcn))
-        .then_some(pair.end_note_id)
+    charge_pair_for_start(chart, start_note_id).map(|pair| pair.end_note_id)
+}
+
+pub(super) fn charge_pair_for_start(
+    chart: &PlayableChart,
+    start_note_id: NoteId,
+) -> Option<&bmz_chart::model::LongNotePair> {
+    chart.long_notes.iter().find(|pair| {
+        pair.start_note_id == start_note_id
+            && matches!(
+                pair.mode.unwrap_or(chart.metadata.long_note_mode),
+                LongNoteMode::Cn | LongNoteMode::Hcn
+            )
     })
 }
 
@@ -533,6 +440,7 @@ pub(super) fn ln_final_event(
         delta,
         time,
         affects_score: true,
+        advances_score: true,
     }
 }
 
@@ -552,6 +460,7 @@ pub(super) fn empty_poor(
             delta,
             time,
             affects_score: true,
+            advances_score: false,
         }],
         keysounds: vec![KeySoundEvent {
             note_id: keysound_note_id,

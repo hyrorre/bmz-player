@@ -19,9 +19,10 @@ fn score_with_ex_score(ex_score: u32) -> ScoreState {
             lane: Lane::Key1,
             judge: Judge::PGreat,
             side: TimingSide::Slow,
-            delta: TimeUs(0),
+            delta: TimeUs(1),
             time: TimeUs(index as i64),
             affects_score: true,
+            advances_score: true,
         });
     }
     score
@@ -54,6 +55,36 @@ fn record(ex_score: u32, clear_type: ClearType) -> ScoreRecord {
         replay_path: String::new(),
         source_kind: ScoreSourceKind::Local,
     }
+}
+
+#[test]
+fn exact_hit_is_persisted_on_the_fast_side_even_with_a_slow_display_side() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    configure_connection(&conn).unwrap();
+    run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+    let mut db = ScoreDatabase { conn };
+    let mut play = record(2, ClearType::Max);
+    play.score = ScoreState::default();
+    play.score.apply(&JudgementEvent {
+        note_id: Some(NoteId(1)),
+        lane: Lane::Key1,
+        judge: Judge::PGreat,
+        side: TimingSide::Slow,
+        delta: TimeUs(0),
+        time: TimeUs(1_000_000),
+        affects_score: true,
+        advances_score: true,
+    });
+    let id = db.insert_score(&play).unwrap();
+    let counts = db
+        .conn()
+        .query_row(
+            "SELECT fast_pgreat, slow_pgreat FROM score_history WHERE id = ?1",
+            [id],
+            |row| Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?)),
+        )
+        .unwrap();
+    assert_eq!(counts, (1, 0));
 }
 
 #[test]

@@ -1996,6 +1996,7 @@ fn assist_easy_session(gauge: bmz_gameplay::gauge::GaugeState) -> GameSession {
             delta: TimeUs(0),
             time: TimeUs(0),
             affects_score: true,
+            advances_score: true,
         });
     }
     session

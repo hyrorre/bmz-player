@@ -331,9 +331,10 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         max_combo: session.display_max_combo(),
         ex_score: session.score.ex_score(),
         total_notes: session.scored_total_notes,
-        chart_total_gauge: gauge_total_for_chart(
-            session.chart.metadata.total,
+        chart_total_gauge: bmz_gameplay::gauge::gauge_total_for_play(
+            &session.chart.metadata,
             session.scored_total_notes,
+            session.rule_mode,
         ) as f32,
         past_notes: session.score.past_notes,
         judge_counts: display_judge_counts(session),

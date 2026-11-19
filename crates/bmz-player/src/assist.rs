@@ -7,10 +7,12 @@ use bmz_chart::model::{
     TimingEventKind,
 };
 use bmz_chart::timing::TimingMap;
+use bmz_core::course::CourseJudgeConstraint;
 use bmz_core::ids::NoteId;
 use bmz_core::lane::Lane;
 use bmz_core::time::{ChartTick, TimeUs};
-use bmz_gameplay::judge::model::{JudgeWindow, JudgeWindows};
+use bmz_gameplay::judge::window::JudgeWindowRates;
+use bmz_gameplay::rule::RuleMode;
 use bmz_gameplay::session::{AssistLevel, AssistRuntime};
 
 use crate::config::profile_config::{
@@ -219,72 +221,27 @@ pub fn apply_extra_note_assist(
     Some(first_id)
 }
 
-pub fn apply_custom_judge_windows(
-    windows: JudgeWindows,
+pub fn judge_window_rates(
     config: AssistOptionConfig,
-) -> JudgeWindows {
-    if !config.expand_judge {
-        return windows;
+    rule_mode: RuleMode,
+    constraint: CourseJudgeConstraint,
+) -> JudgeWindowRates {
+    let mut rates = JudgeWindowRates::default();
+    if config.expand_judge && rule_mode != RuleMode::Dx {
+        rates.keys = [config.key_pgreat_rate, config.key_great_rate, config.key_good_rate];
+        rates.scratch =
+            [config.scratch_pgreat_rate, config.scratch_great_rate, config.scratch_good_rate];
+        rates.long_note_margin = config.long_note_margin_rate;
     }
-    JudgeWindows {
-        note: scale_window(
-            windows.note,
-            config.key_pgreat_rate,
-            config.key_great_rate,
-            config.key_good_rate,
-        ),
-        scratch: scale_window(
-            windows.scratch,
-            config.scratch_pgreat_rate,
-            config.scratch_great_rate,
-            config.scratch_good_rate,
-        ),
-        long_note_end: scale_window(
-            windows.long_note_end,
-            config.key_pgreat_rate,
-            config.key_great_rate,
-            config.key_good_rate,
-        ),
-        long_scratch_end: scale_window(
-            windows.long_scratch_end,
-            config.scratch_pgreat_rate,
-            config.scratch_great_rate,
-            config.scratch_good_rate,
-        ),
-        long_note_end_fast: windows.long_note_end_fast.map(|window| {
-            scale_window(
-                window,
-                config.key_pgreat_rate,
-                config.key_great_rate,
-                config.key_good_rate,
-            )
-        }),
-        long_scratch_end_fast: windows.long_scratch_end_fast.map(|window| {
-            scale_window(
-                window,
-                config.scratch_pgreat_rate,
-                config.scratch_great_rate,
-                config.scratch_good_rate,
-            )
-        }),
-        long_note_release_margin_us: scale_us(
-            windows.long_note_release_margin_us,
-            config.long_note_margin_rate,
-        ),
-        long_scratch_release_margin_us: windows.long_scratch_release_margin_us,
+    for bands in [&mut rates.keys, &mut rates.scratch] {
+        if constraint == CourseJudgeConstraint::NoGreat {
+            bands[1] = 0;
+        }
+        if constraint != CourseJudgeConstraint::Normal {
+            bands[2] = 0;
+        }
     }
-}
-
-fn scale_window(window: JudgeWindow, pgreat: u16, great: u16, good: u16) -> JudgeWindow {
-    let bad_cap = window.bad_fast_us.min(window.bad_slow_us);
-    let pgreat_us = scale_us(window.pgreat_us, pgreat).min(bad_cap);
-    let great_us = scale_us(window.great_us, great).clamp(pgreat_us, bad_cap);
-    let good_us = scale_us(window.good_us, good).clamp(great_us, bad_cap);
-    JudgeWindow { pgreat_us, great_us, good_us, ..window }
-}
-
-fn scale_us(value: i64, rate: u16) -> i64 {
-    value.saturating_mul(i64::from(rate)) / 100
+    rates
 }
 
 fn mark_effect(runtime: &mut AssistRuntime, mask: u32, level: AssistLevel) {
@@ -774,8 +731,8 @@ mod tests {
 
     #[test]
     fn custom_judge_expands_nested_windows_but_not_past_bad() {
-        let window =
-            JudgeWindow::symmetric(20_000, 40_000, 100_000, 120_000, 150_000, 150_000, 16_000);
+        use bmz_gameplay::judge::model::{JudgeWindow, JudgeWindows};
+        let window = JudgeWindow::symmetric(20_000, 40_000, 100_000, 120_000, 150_000, 150_000);
         let windows = JudgeWindows {
             note: window,
             scratch: window,
@@ -786,8 +743,7 @@ mod tests {
             long_note_release_margin_us: 50_000,
             long_scratch_release_margin_us: 60_000,
         };
-        let scaled = apply_custom_judge_windows(
-            windows,
+        let scaled = judge_window_rates(
             AssistOptionConfig {
                 expand_judge: true,
                 key_pgreat_rate: 400,
@@ -796,7 +752,10 @@ mod tests {
                 long_note_margin_rate: 200,
                 ..Default::default()
             },
-        );
+            RuleMode::Beatoraja,
+            CourseJudgeConstraint::Normal,
+        )
+        .apply(windows);
         assert_eq!(
             (scaled.note.pgreat_us, scaled.note.great_us, scaled.note.good_us),
             (80_000, 120_000, 120_000)
@@ -833,6 +792,28 @@ mod tests {
         assert_eq!(chart.lane_notes[Lane::Key1.index()][0].tick, ChartTick(1_920));
         assert_eq!(chart.bar_lines[1].tick, ChartTick(5_760));
         assert!(chart.lane_notes.iter().flatten().all(|note| note.kind != NoteKind::Mine));
+    }
+
+    #[test]
+    fn dx_ignores_configured_window_rates_but_preserves_upstream_save_eligibility() {
+        for rate in [50, 200] {
+            let config = AssistOptionConfig {
+                expand_judge: true,
+                key_pgreat_rate: 100,
+                key_great_rate: 100,
+                key_good_rate: rate,
+                scratch_pgreat_rate: 100,
+                scratch_great_rate: 100,
+                scratch_good_rate: 100,
+                long_note_margin_rate: 100,
+                ..Default::default()
+            };
+            let rates = judge_window_rates(config, RuleMode::Dx, CourseJudgeConstraint::Normal);
+            assert_eq!(rates.keys, [100; 3]);
+            let runtime = apply_chart_assists(&mut chart(), config, 1);
+            assert_eq!(runtime.score_update_enabled(), rate <= 100);
+            assert_ne!(runtime.configured_mask & EXPAND_JUDGE_MASK, 0);
+        }
     }
 
     #[test]

@@ -174,8 +174,11 @@ impl PracticeRuleContext {
     }
 
     pub fn gauge_bounds(self, property: &PracticeProperty) -> PracticeGaugeBounds {
-        let category =
-            property.gauge_category.unwrap_or_else(|| GaugeProperty::from_keymode(self.key_mode));
+        let category = if self.rule_mode == RuleMode::Lr2Oraja {
+            GaugeProperty::Lr2
+        } else {
+            property.gauge_category.unwrap_or_else(|| GaugeProperty::from_keymode(self.key_mode))
+        };
         let definition = bmz_gameplay::gauge::gauge_definitions_for_rule_mode_and_keymode(
             category,
             self.rule_mode,
@@ -283,7 +286,13 @@ pub fn load_practice_property(
         property.start_gauge = rules.gauge_bounds(&property).initial;
     }
     if property.total.is_none() {
-        property.total = chart.metadata.total;
+        property.total = chart.metadata.total.map(|_| {
+            bmz_gameplay::gauge::gauge_total_for_play(
+                &chart.metadata,
+                bmz_gameplay::score::scored_note_count(chart),
+                rules.rule_mode,
+            )
+        });
     }
 
     if let Some(start) = cli.start_time_ms {
@@ -342,6 +351,7 @@ pub fn apply_practice_property(chart: &mut PlayableChart, property: &PracticePro
     let audio_start_us = TimeUs(start_us.0.saturating_sub(1_000_000).max(0));
     if let Some(total) = property.total {
         chart.metadata.total = Some(total);
+        chart.metadata.bmson_total_percent = None;
     }
     apply_practice_section(chart, start_us, end_us);
     // beatoraja starts background keysounds at `starttime - 1s` and skips

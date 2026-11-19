@@ -33,6 +33,13 @@ pub enum GaugeProperty {
 }
 
 impl GaugeProperty {
+    /// Resolves a course override or the selected rule's default property.
+    pub fn for_rule_mode(key_mode: KeyMode, rule_mode: RuleMode, explicit: Option<Self>) -> Self {
+        explicit.unwrap_or_else(|| {
+            if rule_mode == RuleMode::Lr2Oraja { Self::Lr2 } else { Self::from_keymode(key_mode) }
+        })
+    }
+
     /// チャートの `KeyMode` から beatoraja 既定の `GaugeProperty` を決める。
     /// `BMSPlayerRule.Beatoraja_5/7/9` 準拠：
     /// - K5 / K10 → FiveKeys (BEAT_5K / BEAT_10K)
@@ -171,7 +178,12 @@ impl GaugeState {
         let gauges = gauge_definitions_for_rule_mode_and_keymode(property, rule_mode, key_mode)
             .into_iter()
             .map(|definition| {
-                let definition = compile_gauge_definition(&definition, total, total_notes);
+                let definition = compile::compile_gauge_definition_for_rule(
+                    &definition,
+                    total,
+                    total_notes,
+                    rule_mode,
+                );
                 SingleGaugeState { value: definition.init, definition }
             })
             .collect();

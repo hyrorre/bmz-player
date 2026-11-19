@@ -25,7 +25,8 @@ pub fn gauge_definitions_for_rule_mode_and_keymode(
 ) -> Vec<GaugeDefinition> {
     match rule_mode {
         RuleMode::Beatoraja => gauge_definitions_for(property),
-        RuleMode::Lr2Oraja => lr2oraja_gauge_definitions(),
+        RuleMode::Lr2Oraja if property == GaugeProperty::Lr2 => lr2oraja_gauge_definitions(),
+        RuleMode::Lr2Oraja => gauge_definitions_for(property),
         RuleMode::Dx => {
             if key_mode == KeyMode::K9 {
                 dx_pop_gauge_definition_table().to_vec()
@@ -44,7 +45,7 @@ pub(super) fn lr2oraja_gauge_definitions() -> Vec<GaugeDefinition> {
                 definition.guts = LR2_HARD_GUTS;
                 definition.death = 2.0;
             }
-            GaugeType::ExHard | GaugeType::Hazard => {
+            GaugeType::ExHard | GaugeType::Hazard | GaugeType::ExHardClass => {
                 definition.death = 2.0;
             }
             GaugeType::Class | GaugeType::ExClass => {
@@ -528,7 +529,7 @@ pub(super) fn gauge_definition_table(property: GaugeProperty) -> [GaugeDefinitio
                 100.0,
                 0.0,
                 [0.1, 0.1, 0.05, -6.0, -10.0, -2.0],
-                LR2_CLASS_GUTS,
+                BEATORAJA_LR2_GUTS,
             ),
             def(
                 GaugeType::ExHard,
@@ -561,7 +562,7 @@ pub(super) fn gauge_definition_table(property: GaugeProperty) -> [GaugeDefinitio
                 100.0,
                 0.0,
                 [0.1, 0.1, 0.05, -2.0, -3.0, -2.0],
-                LR2_CLASS_GUTS,
+                BEATORAJA_LR2_GUTS,
             ),
             def(
                 GaugeType::ExClass,
@@ -572,7 +573,7 @@ pub(super) fn gauge_definition_table(property: GaugeProperty) -> [GaugeDefinitio
                 100.0,
                 0.0,
                 [0.1, 0.1, 0.05, -6.0, -10.0, -2.0],
-                LR2_CLASS_GUTS,
+                BEATORAJA_LR2_GUTS,
             ),
             def(
                 GaugeType::ExHardClass,

@@ -234,6 +234,7 @@ fn fast_slow_filter_applies_threshold_only_to_pgreat() {
                 delta: TimeUs(delta_us),
                 time: TimeUs(1_000),
                 affects_score: true,
+                advances_score: true,
             },
             1,
             TimeUs(1_000),
@@ -372,6 +373,7 @@ fn build_render_snapshot_filters_visible_notes_and_formats_judgements() {
         delta: TimeUs(5_000),
         time: TimeUs(1_000),
         affects_score: true,
+        advances_score: true,
     }];
 
     let snapshot = build_render_snapshot(&session, TimeUs(0), &judgements, None);
@@ -404,6 +406,7 @@ fn build_render_snapshot_preserves_dp_combo_at_each_judgement() {
             delta: TimeUs(0),
             time: TimeUs(1_000),
             affects_score: true,
+            advances_score: true,
         },
         JudgementEvent {
             note_id: None,
@@ -413,6 +416,7 @@ fn build_render_snapshot_preserves_dp_combo_at_each_judgement() {
             delta: TimeUs(0),
             time: TimeUs(2_000),
             affects_score: true,
+            advances_score: true,
         },
     ];
     session.recent_display_judgements = vec![

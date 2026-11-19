@@ -21,7 +21,7 @@ pub const DEFAULT_JUDGE_WINDOW: JudgeWindow = JudgeWindow {
     bad_slow_us: 220_000,
     empty_poor_fast_us: 150_000,
     empty_poor_slow_us: 500_000,
-    mine_hit_us: 16_000,
+    fast_bands: None,
 };
 
 pub const TARGET_GREEN_NUMBER_MIN: u32 = 1;

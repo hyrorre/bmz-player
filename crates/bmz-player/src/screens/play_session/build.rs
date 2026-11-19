@@ -61,7 +61,7 @@ pub fn apply_placeholder_session_visuals(
         bottom_shiftable_gauge_from_config(profile.play.bottom_shiftable_gauge)
     };
     let gauge_property =
-        options.gauge_property.unwrap_or_else(|| GaugeProperty::from_keymode(rule_key_mode));
+        GaugeProperty::for_rule_mode(rule_key_mode, profile.play.rule_mode, options.gauge_property);
     // TOTAL は譜面パース前で不明だが、init/max/border は TOTAL 非依存なので
     // ノーツ数由来のデフォルト TOTAL で代用して問題ない。
     let rule_mode = profile.play.rule_mode;
@@ -400,21 +400,15 @@ pub fn build_game_session_with_input_backend(
         },
     );
 
-    // Course judge constraints narrow the judge window so the corresponding
-    // judge band is unreachable: NoGood zeroes good_us, NoGreat zeroes both
-    // great_us and good_us.  Mirrors beatoraja JudgeManager's *JudgeWindowRate
-    // = 0 path.
-    let base_judge_windows = apply_judge_constraint_to_windows(
-        crate::assist::apply_custom_judge_windows(
-            replay_judge_windows_for_keymode_and_rule_mode(
-                primary_key_mode,
-                rule_mode,
-                replay_player.as_ref().is_some_and(|player| player.legacy_dx_pop_judge),
-            ),
-            options.assist,
-        ),
-        options.judge_constraint,
+    let base_judge_windows = replay_judge_windows_for_keymode_and_rule_mode(
+        primary_key_mode,
+        rule_mode,
+        replay_player.as_ref().is_some_and(|player| player.legacy_dx_pop_judge),
     );
+    let window_rates =
+        replay_player.as_ref().and_then(|player| player.judge_window_rates).unwrap_or_else(|| {
+            crate::assist::judge_window_rates(options.assist, rule_mode, options.judge_constraint)
+        });
     let base_judge_windows = replay_player
         .as_ref()
         .and_then(|player| player.kaleid.as_ref())
@@ -424,11 +418,11 @@ pub fn build_game_session_with_input_backend(
     let base_judge_window = base_judge_windows.note;
 
     let gauge_total =
-        gauge_total_for_chart_and_rule_mode(chart.metadata.total, scored_total_notes, rule_mode);
+        bmz_gameplay::gauge::gauge_total_for_play(&chart.metadata, scored_total_notes, rule_mode);
     // 単曲時はチャートのキーモードから GaugeProperty を導出、コース時は
     // `apply_course_constraints` が CourseGaugeConstraint から決めた値を使う。
     let gauge_property =
-        options.gauge_property.unwrap_or_else(|| GaugeProperty::from_keymode(primary_key_mode));
+        GaugeProperty::for_rule_mode(primary_key_mode, rule_mode, options.gauge_property);
     let mut gauge = {
         if gauge_auto_shift != GaugeAutoShiftMode::Off {
             let mut gauge = GaugeState::new_with_auto_shift_property_and_rule_mode_and_keymode(
@@ -505,9 +499,14 @@ pub fn build_game_session_with_input_backend(
             } else {
                 options.playback_rate_percent
             };
+            let opponent_rates = opponent
+                .replay_player
+                .as_ref()
+                .and_then(|player| player.judge_window_rates)
+                .unwrap_or_default();
             let gauge_type = opponent.gauge.unwrap_or(gauge_type);
-            let gauge_total = gauge_total_for_chart_and_rule_mode(
-                chart.metadata.total,
+            let gauge_total = bmz_gameplay::gauge::gauge_total_for_play(
+                &chart.metadata,
                 scored_total_notes,
                 rule_mode,
             );
@@ -515,32 +514,36 @@ pub fn build_game_session_with_input_backend(
                 conditional: bmz_gameplay::session::conditional::ConditionalRuntime::from_player(
                     opponent.replay_player.as_ref(),
                 ),
-                judge: JudgeEngine::new_with_window_set_algorithm_and_keymode(
-                    scale_judge_windows_for_playback_rate(
-                        judge_windows_for_rule_mode_and_keymode(
-                            base_judge_windows,
-                            judge_percent_at_time_for_keymode(
-                                chart.metadata.judge_rank_spec,
-                                &chart.judge_rank_events,
-                                TimeUs(0),
-                                key_mode,
+                judge: {
+                    let mut judge = JudgeEngine::new_with_window_set_algorithm_and_keymode(
+                        scale_judge_windows_for_playback_rate(
+                            opponent_rates.apply(judge_windows_for_rule_mode_and_keymode(
+                                base_judge_windows,
+                                judge_percent_at_time_for_keymode(
+                                    chart.metadata.judge_rank_spec,
+                                    &chart.judge_rank_events,
+                                    TimeUs(0),
+                                    key_mode,
+                                    rule_mode,
+                                ),
                                 rule_mode,
-                            ),
-                            rule_mode,
-                            key_mode,
+                                key_mode,
+                            )),
+                            judge_rate,
                         ),
-                        judge_rate,
-                    ),
-                    rule_mode,
-                    judge_algorithm,
-                    key_mode,
-                )
-                .with_chart_index(chart.clone()),
+                        rule_mode,
+                        judge_algorithm,
+                        key_mode,
+                    )
+                    .with_chart_index(chart.clone());
+                    judge.window_rates = opponent_rates;
+                    judge
+                },
                 gauge: GaugeState::new_with_property_and_rule_mode_and_keymode(
                     gauge_type,
                     gauge_total,
                     scored_total_notes,
-                    GaugeProperty::from_keymode(key_mode),
+                    GaugeProperty::for_rule_mode(key_mode, rule_mode, options.gauge_property),
                     rule_mode,
                     key_mode,
                 ),
@@ -569,7 +572,7 @@ pub fn build_game_session_with_input_backend(
 
     let mut judge = JudgeEngine::new_with_window_set_algorithm_and_keymode(
         scale_judge_windows_for_playback_rate(
-            judge_windows_for_rule_mode_and_keymode(
+            window_rates.apply(judge_windows_for_rule_mode_and_keymode(
                 base_judge_windows,
                 judge_percent_at_time_for_keymode(
                     chart.metadata.judge_rank_spec,
@@ -580,7 +583,7 @@ pub fn build_game_session_with_input_backend(
                 ),
                 rule_mode,
                 primary_key_mode,
-            ),
+            )),
             options.playback_rate_percent,
         ),
         rule_mode,
@@ -588,6 +591,7 @@ pub fn build_game_session_with_input_backend(
         primary_key_mode,
     )
     .with_chart_index(chart.clone());
+    judge.window_rates = window_rates;
     if let Some(projection) = &replay_lane_projection {
         judge.set_scratch_lane_mask(projection.playback_scratch_lane_mask);
     }
@@ -883,43 +887,6 @@ pub(super) fn play_config_key_mode(
         return DoubleOption::battle_key_mode(chart_key_mode);
     }
     options.play_config_key_mode.unwrap_or(chart_key_mode)
-}
-
-pub(super) fn apply_judge_constraint_to_windows(
-    windows: JudgeWindows,
-    constraint: bmz_core::course::CourseJudgeConstraint,
-) -> JudgeWindows {
-    JudgeWindows {
-        note: apply_judge_constraint_to_window(windows.note, constraint),
-        scratch: apply_judge_constraint_to_window(windows.scratch, constraint),
-        long_note_end: apply_judge_constraint_to_window(windows.long_note_end, constraint),
-        long_scratch_end: apply_judge_constraint_to_window(windows.long_scratch_end, constraint),
-        long_note_end_fast: windows
-            .long_note_end_fast
-            .map(|window| apply_judge_constraint_to_window(window, constraint)),
-        long_scratch_end_fast: windows
-            .long_scratch_end_fast
-            .map(|window| apply_judge_constraint_to_window(window, constraint)),
-        long_note_release_margin_us: windows.long_note_release_margin_us,
-        long_scratch_release_margin_us: windows.long_scratch_release_margin_us,
-    }
-}
-
-pub(super) fn apply_judge_constraint_to_window(
-    mut window: JudgeWindow,
-    constraint: bmz_core::course::CourseJudgeConstraint,
-) -> JudgeWindow {
-    match constraint {
-        bmz_core::course::CourseJudgeConstraint::Normal => {}
-        bmz_core::course::CourseJudgeConstraint::NoGood => {
-            window.good_us = 0;
-        }
-        bmz_core::course::CourseJudgeConstraint::NoGreat => {
-            window.great_us = 0;
-            window.good_us = 0;
-        }
-    }
-    window
 }
 
 pub(super) const fn base_hispeed_mode(base: BaseHispeedConfig) -> HispeedMode {

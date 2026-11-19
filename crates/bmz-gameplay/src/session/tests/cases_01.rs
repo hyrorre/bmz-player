@@ -41,6 +41,7 @@ fn display_only_opponent_judgement_does_not_change_primary_score_or_gauge() {
                 delta: TimeUs(0),
                 time: TimeUs(1_000_000),
                 affects_score: true,
+                advances_score: true,
             }],
             keysound_volumes: vec![(SoundId(7), 0.0)],
             ..JudgeOutcome::default()
@@ -62,7 +63,7 @@ fn display_only_opponent_judgement_does_not_change_primary_score_or_gauge() {
 #[test]
 fn independent_battle_opponent_replay_advances_without_taking_primary_lanes() {
     let opponent_chart = Arc::new(chart_with_keysound());
-    let window = JudgeWindow::symmetric(16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000);
+    let window = JudgeWindow::symmetric(16_000, 40_000, 80_000, 120_000, 500_000, 200_000);
     let mut session = session_with_autoplay(chart_with_keysound());
     session.autoplay = None;
     session.opponent.independent = Some(BattleOpponentSession {
@@ -110,6 +111,7 @@ fn independent_battle_opponent_replay_advances_without_taking_primary_lanes() {
                 delta: TimeUs(500_000),
                 time: TimeUs(0),
                 affects_score: true,
+                advances_score: true,
             }],
             keysound_volumes: vec![(SoundId(7), 0.0)],
             ..JudgeOutcome::default()
@@ -142,7 +144,7 @@ fn independent_battle_opponent_without_replay_uses_autoplay() {
     opponent_chart.lane_notes[Lane::Key1.index()]
         .extend(chart_with_mine(TimeUs(100_000), 8.0).lane_notes[Lane::Key1.index()].clone());
     let opponent_chart = Arc::new(opponent_chart);
-    let window = JudgeWindow::symmetric(16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000);
+    let window = JudgeWindow::symmetric(16_000, 40_000, 80_000, 120_000, 500_000, 200_000);
     let mut session = session_with_autoplay(chart_with_keysound());
     session.autoplay = None;
     session.display_only_lane_mask[Lane::Key8.index()] = true;
@@ -281,6 +283,7 @@ fn judgement_display_latches_combo_at_each_dp_event() {
                     delta: TimeUs(0),
                     time: TimeUs(time),
                     affects_score: true,
+                    advances_score: true,
                 }],
                 ..JudgeOutcome::default()
             },
@@ -317,6 +320,7 @@ fn battle_judgement_display_latches_each_players_combo() {
                     delta: TimeUs(0),
                     time: TimeUs(1_000_000),
                     affects_score: true,
+                    advances_score: true,
                 },
                 JudgementEvent {
                     note_id: None,
@@ -326,6 +330,7 @@ fn battle_judgement_display_latches_each_players_combo() {
                     delta: TimeUs(0),
                     time: TimeUs(1_000_000),
                     affects_score: true,
+                    advances_score: true,
                 },
             ],
             ..JudgeOutcome::default()
@@ -601,7 +606,10 @@ fn mine_hit_schedules_its_chart_keysound() {
     session.autoplay = None;
     let mut audio = TestAudio::default();
 
-    process_session_input(&mut session, human_press(TimeUs(1_000_000)));
+    let input = human_press(TimeUs(1_000_000));
+    update_lane_key_states(&mut session, &[input]);
+    process_session_input(&mut session, input);
+    process_mine_passes(&mut session, input.time);
     schedule_keysounds(&mut session, &mut audio);
 
     assert_eq!(session.pending_mine_hits.len(), 1);
@@ -620,7 +628,10 @@ fn auto_keysound_preserves_custom_mine_sound_on_hit() {
     session.audio_mix.auto_keysound = true;
     let mut audio = TestAudio::default();
 
-    process_session_input(&mut session, human_press(TimeUs(1_000_000)));
+    let input = human_press(TimeUs(1_000_000));
+    update_lane_key_states(&mut session, &[input]);
+    process_session_input(&mut session, input);
+    process_mine_passes(&mut session, input.time);
     schedule_keysounds(&mut session, &mut audio);
 
     // 自動キー音モードでも、auto_keysound_mine が既定 true なら
@@ -639,7 +650,10 @@ fn auto_keysound_mine_flag_off_suppresses_mine_sound() {
     session.audio_mix.auto_keysound_mine = false;
     let mut audio = TestAudio::default();
 
-    process_session_input(&mut session, human_press(TimeUs(1_000_000)));
+    let input = human_press(TimeUs(1_000_000));
+    update_lane_key_states(&mut session, &[input]);
+    process_session_input(&mut session, input);
+    process_mine_passes(&mut session, input.time);
     schedule_keysounds(&mut session, &mut audio);
 
     // ダメージは変わらず入るが、音は鳴らさない。

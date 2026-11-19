@@ -250,6 +250,7 @@ fn build_render_snapshot_selects_current_bga_frames() {
         delta: TimeUs(0),
         time: TimeUs(400_000),
         affects_score: true,
+        advances_score: true,
     }];
 
     let early =
@@ -330,6 +331,7 @@ fn build_render_snapshot_uses_zero_asset_for_initial_poor_before_later_event() {
             delta: TimeUs(0),
             time: TimeUs(time),
             affects_score: true,
+            advances_score: true,
         }];
         // The miss image is selected at judgement time, even across a later change.
         let active = build_render_snapshot_with_bga_frames(
@@ -380,6 +382,7 @@ fn misslayer_good_clear_respects_event_order_offsets_and_raw_snapshot_fallback()
         delta: TimeUs(0),
         time: TimeUs(100_000),
         affects_score: true,
+        advances_score: true,
     };
     for judge in
         [Judge::PGreat, Judge::Great, Judge::Good, Judge::Bad, Judge::Poor, Judge::EmptyPoor]

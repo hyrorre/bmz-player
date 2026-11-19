@@ -154,10 +154,16 @@ pub(super) fn timing_judge_areas(state: &SkinDrawState) -> [TimingJudgeArea; 5] 
 pub(super) fn timing_judge_areas_from_window(
     window: bmz_gameplay::judge::model::JudgeWindow,
 ) -> [TimingJudgeArea; 5] {
+    let fast = window.bands(true);
+    let slow = window.bands(false);
+    let band = |i: usize| TimingJudgeArea {
+        late_ms: -fast[i] as f32 / 1_000.0,
+        early_ms: slow[i] as f32 / 1_000.0,
+    };
     [
-        symmetric_timing_judge_area(window.pgreat_us),
-        symmetric_timing_judge_area(window.great_us),
-        symmetric_timing_judge_area(window.good_us),
+        band(0),
+        band(1),
+        band(2),
         TimingJudgeArea {
             late_ms: -window.bad_fast_us as f32 / 1_000.0,
             early_ms: window.bad_slow_us as f32 / 1_000.0,
@@ -167,11 +173,6 @@ pub(super) fn timing_judge_areas_from_window(
             early_ms: window.empty_poor_slow_us as f32 / 1_000.0,
         },
     ]
-}
-
-pub(super) fn symmetric_timing_judge_area(us: i64) -> TimingJudgeArea {
-    let ms = us as f32 / 1_000.0;
-    TimingJudgeArea { late_ms: -ms, early_ms: ms }
 }
 
 pub(super) fn beatoraja_judge_rank_percent_for_mode(
