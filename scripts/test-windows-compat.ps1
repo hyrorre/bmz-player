@@ -15,6 +15,8 @@ if ($output.StartsWith($package + [IO.Path]::DirectorySeparatorChar, [StringComp
 }
 New-Item -ItemType Directory -Path $output | Out-Null
 $copy = Join-Path $output "package"
+# Windows 10 and later always load the system UCRT; older Windows loads the app-local copy in dll/.
+$ucrtDirectory = if ([Environment]::OSVersion.Version.Major -ge 10) { [Environment]::SystemDirectory } else { Join-Path $copy 'dll' }
 # Hard links keep the full release package test affordable without mutating its files.
 foreach ($file in (Get-ChildItem -LiteralPath $package -Recurse -File)) {
     $relative = [IO.Path]::GetRelativePath($package, $file.FullName)
@@ -54,7 +56,7 @@ function Run-Player([string[]]$PlayerArgs, [string]$Label) {
             if ($loaded.Count -ne 1) { throw "Could not identify loaded module: $pattern" }
             $path = $loaded[0]
             $name = $modules[$path]
-            $directory = if ($pattern -eq 'ucrtbase.dll') { [Environment]::SystemDirectory } else { Join-Path $copy 'dll' }
+            $directory = if ($pattern -eq 'ucrtbase.dll') { $ucrtDirectory } else { Join-Path $copy 'dll' }
             if ($path -ne (Join-Path $directory $name)) { throw "Unexpected DLL origin: $path" }
             [pscustomobject]@{ name=$name; path=$path; version=(Get-Item -LiteralPath $path).VersionInfo.FileVersion; sha256=(Get-FileHash -LiteralPath $path).Hash }
         }

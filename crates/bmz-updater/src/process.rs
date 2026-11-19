@@ -211,7 +211,9 @@ pub(crate) fn verify_player_startup(root: &Path, work: &Path, version: &str) -> 
     // --version exits before the player's startup guard and any data migration.
     let mut child =
         command.spawn().context("SxS loader check could not start the updated player")?;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // The first start of a new executable can wait for antivirus scans of every bundled DLL,
+    // which takes several seconds on Windows 8.1 VMs and slow disks.
+    let deadline = Instant::now() + Duration::from_secs(30);
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
