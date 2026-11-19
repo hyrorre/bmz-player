@@ -101,7 +101,7 @@ if ($baselinePe -match '^  Type: .*\(ID 24\)') {
 </assembly>
 '@
 }
-$template = Join-Path $PSScriptRoot 'dll.manifest'
+$template = Join-Path $PSScriptRoot '..\dll.manifest'
 [xml]$definition = Get-Content -LiteralPath $template -Raw
 $identity = $definition.assembly.assemblyIdentity
 $assemblyName = $identity.name

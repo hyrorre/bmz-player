@@ -77,3 +77,42 @@ fn bridge_chain_upgrades_reader_without_raising_bridge_package_requirements() {
         );
     }
 }
+
+#[test]
+fn sxs_package_routes_protocols_one_through_three_via_the_flat_bridge() {
+    let mut final_package = verify_update_metadata("release.json", FIXTURE, KEY)
+        .unwrap()
+        .packages
+        .into_iter()
+        .find(|package| package.kind == PackageKind::Portable)
+        .unwrap();
+    final_package.version = "0.5.4".into();
+    final_package.min_updater_protocol = 4;
+    final_package.bridge_tag = Some("v0.5.3".into());
+    let mut bridge = final_package.clone();
+    bridge.version = "0.5.3".into();
+    bridge.min_updater_protocol = 1;
+    bridge.bridge_tag = None;
+    let installed = PackageManifest {
+        schema: 1,
+        kind: PackageKind::Portable,
+        target: "windows-x64".into(),
+        version: "0.5.2".into(),
+        min_updater_protocol: 1,
+        files: vec![],
+    };
+    for protocol in 1..=3 {
+        assert!(matches!(
+            update_step(vec![final_package.clone()], "v0.5.4", &installed, "0.5.2", protocol).unwrap(),
+            Some(UpdateStep::Bridge(tag)) if tag == "v0.5.3"
+        ));
+        assert!(matches!(
+            update_step(vec![bridge.clone()], "v0.5.3", &installed, "0.5.2", protocol).unwrap(),
+            Some(UpdateStep::Package(package)) if package.min_updater_protocol == 1
+        ));
+    }
+    assert!(matches!(
+        update_step(vec![final_package], "v0.5.4", &installed, "0.5.3", bmz_updater::PROTOCOL).unwrap(),
+        Some(UpdateStep::Package(package)) if package.min_updater_protocol == 4
+    ));
+}

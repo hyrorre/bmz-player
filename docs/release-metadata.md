@@ -49,8 +49,9 @@ node scripts/generate-release-metadata.mjs dist/release VERSION COMMIT
 hash sidecarは生成後にRelease upload候補から除去します。
 
 `BMZ_UPDATE_PRIVATE_KEY` / `BMZ_UPDATE_PUBLIC_KEY`は既存の鍵を継続使用します。
-`BMZ_WINDOWS_UPDATER_LAYOUT`、`BMZ_UPDATE_BRIDGE_TAG`、`BMZ_MIN_UPDATER_PROTOCOL`を参照します。
-最低protocol未指定時はgrouped=2 / legacy=1です。公開用は必要な橋渡しタグ・署名鍵がなければ失敗します。
+`BMZ_WINDOWS_UPDATER_LAYOUT`、`BMZ_WINDOWS_DLL_LAYOUT`、`BMZ_UPDATE_BRIDGE_TAG`、`BMZ_MIN_UPDATER_PROTOCOL`を参照します。
+最低 protocol 未指定時は flat の grouped=2 / legacy=1、SxS の grouped=4 です。
+SxS では protocol 4 と grouped が必要です。公開用は必要な橋渡しタグ・署名鍵がなければ失敗します。
 橋渡しタグは対象版より古く、Stable公開ではStableタグである必要があります。
 
 公開しないworkflow_dispatchは`--unsigned`を使います。出力の`signature: null`は明示的な未署名データで、

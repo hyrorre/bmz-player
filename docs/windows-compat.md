@@ -37,7 +37,7 @@ ASIO SDKは公式の2.3.4（2025-10-15）をURLとSHA-256で固定し、
 CIのPowerShellで展開して`CPAL_ASIO_DIR`を渡します。
 `asio-sys`の自動取得時にWindows PowerShellとPowerShell 7のArchive moduleが混在する問題を避けます。
 `scripts/package-windows.ps1 -Target x86_64-win7-windows-msvc -SkipBuild`は
-VS 2022の`vcruntime140.dll`とWindows SDKのapp-local UCRT一式を追加します。
+VS 2022の `vcruntime140.dll`、`vcruntime140_1.dll`、`msvcp140.dll` とWindows SDKのapp-local UCRT一式を追加します。
 UCRTは`Windows Kits/10/Redist/ucrt/DLLs/x64`の旧OS向けセットを使い、
 build番号が14393を超えるものやVC runtime 14.44を超えるものは包装を失敗させます。
 使用したDLLのversionとSHA-256を`resources/licenses/windows-runtime.json`へ記録します。
@@ -60,6 +60,27 @@ GitHub提供のWindowsランナーには8.1がないため、起動試験はWind
 Release Appsの手動実行では`windows_only=true`、`tag`にブランチ等のGit refを指定すると、
 Windowsだけをビルド・起動確認できます。このモードでは`upload_to_release`の値に関係なく公開せず、
 通常のrelease asset名でActions artifactだけを生成します。
+
+### SxS 版の採用前検証
+
+Windows-only の dry run で `windows_sxs=true` を選ぶと、`dll/` 版の ZIP と installer を生成します。
+ローカルでは `package-windows.ps1 -SkipBuild -Target x86_64-win7-windows-msvc -UpdaterLayout grouped -DllLayout sxs`
+で同じ配置を作成できます。player の PE に SDK の `mt.exe` で SxS 依存を追加し、
+DLL と `dll/dll.manifest` の一覧を照合してからハッシュを生成します。
+
+1. 同じ候補ビルドの flat と SxS を、中央導入の VC/UCRT がない Windows 8.1 x64 VM に
+   別々に展開します。OS の build、KB2999226・KB3118401 等と `System32` の DLL の有無を記録します。
+2. 開発環境の PATH を使わず、空の作業ディレクトリから両構成を起動します。
+   実際の module 一覧から `ucrtbase.dll`、使用された CRT 転送 DLL、VC、FFmpeg の絶対パス、
+   version と SHA-256 を記録します。SxS 版では必要な app-local UCRT が `dll/` からロードされることを確認します。
+3. CLI、選曲、Result、音声、動画 BGA と updater を実行します。manifest 欠落・identity 不一致、
+   必須 DLL と同梱 UCRT 欠落のコピーも別々に試し、SideBySide イベントや `sxstrace` で原因を確認します。
+4. `scripts/test-windows-sxs-update.ps1` に flat 橋渡しパッケージ、SxS パッケージ、
+   旧 helper とその protocol を渡し、更新・復旧・再起動を確認します。
+   protocol 1 の v0.4.2、2 の v0.4.3、3 の v0.5.2 を比較に使用できます。
+
+中央導入済みの 8.1 と、システム UCRT を使う Windows 10/11 も別枠で試験します。
+8.1 での app-local UCRT のロードを確認できるまで `dll/` 版の正式公開を保留します。
 
 ## 実行経路
 

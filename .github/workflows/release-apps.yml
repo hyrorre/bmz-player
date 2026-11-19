@@ -24,6 +24,11 @@ name: Release Apps
         required: true
         default: false
         type: boolean
+      windows_sxs:
+        description: Build the Windows dll/ layout for validation without publishing
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -36,9 +41,10 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   BMZ_UPDATE_PUBLIC_KEY: ${{ vars.BMZ_UPDATE_PUBLIC_KEY }}
-  BMZ_WINDOWS_UPDATER_LAYOUT: ${{ vars.BMZ_WINDOWS_UPDATER_LAYOUT || 'grouped' }}
+  BMZ_WINDOWS_DLL_LAYOUT: ${{ inputs.windows_sxs && 'sxs' || 'flat' }}
+  BMZ_WINDOWS_UPDATER_LAYOUT: ${{ inputs.windows_sxs && 'grouped' || vars.BMZ_WINDOWS_UPDATER_LAYOUT || 'grouped' }}
   BMZ_UPDATE_BRIDGE_TAG: ${{ vars.BMZ_UPDATE_BRIDGE_TAG }}
-  BMZ_MIN_UPDATER_PROTOCOL: ${{ vars.BMZ_MIN_UPDATER_PROTOCOL }}
+  BMZ_MIN_UPDATER_PROTOCOL: ${{ inputs.windows_sxs && '4' || vars.BMZ_MIN_UPDATER_PROTOCOL }}
 
 jobs:
   metadata:
@@ -222,6 +228,9 @@ jobs:
       - name: Package Windows app
         shell: pwsh
         run: |
+          if ("${{ needs.metadata.outputs.should_upload }}" -eq "true" -and $env:BMZ_WINDOWS_DLL_LAYOUT -eq "sxs") {
+            throw "Publishing dll/ packages is blocked pending Windows 8.1 app-local UCRT verification"
+          }
           if ("${{ needs.metadata.outputs.should_upload }}" -eq "true" -and -not $env:BMZ_UPDATE_PUBLIC_KEY) {
             throw "BMZ_UPDATE_PUBLIC_KEY must be configured before publishing automatic updates"
           }
@@ -233,6 +242,7 @@ jobs:
             -SkipBuild `
             -Target $env:BMZ_WINDOWS_TARGET `
             -Installer `
+            -DllLayout $env:BMZ_WINDOWS_DLL_LAYOUT `
             -UpdaterLayout $env:BMZ_WINDOWS_UPDATER_LAYOUT `
             -DllDir (Join-Path $env:VCPKG_ROOT "installed\$env:VCPKG_DEFAULT_TRIPLET\bin")
           $provenance = "dist\release\bmz-player-v$env:BMZ_VERSION-windows-x64-provenance.txt"
@@ -262,6 +272,7 @@ jobs:
           name: windows-compat-startup
           path: |
             .local/windows-compat-ci/*.txt
+            .local/windows-compat-ci/*.csv
             .local/windows-compat-ci/*.log
             .local/windows-compat-ci/package/data/logs/*.log
           if-no-files-found: ignore
