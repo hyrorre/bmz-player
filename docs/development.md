@@ -13,6 +13,10 @@ Linuxのアイドル抑止テストには`dbus-daemon`とUnixソケットを作�
 `cargo test -p bmz-player --locked idle_inhibit --lib`はサービス自動起動を無効にした
 専用のsession busでPortal / ScreenSaverの模擬サービスを動かし、実際のデスクトップには接続しません。
 
+Windows 8.1向けの実験ビルドと通常ターゲットとの比較は
+[Windows互換ビルドの検証](windows-compat.md)を参照してください。
+Windows 8.1の正式サポートはVM・実機での確認後に判断します。
+
 ## ビルド識別情報
 
 `bmz-player`はGitのHEADとコードのdirty状態をビルド時に記録します。

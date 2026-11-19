@@ -104,6 +104,7 @@ zbus = "5.16"
 
 [target.'cfg(windows)'.dependencies]
 everything-ipc.workspace = true
+windows = { workspace = true, features = ["Gaming_Input"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_Devices_Display",

@@ -200,6 +200,11 @@ pub(super) fn build_integration_settings_sections(
                         ui.selectable_value(&mut config.input.gamepad_backend, backend, label);
                     }
                 });
+            let backend = match state.active_gamepad_backend {
+                Some("keyboard only") | None => text.text("settings-input-gamepad-inactive"),
+                Some(name) => name.to_owned(),
+            };
+            ui.label(tr!(text, "settings-input-gamepad-active", "backend" => backend.as_str()));
             #[cfg(target_os = "macos")]
             if config.input.gamepad_backend == GamepadBackendKind::GameController {
                 ui.label(text.text(match crate::input::gamecontroller::pad_status() {

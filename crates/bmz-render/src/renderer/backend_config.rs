@@ -120,6 +120,9 @@ pub(super) fn fallback_wgpu_backends(backend: WgpuBackend) -> &'static [WgpuBack
         WgpuBackend::Auto => &[WgpuBackend::Dx12, WgpuBackend::Vulkan, WgpuBackend::Gl],
         #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         WgpuBackend::Auto => &[WgpuBackend::Auto],
+        #[cfg(target_os = "windows")]
+        WgpuBackend::Vulkan => &[WgpuBackend::Vulkan, WgpuBackend::Gl],
+        #[cfg(not(target_os = "windows"))]
         WgpuBackend::Vulkan => &[WgpuBackend::Vulkan],
         WgpuBackend::Metal => &[WgpuBackend::Metal],
         WgpuBackend::Dx12 => &[WgpuBackend::Dx12],
