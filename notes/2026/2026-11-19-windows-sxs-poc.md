@@ -2,7 +2,7 @@
 
 ## 判断
 
-**条件付きで採用可能。** Windows 11 x64 では、配布ルートの `bmz-player.exe` に埋め込んだ manifest で、同梱 DLL 52 本をサブフォルダーに配置して起動できた。必要な FFmpeg 5 本と `vcruntime140.dll` のロード元も確認した。中央導入のない Windows 8.1 での UCRT 検証と、配布・更新処理の変更が採用条件になる。
+**条件付きで採用可能。** Windows 11 x64 では、配布ルートの `bmz-player.exe` に埋め込んだ manifest で、同梱 DLL 52 本を `dll/` に配置して起動できた。必要な FFmpeg 5 本と `vcruntime140.dll` のロード元も確認した。中央導入のない Windows 8.1 での UCRT 検証と、配布・更新処理の変更が採用条件になる。
 
 ## 対象と環境
 
@@ -24,7 +24,7 @@ SDK の `mt.exe` で未署名の検証用 exe コピーの `RT_MANIFEST #1` に�
   <assemblyIdentity type="win32" name="BMZ.Player" version="1.0.0.0" processorArchitecture="amd64"/>
   <dependency>
     <dependentAssembly>
-      <assemblyIdentity type="win32" name="BMZ.Player.Runtime" version="1.0.0.0" processorArchitecture="amd64"/>
+      <assemblyIdentity type="win32" name="dll" version="1.0.0.0" processorArchitecture="amd64"/>
     </dependentAssembly>
   </dependency>
 </assembly>
@@ -33,8 +33,8 @@ SDK の `mt.exe` で未署名の検証用 exe コピーの `RT_MANIFEST #1` に�
 ```text
 BMZ Player/
   bmz-player.exe
-  BMZ.Player.Runtime/
-    BMZ.Player.Runtime.manifest
+  dll/
+    dll.manifest
     （FFmpeg 7 本、pkgconf 1 本、VC 3 本、UCRT と転送 DLL 41 本）
   resources/
   updater/
@@ -43,9 +43,9 @@ BMZ Player/
     instance.lock
 ```
 
-[アセンブリ manifest のテンプレート](../../scripts/windows-sxs-poc/BMZ.Player.Runtime.manifest) が同じ name・type・version・processorArchitecture を定義する。生成時に `<file name="avcodec-63.dll"/>` のような実ファイル名を 1 本ずつ追加する。準備スクリプトは許可位置、宣言と DLL の一覧、同名や過不足、移動前後の SHA-256 を照合する。現行配置はルート 52 本、FFmpeg だけを移した途中段階はルート 45 本、全 DLL 移動版はルート **0 本**。
+[アセンブリ manifest のテンプレート](../../scripts/windows-sxs-poc/dll.manifest) が同じ name・type・version・processorArchitecture を定義する。生成時に `<file name="avcodec-63.dll"/>` のような実ファイル名を 1 本ずつ追加する。準備スクリプトは許可位置、宣言と DLL の一覧、同名や過不足、移動前後の SHA-256 を照合する。現行配置はルート 52 本、FFmpeg だけを移した途中段階はルート 45 本、全 DLL 移動版はルート **0 本**。
 
-Windows は共有アセンブリを検索した後、exe の隣と同名子フォルダーで `<assemblyname>.dll`、`<assemblyname>.manifest` を探す。DLL 名と異なる独自 identity を使い、`BMZ.Player.Runtime/BMZ.Player.Runtime.manifest` を選ばせた。API set の解決に続いて SxS リダイレクトが働く。依存 DLL の間接 import もモジュール名で解決される。Windows 10/11 は OS の UCRT を使い、API set は実ファイルのロードを伴わないことがある。Microsoft が記す Windows 8 より前のサブフォルダー制限は、8.1 での成功を保証しない。
+Windows は共有アセンブリを検索した後、exe の隣と同名子フォルダーで `<assemblyname>.dll`、`<assemblyname>.manifest` を探す。初回の `BMZ.Player.Runtime` から、フォルダー名、manifest ファイル名、両側のアセンブリ名をまとめて `dll` に揃え、`dll/dll.manifest` が選ばれる構成にした。API set の解決に続いて SxS リダイレクトが働く。依存 DLL の間接 import もモジュール名で解決される。Windows 10/11 は OS の UCRT を使い、API set は実ファイルのロードを伴わないことがある。Microsoft が記す Windows 8 より前のサブフォルダー制限は、8.1 での成功を保証しない。
 
 - [Assembly Searching Sequence](https://learn.microsoft.com/en-us/windows/win32/sbscs/assembly-searching-sequence)
 - [Application manifests](https://learn.microsoft.com/en-us/windows/win32/sbscs/application-manifests)
@@ -62,14 +62,14 @@ Windows は共有アセンブリを検索した後、exe の隣と同名子フ�
 
 | 対象 | 想定（全 DLL 移動版） | Windows 11 実測 |
 |---|---|---|
-| `avcodec-63.dll`、`avformat-63.dll`、`avutil-61.dll`、`swresample-7.dll`、`swscale-10.dll` | private assembly | すべて `BMZ.Player.Runtime/`。現行は exe 横、FFmpeg のみ移動版も assembly |
+| `avcodec-63.dll`、`avformat-63.dll`、`avutil-61.dll`、`swresample-7.dll`、`swscale-10.dll` | private assembly | すべて `dll/`。現行は exe 横、FFmpeg のみ移動版も assembly |
 | `avdevice-63.dll`、`avfilter-12.dll`、`pkgconf-8.dll` | 使用時は private assembly | 実行経路でロードされず。同梱と import/export は確認 |
-| `vcruntime140.dll` | private assembly | `BMZ.Player.Runtime/`、14.44.35211.0。現行と FFmpeg のみ移動版は exe 横 |
+| `vcruntime140.dll` | private assembly | `dll/`、14.44.35211.0。現行と FFmpeg のみ移動版は exe 横 |
 | `msvcp140.dll`、`vcruntime140_1.dll` | 使用時は private assembly | 実行経路でロードされず。同梱と import/export は確認 |
 | `ucrtbase.dll` | 11 は System32、中央導入なしの 8.1 は同梱先を検証 | `C:\Windows\System32\ucrtbase.dll`、10.0.26100.9711 |
 | UCRT の API 転送 40 本 | 11 は API set 解決が優先、8.1 は必要な転送 DLL を同梱先から解決できるか検証 | 個別のファイルモジュールは一覧に現れず |
 
-全 DLL 移動版の実ロード元と SHA-256 は `.local/windows-sxs/handoff-trial/sxs-result.modules.csv`。FFmpeg の DLL に PE FileVersion がないため、バージョンはリンクに使ったローカル vcpkg のヘッダーと provenance による。
+全 DLL 移動版の実ロード元と SHA-256 は `.local/windows-sxs/dll-layout/trial/sxs-result.modules.csv`。FFmpeg の DLL に PE FileVersion がないため、バージョンはリンクに使ったローカル vcpkg のヘッダーと provenance による。
 
 | 実ロードファイル | バージョン | SHA-256 |
 |---|---|---|
@@ -89,7 +89,7 @@ Windows は共有アセンブリを検索した後、exe の隣と同名子フ�
 | assembly manifest 欠落 | Win32 14001、SideBySide イベント 33。sxstrace で assembly が見つからない | 未実施 |
 | assembly version 2.0.0.0 と exe が要求する 1.0.0.0 の不一致 | Win32 14001、イベント 35。sxstrace に両 identity の差異 | 未実施 |
 | assembly manifest に記載した `avcodec-63.dll` を削除 | NTSTATUS 0xC0000135。CLI 実行に到達しない | 未実施 |
-| 同梱 UCRT 41 本と対応する `file` 宣言を削除 | 別コピーの `--version` は終了コード 0 | 実施対象外。中央導入なしで同梱 UCRT を確認する |
+| 同梱 UCRT 41 本と対応する `file` 宣言を削除 | 初回のアセンブリ名で、別コピーの `--version` が終了コード 0 | 実施対象外。中央導入なしで同梱 UCRT を確認する |
 | 現行配置に SxS を上書きするシミュレーション | profile 起動、FFmpeg/VC は SxS からロード。ルートに旧 DLL 52 本が残った | 未実施 |
 
 Windows 8.1 の VirtualBox VM は登録済みだったが、ディスクに起動可能な OS がなく、前回ログも `No bootable medium found` だった。該当のローカルデータに起動メディアはなかった。Windows 10 の別環境での起動と 8.1 の app-local UCRT は未確認。
@@ -99,9 +99,9 @@ Windows 8.1 の VirtualBox VM は登録済みだったが、ディスクに起�
 ## 保存先・配布・更新への影響
 
 - [paths.rs](../../crates/bmz-player/src/paths.rs) は `current_exe()` の親の package manifest を検証してから保存先と `resources/` を決める。許可されるファイルだけの PoC 用 marker で portable の隣接 `data/` と installer の分離した AppData を実測した。全ファイルを記載した marker は `profile create` が終了コード 1 で拒否した。全ファイルの別 inventory は `sxs.files.json`。
-- [generate-update-metadata.mjs](../../scripts/generate-update-metadata.mjs) の package 生成は `BMZ.Player.Runtime` を拒否し、[manifest.rs](../../crates/bmz-updater/src/manifest.rs) の `managed_path()` は同ディレクトリ配下を拒否する。採用時は固定名フォルダー、その同名 manifest と宣言にある直下の DLL だけを許可する。archive・更新・復旧で同じパス規則を使い、余分な階層、reparse point、大小文字違いの重複を拒否する。
+- [generate-update-metadata.mjs](../../scripts/generate-update-metadata.mjs) の package 生成と、[manifest.rs](../../crates/bmz-updater/src/manifest.rs) の `managed_path()` は新しい `dll/` 配置を扱えない。採用時は `dll/dll.manifest` と、その宣言にある直下の DLL だけを許可する。archive・更新・復旧で同じパス規則を使い、余分な階層、reparse point、大小文字違いの重複を拒否する。
 - [verify-windows-compat-imports.ps1](../../scripts/verify-windows-compat-imports.ps1) はルートの DLL を前提にする。許可位置と manifest の identity / `file` 一覧を照合して DLL 名→実ファイルの表を作り、import/export に使用する。#138 の VC/UCRT 同梱必須判定と updater の CRT 非依存判定を維持し、実行試験でロード元も確認する。
-- exe の manifest 埋め込み、必要な Authenticode 署名、[IR client hash](../../scripts/generate-client-hash-manifest.mjs) と package のファイルハッシュ、installer・ZIP の生成、アーカイブハッシュと署名付き release metadata の順で確定する。ローカルの client hash は現行 `f34fea4e16a9e0d577a3f8bba7aa093abeae8aa91f8a07bd95168155067fc6d3`、SxS `13f549830165da41ee9379742fe3f8a67c538bc11ffbae629bba759eafc2644d` だった。PoC の値は IR へ登録していない。
+- exe の manifest 埋め込み、必要な Authenticode 署名、[IR client hash](../../scripts/generate-client-hash-manifest.mjs) と package のファイルハッシュ、installer・ZIP の生成、アーカイブハッシュと署名付き release metadata の順で確定する。`dll` 名の SxS 版の client hash は `.local/windows-sxs/dll-layout/client-hash.json` に記録した。PoC の値は IR へ登録していない。
 - [Inno Setup](../../installer/inno/bmz-player.iss) の再帰コピーはサブフォルダーを配置でき、上書きでは旧 DLL が残る。既存ファイル保護試験は 6.7.3 のダミー installer で成功した。SxS 版の実 installer による移行は未実施。採用時には旧 package manifest に記録された管理済みファイルに削除・退避対象を限定する。変更済みの DLL、同名ユーザーファイル、書き込み不可、中断時の復旧も確認する。
 - [transaction.rs](../../crates/bmz-updater/src/transaction.rs) は旧 inventory と新 inventory の差分を取り、旧ファイルをバックアップする。旧 DLL・以前の exe・package manifest を同じトランザクションで戻せることを検証する。protocol 3 の reader も新パスを拒否するため、現行配置のまま新 reader / helper を先に届ける橋渡し版が必要。新配置の最低 protocol は 4 が候補。旧 1/2/3 からの橋渡し経路と署名済みメタデータを確認する。[自動更新](../../docs/auto-update.md)
 
@@ -134,4 +134,4 @@ Windows 8.1 の VirtualBox VM は登録済みだったが、ディスクに起�
 ffmpeg -f lavfi -i 'testsrc2=size=320x240:rate=30' -t 9 -c:v mpeg4 -q:v 4 -an bga.mp4
 ```
 
-生ログ、生成バイナリ、検証用 ZIP（`bmz-player-sxs-2d3d9675-windows81-x64-poc.zip`）と SHA-256 は `.local/windows-sxs/` に置き、Git では管理しない。ZIP は標準スキン、同梱サンプル、動画素材と各配置を含み、リリースの追加スキンは省いた。元の配布 staging を直接起動せず、展開した ZIP の検証スクリプトからテストする。動画を確認した画面は `visual/sxs-video-bga.png`、MP3 試験は `audio-ffmpeg/stderr.txt`、SxS 探索トレースは `loader-diagnostics/sxs.txt`。
+生ログ、生成バイナリ、`dll/` 版の検証用 ZIP（`bmz-player-sxs-dll-2d3d9675-windows81-x64-poc.zip`）と SHA-256 は `.local/windows-sxs/` に置き、Git では管理しない。ZIP は標準スキン、同梱サンプル、動画素材と各配置を含み、リリースの追加スキンは省いた。展開した ZIP を Windows PowerShell で再試験し、33 回の起動・失敗試験で期待どおりの結果を得た。`dll/` 版の SxS 探索トレースは `dll-layout/sxs.txt`。初回の構成で確認した動画画面は `visual/sxs-video-bga.png`、MP3 試験は `audio-ffmpeg/stderr.txt`。
