@@ -219,3 +219,146 @@ fn pending_ratio_change_uses_pending_base_and_replays_on_session() {
     replay_pending_play_lane_actions(&mut session, &mut lane_target, &actions, &profile, false);
     assert_eq!(session.hispeed, 9.0);
 }
+
+#[test]
+fn ratio_changed_hispeed_survives_profile_save_and_next_session() {
+    for base in [BaseHispeedConfig::Classic, BaseHispeedConfig::Lr2] {
+        let mut profile = ratio_profile(base, 3.0, 0.1);
+        assert_eq!(profile.lane.classic_hispeed_step, 0.25);
+        let mut session = ratio_session(&profile, 150.0, HsFixOption::StartBpm);
+        press_hispeed(&mut session, &profile, HispeedChange::Up);
+        let display = crate::screens::play_snapshot::display_hispeed_for_session(&session);
+        assert_eq!(display, 3.3, "base={base:?}");
+
+        apply_lane_state_to_profile(
+            &mut profile,
+            Some(display),
+            Some(active_lane_state_for_session(&session)),
+        );
+        assert_eq!(profile.lane.hispeed, 3.3, "base={base:?}");
+        assert_eq!(profile.lane.base_hispeed, base);
+
+        let next = ratio_session(&profile, 150.0, HsFixOption::StartBpm);
+        assert_eq!(
+            crate::screens::play_snapshot::display_hispeed_for_session(&next),
+            3.3,
+            "base={base:?}"
+        );
+        assert_eq!(next.hispeed_change_base, 3.3, "base={base:?}");
+    }
+}
+
+#[test]
+fn fixed_change_type_still_rounds_saved_classic_hispeed_to_quarter_steps() {
+    let mut profile = ratio_profile(BaseHispeedConfig::Classic, 3.0, 0.1);
+    profile.lane.hispeed_change_type = HispeedChangeTypeConfig::Fixed;
+    let session = ratio_session(&profile, 150.0, HsFixOption::Off);
+
+    apply_lane_state_to_profile(
+        &mut profile,
+        Some(3.3),
+        Some(active_lane_state_for_session(&session)),
+    );
+    assert_eq!(profile.lane.hispeed, 3.25);
+}
+
+fn bpm_change_chart() -> bmz_chart::model::PlayableChart {
+    let mut chart = app_test_chart();
+    chart.metadata.initial_bpm = 150.0;
+    chart.timing_events.push(bmz_chart::model::TimingEvent {
+        tick: bmz_core::time::ChartTick(48),
+        time: TimeUs(1_000_000),
+        kind: bmz_chart::model::TimingEventKind::BpmChange { bpm: 300.0 },
+    });
+    chart
+}
+
+/// ロード中はplaceholderのHSで操作し、実譜面の準備時に作り直した状態が、
+/// 実sessionへ同じ操作を再適用した結果と一致することを確かめる。
+/// 戻り値はplaceholderで使った比率の基準。
+fn assert_pending_matches_session(profile: &ProfileConfig, hs_fix: HsFixOption) -> f32 {
+    let chart = bpm_change_chart();
+    let options = crate::screens::play_session::PlaySessionOptions {
+        hs_fix,
+        ..crate::screens::play_session::PlaySessionOptions::default()
+    };
+    let key_mode = chart.metadata.key_mode;
+    let mode_config = profile.play_mode_config(key_mode);
+    let mut snapshot = bmz_render::snapshot::RenderSnapshot {
+        now_bpm: 150.0,
+        main_bpm: 150.0,
+        min_bpm: 150.0,
+        max_bpm: 150.0,
+        ..Default::default()
+    };
+    crate::screens::play_session::apply_placeholder_session_visuals(
+        &mut snapshot,
+        profile,
+        key_mode,
+        &options,
+    );
+    let mut lane = PendingPlayLaneState::from_snapshot(&snapshot, &mode_config, hs_fix, 100);
+    let placeholder_base = lane.hispeed_change_base;
+    let actions = [PlayLaneAction::Hispeed(HispeedChange::Up)];
+    for action in actions {
+        assert!(apply_pending_play_lane_action_to_state(&mut lane, action, profile, 150.0, false));
+        lane.apply_to_snapshot(&mut snapshot);
+    }
+
+    let initial = crate::screens::play_session::initial_session_hispeed(&chart, profile, &options);
+    let mut session = crate::screens::play_session::build_game_session(
+        std::sync::Arc::new(chart),
+        profile,
+        options,
+    );
+    assert_eq!(initial.hispeed, session.hispeed, "hs_fix={hs_fix:?}");
+    assert_eq!(initial.display_hispeed, session.hispeed_change_base, "hs_fix={hs_fix:?}");
+
+    snapshot.min_bpm = 150.0;
+    snapshot.max_bpm = 300.0;
+    lane.rebase_to_prepared_chart(&snapshot, &mode_config, hs_fix, initial, |lane| {
+        for action in actions {
+            assert!(apply_pending_play_lane_action_to_state(lane, action, profile, 150.0, false));
+        }
+    });
+    let mut lane_target = PlayLaneTarget::Lift;
+    replay_pending_play_lane_actions(&mut session, &mut lane_target, &actions, profile, false);
+
+    assert_eq!(lane.hispeed_change_base, session.hispeed_change_base, "hs_fix={hs_fix:?}");
+    assert!(
+        (lane.hispeed - session.hispeed).abs() < 0.000_01,
+        "hs_fix={hs_fix:?} pending={} session={}",
+        lane.hispeed,
+        session.hispeed
+    );
+    assert_eq!(
+        lane.display_hispeed(),
+        crate::screens::play_snapshot::display_hispeed_for_session(&session),
+        "hs_fix={hs_fix:?}"
+    );
+    placeholder_base
+}
+
+#[test]
+fn pending_floating_ratio_change_matches_session_after_chart_is_prepared() {
+    let mut profile = ratio_profile(BaseHispeedConfig::Classic, 3.0, 1.0);
+    profile.lane.floating_policy = FloatingPolicyConfig::Locked;
+    profile.lane.target_green_number = 300;
+    for hs_fix in
+        [HsFixOption::StartBpm, HsFixOption::MaxBpm, HsFixOption::MinBpm, HsFixOption::MainBpm]
+    {
+        let placeholder_base = assert_pending_matches_session(&profile, hs_fix);
+        if hs_fix == HsFixOption::MaxBpm {
+            // placeholderは初期BPM150、実sessionは最大BPM300から求めるため基準が異なる。
+            assert!((placeholder_base - 3.2).abs() < 0.01, "placeholder={placeholder_base}");
+        }
+    }
+}
+
+#[test]
+fn pending_lr2_ratio_change_matches_session_after_chart_is_prepared() {
+    let profile = ratio_profile(BaseHispeedConfig::Lr2, 3.0, 1.0);
+    for hs_fix in [HsFixOption::Off, HsFixOption::MaxBpm, HsFixOption::MinBpm] {
+        let _ = assert_pending_matches_session(&profile, hs_fix);
+    }
+}

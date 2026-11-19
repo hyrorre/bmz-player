@@ -530,7 +530,8 @@ pub(crate) use arrange_pipeline::preview_arrange_pattern;
 pub(crate) use arrange_pipeline::second_player_lane_mask;
 pub use arrange_pipeline::{apply_arrange, apply_arrange_pair, generate_arrange_seed};
 pub use build::{
-    apply_placeholder_session_visuals, build_game_session, build_game_session_with_input_backend,
+    InitialSessionHispeed, apply_placeholder_session_visuals, build_game_session,
+    build_game_session_with_input_backend, initial_session_hispeed,
 };
 pub(crate) use build::{
     beatoraja_chart_last_time, effective_primary_key_mode, judge_algorithm_from_config,

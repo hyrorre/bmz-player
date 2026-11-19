@@ -379,36 +379,26 @@ pub fn build_game_session_with_input_backend(
         chart.metadata.initial_bpm,
         &chart.timing_events,
     );
-    let speed_locked = options.speed_constraint == bmz_core::course::CourseSpeedConstraint::NoSpeed;
-    let hispeed_mode = initial_hispeed_mode(&mode_config, hs_fix, speed_locked);
-    let target_green_number = mode_config.target_green_number.max(1);
-    let lift = if speed_locked { 0.0 } else { lift_from_mode_config(&mode_config) };
-    let lane_cover = if speed_locked {
-        0.0
-    } else {
-        crate::config::play::clamp_lane_cover_for_lift(lane_unit_to_f32(mode_config.sudden), lift)
-    };
-    // Practice では CONSTANT を無効にする。初期 HS も実際に使う状態で求める。
-    let constant_enabled = mode_config.constant_enabled
-        && session_mode != crate::select_options::SessionMode::Practice;
-    let hsfix_base_bpm = hsfix_base_bpm_for_chart(&chart, &timing_map, hs_fix, constant_enabled);
-    let hispeed = if speed_locked {
-        1.0
-    } else {
-        initial_hispeed_for_mode(
-            &mode_config,
-            hispeed_mode,
-            target_green_number,
-            // SUDDEN+無効時の保存値はFloatingの可視範囲に含めない。
-            if lanecover_enabled_from_mode_config(&mode_config) { lane_cover } else { 0.0 },
-            lift,
-            &chart,
-            &timing_map,
+    let InitialLaneSpeed {
+        speed_locked,
+        hispeed_mode,
+        target_green_number,
+        lift,
+        lane_cover,
+        constant_enabled,
+        hsfix_base_bpm,
+        hispeed,
+    } = initial_lane_speed(
+        &chart,
+        &timing_map,
+        &mode_config,
+        &InitialLaneSpeedOptions {
             hs_fix,
-            options.playback_rate_percent,
-            constant_enabled,
-        )
-    };
+            speed_constraint: options.speed_constraint,
+            session_mode,
+            playback_rate_percent: options.playback_rate_percent,
+        },
+    );
 
     // Course judge constraints narrow the judge window so the corresponding
     // judge band is unreachable: NoGood zeroes good_us, NoGreat zeroes both
@@ -715,6 +705,138 @@ pub fn build_game_session_with_input_backend(
     session.hispeed_change_base =
         crate::screens::play_snapshot::display_hispeed_for_session(&session);
     session
+}
+
+/// プレイ開始時のレーン速度。`build_game_session`と、ロード中の表示を実譜面に合わせる
+/// 処理で同じ規則を使う。
+struct InitialLaneSpeed {
+    speed_locked: bool,
+    hispeed_mode: HispeedMode,
+    target_green_number: u32,
+    lift: f32,
+    lane_cover: f32,
+    constant_enabled: bool,
+    hsfix_base_bpm: f64,
+    hispeed: f32,
+}
+
+struct InitialLaneSpeedOptions {
+    hs_fix: HsFixOption,
+    speed_constraint: bmz_core::course::CourseSpeedConstraint,
+    session_mode: crate::select_options::SessionMode,
+    playback_rate_percent: u16,
+}
+
+impl InitialLaneSpeedOptions {
+    fn from_session_options(options: &PlaySessionOptions) -> Self {
+        Self {
+            hs_fix: options.hs_fix,
+            speed_constraint: options.speed_constraint,
+            session_mode: options.session_mode,
+            playback_rate_percent: options.playback_rate_percent,
+        }
+    }
+}
+
+fn initial_lane_speed(
+    chart: &PlayableChart,
+    timing_map: &bmz_chart::timing::TimingMap,
+    mode_config: &PlayModeConfig,
+    options: &InitialLaneSpeedOptions,
+) -> InitialLaneSpeed {
+    let hs_fix = options.hs_fix;
+    let speed_locked = options.speed_constraint == bmz_core::course::CourseSpeedConstraint::NoSpeed;
+    let hispeed_mode = initial_hispeed_mode(mode_config, hs_fix, speed_locked);
+    let target_green_number = mode_config.target_green_number.max(1);
+    let lift = if speed_locked { 0.0 } else { lift_from_mode_config(mode_config) };
+    let lane_cover = if speed_locked {
+        0.0
+    } else {
+        crate::config::play::clamp_lane_cover_for_lift(lane_unit_to_f32(mode_config.sudden), lift)
+    };
+    // Practice では CONSTANT を無効にする。初期 HS も実際に使う状態で求める。
+    let constant_enabled = mode_config.constant_enabled
+        && options.session_mode != crate::select_options::SessionMode::Practice;
+    let hsfix_base_bpm = hsfix_base_bpm_for_chart(chart, timing_map, hs_fix, constant_enabled);
+    let hispeed = if speed_locked {
+        1.0
+    } else {
+        initial_hispeed_for_mode(
+            mode_config,
+            hispeed_mode,
+            target_green_number,
+            // SUDDEN+無効時の保存値はFloatingの可視範囲に含めない。
+            if lanecover_enabled_from_mode_config(mode_config) { lane_cover } else { 0.0 },
+            lift,
+            chart,
+            timing_map,
+            hs_fix,
+            options.playback_rate_percent,
+            constant_enabled,
+        )
+    };
+    InitialLaneSpeed {
+        speed_locked,
+        hispeed_mode,
+        target_green_number,
+        lift,
+        lane_cover,
+        constant_enabled,
+        hsfix_base_bpm,
+        hispeed,
+    }
+}
+
+/// 実譜面から求めたプレイ開始時のHSとレーンカバー。`hispeed`は実効倍率、
+/// `display_hispeed`はskin表示・保存と比率方式のHS変更の基準に使う表示上の値。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InitialSessionHispeed {
+    pub hispeed: f32,
+    pub hispeed_mode: HispeedMode,
+    pub display_hispeed: f32,
+    pub lift: f32,
+    pub lane_cover: f32,
+}
+
+/// `build_game_session`が作るsessionの初期HSを、sessionを作らずに求める。
+pub fn initial_session_hispeed(
+    chart: &PlayableChart,
+    profile: &ProfileConfig,
+    options: &PlaySessionOptions,
+) -> InitialSessionHispeed {
+    let play_config_key_mode = play_config_key_mode(chart.metadata.key_mode, options);
+    let mode_config = profile.play_mode_config(play_config_key_mode);
+    let timing_map = bmz_chart::timing::TimingMap::from_chart_timing_events(
+        chart.metadata.initial_bpm,
+        &chart.timing_events,
+    );
+    let speed = initial_lane_speed(
+        chart,
+        &timing_map,
+        &mode_config,
+        &InitialLaneSpeedOptions::from_session_options(options),
+    );
+    let display_hispeed = if speed.hispeed_mode == HispeedMode::Classic {
+        let lr2_hispeed = !speed.speed_locked && mode_config.base_hispeed == BaseHispeedConfig::Lr2;
+        crate::config::play::classic_display_hispeed(
+            speed.hispeed,
+            crate::screens::play_snapshot::classic_hsfix_scale_for_option(
+                lr2_hispeed,
+                options.hs_fix,
+                speed.hsfix_base_bpm,
+                options.playback_rate_percent,
+            ),
+        )
+    } else {
+        speed.hispeed
+    };
+    InitialSessionHispeed {
+        hispeed: speed.hispeed,
+        hispeed_mode: speed.hispeed_mode,
+        display_hispeed,
+        lift: speed.lift,
+        lane_cover: speed.lane_cover,
+    }
 }
 
 pub(super) fn clamp_hispeed(hispeed: f32) -> f32 {

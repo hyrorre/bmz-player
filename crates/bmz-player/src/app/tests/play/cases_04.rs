@@ -668,8 +668,30 @@ fn pending_lr2_hsfix_hispeed_tracks_chart_base_bpm() {
     assert!((lane.hispeed - 1.625).abs() < 0.000_01, "hispeed={}", lane.hispeed);
     assert_eq!(lane.display_hispeed(), 3.25);
 
+    // 実譜面の基準BPMが150と分かったら、表示上のHSを保ったまま実効倍率を求め直す。
     let snapshot = bmz_render::snapshot::RenderSnapshot { max_bpm: 150.0, ..Default::default() };
-    lane.sync_chart_bpm(&snapshot, HsFixOption::MaxBpm);
+    let mode_config = PlayModeConfig {
+        hispeed: 3.0,
+        base_hispeed: BaseHispeedConfig::Lr2,
+        floating_policy: FloatingPolicyConfig::Disabled,
+        ..PlayModeConfig::default()
+    };
+    let initial = crate::screens::play_session::InitialSessionHispeed {
+        hispeed: 3.0,
+        hispeed_mode: HispeedMode::Classic,
+        display_hispeed: 3.0,
+        lift: 0.0,
+        lane_cover: 0.0,
+    };
+    lane.rebase_to_prepared_chart(&snapshot, &mode_config, HsFixOption::MaxBpm, initial, |lane| {
+        assert!(apply_pending_play_lane_action_to_state(
+            lane,
+            PlayLaneAction::Hispeed(HispeedChange::Up),
+            &profile,
+            150.0,
+            false,
+        ));
+    });
     assert!((lane.hispeed - 3.25).abs() < 0.000_01, "hispeed={}", lane.hispeed);
     assert_eq!(lane.display_hispeed(), 3.25);
 }

@@ -416,7 +416,14 @@ fn pending_lane_state_preserves_sub_one_hsfix_bpm() {
     assert_eq!(lane.hsfix_base_bpm, 0.96);
 
     snapshot.min_bpm = 0.5;
-    lane.sync_chart_bpm(&snapshot, HsFixOption::MinBpm);
+    let initial = crate::screens::play_session::InitialSessionHispeed {
+        hispeed: lane.hispeed,
+        hispeed_mode: lane.hispeed_mode,
+        display_hispeed: lane.display_hispeed(),
+        lift: lane.lift,
+        lane_cover: lane.lane_cover,
+    };
+    lane.rebase_to_prepared_chart(&snapshot, &mode_config, HsFixOption::MinBpm, initial, |_| {});
     assert_eq!(lane.hsfix_base_bpm, 0.5);
 }
 

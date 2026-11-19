@@ -376,11 +376,17 @@ pub(in crate::app) fn apply_lane_state_to_profile(
     if let Some(hispeed) = hispeed
         && base_mode == HispeedMode::Classic
     {
-        let step = match active_mode {
-            HispeedMode::Floating => profile.lane.floating_hispeed_step,
-            HispeedMode::Normal | HispeedMode::Classic => profile.lane.classic_hispeed_step,
+        profile.lane.hispeed = match profile.lane.hispeed_change_type {
+            // 比率方式の変更量は固定刻みと揃わないため、表示上のHS値をそのまま残す。
+            HispeedChangeTypeConfig::Ratio => crate::config::play::quantize_hispeed(hispeed),
+            HispeedChangeTypeConfig::Fixed => {
+                let step = match active_mode {
+                    HispeedMode::Floating => profile.lane.floating_hispeed_step,
+                    HispeedMode::Normal | HispeedMode::Classic => profile.lane.classic_hispeed_step,
+                };
+                clamp_hispeed_for_profile(hispeed, active_mode, step)
+            }
         };
-        profile.lane.hispeed = clamp_hispeed_for_profile(hispeed, active_mode, step);
     }
     if let Some(state) = lane_state {
         if state.sudden_enabled {
