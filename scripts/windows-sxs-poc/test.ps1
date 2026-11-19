@@ -32,7 +32,7 @@ $modernUcrt = [int]$os.CurrentBuild -ge 10240
 $centralUcrt = Test-Path -LiteralPath (Join-Path $system32 'ucrtbase.dll')
 if ($RequireAppLocalUcrt -and
     ([int]$os.CurrentBuild -ne 9600 -or $centralUcrt -or (Test-Path -LiteralPath (Join-Path $system32 'vcruntime140.dll')))) {
-    throw 'The app-local UCRT gate requires Windows 8.1 x64 without central UCRT or VC runtime'
+    throw 'The app-local UCRT gate requires build 9600 (Windows 8.1 or Server 2012 R2) x64 without central UCRT or VC runtime'
 }
 $started = Get-Date
 
@@ -181,7 +181,9 @@ function Check-Modules($Probe, [string]$DllDirectory, [string]$VcDirectory) {
 }
 function Check-Text([string]$Label, [string]$Stream, [string]$Pattern) {
     $file = Join-Path $output "$Label.$Stream.txt"
-    Check ((Test-Path -LiteralPath $file) -and ([IO.File]::ReadAllText($file) -match $Pattern)) "$Label ${Stream}: expected $Pattern"
+    $content = if (Test-Path -LiteralPath $file) { [IO.File]::ReadAllText($file) } else { '' }
+    $plain = $content -replace ([string][char]27 + '\[[0-9;]*m'), ''
+    Check ($plain -match $Pattern) "$Label ${Stream}: expected $Pattern"
 }
 
 $previousErrorMode = [BmzPoC.Native]::SetErrorMode(0x8003)
@@ -283,10 +285,13 @@ try {
             'no-ucrt' { Remove-Item -LiteralPath (Join-Path $dllDir 'ucrtbase.dll') }
         }
         $p = Run-Probe $fault $root @('--help')
-        $diagnostic = if ($fault -in @('no-avcodec', 'no-ucrt')) {
-            $p.exit_hex -eq '0xC0000135' -or $p.start_error -eq 126
-        } else {
-            $p.start_error -eq 14001 -or $p.exit_hex -eq '0xC0150002'
+        $diagnostic = switch ($fault) {
+            'no-avcodec' { $p.exit_hex -eq '0xC0000135' -or $p.start_error -eq 126 }
+            'no-ucrt' {
+                # On Server 2012 R2 a CRT forwarder can fail to resolve an entry point.
+                $p.exit_hex -in @('0xC0000135', '0xC0000139') -or $p.start_error -in @(126, 127)
+            }
+            default { $p.start_error -eq 14001 -or $p.exit_hex -eq '0xC0150002' }
         }
         Check ($diagnostic -and -not $p.timed_out) "${fault}: missing expected loader failure"
     }

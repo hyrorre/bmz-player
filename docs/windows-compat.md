@@ -61,14 +61,14 @@ Release Appsの手動実行では`windows_only=true`、`tag`にブランチ等�
 Windowsだけをビルド・起動確認できます。このモードでは`upload_to_release`の値に関係なく公開せず、
 通常のrelease asset名でActions artifactだけを生成します。
 
-### SxS 版の採用前検証
+### SxS 版の検証
 
 Windows-only の dry run で `windows_sxs=true` を選ぶと、`dll/` 版の ZIP と installer を生成します。
 ローカルでは `package-windows.ps1 -SkipBuild -Target x86_64-win7-windows-msvc -UpdaterLayout grouped -DllLayout sxs`
 で同じ配置を作成できます。player の PE に SDK の `mt.exe` で SxS 依存を追加し、
 DLL と `dll/dll.manifest` の一覧を照合してからハッシュを生成します。
 
-1. 同じ候補ビルドの flat と SxS を、中央導入の VC/UCRT がない Windows 8.1 x64 VM に
+1. 同じ候補ビルドの flat と SxS を、中央導入の VC/UCRT がない Windows 8.1 x64 または Server 2012 R2 x64 に
    別々に展開します。OS の build、KB2999226・KB3118401 等と `System32` の DLL の有無を記録します。
 2. 開発環境の PATH を使わず、空の作業ディレクトリから両構成を起動します。
    実際の module 一覧から `ucrtbase.dll`、使用された CRT 転送 DLL、VC、FFmpeg の絶対パス、
@@ -79,8 +79,10 @@ DLL と `dll/dll.manifest` の一覧を照合してからハッシュを生成�
    旧 helper とその protocol を渡し、更新・復旧・再起動を確認します。
    protocol 1 の v0.4.2、2 の v0.4.3、3 の v0.5.2 を比較に使用できます。
 
-中央導入済みの 8.1 と、システム UCRT を使う Windows 10/11 も別枠で試験します。
-8.1 での app-local UCRT のロードを確認できるまで `dll/` 版の正式公開を保留します。
+中央導入済みの 8.1 と、システム UCRT を使う Windows 10/11・Server 2022 も別枠で試験します。
+Server 2012 R2 の結果は build 9600 の同梱 UCRT の確認に使います。Windows 8.1 クライアントの実機確認は別途行います。
+公開順は [protocol 4 の配布順](auto-update.md#protocol-4-の配布順)、検証結果は
+[作業記録](../notes/2026/2026-11-20-windows-sxs-update.md#2026-11-20-追試--windows-server-2012-r2) を参照してください。
 
 ## 実行経路
 

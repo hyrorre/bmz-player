@@ -58,11 +58,14 @@ PowerShell 5.1以降で実行する:
 dist/windows/BMZ Player/
 ```
 
-staging layout:
+SxS を選んだ場合の staging 構成です。
 
 ```text
 BMZ Player/
   bmz-player.exe
+  dll/
+    dll.manifest
+    *.dll
   updater/
     bmz-updater.exe
     bmz-package.json
@@ -82,6 +85,9 @@ BMZ Player/
       third-party-notices.txt
       rust-dependency-licenses.txt
 ```
+
+SxS の公開設定と橋渡し版の順序は [protocol 4 の配布順](auto-update.md#protocol-4-の配布順)を参照してください。
+既定の flat 配置と橋渡し版では同梱 DLL を `bmz-player.exe` の横に置きます。
 
 `bmz-player.exe`の隣の`resources`がruntimeの`resource_dir`になります。
 `config.toml`, `library.db`, `profiles`, `score.db`, `replay`などのユーザー状態は

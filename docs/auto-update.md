@@ -35,7 +35,7 @@ portableのデータは環境変数の上書きを最優先とし、未指定時
 
 更新アーカイブには`BMZ Player/`が一つあり、本体exe、DLL、`resources/`、
 `updater/bmz-updater.exe`、`updater/bmz-package.json`、空の`updater/instance.lock`だけを収録します。
-検証中の protocol 4 用パッケージでは、DLL と SxS manifest を `dll/` に置きます。
+protocol 4 の SxS パッケージでは、DLL と SxS manifest を `dll/` に置きます。
 manifestにないファイル・リンク・Windowsの特殊名・展開先外のパスを拒否します。
 ダウンロードは署名済みのサイズ・SHA256を照合し、展開ファイルも個別に照合します。
 
@@ -110,13 +110,19 @@ protocol 3は統合Releaseメタデータへの対応を示します。grouped�
 
 ### protocol 4 の配布順
 
-1. Windows 8.1 の app-local UCRT と更新経路を[互換ビルドの手順](windows-compat.md#sxs-版の採用前検証)で検証します。
+1. Windows 8.1 または Server 2012 R2 の app-local UCRT と更新経路を
+   [互換ビルドの手順](windows-compat.md#sxs-版の検証)で検証します。
 2. exe 横 DLL と旧 updater 配置の橋渡し版を公開します。本体と helper は protocol 4、
-   package / release の最低 protocol は 1 です。`BMZ_WINDOWS_UPDATER_LAYOUT=legacy` を使います。
+   package / release の最低 protocol は 1 です。`BMZ_WINDOWS_DLL_LAYOUT=flat`、
+   `BMZ_WINDOWS_UPDATER_LAYOUT=legacy`、`BMZ_MIN_UPDATER_PROTOCOL=1` を使います。
 3. 次の版で `dll/` と grouped updater に移行します。package / release の最低 protocol は 4、
-   `BMZ_UPDATE_BRIDGE_TAG` は橋渡し版の実タグです。旧版向けに橋渡し版と `updates.json` を保持します。
+   `BMZ_WINDOWS_DLL_LAYOUT=sxs`、`BMZ_WINDOWS_UPDATER_LAYOUT=grouped`、
+   `BMZ_MIN_UPDATER_PROTOCOL=4`、`BMZ_UPDATE_BRIDGE_TAG=橋渡し版のタグ` を使います。
+   旧版向けに橋渡し版と `updates.json` を保持します。
 
-Windows 8.1 確認前の `windows_sxs` ワークフロー入力は検証用です。`dll/` 版の Release へのアップロードは拒否されます。
+初期設定は `flat` です。SxS の公開 CI は、橋渡しタグの updater protocol、公開済み portable ZIP、
+互換 `updates.json` の最低 protocol を照合します。Windows-only 検証の `windows_sxs` は、
+repository variable にかかわらず検証対象の配置を選びます。
 
 ## 更新の署名と公開設定
 
