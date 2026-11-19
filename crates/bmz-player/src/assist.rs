@@ -229,8 +229,9 @@ pub fn judge_window_rates(
     let mut rates = JudgeWindowRates::default();
     if config.expand_judge && rule_mode != RuleMode::Dx {
         rates.keys = [config.key_pgreat_rate, config.key_great_rate, config.key_good_rate];
-        rates.scratch =
-            [config.scratch_pgreat_rate, config.scratch_great_rate, config.scratch_good_rate];
+        // beatoraja/LR2oraja build the judging window from the key rates only, so
+        // scratch notes and long scratch ends follow them as well.
+        rates.scratch = rates.keys;
         rates.long_note_margin = config.long_note_margin_rate;
     }
     for bands in [&mut rates.keys, &mut rates.scratch] {
@@ -792,6 +793,25 @@ mod tests {
         assert_eq!(chart.lane_notes[Lane::Key1.index()][0].tick, ChartTick(1_920));
         assert_eq!(chart.bar_lines[1].tick, ChartTick(5_760));
         assert!(chart.lane_notes.iter().flatten().all(|note| note.kind != NoteKind::Mine));
+    }
+
+    #[test]
+    fn scratch_follows_key_window_rates_like_upstream() {
+        let config = AssistOptionConfig {
+            expand_judge: true,
+            key_pgreat_rate: 150,
+            key_great_rate: 120,
+            key_good_rate: 110,
+            scratch_pgreat_rate: 400,
+            scratch_great_rate: 400,
+            scratch_good_rate: 100,
+            ..Default::default()
+        };
+        for rule in [RuleMode::Beatoraja, RuleMode::Lr2Oraja] {
+            let rates = judge_window_rates(config, rule, CourseJudgeConstraint::NoGood);
+            assert_eq!(rates.keys, [150, 120, 0]);
+            assert_eq!(rates.scratch, rates.keys);
+        }
     }
 
     #[test]

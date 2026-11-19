@@ -226,6 +226,8 @@ BMZの実装でもDX modeの`judge_percent_at_time`は常に100%を返し、
 ランクを適用した後、PGREAT／GREAT／GOODの任意倍率にコース制約を反映します。
 NO_GOODはGOODの倍率を0%、NO_GREATはGREATとGOODの倍率を0%にします。
 各側でBAD幅を上限として、PGREATから順に幅が狭くならないよう補正します。
+beatoraja／LR2orajaでは、上流と同じく鍵盤側の任意倍率をスクラッチとlong scratch endにも使います。
+スクラッチ側の任意倍率は設定に保持しますが、実効窓には使いません。
 LR2orajaの `#RANK 2` では、通常ノーツのPGREAT／GREAT／GOOD窓は
 NO_GOODで18／40／40ms、NO_GREATで18／18／18msです。
 
@@ -255,14 +257,19 @@ LR2oraja / DX modeでは、押下時に選ばれたノーツ周辺のBAD範囲�
 これはLR2oraja Endless Dreamの`MultiBadCollector`相当です。
 
 Beatoraja modeではMultiBadを出しません。
+9KのDX POPでは、非消費BADの履歴があるノーツにも、上流と同じくMultiBadのBADを再度付けます。
+HLNの始点がMultiBadの対象になった場合は、押下が終端時刻以降のときだけBADにします。
+終端前のHLNは未処理のまま残し、後の押下や見逃しで通常どおり判定します。
+LR2oraja / DX modeでは、上流と同じくLNの始点（HLNを含む）にGOOD幅より遅いBADを付けません。
 MultiBadで消費されたCN／HCNの始点に対応する未処理終端は、終端時刻を通常ノーツの
 late BAD幅より過ぎた時点でPOORにします。
 
 ## HCN中の空POOR
 
 BMZはbeatoraja／LR2oraja／DX MODEの全3ルールで、同一レーンの実効HCN本体を通過中に
-発生する空POORを抑止します。保持復帰の押し直しに追加ペナルティを与えないための仕様で、
-各上流実装の動作とは異なる意図的な互換例外です。通常プレイ・リプレイ・コースで共通です。
+発生する空POORを抑止します。保持復帰の押し直しに追加ペナルティを与えないための仕様です。
+DX MODEはLR2oraja Endless Dreamの`state.passing != null && judge >= 4`の分岐と同じ扱いで、
+beatoraja／LR2orajaについては上流と異なる意図的な互換例外です。通常プレイ・リプレイ・コースで共通です。
 対象区間と維持する判定は[LNの仕様](ln.md#実行時の判定)を参照してください。
 
 ## Mine

@@ -503,7 +503,13 @@ pub fn build_game_session_with_input_backend(
                 .replay_player
                 .as_ref()
                 .and_then(|player| player.judge_window_rates)
-                .unwrap_or_default();
+                .unwrap_or_else(|| {
+                    crate::assist::judge_window_rates(
+                        options.assist,
+                        rule_mode,
+                        options.judge_constraint,
+                    )
+                });
             let gauge_type = opponent.gauge.unwrap_or(gauge_type);
             let gauge_total = bmz_gameplay::gauge::gauge_total_for_play(
                 &chart.metadata,

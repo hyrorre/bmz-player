@@ -34,6 +34,26 @@ ED-rian 1.7.0 `6f81c2b78e3de545b2ed86c7651a1479aa14395f` も比較用に取得�
 - DXでは `JudgeManager` が任意倍率を無視し、`BMSPlayer` は100%超の設定をAssistとして扱う。
   設定を保持し、同じ保存・IR条件を使う。
 
+## レビュー後の追従
+
+固定SHAとの行単位の比較で見つかった差を次のとおり直した。
+
+- beatoraja／LR2orajaは判定用の`JudgeWindow`を鍵盤側の倍率だけで作る
+  （beatoraja `AbstractJudgeManager.java:158`、LR2oraja `JudgeManager.java:200`）。
+  BMZもスクラッチとlong scratch endに鍵盤側の倍率を使う。
+- 倍率を記録していない対戦相手のリプレイは、本人のリプレイと同じく現在の設定とコース制約を使う。
+- ED `JudgeManager.java:963` はMultiBadの候補を`state == 0`だけで集めるので、
+  9K DX POPでは非消費BADの履歴があるノーツにも再度BADを付ける。
+- ED `JudgeManager.java:1008-1013` に合わせ、MultiBadの対象になったHLNは押下が終端時刻以降のときだけBADにする。
+  終端前のHLNを始点BADとして捕捉しない。
+- ED `JudgeManager.java:973` に合わせ、LR2oraja／DXのLN遅BAD除外をHLNの始点にも適用する。
+- beatoraja `JudgeManager.java:486-500` と`finishTime`に合わせ、LNのGOOD以内の早離しを終端時刻まで保留する。
+  終端前の押し直し（同322行）で取り消す。
+
+地雷の通過判定は、上流ではチェックポイント（beatorajaは入力時刻とフレーム終了、
+LR2oraja／EDはフレーム終了）の保持状態を使うため、フレームの刻みで結果が変わる。
+BMZは時刻付き入力で判定し、ライブとリプレイの再採点を一致させている。上流に合わせるかは未決定。
+
 ## 結果の読み方
 
 | 再現 | 監査時 | 修正後の期待値 |

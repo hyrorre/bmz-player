@@ -154,7 +154,6 @@ pub(super) fn select_press_candidate(
             && note.kind == NoteKind::LongStart
             && matches!(engine.rule_mode, RuleMode::Lr2Oraja | RuleMode::Dx)
             && delta > good_width(delta, windows)
-            && !hln::is_hln_head(chart, note.id)
         {
             judge = None;
         } else if judge.is_none()

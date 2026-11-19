@@ -309,3 +309,117 @@ fn early_scan_limit_is_exclusive_without_changing_internal_band_boundaries() {
         }
     }
 }
+
+fn ln_chart_with_following_tap() -> PlayableChart {
+    let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+    let mut tap = chart_with_tap(TimeUs(2_300_000)).lane_notes[Lane::Key1.index()][0].clone();
+    tap.id = NoteId(3);
+    chart.lane_notes[Lane::Key1.index()].push(tap);
+    chart
+}
+
+#[test]
+fn beatoraja_ln_good_release_waits_for_the_tail_and_regrab_restores_the_start() {
+    let chart = ln_chart_with_following_tap();
+    let mut judge = engine(RuleMode::Beatoraja, KeyMode::K7, 100, JudgeAlgorithm::Combo);
+    judge.process_input(&chart, press_at(TimeUs(1_010_000)));
+    let release = judge.process_input(&chart, release_at(TimeUs(1_850_000)));
+    assert!(release.events.is_empty() && release.consumed_input);
+    assert!(judge.process_misses(&chart, TimeUs(1_900_000)).events.is_empty());
+    let regrab = judge.process_input(&chart, press_at(TimeUs(1_950_000)));
+    assert!(regrab.events.is_empty() && regrab.consumed_input);
+    let end = judge.process_misses(&chart, TimeUs(2_000_001));
+    assert_eq!(end.events.len(), 1);
+    assert_eq!((end.events[0].judge, end.events[0].delta), (Judge::PGreat, TimeUs(10_000)));
+    assert!(!judge.judged_notes.contains_key(&NoteId(3)));
+}
+
+#[test]
+fn beatoraja_ln_good_release_without_regrab_scores_the_release_at_the_tail() {
+    let chart = ln_chart_with_following_tap();
+    let mut judge = engine(RuleMode::Beatoraja, KeyMode::K7, 100, JudgeAlgorithm::Combo);
+    judge.process_input(&chart, press_at(TimeUs(1_000_000)));
+    assert!(judge.process_input(&chart, release_at(TimeUs(1_850_000))).events.is_empty());
+    assert!(judge.process_misses(&chart, TimeUs(2_000_000)).events.is_empty());
+    let end = judge.process_misses(&chart, TimeUs(2_000_001));
+    assert_eq!((end.events[0].judge, end.events[0].delta), (Judge::Great, TimeUs(-150_000)));
+    assert_eq!(end.events[0].side, TimingSide::Fast);
+}
+
+#[test]
+fn beatoraja_ln_late_start_and_lr2oraja_early_release_settle_immediately() {
+    for (rule, press, release) in [
+        (RuleMode::Beatoraja, 1_100_000, 1_950_000),
+        (RuleMode::Lr2Oraja, 1_000_000, 1_900_000),
+        (RuleMode::Dx, 1_000_000, 1_900_000),
+    ] {
+        let chart = ln_chart_with_following_tap();
+        let mut judge = engine(rule, KeyMode::K7, 100, JudgeAlgorithm::Combo);
+        judge.process_input(&chart, press_at(TimeUs(press)));
+        let outcome = judge.process_input(&chart, release_at(TimeUs(release)));
+        assert_eq!(outcome.events.len(), 1, "{rule:?}");
+    }
+}
+
+fn dx_hln_after_tap() -> PlayableChart {
+    let mut chart = chart_with_long_start(TimeUs(1_300_000), TimeUs(3_000_000));
+    chart.long_notes[0].mode = Some(LongNoteMode::Hln);
+    let mut tap = chart_with_tap(TimeUs(1_000_000)).lane_notes[Lane::Key1.index()][0].clone();
+    tap.id = NoteId(3);
+    chart.lane_notes[Lane::Key1.index()].insert(0, tap);
+    chart
+}
+
+#[test]
+fn dx_multi_bad_leaves_an_unfinished_hln_untouched() {
+    let chart = dx_hln_after_tap();
+    let mut judge = engine(RuleMode::Dx, KeyMode::K7, 100, JudgeAlgorithm::Combo);
+    let press = judge.process_input(&chart, press_at(TimeUs(1_170_000)));
+    assert_eq!(press.events.len(), 1);
+    assert_eq!((press.events[0].note_id, press.events[0].judge), (Some(NoteId(3)), Judge::Bad));
+    assert!(!judge.judged_notes.contains_key(&NoteId(1)));
+    judge.process_input(&chart, release_at(TimeUs(1_180_000)));
+    let hit = judge.process_input(&chart, press_at(TimeUs(1_300_000)));
+    assert!(judge.judged_notes.contains_key(&NoteId(1)) || judge.lanes[0].active_long.is_some());
+    assert!(hit.events.iter().all(|event| event.judge != Judge::Bad));
+    let end = judge.process_input(&chart, release_at(TimeUs(3_000_000)));
+    let finished = end.events.iter().chain(&hit.events).find(|e| e.note_id == Some(NoteId(1)));
+    assert_eq!(finished.map(|event| event.judge), Some(Judge::PGreat));
+}
+
+#[test]
+fn lr2oraja_and_dx_drop_a_late_bad_on_hln_heads() {
+    for rule in [RuleMode::Lr2Oraja, RuleMode::Dx] {
+        let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(3_000_000));
+        chart.long_notes[0].mode = Some(LongNoteMode::Hln);
+        let mut judge = engine(rule, KeyMode::K7, 100, JudgeAlgorithm::Combo);
+        let good = judge.window_set.note.good_us;
+        let late = judge.process_input(&chart, press_at(TimeUs(1_000_000 + good + 1)));
+        assert!(late.events.iter().all(|event| event.judge != Judge::Bad), "{rule:?}");
+        assert!(!judge.judged_notes.contains_key(&NoteId(1)), "{rule:?}");
+    }
+}
+
+#[test]
+fn dx_pop_multi_bad_scores_an_attempted_note_again() {
+    let mut chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_300_000));
+    chart.total_notes = 2;
+    let mut judge = engine(RuleMode::Dx, KeyMode::K9, 100, JudgeAlgorithm::Combo);
+    let bad = judge.window_set.note.bad_slow_us;
+    let good = judge.window_set.note.good_us;
+    let first_delta = (good + bad) / 2;
+    let first = judge.process_input(&chart, press_at(TimeUs(1_000_000 + first_delta)));
+    assert_eq!(first.events[0].judge, Judge::Bad);
+    assert!(!first.events[0].advances_score);
+    judge.process_input(&chart, release_at(TimeUs(1_000_000 + first_delta + 1)));
+    // The second press hits the next note, and the attempted note is in BAD range again.
+    let second_at = 1_000_000 + first_delta + 5_000;
+    let mut chart = chart;
+    chart.lane_notes[Lane::Key1.index()][1].time = TimeUs(second_at);
+    let second = judge.process_input(&chart, press_at(TimeUs(second_at)));
+    let first_again: Vec<_> =
+        second.events.iter().filter(|event| event.note_id == Some(NoteId(1))).collect();
+    assert_eq!(first_again.len(), 1);
+    assert_eq!(first_again[0].judge, Judge::Bad);
+    assert!(first_again[0].affects_score && !first_again[0].advances_score);
+}

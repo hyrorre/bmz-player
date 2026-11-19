@@ -326,8 +326,13 @@ impl JudgeEngine {
             if let Some(active) = lane_state.active_long {
                 let release_margin_us =
                     long_release_margin_us(self.window_set, self.scratch_lane_mask[lane.index()]);
+                // A beatoraja LN released early within its GOOD window waits for the tail.
                 if let Some(pending) = active.pending_release
-                    && now.0 >= pending.released_at.0 + release_margin_us
+                    && if matches!(pending.judge, Judge::Bad | Judge::Poor) {
+                        now.0 >= pending.released_at.0 + release_margin_us
+                    } else {
+                        judge_time.0 > active.end.end_time.0
+                    }
                 {
                     lane_state.active_long = None;
                     let judged_note_id = active_scored_note_id(active);
@@ -574,8 +579,13 @@ impl JudgeEngine {
                 Vec::new()
             };
 
-            multi_bad_candidates
-                .retain(|candidate| !self.attempted_notes.contains(&candidate.note_id));
+            // ED keeps an untouched HLN until its tail time instead of scoring a MultiBad.
+            multi_bad_candidates.retain(|candidate| {
+                !hln::is_hln_head(chart, candidate.note_id)
+                    || chart.long_notes.iter().any(|pair| {
+                        pair.start_note_id == candidate.note_id && input.time >= pair.end_time
+                    })
+            });
             let lane_state = &mut self.lanes[input.lane.index()];
             lane_state.last_press_time = Some(note.time);
             for multi_bad in &multi_bad_candidates {
@@ -742,6 +752,22 @@ impl JudgeEngine {
                         classify_normal_delta(end_delta.0, windows).unwrap_or(Judge::Poor);
                     combine_ln_judgement(active, end_judge, end_delta)
                 };
+                // beatoraja defers an early LN release until the tail, so a regrab
+                // before the tail restores the start judgement.
+                let beatoraja_defer = self.rule_mode == RuleMode::Beatoraja
+                    && active.mode == LongNoteMode::Ln
+                    && end_delta.0 < 0
+                    && delta.0 < 0
+                    && !matches!(judge, Judge::Bad | Judge::Poor);
+                if beatoraja_defer {
+                    active.pending_release = Some(PendingLongRelease {
+                        released_at: event_time,
+                        judge,
+                        delta: end_delta,
+                    });
+                    lane_state.active_long = Some(active);
+                    return JudgeOutcome { consumed_input: true, ..Default::default() };
+                }
                 if release_margin_us > 0
                     && end_delta.0 < 0
                     && matches!(judge, Judge::Bad | Judge::Poor)
