@@ -218,6 +218,10 @@ impl NoteKind {
     pub const fn is_scored_head(self) -> bool {
         matches!(self, Self::Tap | Self::LongStart | Self::FreeZoneEnd)
     }
+
+    pub const fn is_scheduled_keysound(self) -> bool {
+        matches!(self, Self::Tap | Self::LongStart | Self::LongEnd)
+    }
 }
 
 #[derive(Debug, Clone)]
