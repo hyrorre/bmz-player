@@ -1,17 +1,20 @@
 export function isUniqueConstraintError(error: unknown): boolean {
-  return hasConstraintMessage(error, new Set())
+  return hasConstraintMessage(error, /unique constraint failed|SQLITE_CONSTRAINT_UNIQUE/i)
 }
 
-function hasConstraintMessage(error: unknown, seen: Set<unknown>): boolean {
-  if (!(error instanceof Error) || seen.has(error)) {
-    return false
-  }
-  seen.add(error)
+export function isScoreHistoryRevisionMismatch(error: unknown): boolean {
+  return hasConstraintMessage(
+    error,
+    /NOT NULL constraint failed: profiles\.score_history_revision/i,
+  )
+}
 
-  if (/unique constraint failed|SQLITE_CONSTRAINT_UNIQUE/i.test(error.message)) {
-    return true
+function hasConstraintMessage(error: unknown, pattern: RegExp): boolean {
+  const seen = new Set<Error>()
+  while (error instanceof Error && !seen.has(error)) {
+    if (pattern.test(error.message)) return true
+    seen.add(error)
+    error = error.cause
   }
-
-  const cause = (error as Error & { cause?: unknown }).cause
-  return hasConstraintMessage(cause, seen)
+  return false
 }

@@ -291,6 +291,7 @@ pub(super) fn debug_boot_finished_play_session() -> FinishedPlaySession {
             played_at: 0,
             replay_path: String::new(),
             replay_sha256: None,
+            replay_save_failed: false,
             slot_paths: [None, None, None, None],
             device_type: InputDeviceKind::Keyboard,
         },

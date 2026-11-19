@@ -649,11 +649,7 @@ impl ProfileConfig {
                 chart_replication_mode: ChartReplicationModeConfig::default(),
                 entries: Vec::new(),
             },
-            replay: ReplayConfig {
-                auto_save: true,
-                compress: false,
-                slot_rules: default_slot_rules(),
-            },
+            replay: ReplayConfig { auto_save: true, slot_rules: default_slot_rules() },
             ir: IrConfig::default(),
             ui: UiConfig {
                 language: AppLocale::system_default().code().to_owned(),

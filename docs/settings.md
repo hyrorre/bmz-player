@@ -232,6 +232,8 @@ Linuxの「BMZ メニュー → 入力デバイス」では、任意ビルドの
 
 ## プレイ
 
+リプレイはTOMLで保存します。旧プロファイルの `replay.compress` は読み込み時に無視し、次回保存時に取り除きます。この値を必須とする旧版に戻す場合は、プロファイルの `[replay]` に `compress = false` を補ってください。
+
 「BMZ メニュー → プレイ」では、beatoraja互換の7つのアシストと、SCROLL / LONGNOTE / MINE / EXTRA NOTEのモディファイアを設定できます。
 
 EXTRA NOTE DEPTHは、BGMから配置できるノーツのうち曲全体で何割を追加するかを0〜16で指定します。

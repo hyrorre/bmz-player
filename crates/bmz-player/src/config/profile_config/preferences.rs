@@ -160,7 +160,6 @@ pub fn replay_slot_rule_indices(rules: &[ReplaySlotRule; 4]) -> [i64; 4] {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplayConfig {
     pub auto_save: bool,
-    pub compress: bool,
     #[serde(default = "default_slot_rules")]
     pub slot_rules: [ReplaySlotRule; 4],
 }

@@ -1032,10 +1032,6 @@ mod tests {
             item,
             SelectItem::Config(row) if row.entry_id == SettingsEntryId::ReplaySlot4Rule
         )));
-        assert!(items.iter().any(|item| matches!(
-            item,
-            SelectItem::Config(row) if row.entry_id == SettingsEntryId::ReplayCompress
-        )));
     }
 
     #[test]

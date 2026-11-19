@@ -785,7 +785,7 @@ fn replay_slot_rule_empty_string_disables_slot() {
 
             [replay]
             auto_save = true
-            compress = false
+            compress = true
             slot_rules = ["Always", "ScoreUpdate", "BpUpdate", ""]
 
             [ir]
@@ -816,7 +816,9 @@ fn replay_slot_rule_empty_string_disables_slot() {
     )
     .unwrap();
 
+    assert!(profile.replay.auto_save);
     assert_eq!(profile.replay.slot_rules[3], ReplaySlotRule::Disabled);
+    assert!(!toml::to_string(&profile.replay).unwrap().contains("compress"));
     assert!(profile.ir.prefetch_global_ranking_on_score_submit);
     assert!(profile.ir.prefetch_rival_ranking_on_score_submit);
     assert!(profile.audio_mix.normalize_system_bgm_volume);
