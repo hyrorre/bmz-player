@@ -54,15 +54,16 @@ try {
     $text = $text -replace 'gamepad_backend = "(?:Auto|Gilrs|RawInput)"', 'gamepad_backend = "Auto"'
     $text = $text.Replace('check_on_startup = true', 'check_on_startup = false')
     $text | Set-Content -LiteralPath $config -Encoding utf8NoBOM
-    Run-Player @('--boot-play-sample','--autoplay-on-start','--smoke-exit-after-play-frames','120') 'auto'
+    # Result fixtures exercise rendering even on CI hosts without an audio device.
+    Run-Player @('--boot-result-sample','--smoke-exit-after-result-frames','120') 'auto'
     $text.Replace('gamepad_backend = "Auto"', 'gamepad_backend = "RawInput"') | Set-Content -LiteralPath $config -Encoding utf8NoBOM
-    Run-Player @('--boot-play-sample','--autoplay-on-start','--smoke-exit-after-play-frames','120') 'rawinput'
+    Run-Player @('--boot-result-sample','--smoke-exit-after-result-frames','120') 'rawinput'
     $logs = (Get-ChildItem -LiteralPath (Join-Path $copy 'data\logs') -File | Get-Content) -join "`n"
     $logs | Set-Content -LiteralPath (Join-Path $output 'startup.log') -Encoding utf8NoBOM
-    if ([regex]::Matches($logs, 'smoke play frame count reached').Count -ne 2 -or $logs -notmatch 'backend="Raw Input"') { throw 'Sample playback or Raw Input initialization was not confirmed' }
+    if ([regex]::Matches($logs, 'smoke result frame count reached').Count -ne 2 -or $logs -notmatch 'backend="Raw Input"') { throw 'Result rendering or Raw Input initialization was not confirmed' }
     if ($logs -notmatch 'window and renderer surface ready' -or $logs -notmatch [regex]::Escape((Join-Path $copy 'resources'))) { throw 'Packaged rendering/resources were not confirmed' }
     if (Test-Path -LiteralPath (Join-Path $package 'data')) { throw 'Release package was contaminated by runtime data' }
-    Write-Host 'Packaged CLI, updater, Auto and Raw Input sample playback passed on the CI host; Windows 8.1 remains unverified.'
+    Write-Host 'Packaged CLI, updater, Auto and Raw Input Result rendering passed on the CI host; Windows 8.1 remains unverified.'
 } finally {
     foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
 }
