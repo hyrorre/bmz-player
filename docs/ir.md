@@ -430,6 +430,7 @@ GET /api/v1/charts/{sha256}/ranking?scope=global&limit=100&offset=0&rule_mode=Be
 - 並び順は、EXスコアの降順、クリアの降順、BPの昇順、CBの昇順、最大コンボの降順、プレイ日時の昇順です。
 - `rank`は常に全体ランキングでの順位で、EXスコアが同じなら同じ順位です。`self_and_rivals`などでも`rank`は全体の順位を返します。
 - `scope_rank`はscope内での表示順（`offset`からの通し番号）です。
+- 全体順位とクリア率、scope内の総件数を求めてから応答ページを決めます。配置、判定内訳、プレイヤー名の取得は、表示ページと本人行が対象です。
 
 例えば全体で3位の自分と7位のライバルだけがいる場合、`self_and_rivals`では次のようになります。
 

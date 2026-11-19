@@ -4,7 +4,6 @@ import type {
   IrDeviceType,
   IrDoubleOption,
   IrJudgeCounts,
-  IrJudges,
   IrRanking,
   IrRankingEntry,
   IrRankingScope,
@@ -127,11 +126,8 @@ export interface BestScoreRow extends BestScoreCandidate {
   rule_mode: IrRuleMode
   scoring: 'bms_ex_score_v1'
   device_type: IrDeviceType
-  arrange_1p?: string
-  arrange_2p?: string
   played_at: string | null
   verification: IrVerificationStatus
-  judges?: IrJudges
 }
 
 export class IrEvidenceValidationError extends Error {}

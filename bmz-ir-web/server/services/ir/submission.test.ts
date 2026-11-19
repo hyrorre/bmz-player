@@ -40,7 +40,8 @@ Object.assign(globalThis, { defineEventHandler })
 const { default: scoreHandler } = await import('../../api/v1/scores.post')
 const { default: courseHandler } = await import('../../api/v1/course-scores.post')
 const { submitScore, prepareBestScoreUpsert } = await import('./submission')
-const { validateScoreSubmission } = await import('./common')
+const { parseRankingQuery, validateScoreSubmission } = await import('./common')
+const { getRanking, getRankingWithPreviousRank } = await import('./ranking')
 const { IrIdempotencyCollisionError } = await import('./idempotency')
 const { submitCourseScore, computeCourseHash, validateCourseScoreSubmission } =
   await import('../course_ir')
@@ -105,6 +106,105 @@ function withNotes(payload: IrScoreSubmission, notes: number) {
   payload.result.max_combo = notes
   return payload
 }
+
+test('joins details only for a full ranking page and the player outside that page', async () => {
+  const playerIds = Array.from({ length: 202 }, (_, i) => `ranking-player-${i}`)
+  await client.execute(`
+    WITH RECURSIVE players(i) AS (VALUES(0) UNION ALL SELECT i + 1 FROM players WHERE i < 201)
+    INSERT INTO users (id, email, password_hash)
+    SELECT 'ranking-player-' || i, 'ranking-' || i || '@example.invalid', '' FROM players
+  `)
+  await client.execute(`
+    INSERT INTO profiles (id, display_name)
+    SELECT id, 'Name ' || id FROM users WHERE id LIKE 'ranking-player-%'
+  `)
+  for (const [i, id] of playerIds.entries()) {
+    const payload = submission()
+    payload.result.played_at = Number(payload.result.played_at) + i
+    if (i >= 101) payload.result.clear = 'Failed'
+    await submitScore({ id }, validateScoreSubmission(payload), [], 10)
+  }
+  const own = submission()
+  own.result.clear = 'Failed'
+  own.result.ex_score = 100
+  own.result.judges.fast.pgreat = 0
+  own.result.judges.fast.great = 100
+  own.play_options.arrange_1p = 'mirror'
+  const { score_id } = await submitScore(user, validateScoreSubmission(own), [], 10)
+  const execute = spyOn(client, 'execute')
+  let result
+  try {
+    result = await getRankingWithPreviousRank(
+      user,
+      own.chart.sha256,
+      parseRankingQuery({ limit: 200, offset: 2 }),
+      199,
+    )
+    const detailQueries = execute.mock.calls.flatMap(([statement]) =>
+      typeof statement === 'object' && statement.sql.includes('as ranking_sources')
+        ? [statement]
+        : [],
+    )
+    expect(detailQueries).toHaveLength(1)
+    const binds = detailQueries[0]!.args
+    expect(binds).toHaveLength(1)
+    const sources = JSON.parse(String((binds as unknown[])[0]))
+    expect(sources.map((source: { playerId: string }) => source.playerId)).toEqual([
+      ...playerIds.slice(2),
+      user.id,
+    ])
+  } finally {
+    execute.mockRestore()
+  }
+
+  const { ranking } = result.data
+  expect(result.previousRank).toBe(203)
+  expect(ranking.clear_rate).toBe(50)
+  expect(ranking.pagination).toEqual({ limit: 200, offset: 2, total: 203, has_more: true })
+  expect(ranking.entries).toHaveLength(200)
+  expect(ranking.entries[0]).toMatchObject({
+    rank: 1,
+    scope_rank: 3,
+    player: { id: playerIds[2], display_name: `Name ${playerIds[2]}` },
+  })
+  expect(ranking.self).toMatchObject({
+    rank: 203,
+    score_id,
+    included_in_entries: false,
+    entry: { scope_rank: 203, score: { arrange_1p: 'mirror', judges: own.result.judges } },
+  })
+})
+
+test('keeps independent bests and their details when falling back to history', async () => {
+  const bestEx = submission()
+  bestEx.play_options.arrange_1p = 'random'
+  const ex = await submitScore(user, validateScoreSubmission(bestEx), [], 10)
+  const bestClear = submission()
+  bestClear.idempotency_key = 'best-clear'
+  bestClear.rule.ln_policy = 'ForceCn'
+  bestClear.rule.effective_ln_mode = 'cn'
+  bestClear.result.clear = 'Hard'
+  bestClear.result.ex_score = 100
+  bestClear.result.judges.fast.pgreat = 0
+  bestClear.result.judges.fast.great = 100
+  bestClear.play_options.arrange_1p = 'mirror'
+  const clear = await submitScore(user, validateScoreSubmission(bestClear), [], 10)
+  const query = parseRankingQuery({ scope: 'around_self', limit: 1 })
+  const cached = await getRanking(user, bestEx.chart.sha256, query)
+  expect(cached.ranking.entries[0]).toMatchObject({
+    rank: 1,
+    score: {
+      score_id: ex.score_id,
+      clear: 'Hard',
+      arrange_1p: 'random',
+      judges: bestEx.result.judges,
+      source_score_ids: { ex_score: ex.score_id, clear: clear.score_id },
+    },
+  })
+  expect(cached.ranking.self?.included_in_entries).toBe(true)
+  await db.delete(schema.bestScores)
+  expect(await getRanking(user, bestEx.chart.sha256, query)).toEqual(cached)
+})
 
 function courseSubmission() {
   const charts = ['a'.repeat(64)]
