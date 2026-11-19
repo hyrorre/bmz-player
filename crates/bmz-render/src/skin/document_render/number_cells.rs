@@ -26,9 +26,9 @@ pub(super) fn render(
     let divy = value.divy.max(1);
     let width = if value.w == -1 { source.source_size.width.round() as i32 } else { value.w };
     let height = if value.h == -1 { source.source_size.height.round() as i32 } else { value.h };
-    let cell_width_px = (width / divx) as f32;
-    let cell_height_px = (height / divy) as f32;
-    if cell_width_px <= 0.0 || cell_height_px <= 0.0 {
+    let cell_width_px = width / divx;
+    let cell_height_px = height / divy;
+    if cell_width_px <= 0 || cell_height_px <= 0 {
         return Vec::new();
     }
     // 桁間スペース (space フィールド、px 単位)
@@ -60,7 +60,17 @@ pub(super) fn render(
         .map(Into::into)
         .enumerate()
         .filter(|(_, digit)| Some(*digit) != hidden_cell)
-        .map(|(index, digit)| {
+        .filter_map(|(index, digit)| {
+            let uv = SkinDocument::value_digit_texture_region(
+                value,
+                digit,
+                elapsed_ms,
+                source.source_size,
+                cell_width_px,
+                cell_height_px,
+                divx,
+                divy,
+            )?;
             let digit_position = (shiftbase + index) as i32;
             let enlarge = value.qwilight_animation.as_ref().map_or(0, |a| {
                 (f64::from(a.enlarge)
@@ -83,17 +93,7 @@ pub(super) fn render(
                 document.w,
                 document.h,
             );
-            let uv = SkinDocument::value_digit_texture_region(
-                value,
-                digit,
-                elapsed_ms,
-                source.source_size,
-                cell_width_px,
-                cell_height_px,
-                divx,
-                divy,
-            );
-            skin_image_item_for_frame(
+            Some(skin_image_item_for_frame(
                 source.texture,
                 rect,
                 uv,
@@ -102,7 +102,7 @@ pub(super) fn render(
                 blend,
                 Some(source.source_size),
                 filter,
-            )
+            ))
         })
         .collect()
 }

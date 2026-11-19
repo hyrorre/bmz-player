@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-20 | [REMI-S の GREAT／GOOD 点滅と LR2 の画像分割](2026/2026-11-20-lr2-judge-blink.md) |
 | 2026-11-19 | [HCN保持復帰時の空POOR](2026/2026-11-19-hcn-regrab-empty-poor.md) |
 | 2026-11-19 | [判定・ゲージの上流互換監査](2026/2026-11-19-judgement-upstream-audit.md) |
 | 2026-11-19 | [FIFO系でHz以上のFPS上限の周期待機を省く（#136）](2026/2026-11-19-issue-136-frame-pacing.md) |

@@ -4,7 +4,7 @@ pub(super) fn skin_image_texture_region(
     image: &SkinImageDef,
     source_size: SkinImageSize,
     elapsed_ms: i32,
-) -> TextureRegion {
+) -> Option<TextureRegion> {
     skin_image_texture_region_with_elapsed(
         image,
         source_size,
@@ -49,7 +49,7 @@ pub(super) fn skin_image_texture_region_for_state(
     source_size: SkinImageSize,
     state: &SkinDrawState,
     pixel_rect: (i32, i32, i32, i32),
-) -> TextureRegion {
+) -> Option<TextureRegion> {
     // beatoraja の SkinImage は destination timer を座標補間だけに使い、
     // source image の cycle は scene 全体の時刻または image.timer で進める。
     // image.timer が off の間も画像自体は隠さず、先頭フレームを表示する。
@@ -63,7 +63,7 @@ pub(super) fn skin_image_texture_region_for_destination(
     source_size: SkinImageSize,
     state: &SkinDrawState,
     pixel_rect: (i32, i32, i32, i32),
-) -> TextureRegion {
+) -> Option<TextureRegion> {
     if !destination.lr2_timing {
         return skin_image_texture_region_for_state(image, source_size, state, pixel_rect);
     }
@@ -95,14 +95,11 @@ fn skin_image_texture_region_with_elapsed(
     elapsed_ms: i32,
     state: Option<&SkinDrawState>,
     pixel_rect: (i32, i32, i32, i32),
-) -> TextureRegion {
+) -> Option<TextureRegion> {
     let source_width = source_size.width.max(1.0);
     let source_height = source_size.height.max(1.0);
-    let (px, py, pw, ph) = if image.lr2_clip {
-        resolve_skin_image_pixel_rect(pixel_rect, source_width, source_height)
-    } else {
-        resolve_beatoraja_image_pixel_rect(pixel_rect, source_width, source_height)
-    };
+    let (px, py, pw, ph) =
+        resolve_beatoraja_image_pixel_rect(pixel_rect, source_width, source_height);
     let divx = image.divx.max(1);
     let divy = image.divy.max(1);
     let frame_count = divx * divy;
@@ -161,14 +158,27 @@ fn skin_image_texture_region_with_elapsed(
 
     let source_column = frame_index % divx;
     let source_row = frame_index / divx;
-    skin_image_texture_region_for_pixel_bounds(
+    if image.lr2_clip {
+        let width = pw / divx;
+        let height = ph / divy;
+        return lr2_cell_texture_region(
+            (
+                px.saturating_add(width * source_column),
+                py.saturating_add(height * source_row),
+                width,
+                height,
+            ),
+            source_size,
+        );
+    }
+    Some(skin_image_texture_region_for_pixel_bounds(
         px as f32 + pw as f32 / divx as f32 * source_column as f32,
         py as f32 + ph as f32 / divy as f32 * source_row as f32,
         pw as f32 / divx as f32,
         ph as f32 / divy as f32,
         source_width,
         source_height,
-    )
+    ))
 }
 
 /// beatoraja `SkinSourceImage` が `timer/cycle` から選ぶ画像配列 index。
@@ -202,6 +212,27 @@ pub(super) fn skin_image_texture_region_for_pixel_bounds(
         width: width / source_width,
         height: height / source_height,
     }
+}
+
+/// LR2 clips each cell after splitting the source rectangle. A cell entirely
+/// outside the texture takes up its usual time in the cycle without drawing.
+pub(super) fn lr2_cell_texture_region(
+    pixel_rect: (i32, i32, i32, i32),
+    source_size: SkinImageSize,
+) -> Option<TextureRegion> {
+    let source_width = source_size.width.max(1.0);
+    let source_height = source_size.height.max(1.0);
+    let (x, y, w, h) = resolve_skin_image_pixel_rect(pixel_rect, source_width, source_height);
+    (w > 0 && h > 0).then(|| {
+        skin_image_texture_region_for_pixel_bounds(
+            x as f32,
+            y as f32,
+            w as f32,
+            h as f32,
+            source_width,
+            source_height,
+        )
+    })
 }
 
 pub(super) fn skin_image_ref_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
