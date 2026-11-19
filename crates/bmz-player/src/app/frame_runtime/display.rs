@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use bmz_render::renderer::WgpuPresentMode;
 use winit::{
     monitor::{MonitorHandle, VideoModeHandle},
+    raw_window_handle::{HasDisplayHandle, RawDisplayHandle},
     window::{Fullscreen, Window},
 };
 
@@ -119,7 +120,8 @@ struct RefreshResult {
 }
 
 struct RefreshWorker {
-    requests: SyncSender<RefreshRequest>,
+    // Boxed: winit's Linux monitor and video mode handles make the request large.
+    requests: SyncSender<Box<RefreshRequest>>,
     results: Receiver<RefreshResult>,
 }
 
@@ -127,7 +129,7 @@ impl RefreshWorker {
     fn spawn(
         query: impl Fn(&RefreshRequest) -> Option<RefreshRate> + Send + 'static,
     ) -> std::io::Result<Self> {
-        let (requests, receive_requests) = mpsc::sync_channel::<RefreshRequest>(1);
+        let (requests, receive_requests) = mpsc::sync_channel::<Box<RefreshRequest>>(1);
         let (send_results, results) = mpsc::sync_channel(1);
         // Do not join on the window thread: an OS query may still be blocked at shutdown.
         let _ = std::thread::Builder::new().name("display-timing".into()).spawn(move || {
@@ -162,6 +164,12 @@ impl DisplayTimingCache {
         window: Option<&Window>,
     ) -> (Option<RefreshRate>, u64) {
         let Some(window) = window else { return (None, 0) };
+        if !window
+            .display_handle()
+            .is_ok_and(|handle| reports_current_refresh_rate(handle.as_raw()))
+        {
+            return (None, 0);
+        }
         let monitor = window.current_monitor();
         let exclusive_mode = match window.fullscreen() {
             Some(Fullscreen::Exclusive(mode)) => Some(mode),
@@ -184,11 +192,11 @@ impl DisplayTimingCache {
             _ => {}
         }
         if cache.monitor.is_some() && cache.query.due(now) {
-            let request = RefreshRequest {
+            let request = Box::new(RefreshRequest {
                 generation: cache.query.generation,
                 monitor: cache.monitor.clone(),
                 exclusive_mode: cache.exclusive_mode.clone(),
-            };
+            });
             match cache.worker.as_ref().map(|worker| worker.requests.try_send(request)) {
                 Some(Ok(())) => cache.query.started(now),
                 Some(Err(TrySendError::Disconnected(_))) => cache.worker_failed(),
@@ -197,6 +205,13 @@ impl DisplayTimingCache {
         }
         (cache.query.rate, cache.query.revision)
     }
+}
+
+/// winit's X11 monitor handles keep the refresh rate seen when the monitor list was
+/// read, so an existing window can report the old Hz after an xrandr change. Treat
+/// it as unknown to keep the configured cap instead of uncapping above the display.
+fn reports_current_refresh_rate(display: RawDisplayHandle) -> bool {
+    !matches!(display, RawDisplayHandle::Xlib(_) | RawDisplayHandle::Xcb(_))
 }
 
 impl DisplayTiming {
@@ -210,6 +225,23 @@ impl DisplayTiming {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn x11_refresh_rates_are_treated_as_unknown() {
+        use winit::raw_window_handle::{
+            AppKitDisplayHandle, WindowsDisplayHandle, XcbDisplayHandle, XlibDisplayHandle,
+        };
+        assert!(!reports_current_refresh_rate(RawDisplayHandle::Xlib(XlibDisplayHandle::new(
+            None, 0
+        ))));
+        assert!(!reports_current_refresh_rate(RawDisplayHandle::Xcb(XcbDisplayHandle::new(
+            None, 0
+        ))));
+        assert!(reports_current_refresh_rate(RawDisplayHandle::Windows(
+            WindowsDisplayHandle::new()
+        )));
+        assert!(reports_current_refresh_rate(RawDisplayHandle::AppKit(AppKitDisplayHandle::new())));
+    }
 
     #[test]
     fn event_bursts_preserve_display_revision_and_do_not_bypass_query_throttle() {
@@ -273,7 +305,11 @@ mod tests {
         assert!(
             worker
                 .requests
-                .try_send(RefreshRequest { generation: 0, monitor: None, exclusive_mode: None })
+                .try_send(Box::new(RefreshRequest {
+                    generation: 0,
+                    monitor: None,
+                    exclusive_mode: None,
+                }))
                 .is_ok()
         );
         state.started(now);
