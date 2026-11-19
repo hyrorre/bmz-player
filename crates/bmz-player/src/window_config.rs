@@ -19,22 +19,20 @@ impl RefreshRate {
 }
 
 pub(crate) fn current_refresh_rate(
-    window: &winit::window::Window,
     monitor: &MonitorHandle,
+    exclusive_mode: Option<&winit::monitor::VideoModeHandle>,
 ) -> Option<RefreshRate> {
     #[cfg(target_os = "windows")]
     {
-        let _ = window;
+        let _ = exclusive_mode;
         // winit's Windows mHz value is based on the integer dmDisplayFrequency.
         windows_display::current_refresh_rate(&monitor.name()?)
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let millihertz = match window.fullscreen() {
-            Some(winit::window::Fullscreen::Exclusive(mode)) => {
-                Some(mode.refresh_rate_millihertz())
-            }
-            _ => monitor.refresh_rate_millihertz(),
+        let millihertz = match exclusive_mode {
+            Some(mode) => Some(mode.refresh_rate_millihertz()),
+            None => monitor.refresh_rate_millihertz(),
         }?;
         Some(RefreshRate { numerator: millihertz, denominator: 1_000 })
             .filter(|rate| rate.is_valid())

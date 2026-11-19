@@ -1,8 +1,12 @@
 use std::cell::RefCell;
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::time::{Duration, Instant};
 
 use bmz_render::renderer::WgpuPresentMode;
-use winit::{monitor::MonitorHandle, window::Window};
+use winit::{
+    monitor::{MonitorHandle, VideoModeHandle},
+    window::{Fullscreen, Window},
+};
 
 use crate::window_config::RefreshRate;
 
@@ -27,19 +31,130 @@ pub(in crate::app) fn resolve_display_frame_limit(
 }
 
 #[derive(Default)]
-pub(in crate::app) struct DisplayTimingCache(RefCell<DisplayTiming>);
+pub(in crate::app) struct DisplayTimingCache(Box<RefCell<DisplayTiming>>);
 
-#[derive(Default)]
 struct DisplayTiming {
     monitor: Option<MonitorHandle>,
-    queried_at: Option<Instant>,
+    exclusive_mode: Option<VideoModeHandle>,
+    query: DisplayQueryState,
+    worker: Option<RefreshWorker>,
+}
+
+impl Default for DisplayTiming {
+    fn default() -> Self {
+        let worker = RefreshWorker::spawn(|request| {
+            crate::window_config::current_refresh_rate(
+                request.monitor.as_ref()?,
+                request.exclusive_mode.as_ref(),
+            )
+        })
+        .map_err(|error| tracing::warn!(%error, "could not start display timing worker"))
+        .ok();
+        Self { monitor: None, exclusive_mode: None, query: DisplayQueryState::default(), worker }
+    }
+}
+
+const QUERY_INTERVAL: Duration = Duration::from_secs(1);
+
+#[derive(Default)]
+struct DisplayQueryState {
     rate: Option<RefreshRate>,
     revision: u64,
+    generation: u64,
+    pending: Option<u64>,
+    last_started: Option<Instant>,
+}
+
+impl DisplayQueryState {
+    fn invalidate(&mut self) {
+        // Reject in-flight results without changing the published display revision.
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    fn monitor_changed(&mut self) {
+        self.invalidate();
+        self.rate = None;
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    fn set_rate(&mut self, rate: Option<RefreshRate>) {
+        let rate = rate.filter(|rate| rate.is_valid());
+        if self.rate != rate {
+            self.rate = rate;
+            self.revision = self.revision.wrapping_add(1);
+            tracing::debug!(?rate, revision = self.revision, "frame pacing display timing changed");
+        }
+    }
+
+    fn complete(&mut self, result: RefreshResult) {
+        if self.pending != Some(result.generation) {
+            return;
+        }
+        self.pending = None;
+        if result.generation == self.generation {
+            self.set_rate(result.rate);
+        }
+    }
+
+    fn due(&self, now: Instant) -> bool {
+        self.pending.is_none()
+            && self.last_started.is_none_or(|at| now.duration_since(at) >= QUERY_INTERVAL)
+    }
+
+    fn started(&mut self, now: Instant) {
+        self.pending = Some(self.generation);
+        self.last_started = Some(now);
+    }
+}
+
+struct RefreshRequest {
+    generation: u64,
+    monitor: Option<MonitorHandle>,
+    exclusive_mode: Option<VideoModeHandle>,
+}
+
+struct RefreshResult {
+    generation: u64,
+    rate: Option<RefreshRate>,
+}
+
+struct RefreshWorker {
+    requests: SyncSender<RefreshRequest>,
+    results: Receiver<RefreshResult>,
+}
+
+impl RefreshWorker {
+    fn spawn(
+        query: impl Fn(&RefreshRequest) -> Option<RefreshRate> + Send + 'static,
+    ) -> std::io::Result<Self> {
+        let (requests, receive_requests) = mpsc::sync_channel::<RefreshRequest>(1);
+        let (send_results, results) = mpsc::sync_channel(1);
+        // Do not join on the window thread: an OS query may still be blocked at shutdown.
+        let _ = std::thread::Builder::new().name("display-timing".into()).spawn(move || {
+            while let Ok(request) = receive_requests.recv() {
+                let started = Instant::now();
+                let rate = query(&request);
+                tracing::debug!(
+                    query_us = started.elapsed().as_micros() as u64,
+                    generation = request.generation,
+                    ?rate,
+                    "frame pacing display timing queried"
+                );
+                if send_results
+                    .send(RefreshResult { generation: request.generation, rate })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })?;
+        Ok(Self { requests, results })
+    }
 }
 
 impl DisplayTimingCache {
     pub(in crate::app) fn invalidate(&self) {
-        self.0.borrow_mut().queried_at = None;
+        self.0.borrow_mut().query.invalidate();
     }
 
     pub(in crate::app) fn refresh_rate(
@@ -48,30 +163,130 @@ impl DisplayTimingCache {
     ) -> (Option<RefreshRate>, u64) {
         let Some(window) = window else { return (None, 0) };
         let monitor = window.current_monitor();
+        let exclusive_mode = match window.fullscreen() {
+            Some(Fullscreen::Exclusive(mode)) => Some(mode),
+            _ => None,
+        };
         let now = Instant::now();
         let mut cache = self.0.borrow_mut();
-        if cache.monitor != monitor
-            || cache.queried_at.is_none_or(|at| now.duration_since(at) >= Duration::from_secs(1))
-        {
-            let rate = monitor
-                .as_ref()
-                .and_then(|monitor| crate::window_config::current_refresh_rate(window, monitor));
-            if cache.monitor != monitor || cache.rate != rate || cache.queried_at.is_none() {
-                cache.revision = cache.revision.wrapping_add(1);
-                tracing::debug!(?rate, monitor = ?monitor.as_ref().and_then(MonitorHandle::name),
-                    revision = cache.revision, "frame pacing display timing changed");
-            }
+        if cache.monitor != monitor {
+            cache.query.monitor_changed();
             cache.monitor = monitor;
-            cache.queried_at = Some(Instant::now());
-            cache.rate = rate;
+        } else if cache.exclusive_mode != exclusive_mode {
+            cache.query.invalidate();
         }
-        (cache.rate, cache.revision)
+        cache.exclusive_mode = exclusive_mode;
+
+        // The render/event path never waits for a query, including after invalidation.
+        match cache.worker.as_ref().map(|worker| worker.results.try_recv()) {
+            Some(Ok(result)) => cache.query.complete(result),
+            Some(Err(TryRecvError::Disconnected)) => cache.worker_failed(),
+            _ => {}
+        }
+        if cache.monitor.is_some() && cache.query.due(now) {
+            let request = RefreshRequest {
+                generation: cache.query.generation,
+                monitor: cache.monitor.clone(),
+                exclusive_mode: cache.exclusive_mode.clone(),
+            };
+            match cache.worker.as_ref().map(|worker| worker.requests.try_send(request)) {
+                Some(Ok(())) => cache.query.started(now),
+                Some(Err(TrySendError::Disconnected(_))) => cache.worker_failed(),
+                _ => {}
+            }
+        }
+        (cache.query.rate, cache.query.revision)
+    }
+}
+
+impl DisplayTiming {
+    fn worker_failed(&mut self) {
+        tracing::warn!("display timing worker stopped; preserving configured FPS cap");
+        self.worker = None;
+        self.query.set_rate(None);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_bursts_preserve_display_revision_and_do_not_bypass_query_throttle() {
+        let now = Instant::now();
+        let rate = Some(RefreshRate { numerator: 60_000, denominator: 1_001 });
+        let mut state = DisplayQueryState::default();
+        state.set_rate(rate);
+        state.started(now);
+        for _ in 0..100 {
+            state.invalidate();
+        }
+        // The query started before these events must not publish its result.
+        state.complete(RefreshResult {
+            generation: 0,
+            rate: Some(RefreshRate { numerator: 240, denominator: 1 }),
+        });
+        assert_eq!((state.rate, state.revision, state.pending), (rate, 1, None));
+        assert!(!state.due(now + QUERY_INTERVAL - Duration::from_nanos(1)));
+        assert!(state.due(now + QUERY_INTERVAL));
+
+        state.started(now + QUERY_INTERVAL);
+        state.complete(RefreshResult { generation: state.generation, rate });
+        assert_eq!((state.rate, state.revision), (rate, 1));
+        assert!(!state.due(now + QUERY_INTERVAL));
+    }
+
+    #[test]
+    fn monitor_and_rate_changes_publish_revisions_but_stale_results_cannot_overwrite_them() {
+        let mut state = DisplayQueryState::default();
+        let rate = Some(RefreshRate { numerator: 240_084, denominator: 1_000 });
+        state.set_rate(rate);
+        state.monitor_changed();
+        assert_eq!((state.rate, state.revision), (None, 2));
+        let now = Instant::now();
+        state.started(now);
+        state.complete(RefreshResult { generation: 0, rate });
+        assert_eq!((state.rate, state.revision, state.pending), (None, 2, Some(1)));
+        assert!(!state.due(now + QUERY_INTERVAL * 10));
+        state.complete(RefreshResult { generation: 1, rate });
+        assert_eq!((state.rate, state.revision), (rate, 3));
+        state.set_rate(Some(RefreshRate { numerator: 60, denominator: 1 }));
+        assert_eq!(state.revision, 4);
+        state.set_rate(None);
+        assert_eq!((state.rate, state.revision), (None, 5));
+        state.set_rate(Some(RefreshRate { numerator: 0, denominator: 1 }));
+        assert_eq!((state.rate, state.revision), (None, 5));
+    }
+
+    #[test]
+    fn blocked_os_query_does_not_block_polling_or_allow_another_in_flight_query() {
+        let (entered, receive_entered) = mpsc::sync_channel(1);
+        let (release, receive_release) = mpsc::sync_channel(1);
+        let worker = RefreshWorker::spawn(move |_| {
+            entered.send(()).unwrap();
+            receive_release.recv().unwrap();
+            Some(RefreshRate { numerator: 240, denominator: 1 })
+        })
+        .unwrap();
+        let mut state = DisplayQueryState::default();
+        let now = Instant::now();
+        assert!(
+            worker
+                .requests
+                .try_send(RefreshRequest { generation: 0, monitor: None, exclusive_mode: None })
+                .is_ok()
+        );
+        state.started(now);
+        receive_entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(worker.results.try_recv(), Err(TryRecvError::Empty)));
+        state.invalidate();
+        assert!(!state.due(now + QUERY_INTERVAL * 10));
+        release.send(()).unwrap();
+        let result = worker.results.recv_timeout(Duration::from_secs(5)).unwrap();
+        state.complete(result);
+        assert_eq!((state.rate, state.revision), (None, 0));
+        assert!(state.due(now + QUERY_INTERVAL * 10));
+    }
 
     #[test]
     fn fractional_refresh_has_an_exact_boundary_without_tolerance() {
