@@ -111,6 +111,26 @@ WindowsのHz取得ではraw HMONITORから`GetMonitorInfoW`を直接呼び、失
 実機での抜き差し・再接続は未検証。再確認時はプレイ中に表示先を切断・再接続し、
 `display timing worker stopped`が出ないこと、取得不能時は設定上限、有効なHzの再取得後は条件に応じて実効上限0へ戻ることを確認する。
 
+## macOSの小数Hzを保つ（2026-11-20）
+
+PR #139のレビューで、winit 0.30.13のmacOS実装はCoreGraphicsの表示modeにHzがないとき、
+CoreVideoの`time_scale / time_value`を整数除算してからmHzに変換することが分かった。
+公称周期が`1001 / 60000`秒の場合は59,000mHzになり、59FPSの上限を誤って外す。
+
+macOSでは取得workerが現在の表示modeをCoreGraphicsで直接読み、modeにHzがない場合は
+CoreVideoの公称周期を反転した比率をそのまま比較に使う。取得不能や無効な周期はHz不明として上限を維持する。
+CoreGraphicsの正のHzをmHzで表すときは切り上げ、整数FPSとの境界を下回らないようにする。
+排他全画面でも実際に適用されている表示modeを使う。
+
+回帰テストではCoreVideoの生の周期から、`60000 / 1001`Hzで59FPSは維持・60FPSは解除可能、
+240.084Hzで240FPSは維持・241FPSは解除可能と確認する。
+macOS 27.2.1 / arm64の内蔵ディスプレイでは、取得処理を専用プログラムの別スレッドから実行し、
+CoreGraphicsの120Hzに対して119FPSは維持・120FPSは解除可能と確認した。
+このディスプレイではCoreGraphicsがHzを返したため、CoreVideoの小数Hzフォールバックはテスト入力で確認した。
+macOSでfmt、`bmz-player`のcheckとall-targets Clippyが成功した。`window_config`の18件と
+`frame_runtime`の25件はすべて成功した。全体libテストは3,296成功・68 ignoredで、
+IR・ダウンロード・OBS・IPC等の97件は実行環境の権限エラーで失敗した。
+
 ## 先行調査と限界
 
 Windows 11 / RTX 5090 / DX12 / Windowed 1280×720 / 既定7K skin / 同一譜面の定常15秒で探索した。

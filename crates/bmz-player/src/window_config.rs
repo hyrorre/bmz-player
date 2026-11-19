@@ -2,6 +2,9 @@ use std::collections::HashMap;
 
 use winit::monitor::MonitorHandle;
 
+#[cfg(target_os = "macos")]
+mod macos_display;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RefreshRate {
     pub(crate) numerator: u32,
@@ -30,7 +33,15 @@ pub(crate) fn current_refresh_rate(
         // winit's Windows mHz value is based on the integer dmDisplayFrequency.
         windows_display::current_refresh_rate(monitor.hmonitor() as _)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::MonitorHandleExtMacOS;
+
+        // Both windowed and exclusive fullscreen use the active display mode.
+        let _ = exclusive_mode;
+        macos_display::current_refresh_rate(monitor.native_id())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let millihertz = match exclusive_mode {
             Some(mode) => Some(mode.refresh_rate_millihertz()),

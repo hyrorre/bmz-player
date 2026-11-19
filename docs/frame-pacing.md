@@ -18,7 +18,9 @@ background、0サイズ・surface復旧中は従来の制限を維持します�
 
 Hzは分子・分母を保持して比較し、整数Hzへの丸めや許容幅は設けません。59.94Hzなら60FPSが対象、
 240.084Hzなら240FPSは制限を維持し、241FPS以上が対象です。Windowsでは既存のQueryDisplayConfig経路を使い、
-winitの整数Hz由来の値で代用しません。ほかのOSはwinitのmHzを使い、排他全画面ではそのVideoModeを参照します。
+winitの整数Hz由来の値で代用しません。macOSではウィンドウ表示・排他全画面とも現在の表示modeをCoreGraphicsで読みます。
+取得できた正のHzはFPS上限を誤って解除しないようmHzへ切り上げ、modeにHzがない場合はCoreVideoの公称周期を反転して
+分子・分母を保持します。ほかのOSはwinitのmHzを使い、排他全画面ではそのVideoModeを参照します。
 X11（Xlib / Xcb）では、既存ウィンドウのmonitor情報がxrandrによるHz変更に追従しないため、取得不能として上限を維持します。
 取得不能・無効値・異なるHzの複製出力は上限を維持します。このHzはVRRの作動状態を示す値ではありません。
 
