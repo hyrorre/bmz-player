@@ -152,7 +152,7 @@ OpenGL指定からフォールバックで起動すると、画面左上に使�
 ### ゲームパッド
 
 - ゲームパッドのバックエンドは、`自動選択` / `gilrs`から選べます。Windowsでは、HID reportをイベント駆動で受け取る`Raw Input`も選べます。
-- `自動選択`はgilrsを使います。WindowsでWGI（Windows Gaming Input）のRawGameController APIを利用できない場合は、Raw Inputを使います。Windows 8.1向けの動作検証は準備中です。
+- `自動選択`はgilrsを使います。WindowsでWGI（Windows Gaming Input）のRawGameController APIを利用できない場合は、Raw Inputを使います。Windows 8.1自体の動作は[未確認です](windows-compat.md)。
 - 「動作中」には実際に選ばれたバックエンドを表示します。ゲームパッドが無効、または初期化できなかった場合は「停止中」と表示します。
 - Windowsでgilrsの初期化に失敗した場合は、Raw Inputを試します。利用できるゲームパッドの経路を初期化できない場合は、ゲームパッドの取得を停止します。
 - バックエンドの変更はプレイ外ですぐに反映します。1P / 2Pのコントローラーの割り当ての変更は次にプレイを開始したときから反映します。プレイ中（読み込み中・プラクティスを含む）の抜き差しや入れ替えでは、そのプレイの1P / 2Pは変わりません。
