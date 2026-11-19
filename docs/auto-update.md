@@ -35,6 +35,7 @@ portableのデータは環境変数の上書きを最優先とし、未指定時
 
 更新アーカイブには`BMZ Player/`が一つあり、本体exe、DLL、`resources/`、
 `updater/bmz-updater.exe`、`updater/bmz-package.json`、空の`updater/instance.lock`だけを収録します。
+検証中の protocol 4 用パッケージでは、DLL と SxS manifest を `dll/` に置きます。
 manifestにないファイル・リンク・Windowsの特殊名・展開先外のパスを拒否します。
 ダウンロードは署名済みのサイズ・SHA256を照合し、展開ファイルも個別に照合します。
 
@@ -50,6 +51,10 @@ helperが準備完了してから本体を正常終了し、すべてのpackaged
 設定、DB、スコア、リプレイ、追加曲、ユーザースキン、未知のファイルは更新対象にしません。
 旧版で管理していた廃止DLLも退避して除去します。新しい配布ファイルと未知の既存ファイルが衝突した場合は更新を拒否します。
 同梱ファイルへのユーザー変更を含め、旧ファイルは`job-*/backup`に保持します。
+protocol 4 の `dll/` 移行では、新しい同梱 DLL と同名の未管理ルート DLL がある場合も適用前に停止します。
+排他ロック中に新版を配置し、旧 DLL を退避した状態で新版の `--version` を実行します。
+loader エラー・タイムアウト・version 不一致なら旧配置を復元してから再起動します。
+`--version` は保存先の初期化や DB migration より前に終了します。
 更新結果と退避ファイルの対応表は`job-*/result.json`、結果ログは`job-*/update.log`に残ります。
 退避ファイルは自動削除しません。容量を空ける際は内容を確認して、完了済みjobディレクトリを削除します。
 
@@ -75,7 +80,7 @@ helperが準備完了してから本体を正常終了し、すべてのpackaged
 
 ### updater の互換性
 
-現在のprotocolは3です。新しい本体は署名付き`release.json`を優先し、assetが存在しない場合だけ
+実装上の最新 protocol は4です。新しい本体は署名付き`release.json`を優先し、assetが存在しない場合だけ
 従来の`updates.json`を読みます。新形式の取得・署名・内容検証が失敗した場合は旧形式へ戻りません。
 署名済み更新情報の`min_updater_protocol`を満たさない場合は、
 `bridge_tag`が指す旧形式の橋渡し版へ先に更新します。次回起動後、新updaterが最新版を取得します。
@@ -102,6 +107,16 @@ protocol 3は統合Releaseメタデータへの対応を示します。grouped�
 橋渡し版Bも、旧`updates.json`の最低protocolは2にします。B公開後に最低protocolを3へ
 引き上げる場合は、`BMZ_UPDATE_BRIDGE_TAG`をBへ切り替えます。
 形式・公開設定・段階的な移行は[Releaseメタデータ](release-metadata.md)を参照してください。
+
+### protocol 4 の配布順
+
+1. Windows 8.1 の app-local UCRT と更新経路を[互換ビルドの手順](windows-compat.md#sxs-版の採用前検証)で検証します。
+2. exe 横 DLL と旧 updater 配置の橋渡し版を公開します。本体と helper は protocol 4、
+   package / release の最低 protocol は 1 です。`BMZ_WINDOWS_UPDATER_LAYOUT=legacy` を使います。
+3. 次の版で `dll/` と grouped updater に移行します。package / release の最低 protocol は 4、
+   `BMZ_UPDATE_BRIDGE_TAG` は橋渡し版の実タグです。旧版向けに橋渡し版と `updates.json` を保持します。
+
+Windows 8.1 確認前の `windows_sxs` ワークフロー入力は検証用です。`dll/` 版の Release へのアップロードは拒否されます。
 
 ## 更新の署名と公開設定
 

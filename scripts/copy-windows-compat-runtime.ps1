@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$Destination,
     [string]$VcRuntimeDirectory = "",
-    [string]$UcrtDirectory = ""
+    [string]$UcrtDirectory = "",
+    [switch]$RejectDuplicates
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -19,11 +20,14 @@ if (-not $VcRuntimeDirectory) {
 if (-not $UcrtDirectory) {
     $UcrtDirectory = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\Redist\ucrt\DLLs\x64"
 }
-$vc = Get-Item -LiteralPath (Join-Path $VcRuntimeDirectory "vcruntime140.dll")
-$ucrt = Get-Item -LiteralPath (Join-Path $UcrtDirectory "ucrtbase.dll")
-if ($vc.VersionInfo.FileMajorPart -ne 14 -or $vc.VersionInfo.FileMinorPart -gt 44) {
-    throw "Use the VS 2022 v143 runtime, not a newer Windows 10-only runtime: $($vc.VersionInfo.FileVersion)"
+$vc = foreach ($name in @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')) {
+    $dll = Get-Item -LiteralPath (Join-Path $VcRuntimeDirectory $name)
+    if ($dll.VersionInfo.FileMajorPart -ne 14 -or $dll.VersionInfo.FileMinorPart -gt 44) {
+        throw "Use the VS 2022 v143 runtime, not a newer Windows 10-only runtime: $($dll.Name) $($dll.VersionInfo.FileVersion)"
+    }
+    $dll
 }
+$ucrt = Get-Item -LiteralPath (Join-Path $UcrtDirectory "ucrtbase.dll")
 if ($ucrt.VersionInfo.FileMajorPart -ne 10 -or $ucrt.VersionInfo.FileBuildPart -gt 14393) {
     throw "Windows 8.1 packaging needs the legacy SDK app-local UCRT (build <=14393): $($ucrt.VersionInfo.FileVersion)"
 }
@@ -32,6 +36,9 @@ if (-not (Test-Path -LiteralPath (Join-Path $UcrtDirectory "api-ms-win-crt-runti
 }
 $dlls = @($vc) + @(Get-ChildItem -LiteralPath $UcrtDirectory -Filter '*.dll' -File)
 $inventory = foreach ($dll in $dlls) {
+    if ($RejectDuplicates -and (Test-Path -LiteralPath (Join-Path $destinationPath $dll.Name))) {
+        throw "Duplicate DLL in SxS input: $($dll.Name)"
+    }
     Copy-Item -LiteralPath $dll.FullName -Destination $destinationPath -Force
     [ordered]@{name = $dll.Name; version = $dll.VersionInfo.FileVersion; sha256 = (Get-FileHash -LiteralPath $dll.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
 }
@@ -46,4 +53,4 @@ https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files
 https://learn.microsoft.com/en-us/cpp/windows/universal-crt-deployment
 Windows 10/11 use the system UCRT even when an app-local copy is bundled.
 '@ | Set-Content -LiteralPath (Join-Path $licenses "windows-runtime-notice.txt") -Encoding utf8NoBOM
-Write-Host "Bundled $($dlls.Count) VC/UCRT DLLs; VC $($vc.VersionInfo.FileVersion), UCRT $($ucrt.VersionInfo.FileVersion)"
+Write-Host "Bundled $($dlls.Count) VC/UCRT DLLs; VC $($vc[0].VersionInfo.FileVersion), UCRT $($ucrt.VersionInfo.FileVersion)"

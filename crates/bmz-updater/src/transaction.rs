@@ -130,6 +130,17 @@ pub fn preflight(root: &Path, work: &Path) -> Result<()> {
             );
         }
     }
+    if new.uses_sxs() {
+        for name in
+            new.assembly_dlls().chain(["dll.dll", "dll.manifest", "bmz-player.exe.manifest"])
+        {
+            let was_managed = old.files.iter().any(|entry| entry.path.eq_ignore_ascii_case(name));
+            ensure!(
+                was_managed || !checked_path(root, name)?.try_exists()?,
+                "unmanaged root file conflicts with the new private assembly: {name}"
+            );
+        }
+    }
     for entry in old.files.iter().chain(&new.files) {
         let path = checked_path(root, &entry.path)?;
         ensure!(!path.exists() || path.is_file(), "update target is not a file");
@@ -192,6 +203,9 @@ fn apply_with_checkpoint(
                 fs::create_dir_all(target.parent().context("missing parent")?)?;
                 durable_rename(&checked_path(&work.join("stage"), &op.path)?, &target)?;
             }
+        }
+        if new.uses_sxs() {
+            crate::process::verify_player_startup(root, work, &new.version)?;
         }
         journal.complete = true;
         atomic_json(&active_path(root), &journal)?;
@@ -439,6 +453,71 @@ mod tests {
         assert!(apply(temp.path(), &work).is_err());
         assert_eq!(fs::read(temp.path().join("new.dll")).unwrap(), b"user library");
         assert!(!active_path(temp.path()).exists());
+    }
+
+    fn sxs_fixture() -> (tempfile::TempDir, PathBuf) {
+        let (temp, work) = fixture();
+        package(
+            &work.join("stage"),
+            "0.6.0",
+            &[
+                ("bmz-player.exe", b"invalid executable"),
+                (crate::HELPER, b"new updater"),
+                ("dll/dll.manifest", b"assembly"),
+                ("dll/old.dll", b"new library"),
+                ("dll/vcruntime140.dll", b"vc"),
+                ("dll/ucrtbase.dll", b"ucrt"),
+                ("dll/api-ms-win-crt-runtime-l1-1-0.dll", b"forwarder"),
+            ],
+        );
+        (temp, work)
+    }
+
+    #[test]
+    fn failed_sxs_loader_check_restores_old_package_and_modified_dll() {
+        let (temp, work) = sxs_fixture();
+        let root = temp.path();
+        fs::write(root.join("old.dll"), b"user-modified managed library").unwrap();
+        assert!(apply(root, &work).unwrap_err().to_string().contains("previous version restored"));
+        assert_eq!(fs::read(root.join("old.dll")).unwrap(), b"user-modified managed library");
+        assert_eq!(fs::read(root.join("bmz-player.exe")).unwrap(), b"old app");
+        assert_eq!(PackageManifest::read(root).unwrap().version, "0.4.0");
+        assert!(!root.join("dll/dll.manifest").exists());
+        assert!(pending_update(root).unwrap().is_none());
+        assert_user_data(root);
+    }
+
+    #[test]
+    fn sxs_preflight_protects_unmanaged_root_files_that_can_override_loader_resolution() {
+        let (temp, work) = sxs_fixture();
+        for name in ["ucrtbase.dll", "dll.dll", "dll.manifest", "bmz-player.exe.manifest"] {
+            let path = temp.path().join(name);
+            fs::write(&path, b"user file").unwrap();
+            assert!(preflight(temp.path(), &work).is_err(), "{name}");
+            assert_eq!(fs::read(&path).unwrap(), b"user file");
+            fs::remove_file(&path).unwrap();
+        }
+        preflight(temp.path(), &work).unwrap();
+        assert_original(temp.path());
+    }
+
+    #[test]
+    fn interrupted_sxs_migration_can_restore_retired_root_dlls() {
+        let (temp, work) = sxs_fixture();
+        let root = temp.path();
+        let outcome = std::panic::catch_unwind(|| {
+            apply_with_checkpoint(root, &work, |_| {
+                assert!(root.join("old.dll").exists(), "simulated process interruption");
+                Ok(())
+            })
+        });
+        assert!(outcome.is_err());
+        assert!(pending_update(root).unwrap().is_some());
+        assert!(root.join("dll/dll.manifest").is_file());
+        recover(root).unwrap();
+        recover(root).unwrap();
+        assert_original(root);
+        assert!(!root.join("dll/dll.manifest").exists());
     }
 
     #[cfg(windows)]

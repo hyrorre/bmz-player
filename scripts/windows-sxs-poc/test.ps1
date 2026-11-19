@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory)][string]$OutputDirectory,
     [switch]$SkipRendering,
     [switch]$SkipPlay,
+    [switch]$RequireAppLocalUcrt,
     [string]$BgaChart
 )
 Set-StrictMode -Version Latest
@@ -29,6 +30,10 @@ $os | Select-Object ProductName, CurrentVersion, DisplayVersion, CurrentBuild, U
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'os.json') -Encoding UTF8
 $modernUcrt = [int]$os.CurrentBuild -ge 10240
 $centralUcrt = Test-Path -LiteralPath (Join-Path $system32 'ucrtbase.dll')
+if ($RequireAppLocalUcrt -and
+    ([int]$os.CurrentBuild -ne 9600 -or $centralUcrt -or (Test-Path -LiteralPath (Join-Path $system32 'vcruntime140.dll')))) {
+    throw 'The app-local UCRT gate requires Windows 8.1 x64 without central UCRT or VC runtime'
+}
 $started = Get-Date
 
 function File-Evidence([string]$Path) {
@@ -181,7 +186,10 @@ function Check-Text([string]$Label, [string]$Stream, [string]$Pattern) {
 
 $previousErrorMode = [BmzPoC.Native]::SetErrorMode(0x8003)
 try {
-    foreach ($layout in @('baseline', 'ffmpeg-only', 'sxs')) {
+    $layouts = if (Test-Path -LiteralPath (Join-Path $packagesRoot 'ffmpeg-only')) {
+        @('baseline', 'ffmpeg-only', 'sxs')
+    } else { @('baseline', 'sxs') }
+    foreach ($layout in $layouts) {
         $case = Join-Path $output $layout
         $root = Join-Path $case ("BMZ Player " + [char]0x65E5 + [char]0x672C + [char]0x8A9E)
         Copy-Pristine $layout $root
@@ -198,7 +206,10 @@ try {
         $p = Run-Probe "$layout-invalid-cli" $root @('--gauge', 'invalid')
         Check ($p.exit_code -eq 1) "$($p.label): invalid CLI did not exit 1"
         Check-Text $p.label stderr 'invalid --gauge'
-        $p = Run-Probe "$layout-updater" $root @('--help') -Executable 'updater\bmz-updater.exe'
+        $helper = if (Test-Path -LiteralPath (Join-Path $root 'updater\bmz-updater.exe')) {
+            'updater\bmz-updater.exe'
+        } else { 'bmz-updater.exe' }
+        $p = Run-Probe "$layout-updater" $root @('--help') -Executable $helper
         Check ($p.exit_code -eq 0) "$($p.label): updater CLI failed"
         $p = Run-Probe "$layout-profile" $root @('profile', 'create', 'sxs-poc', '--activate') -Modules:$SkipRendering
         Check ($p.exit_code -eq 0) "$($p.label): profile creation failed"
@@ -250,7 +261,9 @@ try {
         }
     }
 
-    foreach ($fault in @('no-manifest', 'identity-mismatch', 'no-avcodec')) {
+    $faults = @('no-manifest', 'identity-mismatch', 'no-avcodec')
+    if ($RequireAppLocalUcrt) { $faults += 'no-ucrt' }
+    foreach ($fault in $faults) {
         $root = Join-Path $output $fault
         Copy-SxsBinaries $root
         $dllDir = Join-Path $root $assembly
@@ -267,9 +280,10 @@ try {
                 if ($codec.Count -ne 1) { throw 'Expected exactly one avcodec DLL' }
                 Remove-Item -LiteralPath $codec[0].FullName
             }
+            'no-ucrt' { Remove-Item -LiteralPath (Join-Path $dllDir 'ucrtbase.dll') }
         }
         $p = Run-Probe $fault $root @('--help')
-        $diagnostic = if ($fault -eq 'no-avcodec') {
+        $diagnostic = if ($fault -in @('no-avcodec', 'no-ucrt')) {
             $p.exit_hex -eq '0xC0000135' -or $p.start_error -eq 126
         } else {
             $p.start_error -eq 14001 -or $p.exit_hex -eq '0xC0150002'
@@ -290,14 +304,16 @@ try {
     Check (Test-Path -LiteralPath $roamingProfile) 'Installer profile did not use isolated roaming directory'
     Check (-not (Test-Path -LiteralPath (Join-Path $root 'data'))) 'Installer marker created adjacent data'
 
-    $probeMarker.kind = 'portable'
-    $fullInventory = [IO.File]::ReadAllText((Join-Path $packagesRoot 'sxs.files.json')) | ConvertFrom-Json
-    # Windows PowerShell wraps a top-level JSON array. Materialize a plain array for serialization.
-    $probeMarker.files = @(foreach ($entry in $fullInventory) { $entry })
-    [IO.File]::WriteAllText((Join-Path $root $marker), ($probeMarker | ConvertTo-Json -Depth 5))
-    $p = Run-Probe 'full-inventory-profile' $root @('profile', 'create', 'sxs-poc')
-    Check ($p.exit_code -eq 1) 'Current app accepted runtime paths in full package inventory'
-    Check-Text $p.label stderr 'package must not manage user files'
+    if ($probeMarker.min_updater_protocol -lt 4) {
+        $probeMarker.kind = 'portable'
+        $fullInventory = [IO.File]::ReadAllText((Join-Path $packagesRoot 'sxs.files.json')) | ConvertFrom-Json
+        # Windows PowerShell wraps a top-level JSON array. Materialize a plain array for serialization.
+        $probeMarker.files = @(foreach ($entry in $fullInventory) { $entry })
+        [IO.File]::WriteAllText((Join-Path $root $marker), ($probeMarker | ConvertTo-Json -Depth 5))
+        $p = Run-Probe 'full-inventory-profile' $root @('profile', 'create', 'sxs-poc')
+        Check ($p.exit_code -eq 1) 'Current app accepted runtime paths in full package inventory'
+        Check-Text $p.label stderr 'package must not manage user files'
+    }
 
     $root = Join-Path $output 'overlay'
     Copy-Pristine 'baseline' $root

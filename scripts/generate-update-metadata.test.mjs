@@ -64,6 +64,42 @@ test('grouped release cannot advertise protocol one or omit its bridge', async (
   await assert.rejects(releaseManifest('', '0.5.0', 2), /bridge release/)
 })
 
+test('the private assembly requires the protocol-four Windows x64 package', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'bmz-sxs-package-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await mkdir(path.join(root, 'dll'))
+  await mkdir(path.join(root, 'updater'))
+  for (const name of [
+    'bmz-player.exe',
+    'updater/bmz-updater.exe',
+    'dll/dll.manifest',
+    'dll/avcodec-63.dll',
+    'dll/vcruntime140.dll',
+    'dll/ucrtbase.dll',
+    'dll/api-ms-win-crt-runtime-l1-1-0.dll',
+  ]) {
+    await writeFile(path.join(root, name), name)
+  }
+  const build = () => packageManifest(root, 'portable', 'windows-x64', '0.5.2', 'grouped', 'sxs')
+  assert.equal((await build()).min_updater_protocol, 4)
+  await assert.rejects(packageManifest(root, 'portable', 'windows-x64', '0.5.2'), /unmanaged/)
+  await assert.rejects(
+    packageManifest(root, 'portable', 'windows-arm64', '0.5.2', 'grouped', 'sxs'),
+    /kind\/target/,
+  )
+  await writeFile(path.join(root, 'avcodec-63.dll'), 'duplicate')
+  await assert.rejects(build(), /unmanaged/)
+  await rm(path.join(root, 'avcodec-63.dll'))
+  await writeFile(path.join(root, 'dll/dll.dll'), 'would shadow the private manifest')
+  await assert.rejects(build(), /unmanaged/)
+  await rm(path.join(root, 'dll/dll.dll'))
+  await mkdir(path.join(root, 'dll/nested.dll'))
+  await assert.rejects(build(), /regular private assembly file/)
+  await rm(path.join(root, 'dll/nested.dll'), { recursive: true })
+  await rm(path.join(root, 'dll/ucrtbase.dll'))
+  await assert.rejects(build(), /Missing dll\/ucrtbase\.dll/)
+})
+
 test('signed metadata binds raw bytes and checks the embedded public key', () => {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519')
   const publicBase64 = publicKey

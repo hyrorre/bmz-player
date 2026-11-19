@@ -43,7 +43,7 @@ BMZ Player/
     instance.lock
 ```
 
-[アセンブリ manifest のテンプレート](../../scripts/windows-sxs-poc/dll.manifest) が同じ name・type・version・processorArchitecture を定義する。生成時に `<file name="avcodec-63.dll"/>` のような実ファイル名を 1 本ずつ追加する。準備スクリプトは許可位置、宣言と DLL の一覧、同名や過不足、移動前後の SHA-256 を照合する。現行配置はルート 52 本、FFmpeg だけを移した途中段階はルート 45 本、全 DLL 移動版はルート **0 本**。
+[アセンブリ manifest のテンプレート](../../scripts/dll.manifest) が同じ name・type・version・processorArchitecture を定義する。生成時に `<file name="avcodec-63.dll"/>` のような実ファイル名を 1 本ずつ追加する。準備スクリプトは許可位置、宣言と DLL の一覧、同名や過不足、移動前後の SHA-256 を照合する。現行配置はルート 52 本、FFmpeg だけを移した途中段階はルート 45 本、全 DLL 移動版はルート **0 本**。
 
 Windows は共有アセンブリを検索した後、exe の隣と同名子フォルダーで `<assemblyname>.dll`、`<assemblyname>.manifest` を探す。初回の `BMZ.Player.Runtime` から、フォルダー名、manifest ファイル名、両側のアセンブリ名をまとめて `dll` に揃え、`dll/dll.manifest` が選ばれる構成にした。API set の解決に続いて SxS リダイレクトが働く。依存 DLL の間接 import もモジュール名で解決される。Windows 10/11 は OS の UCRT を使い、API set は実ファイルのロードを伴わないことがある。Microsoft が記す Windows 8 より前のサブフォルダー制限は、8.1 での成功を保証しない。
 
