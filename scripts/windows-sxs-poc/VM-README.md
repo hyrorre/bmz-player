@@ -18,7 +18,7 @@ GPU なしの環境では `-SkipRendering`、描画可能で音声デバイス�
 
 保存する結果は `results.json`、`*.modules.csv`、`os.json`、`system-runtime.json`、
 `hotfixes.csv`、`side-by-side-events.txt`、個別の stdout/stderr です。
-中央導入のない 8.1 では現行配置でルート、全 DLL 移動版で `BMZ.Player.Runtime/` から
+中央導入のない 8.1 では現行配置でルート、全 DLL 移動版で `dll/` から
 `ucrtbase.dll` と使用した CRT 転送 DLL がロードされることを確認します。
 中央導入済みの場合は UCRT の実ロード元を記録し、中央導入のない試験と区別します。
 manifest 欠落と version 不一致は起動エラー 14001、

@@ -18,7 +18,7 @@ if ($BgaChart) { $BgaChart = (Resolve-Path -LiteralPath $BgaChart).Path }
 New-Item -ItemType Directory -Path $output | Out-Null
 $foreign = Join-Path $output 'empty-working-directory'
 New-Item -ItemType Directory -Path $foreign | Out-Null
-$assembly = 'BMZ.Player.Runtime'
+$assembly = 'dll'
 $assemblyManifest = "$assembly.manifest"
 $exeName = 'bmz-player.exe'
 $marker = 'updater\bmz-package.json'
