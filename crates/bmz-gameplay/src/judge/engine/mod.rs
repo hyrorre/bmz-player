@@ -173,7 +173,7 @@ impl JudgeEngine {
     }
 
     pub fn process_input(&mut self, chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
-        self.process_input_at(chart, input, input.time)
+        self.process_input_at(chart, input, input.time, false)
     }
 
     pub(crate) fn process_input_at(
@@ -181,6 +181,7 @@ impl JudgeEngine {
         chart: &PlayableChart,
         input: InputEvent,
         judge_time: TimeUs,
+        play_miss_keysound: bool,
     ) -> JudgeOutcome {
         self.mark_free_zone_input(chart, input);
         let mut outcome = self.advance_hln(chart, input.time);
@@ -195,7 +196,9 @@ impl JudgeEngine {
         }
         let timed_input = InputEvent { time: judge_time, ..input };
         let mut input_outcome = match input.kind {
-            InputKind::Press => self.process_press(chart, timed_input, input.time),
+            InputKind::Press => {
+                self.process_press(chart, timed_input, input.time, play_miss_keysound)
+            }
             InputKind::Release => self.process_release(chart, timed_input, input.time),
         };
         if judge_time != input.time {
@@ -223,6 +226,78 @@ impl JudgeEngine {
         self.process_misses_at(chart, now, |_| now, play_keysound)
     }
 
+    /// Settle press-reference notes in `lane` that are already past the late
+    /// window at `judge_time`. OpenLR2's `ProcSinglenote` performs this before
+    /// judging the press itself, so a press that arrives after the head expired
+    /// can still reach the following note.
+    fn settle_missed_notes_in_lane(
+        &mut self,
+        chart: &PlayableChart,
+        lane: Lane,
+        now: TimeUs,
+        judge_time: TimeUs,
+        play_keysound: bool,
+        outcome: &mut JudgeOutcome,
+    ) {
+        let lane_state = &mut self.lanes[lane.index()];
+        while let Some((idx, note)) = next_unjudged_press_reference_note(
+            chart,
+            lane,
+            lane_state.next_note_index,
+            &self.judged_notes,
+        ) {
+            let windows = press_window(self.window_set, self.scratch_lane_mask[lane.index()]);
+            let expired = if self.rule_mode == RuleMode::Legacy {
+                legacy_note_expired(note, judge_time, windows)
+            } else {
+                judge_time.0 > note.time.0 + windows.bad_slow_us
+            };
+            if !expired {
+                break;
+            }
+
+            lane_state.next_note_index = idx + 1;
+            let bad_was_already_scored = self.bad_attempted_notes.remove(&note.id);
+            self.judged_notes.insert(note.id, Judge::Poor);
+            let miss_delta = TimeUs(judge_time.0 - note.time.0);
+            if !bad_was_already_scored {
+                if play_keysound {
+                    outcome.keysounds.push(KeySoundEvent {
+                        note_id: note.id,
+                        time: now,
+                        trigger: KeySoundTrigger::Miss,
+                    });
+                }
+                outcome.events.push(JudgementEvent {
+                    note_id: Some(note.id),
+                    lane,
+                    judge: Judge::Poor,
+                    side: TimingSide::Slow,
+                    delta: miss_delta,
+                    time: now,
+                    affects_score: true,
+                });
+            }
+            // beatoraja treats a missed CN/HCN head as two misses: both the
+            // head and its paired tail become POOR immediately. If the head
+            // had already produced a non-vanishing BAD, only the tail adds
+            // another score event (MissCondition.ONE).
+            if let Some(end_note_id) = missed_charge_end_for_start(chart, note.id) {
+                self.judged_notes.insert(end_note_id, Judge::Poor);
+                outcome.events.push(JudgementEvent {
+                    note_id: Some(end_note_id),
+                    lane,
+                    judge: Judge::Poor,
+                    side: TimingSide::Slow,
+                    delta: miss_delta,
+                    time: now,
+                    affects_score: true,
+                });
+            }
+        }
+        advance_press_cursor(chart, lane, &mut lane_state.next_note_index, &self.judged_notes);
+    }
+
     pub(crate) fn process_misses_at(
         &mut self,
         chart: &PlayableChart,
@@ -234,64 +309,15 @@ impl JudgeEngine {
 
         for lane in Lane::ALL {
             let judge_time = lane_judge_time(lane);
-            let lane_state = &mut self.lanes[lane.index()];
-
-            while let Some((idx, note)) = next_unjudged_press_reference_note(
+            self.settle_missed_notes_in_lane(
                 chart,
                 lane,
-                lane_state.next_note_index,
-                &self.judged_notes,
-            ) {
-                let windows = press_window(self.window_set, self.scratch_lane_mask[lane.index()]);
-                let expired = if self.rule_mode == RuleMode::Legacy {
-                    legacy_note_expired(note, judge_time, windows)
-                } else {
-                    judge_time.0 > note.time.0 + windows.bad_slow_us
-                };
-                if !expired {
-                    break;
-                }
-
-                lane_state.next_note_index = idx + 1;
-                let bad_was_already_scored = self.bad_attempted_notes.remove(&note.id);
-                self.judged_notes.insert(note.id, Judge::Poor);
-                let miss_delta = TimeUs(judge_time.0 - note.time.0);
-                if !bad_was_already_scored {
-                    if play_keysound {
-                        outcome.keysounds.push(KeySoundEvent {
-                            note_id: note.id,
-                            time: now,
-                            trigger: KeySoundTrigger::Miss,
-                        });
-                    }
-                    outcome.events.push(JudgementEvent {
-                        note_id: Some(note.id),
-                        lane,
-                        judge: Judge::Poor,
-                        side: TimingSide::Slow,
-                        delta: miss_delta,
-                        time: now,
-                        affects_score: true,
-                    });
-                }
-                // beatoraja treats a missed CN/HCN head as two misses: both the
-                // head and its paired tail become POOR immediately. If the head
-                // had already produced a non-vanishing BAD, only the tail adds
-                // another score event (MissCondition.ONE).
-                if let Some(end_note_id) = missed_charge_end_for_start(chart, note.id) {
-                    self.judged_notes.insert(end_note_id, Judge::Poor);
-                    outcome.events.push(JudgementEvent {
-                        note_id: Some(end_note_id),
-                        lane,
-                        judge: Judge::Poor,
-                        side: TimingSide::Slow,
-                        delta: miss_delta,
-                        time: now,
-                        affects_score: true,
-                    });
-                }
-            }
-            advance_press_cursor(chart, lane, &mut lane_state.next_note_index, &self.judged_notes);
+                now,
+                judge_time,
+                play_keysound,
+                &mut outcome,
+            );
+            let lane_state = &mut self.lanes[lane.index()];
 
             if let Some(active) = lane_state.active_long {
                 let release_margin_us =
@@ -309,6 +335,7 @@ impl JudgeEngine {
                             lane,
                             active,
                             pending.judge,
+                            pending.delta,
                             pending.delta,
                             now,
                         ),
@@ -475,8 +502,24 @@ impl JudgeEngine {
         chart: &PlayableChart,
         input: InputEvent,
         event_time: TimeUs,
+        play_miss_keysound: bool,
     ) -> JudgeOutcome {
-        let mut outcome = self.process_press_once(chart, input, event_time);
+        let mut outcome = JudgeOutcome::default();
+        if self.rule_mode == RuleMode::Legacy {
+            // OpenLR2 judges the same lane's misses before comparing this press
+            // against the next note. Without this, an expired head would return
+            // no candidate and swallow a press aimed at the following note.
+            self.settle_missed_notes_in_lane(
+                chart,
+                input.lane,
+                input.time,
+                input.time,
+                play_miss_keysound,
+                &mut outcome,
+            );
+        }
+        let first = self.process_press_once(chart, input, event_time);
+        append_outcome(&mut outcome, first);
         if self.rule_mode != RuleMode::Legacy {
             return outcome;
         }
@@ -560,6 +603,7 @@ impl JudgeEngine {
                     input.lane,
                     active,
                     judge,
+                    TimeUs(delta),
                     TimeUs(delta),
                     input.time,
                 );
@@ -757,6 +801,7 @@ impl JudgeEngine {
                     active,
                     judge,
                     TimeUs(delta),
+                    TimeUs(delta),
                     input.time,
                 );
             }
@@ -767,7 +812,7 @@ impl JudgeEngine {
         match active.mode {
             LongNoteMode::Ln | LongNoteMode::Hln => {
                 let end_delta = TimeUs(input.time.0 - active.end.end_time.0);
-                let (judge, delta) = if self.rule_mode == RuleMode::Legacy
+                let (judge, delta, release_delta) = if self.rule_mode == RuleMode::Legacy
                     && active.mode == LongNoteMode::Ln
                 {
                     let windows =
@@ -778,9 +823,11 @@ impl JudgeEngine {
                     } else {
                         active.start_judge
                     };
-                    (grade, active.start_delta)
+                    // LR2 reports the head offset with the final judgement, but
+                    // stopping the head keysound depends on the tail release.
+                    (grade, active.start_delta, end_delta)
                 } else if end_delta.0 >= 0 {
-                    (active.start_judge, active.start_delta)
+                    (active.start_judge, active.start_delta, active.start_delta)
                 } else {
                     let windows = long_end_window(
                         self.window_set,
@@ -788,7 +835,8 @@ impl JudgeEngine {
                     );
                     let end_judge =
                         classify_normal_delta(end_delta.0, windows).unwrap_or(Judge::Poor);
-                    combine_ln_judgement(active, end_judge, end_delta)
+                    let (judge, delta) = combine_ln_judgement(active, end_judge, end_delta);
+                    (judge, delta, delta)
                 };
                 if release_margin_us > 0
                     && end_delta.0 < 0
@@ -801,7 +849,15 @@ impl JudgeEngine {
                 }
                 lane_state.active_long = None;
                 self.judged_notes.insert(active.start_note_id, judge);
-                finalize_long_release(chart, input.lane, active, judge, delta, input.time)
+                finalize_long_release(
+                    chart,
+                    input.lane,
+                    active,
+                    judge,
+                    delta,
+                    release_delta,
+                    input.time,
+                )
             }
             LongNoteMode::Cn | LongNoteMode::Hcn => {
                 let delta = input.time.0 - active.end.end_time.0;
@@ -819,7 +875,15 @@ impl JudgeEngine {
                 }
                 lane_state.active_long = None;
                 self.judged_notes.insert(active.end.end_note_id, judge);
-                finalize_long_release(chart, input.lane, active, judge, TimeUs(delta), input.time)
+                finalize_long_release(
+                    chart,
+                    input.lane,
+                    active,
+                    judge,
+                    TimeUs(delta),
+                    TimeUs(delta),
+                    input.time,
+                )
             }
         }
     }

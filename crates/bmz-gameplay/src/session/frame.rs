@@ -596,7 +596,7 @@ fn score_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
             }
             InputKind::Release => opponent.lane_keyon_started_at[input.lane.index()] = None,
         }
-        let outcome = opponent.judge.process_input_at(&opponent.chart, input, judge_time);
+        let outcome = opponent.judge.process_input_at(&opponent.chart, input, judge_time, false);
         display_judgements.extend(apply_battle_opponent_outcome(opponent, outcome));
     }
     let mut mine_keyon = opponent.lane_keyon_started_at;

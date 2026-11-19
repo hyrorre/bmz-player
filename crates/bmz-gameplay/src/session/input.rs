@@ -568,7 +568,12 @@ pub(super) fn process_session_input(
     } else {
         session.timing_map.reflected_judge_time(input.time)
     };
-    let mut outcome = session.judge.process_input_at(&session.chart, input, judge_time);
+    let mut outcome = session.judge.process_input_at(
+        &session.chart,
+        input,
+        judge_time,
+        session.play_keysound_on_miss,
+    );
     if input.kind == InputKind::Press {
         let hcn_passing = hold_note_passing_at(session, input.lane, input.time, LongNoteMode::Hcn);
         let hln_passing = hold_note_passing_at(session, input.lane, input.time, LongNoteMode::Hln);

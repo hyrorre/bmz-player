@@ -418,3 +418,67 @@ fn lr2oraja_ignores_exrank_events() {
     assert_eq!(judge_percent_at_time(header, &events, TimeUs(0), RuleMode::Lr2Oraja), 100);
     assert_eq!(judge_percent_at_time(header, &events, TimeUs(1_500), RuleMode::Lr2Oraja), 100);
 }
+
+#[test]
+fn legacy_rank_keeps_expanded_key_judge_widths() {
+    let mut base = judge_windows_for_keymode_and_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    // EXPAND JUDGE KEY 200%: 18/40/100ms -> 36/80/200ms (GOOD is capped by BAD).
+    base.note.pgreat_us = 36_000;
+    base.note.great_us = 80_000;
+    base.note.good_us = 200_000;
+
+    let rank2 = judge_windows_for_rule_mode(base, 75, RuleMode::Legacy);
+    assert_eq!(
+        (rank2.note.pgreat_us, rank2.note.great_us, rank2.note.good_us),
+        (36_000, 80_000, 200_000)
+    );
+
+    // #RANK 3 also scales the rank table itself: 21/60/120ms -> 42/120/200ms.
+    let rank3 = judge_windows_for_rule_mode(base, 100, RuleMode::Legacy);
+    assert_eq!(
+        (rank3.note.pgreat_us, rank3.note.great_us, rank3.note.good_us),
+        (42_000, 120_000, 200_000)
+    );
+    // Scratch keeps its own (unexpanded) window.
+    assert_eq!(rank3.scratch.pgreat_us, 21_000);
+    assert_eq!(rank3.scratch.great_us, 60_000);
+}
+
+#[test]
+fn legacy_rank_keeps_course_no_good_and_no_great_constraints() {
+    let base = judge_windows_for_keymode_and_rule_mode(KeyMode::K7, RuleMode::Legacy);
+
+    let mut no_good = base;
+    no_good.note.good_us = 0;
+    let window = judge_windows_for_rule_mode(no_good, 100, RuleMode::Legacy);
+    assert_eq!(window.note.pgreat_us, 21_000);
+    assert_eq!(window.note.great_us, 60_000);
+    assert_eq!(window.note.good_us, 0);
+
+    let mut no_great = base;
+    no_great.note.great_us = 0;
+    no_great.note.good_us = 0;
+    let window = judge_windows_for_rule_mode(no_great, 25, RuleMode::Legacy);
+    assert_eq!(window.note.pgreat_us, 8_000);
+    assert_eq!(window.note.great_us, 0);
+    assert_eq!(window.note.good_us, 0);
+}
+
+#[test]
+fn legacy_rank_without_customization_uses_the_rank_table() {
+    let base = judge_windows_for_keymode_and_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    for (percent, expected) in [
+        (25, (8_000, 24_000, 40_000)),
+        (50, (15_000, 30_000, 60_000)),
+        (100, (21_000, 60_000, 120_000)),
+    ] {
+        let window = judge_windows_for_rule_mode(base, percent, RuleMode::Legacy);
+        assert_eq!(
+            (window.note.pgreat_us, window.note.great_us, window.note.good_us),
+            expected,
+            "percent {percent}"
+        );
+        assert_eq!(window.note.bad_fast_us, 200_000);
+        assert_eq!(window.note.empty_poor_fast_us, 1_000_000);
+    }
+}

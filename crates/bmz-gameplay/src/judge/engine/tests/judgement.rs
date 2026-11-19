@@ -969,8 +969,9 @@ fn legacy_matches_openlr2_recorded_judgement_of_air_god() {
     );
     let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
 
-    // OpenLR2 は毎フレーム全レーンの取りこぼしを判定するので、
-    // 押下時刻に加えて各ノートが BAD 窓を過ぎる時刻も進める。
+    // 実プレイと同じく、そのフレームの入力を先に処理し、その後で全レーンの
+    // 取りこぼしを確定する。入力レーン内の期限切れは process_input 側が
+    // 先に確定する (OpenLR2 の ProcSinglenote と同じ順序)。
     let mut timeline: Vec<i64> = presses.iter().map(|&(_, ms)| ms).collect();
     timeline.extend(notes.iter().map(|&(_, ms)| ms + 201));
     timeline.sort_unstable();
@@ -980,7 +981,6 @@ fn legacy_matches_openlr2_recorded_judgement_of_air_god() {
     let mut judged = Vec::new();
     for &ms in &timeline {
         let now = TimeUs(ms * 1_000);
-        judged.extend(engine.process_misses(&chart, now).events.iter().map(|e| e.judge));
         while let Some(&(op, press_ms)) = presses.get(press_cursor) {
             if press_ms != ms {
                 break;
@@ -991,6 +991,7 @@ fn legacy_matches_openlr2_recorded_judgement_of_air_god() {
             judged.extend(outcome.events.iter().map(|e| e.judge));
             press_cursor += 1;
         }
+        judged.extend(engine.process_misses(&chart, now).events.iter().map(|e| e.judge));
     }
     assert_eq!(press_cursor, presses.len());
 
@@ -1037,4 +1038,61 @@ fn legacy_ln_release_preserves_head_grade_inside_the_good_window() {
         let outcome = engine.process_input(&chart, release_at(TimeUs(release_ms * 1_000)));
         assert_eq!(outcome.events[0].judge, expected);
     }
+}
+
+#[test]
+fn legacy_press_after_an_expired_head_still_reaches_the_next_note() {
+    let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_201_100));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+
+    // 通常プレイは入力 -> 見逃しの順。入力時刻で先頭ノートが期限切れでも、
+    // 同じ押下で後続ノートを判定できなければならない。
+    let outcome = engine.process_input(&chart, press_at(TimeUs(1_201_500)));
+
+    assert_eq!(outcome.events.len(), 2);
+    assert_eq!(outcome.events[0].note_id, Some(NoteId(1)));
+    assert_eq!(outcome.events[0].judge, Judge::Poor);
+    assert_eq!(outcome.events[1].note_id, Some(NoteId(2)));
+    assert_eq!(outcome.events[1].judge, Judge::PGreat);
+    assert!(engine.process_misses(&chart, TimeUs(1_500_000)).events.is_empty());
+}
+
+#[test]
+fn legacy_ln_early_bad_mutes_the_start_keysound_for_any_head_offset() {
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    for head_ms in [980_i64, 1_000, 1_020] {
+        let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+        chart.lane_notes[Lane::Key1.index()][0].sound = Some(bmz_core::ids::SoundId(7));
+        let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+
+        engine.process_input(&chart, press_at(TimeUs(head_ms * 1_000)));
+        // #RANK 2 の GOOD 窓 (100ms) を超えて早く離すと最終判定は BAD になる。
+        let outcome = engine.process_input(&chart, release_at(TimeUs(1_899_000)));
+
+        assert_eq!(outcome.events[0].judge, Judge::Bad, "head {head_ms}ms");
+        assert_eq!(outcome.events[0].delta, TimeUs((head_ms - 1_000) * 1_000), "head {head_ms}ms");
+        assert_eq!(
+            outcome.keysound_volumes,
+            vec![(bmz_core::ids::SoundId(7), 0.0)],
+            "head {head_ms}ms"
+        );
+    }
+}
+
+#[test]
+fn legacy_press_that_settles_an_expired_head_plays_its_miss_keysound_when_enabled() {
+    let mut chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_201_100));
+    chart.lane_notes[Lane::Key1.index()][0].sound = Some(bmz_core::ids::SoundId(7));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+
+    let outcome =
+        engine.process_input_at(&chart, press_at(TimeUs(1_201_500)), TimeUs(1_201_500), true);
+
+    assert_eq!(outcome.keysounds[0].note_id, NoteId(1));
+    assert_eq!(outcome.keysounds[0].trigger, KeySoundTrigger::Miss);
 }

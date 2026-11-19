@@ -190,7 +190,7 @@ pub fn judge_window_for_rule_mode_and_keymode(
     match rule_mode {
         RuleMode::Beatoraja => beatoraja_judge_window_for_rank_and_keymode(base, percent, key_mode),
         RuleMode::Lr2Oraja => lr2oraja_judge_window_for_rank(base, percent),
-        RuleMode::Legacy => legacy_window(percent),
+        RuleMode::Legacy => rebase_legacy_window(base, legacy_window(percent), legacy_window(75)),
         RuleMode::Dx => base,
     }
 }
@@ -226,7 +226,7 @@ pub fn judge_windows_for_rule_mode_and_keymode(
             long_note_release_margin_us: base.long_note_release_margin_us,
             long_scratch_release_margin_us: base.long_scratch_release_margin_us,
         },
-        RuleMode::Legacy => JudgeWindows::uniform(legacy_window(percent)),
+        RuleMode::Legacy => legacy_windows_with_customization(base, percent),
         RuleMode::Lr2Oraja => JudgeWindows {
             note: lr2oraja_judge_window_for_rank(base.note, percent),
             scratch: lr2oraja_judge_window_for_rank(base.scratch, percent),
@@ -523,6 +523,71 @@ const fn legacy_window(percent: i32) -> JudgeWindow {
         0,
         great_ms * 1_000,
     )
+}
+
+/// LEGACY の RANK 別基本窓へ、`base` に残っているカスタム判定幅
+/// (EXPAND JUDGE) とコース制約 (NO GOOD / NO GREAT) を写す。
+///
+/// `base` は既定 (RANK 75%) の窓へ倍率・制約を適用したものなので、既定窓と
+/// の比を RANK 別窓に掛ければ最終窓まで補正を維持できる。既定窓と等しい
+/// フィールドは比が 1 になり、RANK 別の値がそのまま残る。
+fn legacy_windows_with_customization(base: JudgeWindows, percent: i32) -> JudgeWindows {
+    let rank = legacy_window(percent);
+    let default = legacy_window(75);
+    JudgeWindows {
+        note: rebase_legacy_window(base.note, rank, default),
+        scratch: rebase_legacy_window(base.scratch, rank, default),
+        long_note_end: rebase_legacy_window(base.long_note_end, rank, default),
+        long_scratch_end: rebase_legacy_window(base.long_scratch_end, rank, default),
+        long_note_release_margin_us: base.long_note_release_margin_us,
+        long_scratch_release_margin_us: base.long_scratch_release_margin_us,
+    }
+}
+
+fn rebase_legacy_window(base: JudgeWindow, rank: JudgeWindow, default: JudgeWindow) -> JudgeWindow {
+    let bad_fast_us = rebase_legacy_time(rank.bad_fast_us, base.bad_fast_us, default.bad_fast_us);
+    let bad_slow_us = rebase_legacy_time(rank.bad_slow_us, base.bad_slow_us, default.bad_slow_us);
+    let bad_cap = bad_fast_us.min(bad_slow_us);
+    // base で 0 にされた帯 (NO GOOD / NO GREAT) は RANK 別窓でも 0 のままにする。
+    let pgreat_us = rebase_legacy_time(rank.pgreat_us, base.pgreat_us, default.pgreat_us);
+    let pgreat_us = if base.pgreat_us == 0 { 0 } else { pgreat_us.min(bad_cap) };
+    let great_us = rebase_legacy_time(rank.great_us, base.great_us, default.great_us);
+    let great_us =
+        if base.great_us == 0 { 0 } else { great_us.clamp(pgreat_us.min(bad_cap), bad_cap) };
+    let good_us = rebase_legacy_time(rank.good_us, base.good_us, default.good_us);
+    let good_us = if base.good_us == 0 { 0 } else { good_us.clamp(great_us.min(bad_cap), bad_cap) };
+    JudgeWindow {
+        pgreat_us,
+        great_us,
+        good_us,
+        bad_fast_us,
+        bad_slow_us,
+        empty_poor_fast_us: rebase_legacy_time(
+            rank.empty_poor_fast_us,
+            base.empty_poor_fast_us,
+            default.empty_poor_fast_us,
+        ),
+        empty_poor_slow_us: rebase_legacy_time(
+            rank.empty_poor_slow_us,
+            base.empty_poor_slow_us,
+            default.empty_poor_slow_us,
+        ),
+        mine_hit_us: rebase_legacy_time(rank.mine_hit_us, base.mine_hit_us, default.mine_hit_us),
+    }
+}
+
+fn rebase_legacy_time(rank_us: i64, base_us: i64, default_us: i64) -> i64 {
+    if base_us == 0 || default_us == 0 {
+        return base_us;
+    }
+    let scaled = i128::from(rank_us) * i128::from(base_us);
+    let denominator = i128::from(default_us.abs());
+    let rounded = if scaled >= 0 {
+        (scaled + denominator / 2) / denominator
+    } else {
+        (scaled - denominator / 2) / denominator
+    };
+    rounded.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
 
 /// LR2oraja `JudgeProperty.LR2` NOTE window.

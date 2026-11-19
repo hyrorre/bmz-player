@@ -4,10 +4,10 @@ pub(super) fn push_early_bad_long_start_mute(
     chart: &PlayableChart,
     active: ActiveLongNote,
     judge: Judge,
-    end_delta: TimeUs,
+    release_delta: TimeUs,
     outcome: &mut JudgeOutcome,
 ) {
-    if end_delta.0 < 0 && matches!(judge, Judge::Bad | Judge::Poor) {
+    if release_delta.0 < 0 && matches!(judge, Judge::Bad | Judge::Poor) {
         let Some(pair) = chart.long_notes.get(active.pair_index) else {
             return;
         };
@@ -19,12 +19,19 @@ pub(super) fn push_early_bad_long_start_mute(
     }
 }
 
+/// Finalize a released long note.
+///
+/// `delta` is the timing offset reported with the judgement (LR2 reports the
+/// head offset for an early BAD on a LEGACY LN). `release_delta` is compared
+/// against the long end only to decide whether the release came early enough
+/// to stop the long start keysound; the two must not be conflated.
 pub(super) fn finalize_long_release(
     chart: &PlayableChart,
     lane: Lane,
     active: ActiveLongNote,
     judge: Judge,
     delta: TimeUs,
+    release_delta: TimeUs,
     time: TimeUs,
 ) -> JudgeOutcome {
     let mut outcome = match active.mode {
@@ -63,7 +70,7 @@ pub(super) fn finalize_long_release(
         },
     };
     if matches!(active.mode, LongNoteMode::Ln | LongNoteMode::Cn) {
-        push_early_bad_long_start_mute(chart, active, judge, delta, &mut outcome);
+        push_early_bad_long_start_mute(chart, active, judge, release_delta, &mut outcome);
     }
     outcome
 }
