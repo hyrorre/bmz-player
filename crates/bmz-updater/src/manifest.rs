@@ -208,17 +208,24 @@ impl PackageManifest {
     /// Prefer the grouped layout, but never hide a corrupt manifest behind a legacy fallback.
     pub fn read_optional(root: &Path) -> Result<Option<Self>> {
         for relative in [super::MANIFEST, super::LEGACY_MANIFEST] {
-            let path = checked_path(root, relative)?;
-            if !path.try_exists()? {
-                continue;
+            if let Some(manifest) = Self::read_at(root, relative)? {
+                return Ok(Some(manifest));
             }
-            ensure!(path.metadata()?.len() <= 16 * 1024 * 1024, "package manifest too large");
-            let manifest: Self = serde_json::from_reader(File::open(path)?)?;
-            manifest.validate()?;
-            ensure!(manifest.manifest_path() == relative, "package layout mismatch");
-            return Ok(Some(manifest));
         }
         Ok(None)
+    }
+
+    /// Reads the manifest of one layout only, even when the other layout's manifest also exists.
+    pub(crate) fn read_at(root: &Path, relative: &str) -> Result<Option<Self>> {
+        let path = checked_path(root, relative)?;
+        if !path.try_exists()? {
+            return Ok(None);
+        }
+        ensure!(path.metadata()?.len() <= 16 * 1024 * 1024, "package manifest too large");
+        let manifest: Self = serde_json::from_reader(File::open(path)?)?;
+        manifest.validate()?;
+        ensure!(manifest.manifest_path() == relative, "package layout mismatch");
+        Ok(Some(manifest))
     }
 
     pub fn read(root: &Path) -> Result<Self> {
