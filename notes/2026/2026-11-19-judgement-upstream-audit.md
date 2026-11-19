@@ -84,3 +84,25 @@ Debian Linux上でRustのワークスペースを検証した。全体テスト�
 
 現行仕様は [判定とゲージ](../../docs/rule.md)、[LN](../../docs/ln.md)、
 [実行経路](../../docs/gameplay-runtime.md)、[スコア保存](../../docs/score-persistence.md) を参照。
+
+## 2026-11-20 の追加照合
+
+PR #140 の `8ddda0ca` で見つかった差を、同じ固定上流と比較した。
+beatorajaとLR2orajaの同梱パーサーにランク未指定のBMSを渡した結果は、いずれも `BMS_RANK 2`。
+ED-rian側にも同じ[モデル初期値](https://github.com/rian-eimu/jbms-parser/blob/b18d8129969ab2036d3d9c5dd613901492553265/src/bms/model/BMSModel.java#L65-L72)がある。
+
+| 条件 | 修正後の期待値 |
+|---|---|
+| beatoraja 7Kでランク未指定・18ms遅れ | BMSはGREAT、BMSONはPGREAT |
+| beatoraja 9Kで通常LNの終点170ms前に離す | 200msの猶予が切れる前に終点を通過しても、離した時のBADを1回確定 |
+| DX 9Kで1000／1500msの通常ノーツを850／1150msに押す | 2回目は先行ノーツのBADと次の空POOR。通算BP 3 |
+| DX 7Kの対戦相手がNO_GOODで80ms遅れ | 毎フレームの再計算後もBAD |
+| 両方向の皿を押した後、片方だけ離して地雷を通過 | 本人・相手とも被弾。両方離した後の地雷は回避 |
+| beatoraja 5K／10KのBSSでランク100%、倍率100／50／100% | 終端のPGREAT・GREAT・GOOD幅は各130ms。145ms前の切り返しはBAD |
+| LR2oraja PracticeでPMS／NORMALを選択 | 初期30、上限120。カテゴリ未指定時はLR2 |
+| beatoraja 7KのGOOD幅がFAST 165ms・SLOW 210ms | JUDGE AREAの接近側の端は165ms |
+| LR2oraja BMSON 100%、1000採点ノーツ | PRELOAD・Play・ResultのTOTALはすべて352 |
+
+Windowsで修正後のworkspace check、全ターゲットClippy、全体テスト（5873件成功、144件ignore）を確認した。
+同梱7K譜面を判定倍率100／100／200%、JUDGE AREA有効で184フレーム書き出し、判定帯の表示を確認した。
+境界の数値は判定エンジンと描画スナップショットの回帰テストで確認した。物理コントローラーでの実プレイは未実施。

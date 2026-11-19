@@ -1280,11 +1280,7 @@ pub fn build_practice_prepared_from_preloaded(
     let (practice_gauge, gauge_auto_shift, bottom_shiftable_gauge) =
         practice_gauge_runtime_options(profile, property.gauge, &options);
     options.gauge_override = Some(practice_gauge);
-    options.gauge_property = if profile.play.rule_mode == bmz_gameplay::rule::RuleMode::Lr2Oraja {
-        None
-    } else {
-        property.gauge_category
-    };
+    options.gauge_property = property.gauge_category;
     options.gauge_auto_shift = gauge_auto_shift;
     options.bottom_shiftable_gauge = bottom_shiftable_gauge;
     options.arrange = property.arrange;

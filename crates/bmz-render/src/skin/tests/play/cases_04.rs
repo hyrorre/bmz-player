@@ -375,10 +375,10 @@ fn timing_judge_areas_follow_beatoraja_mode_windows() {
         ..SkinDrawState::default()
     });
 
-    assert_eq!(areas[0], TimingJudgeArea { late_ms: -20.0, early_ms: 20.0 });
-    assert_eq!(areas[1], TimingJudgeArea { late_ms: -60.0, early_ms: 60.0 });
-    assert_eq!(areas[2], TimingJudgeArea { late_ms: -150.0, early_ms: 150.0 });
-    assert_eq!(areas[3], TimingJudgeArea { late_ms: -220.0, early_ms: 280.0 });
+    assert_eq!(areas[0], TimingJudgeArea { late_ms: -15.0, early_ms: 15.0 });
+    assert_eq!(areas[1], TimingJudgeArea { late_ms: -45.0, early_ms: 45.0 });
+    assert_eq!(areas[2], TimingJudgeArea { late_ms: -112.5, early_ms: 112.5 });
+    assert_eq!(areas[3], TimingJudgeArea { late_ms: -165.0, early_ms: 210.0 });
     assert_eq!(areas[4], TimingJudgeArea { late_ms: -500.0, early_ms: 150.0 });
 }
 

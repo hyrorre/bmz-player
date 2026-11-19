@@ -6,7 +6,7 @@ pub fn sync_judge_windows(session: &mut GameSession, now: TimeUs) {
         session.primary_key_mode,
         session.rule_mode,
     );
-    let windows = judge_windows_for_rule_mode_and_keymode(
+    let windows = session.judge.window_rates.for_rank(
         session.base_judge_windows,
         percent,
         session.rule_mode,
@@ -17,9 +17,7 @@ pub fn sync_judge_windows(session: &mut GameSession, now: TimeUs) {
     } else {
         session.audio_clock.playback_rate_percent()
     };
-    let windows =
-        scale_judge_windows_for_playback_rate(session.judge.window_rates.apply(windows), rate);
-    session.judge.set_window_set(windows);
+    session.judge.set_window_set(scale_judge_windows_for_playback_rate(windows, rate));
 }
 
 use super::judgement::{
@@ -581,7 +579,7 @@ fn score_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
         opponent.key_mode,
         opponent.rule_mode,
     );
-    let windows = judge_windows_for_rule_mode_and_keymode(
+    let windows = opponent.judge.window_rates.for_rank(
         opponent.base_judge_windows,
         percent,
         opponent.rule_mode,
@@ -626,8 +624,14 @@ fn score_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
             } else {
                 opponent_reflected_time(opponent, input.time).unwrap_or(input.time)
             };
-            opponent.lane_keyon_started_at[input.lane.index()] =
-                (input.kind == InputKind::Press).then_some(input.time);
+            let lane = input.lane.index();
+            let held = &mut opponent.lane_key_hold[lane];
+            held.update(input.kind, input.scratch_direction);
+            if input.kind == InputKind::Press {
+                opponent.lane_keyon_started_at[lane] = Some(input.time);
+            } else if !held.is_held() {
+                opponent.lane_keyon_started_at[lane] = None;
+            }
             outcomes.push(opponent.judge.process_input_at(&opponent.chart, input, judge_time));
         }
         if has_mines {

@@ -485,7 +485,12 @@ fn build_practice_session_preserves_preloaded_hsfix_and_rule_mode() {
     let prepared = build_practice_prepared_from_preloaded(
         preloaded_play_session(bpm_chart),
         &profile,
-        &PracticeProperty::default(),
+        &PracticeProperty {
+            gauge_category: Some(GaugeProperty::Pms),
+            gauge: PracticeGaugeType::Normal,
+            start_gauge: 30,
+            ..Default::default()
+        },
         options,
         Box::new(NullInputBackend),
     );
@@ -494,6 +499,8 @@ fn build_practice_session_preserves_preloaded_hsfix_and_rule_mode() {
     assert_eq!(prepared.session.hsfix_base_bpm, 240.0);
     assert_eq!(prepared.session.hispeed_mode, HispeedMode::Floating);
     assert_eq!(prepared.session.rule_mode, RuleMode::Lr2Oraja);
+    assert_eq!(prepared.session.gauge.current().value, 30.0);
+    assert_eq!(prepared.session.gauge.current().definition.max, 120.0);
     assert_eq!(prepared.skin_attempt.hsfix_index, Some(2));
 }
 
@@ -1621,6 +1628,7 @@ fn preload_reports_prepared_chart_before_audio_progress() {
         &mut snapshot,
         &reported_chart.chart,
         &reported_chart.render_snapshot_cache,
+        reported_chart.score_key.rule_mode,
         false,
     );
     assert_eq!(snapshot.total_notes, 1);

@@ -129,6 +129,7 @@ fn viewer_seek_prefills_independent_battle_opponent() {
         gauge_max_started_at: None,
         full_combo_started_at: None,
         lane_keyon_started_at: Default::default(),
+        lane_key_hold: Default::default(),
         lane_hcn_timer: Default::default(),
         last_hcn_gauge_at: None,
     });
@@ -751,7 +752,7 @@ fn update_lane_key_states_tracks_scratch_direction_until_release() {
 
     update_lane_key_states(&mut session, &press);
 
-    assert_eq!(session.lane_scratch_direction[Lane::Scratch.index()], Some(ScratchDirection::Up));
+    assert_eq!(session.lane_key_hold[Lane::Scratch.index()].direction, Some(ScratchDirection::Up));
 
     let release = [InputEvent {
         lane: Lane::Scratch,
@@ -763,7 +764,7 @@ fn update_lane_key_states_tracks_scratch_direction_until_release() {
     }];
     update_lane_key_states(&mut session, &release);
 
-    assert_eq!(session.lane_scratch_direction[Lane::Scratch.index()], None);
+    assert_eq!(session.lane_key_hold[Lane::Scratch.index()].direction, None);
 }
 
 #[test]

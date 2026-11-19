@@ -47,8 +47,18 @@ fn maps_bms_rank_levels_to_percent() {
 }
 
 #[test]
-fn none_rank_uses_easy_default() {
-    assert_eq!(judge_rank_to_percent_optional(None), 100);
+fn omitted_bms_rank_uses_the_normal_default_for_the_key_mode() {
+    assert_eq!(judge_rank_to_percent_optional(None), 75);
+    for (key_mode, rank) in [(KeyMode::K7, 75), (KeyMode::K9, 70)] {
+        assert_eq!(
+            judge_rank_spec_to_percent_optional_for_keymode_and_rule_mode(
+                None,
+                key_mode,
+                RuleMode::Beatoraja
+            ),
+            rank
+        );
+    }
 }
 
 #[test]

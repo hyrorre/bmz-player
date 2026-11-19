@@ -179,15 +179,11 @@ pub(super) fn beatoraja_judge_rank_percent_for_mode(
     key_mode: KeyMode,
     judge_rank: Option<i32>,
 ) -> i32 {
-    let Some(rank) = judge_rank else {
-        return 100;
-    };
+    let rank = judge_rank.unwrap_or(2);
     if rank >= 10 {
         return rank;
     }
-    let table =
-        if key_mode == KeyMode::K9 { [33, 50, 70, 100, 133] } else { [25, 50, 75, 100, 125] };
-    table.get(rank as usize).copied().unwrap_or(table[2])
+    bmz_gameplay::judge::window::beatoraja_judge_rank_to_percent_for_keymode(rank, key_mode)
 }
 
 pub(super) fn timing_distribution_x(rect: Rect, center: usize, value_ms: f32) -> f32 {

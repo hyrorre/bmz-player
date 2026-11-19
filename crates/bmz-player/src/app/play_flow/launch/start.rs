@@ -327,6 +327,7 @@ impl WinitApp {
                 &mut snapshot,
                 &prepared.chart,
                 &prepared.render_snapshot_cache,
+                prepared.score_key.rule_mode,
                 battle_presentation,
             );
             snapshot.skin_attempt.merge_known(prepared.skin_attempt);
@@ -372,6 +373,7 @@ impl WinitApp {
                 &mut snapshot,
                 &prepared.chart,
                 &prepared.render_snapshot_cache,
+                prepared.score_key.rule_mode,
                 battle_presentation,
             );
             snapshot.skin_attempt.merge_known(prepared.skin_attempt);

@@ -239,7 +239,9 @@ pub(super) fn lr2oraja_multi_bad_candidates(
 
     candidates.sort_by_key(|candidate| -candidate.delta.0);
 
-    if selected_candidate.judge != Judge::Bad || selected_note.kind == NoteKind::LongStart {
+    let selected_in_bad = in_bad_range(selected_candidate.delta.0, windows)
+        && !in_good_range(selected_candidate.delta.0, windows);
+    if !selected_in_bad || selected_note.kind == NoteKind::LongStart {
         candidates.retain(|candidate| -candidate.delta.0 < selected_dmtime);
     }
 
@@ -449,18 +451,20 @@ pub(super) fn empty_poor(
     delta: TimeUs,
     time: TimeUs,
     keysound_note_id: NoteId,
+    mut events: Vec<JudgementEvent>,
 ) -> JudgeOutcome {
+    events.push(JudgementEvent {
+        note_id: None,
+        lane,
+        judge: Judge::EmptyPoor,
+        side,
+        delta,
+        time,
+        affects_score: true,
+        advances_score: false,
+    });
     JudgeOutcome {
-        events: vec![JudgementEvent {
-            note_id: None,
-            lane,
-            judge: Judge::EmptyPoor,
-            side,
-            delta,
-            time,
-            affects_score: true,
-            advances_score: false,
-        }],
+        events,
         keysounds: vec![KeySoundEvent {
             note_id: keysound_note_id,
             time,

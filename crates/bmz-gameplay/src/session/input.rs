@@ -84,31 +84,61 @@ pub fn update_recent_inputs(session: &mut GameSession, inputs: &[InputEvent], no
     session.recent_inputs.retain(|input| now.0 <= input.time.0 + INPUT_DISPLAY_US);
 }
 
+/// A directionless key and the two scratch directions can be held independently.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LaneKeyHold {
+    held: [bool; 3],
+    pub direction: Option<ScratchDirection>,
+}
+
+impl LaneKeyHold {
+    pub fn update(&mut self, kind: InputKind, direction: Option<ScratchDirection>) {
+        use ScratchDirection::{Down, Up};
+        let index = match direction {
+            None => 0,
+            Some(Up) => 1,
+            Some(Down) => 2,
+        };
+        self.held[index] = kind == InputKind::Press;
+        self.direction = if kind == InputKind::Press {
+            direction
+        } else if self.held[1] {
+            Some(Up)
+        } else if self.held[2] {
+            Some(Down)
+        } else {
+            None
+        };
+    }
+
+    pub fn is_held(self) -> bool {
+        self.held.contains(&true)
+    }
+}
+
 /// レーンごとのキー押下/解放状態を更新する。beatoraja の KEYON/KEYOFF タイマー相当。
 /// Press → keyon を新しい時刻にセット、keyoff をクリア(autoplay 入力なら 80ms 後の自動 release も予約)。
 /// Release → 押下中だった場合のみ keyoff をセット、keyon と auto_release_at をクリア。
 pub fn update_lane_key_states(session: &mut GameSession, inputs: &[InputEvent]) {
     for input in inputs {
         let lane_index = input.lane.index();
+        let held = &mut session.lane_key_hold[lane_index];
+        held.update(input.kind, input.scratch_direction);
         match input.kind {
             InputKind::Press => {
                 session.lane_keyon_started_at[lane_index] = Some(input.time);
                 session.lane_keyoff_started_at[lane_index] = None;
-                session.lane_scratch_direction[lane_index] = input.scratch_direction;
                 session.lane_auto_release_at[lane_index] = match input.source {
                     InputSource::Auto => Some(TimeUs(input.time.0 + AUTO_KEYBEAM_DURATION_US)),
                     _ => None,
                 };
             }
             InputKind::Release => {
-                if session.lane_keyon_started_at[lane_index].is_some() {
-                    session.lane_keyoff_started_at[lane_index] = Some(input.time);
-                    session.lane_keyon_started_at[lane_index] = None;
+                if held.is_held() {
+                    continue;
                 }
-                if input.scratch_direction.is_none()
-                    || session.lane_scratch_direction[lane_index] == input.scratch_direction
-                {
-                    session.lane_scratch_direction[lane_index] = None;
+                if session.lane_keyon_started_at[lane_index].take().is_some() {
+                    session.lane_keyoff_started_at[lane_index] = Some(input.time);
                 }
                 session.lane_auto_release_at[lane_index] = None;
             }
@@ -133,12 +163,12 @@ pub fn apply_auto_key_release(session: &mut GameSession, audio_now: TimeUs) {
                     time: release_at,
                     source: InputSource::Auto,
                     device_kind: Default::default(),
-                    scratch_direction: session.lane_scratch_direction[lane_index],
+                    scratch_direction: session.lane_key_hold[lane_index].direction,
                 }),
             );
             session.lane_keyoff_started_at[lane_index] = Some(release_at);
             session.lane_keyon_started_at[lane_index] = None;
-            session.lane_scratch_direction[lane_index] = None;
+            session.lane_key_hold[lane_index] = Default::default();
             session.lane_auto_release_at[lane_index] = None;
         }
     }
@@ -359,7 +389,7 @@ pub fn update_scratch_angle_phase(session: &mut GameSession, render_now: TimeUs)
             continue;
         }
         let sign =
-            match session.lane_scratch_direction[lane_index].unwrap_or(ScratchDirection::Down) {
+            match session.lane_key_hold[lane_index].direction.unwrap_or(ScratchDirection::Down) {
                 ScratchDirection::Up => 1,
                 ScratchDirection::Down => -1,
             };

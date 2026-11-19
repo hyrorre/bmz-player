@@ -342,6 +342,7 @@ fn assert_pending_matches_session(
             &mut snapshot,
             &chart,
             &cache,
+            profile.play.rule_mode,
             false,
         );
     }
@@ -389,6 +390,7 @@ fn assert_pending_matches_session(
                 &mut snapshot,
                 &chart,
                 &cache,
+                profile.play.rule_mode,
                 false,
             );
             pending.rebase_lane_to_prepared_chart(

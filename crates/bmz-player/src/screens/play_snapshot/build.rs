@@ -13,6 +13,7 @@ pub fn apply_prepared_chart_to_render_snapshot(
     snapshot: &mut RenderSnapshot,
     chart: &PlayableChart,
     cache: &PlayRenderSnapshotCache,
+    rule_mode: bmz_gameplay::rule::RuleMode,
     battle: bool,
 ) {
     let total_notes = if battle {
@@ -36,7 +37,8 @@ pub fn apply_prepared_chart_to_render_snapshot(
     snapshot.judge_rank = chart.metadata.judge_rank;
     snapshot.play_level.clone_from(&chart.metadata.play_level);
     snapshot.total_notes = total_notes;
-    snapshot.chart_total_gauge = gauge_total_for_chart(chart.metadata.total, total_notes) as f32;
+    snapshot.chart_total_gauge =
+        bmz_gameplay::gauge::gauge_total_for_play(&chart.metadata, total_notes, rule_mode) as f32;
     snapshot.now_bpm = chart.metadata.initial_bpm as f32;
     snapshot.main_bpm = chart.metadata.initial_bpm as f32;
     snapshot.min_bpm = cache.min_bpm;

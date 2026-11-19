@@ -143,6 +143,43 @@ fn engine(rule: RuleMode, mode: KeyMode, rank: i32, algorithm: JudgeAlgorithm) -
 }
 
 #[test]
+fn omitted_rank_on_imported_bms_and_bmson_uses_each_formats_default() {
+    use bmz_chart::import::{AssetLookup, BmsRandomSource, import_chart_bytes_with_assets};
+    let bms = "#TITLE Rank\n#BPM 120\n#WAV01 note.wav\n#00111:01\n#00219:01\n";
+    let bmson = r#"{
+        "version":"1.0.0","info":{"title":"Rank","artist":"Test","genre":"Test","level":1,
+        "init_bpm":120,"resolution":240,"mode_hint":"beat-7k"},
+        "sound_channels":[{"name":"note.wav","notes":[{"x":1,"y":960,"l":0,"c":false}]}]}"#;
+    for (path, source, expected) in
+        [("rank.bms", bms, Judge::Great), ("rank.bmson", bmson, Judge::PGreat)]
+    {
+        let chart = import_chart_bytes_with_assets(
+            std::path::Path::new(path),
+            source.as_bytes(),
+            BmsRandomSource::Seed(None),
+            AssetLookup::Declared,
+        )
+        .unwrap()
+        .chart;
+        let rule = RuleMode::Beatoraja;
+        let rank = judge_percent_at_time_for_keymode(
+            chart.metadata.judge_rank_spec,
+            &chart.judge_rank_events,
+            TimeUs(0),
+            chart.metadata.key_mode,
+            rule,
+        );
+        let mut judge = engine(rule, chart.metadata.key_mode, rank, JudgeAlgorithm::Combo);
+        let at = chart.notes_for_lane(Lane::Key1)[0].time;
+        assert_eq!(
+            judge.process_input(&chart, press_at(TimeUs(at.0 + 18_000))).events[0].judge,
+            expected,
+            "{path}"
+        );
+    }
+}
+
+#[test]
 fn asymmetric_custom_good_window_controls_actual_press_judgements() {
     let rule = RuleMode::Beatoraja;
     let chart = chart_with_tap(TimeUs(1_000_000));
@@ -183,7 +220,7 @@ fn bms_rank_source_controls_out_of_range_fallback() {
     use bmz_chart::import::{BmsRandomSource, import_chart_bytes_with_random_source};
     use std::path::Path;
     for (header, expected) in [
-        ("", [100, 75, 100]),
+        ("", [75, 75, 100]),
         ("#RANK 0", [25, 25, 100]),
         ("#RANK 4", [125, 75, 100]),
         ("#RANK 100", [75, 75, 100]),
@@ -422,4 +459,49 @@ fn dx_pop_multi_bad_scores_an_attempted_note_again() {
     assert_eq!(first_again.len(), 1);
     assert_eq!(first_again[0].judge, Judge::Bad);
     assert!(first_again[0].affects_score && !first_again[0].advances_score);
+}
+
+#[test]
+fn beatoraja_pop_ln_settles_pending_bad_when_tail_passes_before_release_deadline() {
+    let chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+    let mut judge = engine(RuleMode::Beatoraja, KeyMode::K9, 70, JudgeAlgorithm::Combo);
+    judge.process_input(&chart, press_at(TimeUs(1_000_000)));
+    assert!(judge.process_input(&chart, release_at(TimeUs(1_830_000))).events.is_empty());
+    assert!(judge.process_misses(&chart, TimeUs(2_000_000)).events.is_empty());
+    let events = judge.process_misses(&chart, TimeUs(2_000_001)).events;
+    assert_eq!(events.len(), 1);
+    assert_eq!((events[0].judge, events[0].delta), (Judge::Bad, TimeUs(-170_000)));
+    assert!(judge.process_misses(&chart, TimeUs(2_030_000)).events.is_empty());
+}
+
+#[test]
+fn dx_pop_empty_poor_also_scores_the_preceding_non_vanishing_bad() {
+    let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_500_000));
+    let mut judge = engine(RuleMode::Dx, KeyMode::K9, 100, JudgeAlgorithm::Combo);
+    let first = judge.process_input(&chart, press_at(TimeUs(850_000)));
+    assert_eq!(first.events[0].judge, Judge::Bad);
+    judge.process_input(&chart, release_at(TimeUs(900_000)));
+    let second = judge.process_input(&chart, press_at(TimeUs(1_150_000)));
+    assert_eq!(
+        second.events.iter().map(|e| (e.note_id, e.judge)).collect::<Vec<_>>(),
+        [(Some(NoteId(1)), Judge::Bad), (None, Judge::EmptyPoor)]
+    );
+}
+
+#[test]
+fn five_key_bss_applies_custom_rates_before_nesting_the_end_windows() {
+    for mode in [KeyMode::K5, KeyMode::K10] {
+        let rule = RuleMode::Beatoraja;
+        let base = judge_windows_for_keymode_and_rule_mode(mode, rule);
+        let rates = JudgeWindowRates {
+            keys: [100, 50, 100],
+            scratch: [100, 50, 100],
+            ..Default::default()
+        };
+        let end = rates.for_rank(base, 100, rule, mode).long_scratch_end;
+        for fast in [true, false] {
+            assert_eq!(end.bands(fast), [130_000; 3]);
+        }
+        assert_eq!(classify_normal_delta(-145_000, end), Some(Judge::Bad));
+    }
 }

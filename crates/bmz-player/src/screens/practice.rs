@@ -174,11 +174,8 @@ impl PracticeRuleContext {
     }
 
     pub fn gauge_bounds(self, property: &PracticeProperty) -> PracticeGaugeBounds {
-        let category = if self.rule_mode == RuleMode::Lr2Oraja {
-            GaugeProperty::Lr2
-        } else {
-            property.gauge_category.unwrap_or_else(|| GaugeProperty::from_keymode(self.key_mode))
-        };
+        let category =
+            GaugeProperty::for_rule_mode(self.key_mode, self.rule_mode, property.gauge_category);
         let definition = bmz_gameplay::gauge::gauge_definitions_for_rule_mode_and_keymode(
             category,
             self.rule_mode,
@@ -281,7 +278,9 @@ pub fn load_practice_property(
     } else {
         migrate_legacy_practice_property(&mut property, chart, rules.rule_mode);
     }
-    property.gauge_category.get_or_insert_with(|| GaugeProperty::from_keymode(rules.key_mode));
+    property
+        .gauge_category
+        .get_or_insert_with(|| GaugeProperty::for_rule_mode(rules.key_mode, rules.rule_mode, None));
     if !loaded_from_file && rules.is_dx() {
         property.start_gauge = rules.gauge_bounds(&property).initial;
     }
@@ -949,6 +948,9 @@ mod tests {
             )
             .unwrap();
             assert_eq!(property.start_gauge, expected, "{rule_mode:?} {key_mode:?} {gauge:?}");
+            if rule_mode == RuleMode::Lr2Oraja {
+                assert_eq!(property.gauge_category, Some(GaugeProperty::Lr2));
+            }
         }
     }
 
@@ -966,7 +968,7 @@ mod tests {
             (RuleMode::Dx, KeyMode::K9, PracticeGaugeType::ExClass, 117, 100),
             (RuleMode::Dx, KeyMode::K9, PracticeGaugeType::ExHardClass, 117, 100),
             (RuleMode::Beatoraja, KeyMode::K9, PracticeGaugeType::Normal, 117, 117),
-            (RuleMode::Lr2Oraja, KeyMode::K9, PracticeGaugeType::Normal, 117, 100),
+            (RuleMode::Lr2Oraja, KeyMode::K9, PracticeGaugeType::Normal, 117, 117),
         ] {
             let saved = PracticeProperty {
                 gauge,

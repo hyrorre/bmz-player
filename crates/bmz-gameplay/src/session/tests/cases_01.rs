@@ -96,6 +96,7 @@ fn independent_battle_opponent_replay_advances_without_taking_primary_lanes() {
         gauge_max_started_at: None,
         full_combo_started_at: None,
         lane_keyon_started_at: Default::default(),
+        lane_key_hold: Default::default(),
         lane_hcn_timer: Default::default(),
         last_hcn_gauge_at: None,
     });
@@ -167,6 +168,7 @@ fn independent_battle_opponent_without_replay_uses_autoplay() {
         gauge_max_started_at: None,
         full_combo_started_at: None,
         lane_keyon_started_at: Default::default(),
+        lane_key_hold: Default::default(),
         lane_hcn_timer: Default::default(),
         last_hcn_gauge_at: None,
     });
@@ -234,6 +236,7 @@ fn independent_battle_opponent_applies_hcn_hold_and_release_ticks() {
             gauge_max_started_at: None,
             full_combo_started_at: None,
             lane_keyon_started_at: Default::default(),
+            lane_key_hold: Default::default(),
             lane_hcn_timer: Default::default(),
             last_hcn_gauge_at: None,
         });

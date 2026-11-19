@@ -388,6 +388,71 @@ fn mine_passage_uses_timestamped_edges_in_live_play_and_replay() {
 }
 
 #[test]
+fn mines_see_the_remaining_scratch_direction_in_own_and_opponent_replays() {
+    let mut chart = tap_chart(TimeUs(3_000_000));
+    let tap = chart.lane_notes[Lane::Key1.index()][0].clone();
+    for (id, time) in [(2, 1_000_000), (3, 1_100_000)] {
+        chart.lane_notes[Lane::Scratch.index()].push(NoteEvent {
+            id: NoteId(id),
+            lane: Lane::Scratch,
+            kind: NoteKind::Mine,
+            time: TimeUs(time),
+            damage: Some(8.0),
+            ..tap.clone()
+        });
+    }
+    for released in [ScratchDirection::Up, ScratchDirection::Down] {
+        let other = if released == ScratchDirection::Up {
+            ScratchDirection::Down
+        } else {
+            ScratchDirection::Up
+        };
+        let mut recorder = ReplayRecorder::default();
+        for (kind, direction, time) in [
+            (InputKind::Press, ScratchDirection::Up, 900_000),
+            (InputKind::Press, ScratchDirection::Down, 940_000),
+            (InputKind::Release, released, 970_000),
+            (InputKind::Release, other, 1_050_000),
+        ] {
+            recorder.record(InputEvent {
+                lane: Lane::Scratch,
+                kind,
+                scratch_direction: Some(direction),
+                ..human_press(TimeUs(time))
+            });
+        }
+        for opponent in [false, true] {
+            let (mut session, _) = dx_human_session(chart.clone(), 0);
+            let replay = ReplayPlayer::new(recorder.events.clone());
+            if opponent {
+                let (rival, _) = dx_human_session(chart.clone(), 0);
+                session.opponent.independent = Some(independent_replay(rival, replay));
+            } else {
+                session.replay_player = Some(replay);
+            }
+            let initial = session.gauge.current().value;
+            advance_at(&mut session, &mut TestAudio::default(), 1_200_000);
+            let gauge = session.opponent.independent.as_ref().map_or(&session.gauge, |r| &r.gauge);
+            assert_eq!(gauge.current().value, initial - 8.0);
+        }
+    }
+}
+
+#[test]
+fn opponent_keeps_no_good_after_recalculating_replay_windows() {
+    let chart = tap_chart(TimeUs(1_000_000));
+    let (mut session, _) = dx_human_session(chart.clone(), 0);
+    let (mut rival, _) = dx_human_session(chart, 0);
+    rival.judge.window_rates.keys = [100, 100, 0];
+    let mut recorder = ReplayRecorder::default();
+    recorder.record(human_press(TimeUs(1_080_000)));
+    session.opponent.independent =
+        Some(independent_replay(rival, ReplayPlayer::new(recorder.events)));
+    advance_at(&mut session, &mut TestAudio::default(), 1_080_000);
+    assert_eq!(session.opponent.independent.unwrap().score.judges.slow_bad, 1);
+}
+
+#[test]
 fn mine_and_tap_at_the_same_time_apply_damage_before_recovery() {
     let time = TimeUs(1_000_000);
     let mut chart = tap_chart(time);
@@ -793,6 +858,7 @@ fn independent_replay(rival: GameSession, replay: ReplayPlayer) -> BattleOpponen
         gauge_max_started_at: None,
         full_combo_started_at: None,
         lane_keyon_started_at: Default::default(),
+        lane_key_hold: Default::default(),
         lane_hcn_timer: Default::default(),
         last_hcn_gauge_at: None,
     }

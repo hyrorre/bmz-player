@@ -62,6 +62,11 @@ fn replay_session(mode: LongNoteMode, opponent: bool) -> GameSession {
     let mut chart = chart_with_hcn_long_note();
     chart.long_notes[0].mode = Some(mode);
     chart.metadata.long_note_mode = mode;
+    // The replay below exercises the fixture's unscaled 16 ms and 120 ms boundaries.
+    chart.metadata.judge_rank_spec = Some(bmz_chart::model::JudgeRankSpec {
+        value: 3,
+        kind: bmz_chart::model::JudgeRankKind::BmsRank,
+    });
     for (id, time) in [(3, 1_500_000), (4, 2_000_000), (5, 2_500_000), (6, 3_000_000)] {
         let mut note = chart.lane_notes[Lane::Key1.index()][0].clone();
         note.id = NoteId(id);
@@ -118,6 +123,7 @@ fn replay_session(mode: LongNoteMode, opponent: bool) -> GameSession {
             gauge_max_started_at: None,
             full_combo_started_at: None,
             lane_keyon_started_at: Default::default(),
+            lane_key_hold: Default::default(),
             lane_hcn_timer: Default::default(),
             last_hcn_gauge_at: None,
         });
@@ -238,7 +244,7 @@ fn practice_human_input_keeps_speed_scaled_judge_windows() {
         session.autoplay = None;
         session.audio_clock.set_playback_rate_percent(rate);
         sync_judge_windows(&mut session, TimeUs(0));
-        let events = process_session_input(&mut session, human_press(TimeUs(15_000)));
+        let events = process_session_input(&mut session, human_press(TimeUs(12_000)));
         assert_eq!(events[0].judge, expected, "rate={rate}");
     }
 }

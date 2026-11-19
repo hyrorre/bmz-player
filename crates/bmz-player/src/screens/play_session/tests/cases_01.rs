@@ -220,7 +220,8 @@ fn seven_to_nine_7k_rule_uses_7k_judgement_and_projects_7k_replay() {
     let replay = bmz_core::replay::ReplayEvent {
         lane: Lane::Scratch,
         kind: InputKind::Press,
-        time: TimeUs(1_025_000),
+        // At NORMAL rank, 22 ms is inside 7K scratch PGREAT (22.5 ms) and outside 9K PGREAT (20 ms).
+        time: TimeUs(1_022_000),
         device_kind: bmz_core::input::InputDeviceKind::Keyboard,
         scratch_direction: None,
     };
@@ -239,7 +240,7 @@ fn seven_to_nine_7k_rule_uses_7k_judgement_and_projects_7k_replay() {
     assert_eq!(session.play_config_key_mode, KeyMode::K9);
     assert_eq!(session.primary_key_mode, KeyMode::K7);
     assert!(session.replay_lane_projection.is_some());
-    let judgements = bmz_gameplay::session::process_replay_inputs(&mut session, TimeUs(1_025_000));
+    let judgements = bmz_gameplay::session::process_replay_inputs(&mut session, TimeUs(1_022_000));
     assert_eq!(judgements.len(), 1);
     assert_eq!(judgements[0].lane, Lane::Key9);
     assert_eq!(judgements[0].judge, bmz_core::judge::Judge::PGreat);

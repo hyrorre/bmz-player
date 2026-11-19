@@ -28,9 +28,9 @@ fn beatoraja_rank_to_percent_for_table(rank: i32, table: [i32; 5]) -> i32 {
     }
 }
 
-/// `#RANK` 未指定時は beatoraja 既定の EASY (100%) を使う。
+/// BMSModel defaults an omitted BMS #RANK to NORMAL (2).
 pub fn judge_rank_to_percent_optional(rank: Option<i32>) -> i32 {
-    rank.map(judge_rank_to_percent).unwrap_or(100)
+    judge_rank_to_percent(rank.unwrap_or(2))
 }
 
 pub fn judge_rank_to_percent_for_rule_mode(rank: i32, rule_mode: RuleMode) -> i32 {
@@ -67,7 +67,7 @@ pub fn judge_rank_spec_to_percent_optional_for_keymode_and_rule_mode(
 
 fn beatoraja_judge_rank_spec_to_percent(spec: Option<JudgeRankSpec>, key_mode: KeyMode) -> i32 {
     match spec {
-        None => 100,
+        None => beatoraja_judge_rank_to_percent_for_keymode(2, key_mode),
         Some(JudgeRankSpec { value, kind: JudgeRankKind::BmsRank }) => {
             beatoraja_judge_rank_to_percent_for_keymode(value, key_mode)
         }
@@ -216,44 +216,32 @@ pub fn judge_windows_for_rule_mode_and_keymode(
     rule_mode: RuleMode,
     key_mode: KeyMode,
 ) -> JudgeWindows {
-    match rule_mode {
-        RuleMode::Beatoraja => JudgeWindows {
-            note: beatoraja_judge_window_for_rank_and_keymode(base.note, percent, key_mode),
-            scratch: beatoraja_judge_window_for_rank_and_keymode(base.scratch, percent, key_mode),
-            long_note_end: beatoraja_judge_window_for_rank_and_keymode(
-                base.long_note_end,
-                percent,
-                key_mode,
-            ),
-            long_scratch_end: beatoraja_judge_window_for_rank_and_keymode(
-                base.long_scratch_end,
-                percent,
-                key_mode,
-            ),
-            long_note_end_fast: base.long_note_end_fast.map(|window| {
-                beatoraja_judge_window_for_rank_and_keymode(window, percent, key_mode)
-            }),
-            long_scratch_end_fast: base.long_scratch_end_fast.map(|window| {
-                beatoraja_judge_window_for_rank_and_keymode(window, percent, key_mode)
-            }),
-            long_note_release_margin_us: base.long_note_release_margin_us,
-            long_scratch_release_margin_us: base.long_scratch_release_margin_us,
-        },
-        RuleMode::Lr2Oraja => JudgeWindows {
-            note: lr2oraja_judge_window_for_rank(base.note, percent),
-            scratch: lr2oraja_judge_window_for_rank(base.scratch, percent),
-            long_note_end: lr2oraja_judge_window_for_rank(base.long_note_end, percent),
-            long_scratch_end: lr2oraja_judge_window_for_rank(base.long_scratch_end, percent),
-            long_note_end_fast: base
-                .long_note_end_fast
-                .map(|window| lr2oraja_judge_window_for_rank(window, percent)),
-            long_scratch_end_fast: base
-                .long_scratch_end_fast
-                .map(|window| lr2oraja_judge_window_for_rank(window, percent)),
-            long_note_release_margin_us: base.long_note_release_margin_us,
-            long_scratch_release_margin_us: base.long_scratch_release_margin_us,
-        },
-        RuleMode::Dx => base,
+    JudgeWindowRates::default().for_rank(base, percent, rule_mode, key_mode)
+}
+
+impl JudgeWindowRates {
+    pub fn for_rank(
+        self,
+        base: JudgeWindows,
+        percent: i32,
+        rule_mode: RuleMode,
+        key_mode: KeyMode,
+    ) -> JudgeWindows {
+        let ranked = |window| match rule_mode {
+            RuleMode::Beatoraja => beatoraja_ranked_window(window, percent, key_mode),
+            RuleMode::Lr2Oraja => lr2oraja_judge_window_for_rank(window, percent),
+            RuleMode::Dx => window,
+        };
+        // The 5K BSS table has a raw GOOD narrower than GREAT. Nest the bands only after both rates.
+        self.apply(JudgeWindows {
+            note: ranked(base.note),
+            scratch: ranked(base.scratch),
+            long_note_end: ranked(base.long_note_end),
+            long_scratch_end: ranked(base.long_scratch_end),
+            long_note_end_fast: base.long_note_end_fast.map(ranked),
+            long_scratch_end_fast: base.long_scratch_end_fast.map(ranked),
+            ..base
+        })
     }
 }
 
@@ -457,6 +445,10 @@ pub fn beatoraja_judge_window_for_rank_and_keymode(
     percent: i32,
     key_mode: KeyMode,
 ) -> JudgeWindow {
+    apply_band_rates(beatoraja_ranked_window(base, percent, key_mode), [100; 3])
+}
+
+fn beatoraja_ranked_window(base: JudgeWindow, percent: i32, key_mode: KeyMode) -> JudgeWindow {
     let fixjudge = beatoraja_fixjudge_for_keymode(key_mode);
     let fast = beatoraja_create_judge_bands(
         {
@@ -506,15 +498,6 @@ fn beatoraja_create_judge_bands(base: [i64; 4], percent: i32, fixjudge: [bool; 5
             && judge[i].abs() > judge[max_index].abs()
         {
             judge[i] = judge[max_index];
-        }
-    }
-
-    for i in 0..3 {
-        if judge[i].abs() > judge[3].abs() {
-            judge[i] = judge[3];
-        }
-        if i > 0 && judge[i].abs() < judge[i - 1].abs() {
-            judge[i] = judge[i - 1];
         }
     }
 

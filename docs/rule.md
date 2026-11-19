@@ -22,8 +22,8 @@ score DB / replay slotでも別条件として扱います。
 | --- | --- | --- | --- |
 | 主な参照 | beatoraja | LR2oraja | LR2oraja Endless Dream DX MODE |
 | 判定property | key mode別`JudgeProperty` | `JudgeProperty.LR2` | 9K（PMS 5K含む）は`JudgeProperty.POP`、それ以外は`IIDX` |
-| ゲージproperty | key mode別`GaugeProperty` | 既定は`GaugeProperty.LR2`、コース明示指定を優先 | 9K（PMS 5K含む）はPOP用、それ以外はIIDX用gauge |
-| `#RANK`未指定 | 100% | 75% (`#RANK 2`相当) | 固定窓のため無視 |
+| ゲージproperty | key mode別`GaugeProperty` | 既定は`GaugeProperty.LR2`、コース・Practiceの明示指定を優先 | 9K（PMS 5K含む）はPOP用、それ以外はIIDX用gauge |
+| `#RANK`未指定 | 75%（PMSは70%） | 75% (`#RANK 2`相当) | 固定窓のため無視 |
 | `#RANK 4` | 125% (`PMS`は133%) | 75% (`#RANK 2`相当) | 固定窓のため無視 |
 | `#EXRANKxx` / chA0 | importはするがruntimeでは無視 | importはするがruntimeでは無視 | 固定窓のため無視 |
 | MultiBad | 無効 | 有効 | 有効 |
@@ -96,7 +96,7 @@ key modeからbeatorajaのplayer ruleに対応する`JudgeProperty`を選びま�
 | 3 | 100 |
 | 4 | 133 |
 
-未指定は100%、範囲外は各ruleの`#RANK 2` (`NORMAL=75%`, `PMS=70%`)に寄せます。
+BMSの未指定・範囲外は各ruleの `#RANK 2`（NORMALは75%、PMSは70%）になります。BMSONの `judge_rank` の既定値は100%です。
 
 `#DEFEXRANK`はbeatoraja `BMSPlayerRule.validate`と同じく、そのruleの`#RANK 2`
 を基準にします。たとえば`#DEFEXRANK 100`は`NORMAL=75%`, `PMS=70%`です。
@@ -258,6 +258,7 @@ LR2oraja / DX modeでは、押下時に選ばれたノーツ周辺のBAD範囲�
 
 Beatoraja modeではMultiBadを出しません。
 9KのDX POPでは、非消費BADの履歴があるノーツにも、上流と同じくMultiBadのBADを再度付けます。
+主判定が空POORでも、先行ノーツが追加BADの条件を満たせば両方を記録します。
 HLNの始点がMultiBadの対象になった場合は、押下が終端時刻以降のときだけBADにします。
 終端前のHLNは未処理のまま残し、後の押下や見逃しで通常どおり判定します。
 LR2oraja / DX modeでは、上流と同じくLNの始点（HLNを含む）にGOOD幅より遅いBADを付けません。
@@ -274,7 +275,8 @@ beatoraja／LR2orajaについては上流と異なる意図的な互換例外で
 
 ## Mine
 
-地雷の時刻にレーンが押されていれば通過時に1回被弾します。
+地雷の時刻にレーンが押されていれば通過時に1回被弾します。スクラッチの上下を重ねて押した場合は、
+片方向を離しても、もう一方を離すまで押下が続きます。
 同時刻の入力は、その時刻の全Press／Releaseを反映した保持状態で通過を判定します。
 譜面のダメージをゲージから直接引き、被弾音を再生します。BP、コンボ、処理済み数は増減しません。
 BSSの同方向Release後に吸収した逆方向Pressは、そのPressと同時刻の地雷を起動しません。

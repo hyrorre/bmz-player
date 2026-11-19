@@ -523,7 +523,7 @@ pub fn build_game_session_with_input_backend(
                 judge: {
                     let mut judge = JudgeEngine::new_with_window_set_algorithm_and_keymode(
                         scale_judge_windows_for_playback_rate(
-                            opponent_rates.apply(judge_windows_for_rule_mode_and_keymode(
+                            opponent_rates.for_rank(
                                 base_judge_windows,
                                 judge_percent_at_time_for_keymode(
                                     chart.metadata.judge_rank_spec,
@@ -534,7 +534,7 @@ pub fn build_game_session_with_input_backend(
                                 ),
                                 rule_mode,
                                 key_mode,
-                            )),
+                            ),
                             judge_rate,
                         ),
                         rule_mode,
@@ -568,6 +568,7 @@ pub fn build_game_session_with_input_backend(
                 gauge_max_started_at: None,
                 full_combo_started_at: None,
                 lane_keyon_started_at: Default::default(),
+                lane_key_hold: Default::default(),
                 lane_hcn_timer: Default::default(),
                 last_hcn_gauge_at: None,
             }
@@ -578,7 +579,7 @@ pub fn build_game_session_with_input_backend(
 
     let mut judge = JudgeEngine::new_with_window_set_algorithm_and_keymode(
         scale_judge_windows_for_playback_rate(
-            window_rates.apply(judge_windows_for_rule_mode_and_keymode(
+            window_rates.for_rank(
                 base_judge_windows,
                 judge_percent_at_time_for_keymode(
                     chart.metadata.judge_rank_spec,
@@ -589,7 +590,7 @@ pub fn build_game_session_with_input_backend(
                 ),
                 rule_mode,
                 primary_key_mode,
-            )),
+            ),
             options.playback_rate_percent,
         ),
         rule_mode,
@@ -642,7 +643,7 @@ pub fn build_game_session_with_input_backend(
         recent_inputs: Vec::new(),
         lane_keyon_started_at: Default::default(),
         lane_keyoff_started_at: Default::default(),
-        lane_scratch_direction: Default::default(),
+        lane_key_hold: Default::default(),
         lane_scratch_angle_delta_ms: Default::default(),
         scratch_angle_last_render_at: None,
         lane_auto_release_at: Default::default(),

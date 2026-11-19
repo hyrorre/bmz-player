@@ -326,13 +326,12 @@ impl JudgeEngine {
             if let Some(active) = lane_state.active_long {
                 let release_margin_us =
                     long_release_margin_us(self.window_set, self.scratch_lane_mask[lane.index()]);
-                // A beatoraja LN released early within its GOOD window waits for the tail.
                 if let Some(pending) = active.pending_release
-                    && if matches!(pending.judge, Judge::Bad | Judge::Poor) {
-                        now.0 >= pending.released_at.0 + release_margin_us
-                    } else {
-                        judge_time.0 > active.end.end_time.0
-                    }
+                    && ((matches!(pending.judge, Judge::Bad | Judge::Poor)
+                        && now.0 >= pending.released_at.0 + release_margin_us)
+                        || (self.rule_mode == RuleMode::Beatoraja
+                            && active.mode == LongNoteMode::Ln
+                            && judge_time > active.end.end_time))
                 {
                     lane_state.active_long = None;
                     let judged_note_id = active_scored_note_id(active);
@@ -556,127 +555,121 @@ impl JudgeEngine {
 
         let note_id = candidate.note_id;
         let side = side_from_delta(candidate.delta.0);
-        if candidate.judge != Judge::EmptyPoor {
-            let Some(note) = self.note_by_id(chart, note_id) else {
-                debug_assert!(false, "candidate note {note_id:?} must exist in chart");
-                return JudgeOutcome::default();
-            };
-            let note_vanishes = candidate.judge != Judge::Bad
-                || self.bad_judge_vanish
-                || hln::is_hln_head(chart, note.id);
-            let mut multi_bad_candidates = if matches!(rule_mode, RuleMode::Lr2Oraja | RuleMode::Dx)
-            {
-                lr2oraja_multi_bad_candidates(
-                    chart,
-                    input.lane,
-                    input.time,
-                    windows,
-                    note,
-                    candidate,
-                    &self.judged_notes,
-                )
-            } else {
-                Vec::new()
-            };
-
-            // ED keeps an untouched HLN until its tail time instead of scoring a MultiBad.
-            multi_bad_candidates.retain(|candidate| {
-                !hln::is_hln_head(chart, candidate.note_id)
-                    || chart.long_notes.iter().any(|pair| {
-                        pair.start_note_id == candidate.note_id && input.time >= pair.end_time
+        // A regrab can restore the HCN body after its tail has already failed.
+        if candidate.judge == Judge::EmptyPoor
+            && self.hcn_pairs_at(chart, input.time).any(|pair| {
+                pair.lane == input.lane
+                    && pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hcn
+                    && pair.start_time <= input.time
+                    && input.time < pair.end_time
+                    && !chart.is_dummy_long(pair)
+            })
+        {
+            return JudgeOutcome { consumed_input: true, ..Default::default() };
+        }
+        let Some(note) = self.note_by_id(chart, note_id) else {
+            debug_assert!(false, "candidate note {note_id:?} must exist in chart");
+            return JudgeOutcome::default();
+        };
+        let mut events = Vec::new();
+        if matches!(rule_mode, RuleMode::Lr2Oraja | RuleMode::Dx) {
+            for extra in lr2oraja_multi_bad_candidates(
+                chart,
+                input.lane,
+                input.time,
+                windows,
+                note,
+                candidate,
+                &self.judged_notes,
+            ) {
+                let hln = hln::is_hln_head(chart, extra.note_id);
+                if hln
+                    && !chart.long_notes.iter().any(|pair| {
+                        pair.start_note_id == extra.note_id && input.time >= pair.end_time
                     })
-            });
-            let lane_state = &mut self.lanes[input.lane.index()];
-            lane_state.last_press_time = Some(note.time);
-            for multi_bad in &multi_bad_candidates {
-                if self.bad_judge_vanish || hln::is_hln_head(chart, multi_bad.note_id) {
-                    self.judged_notes.insert(multi_bad.note_id, Judge::Bad);
-                    if let Some(pair) = charge_pair_for_start(chart, multi_bad.note_id) {
+                {
+                    continue;
+                }
+                if self.bad_judge_vanish || hln {
+                    self.judged_notes.insert(extra.note_id, Judge::Bad);
+                    if let Some(pair) = charge_pair_for_start(chart, extra.note_id) {
                         self.orphan_charge_ends[input.lane.index()]
                             .insert((pair.end_time, pair.end_note_id));
                     }
                 } else {
-                    self.attempted_notes.insert(multi_bad.note_id);
+                    self.attempted_notes.insert(extra.note_id);
                 }
-            }
-            if note_vanishes {
-                self.attempted_notes.remove(&note.id);
-                self.judged_notes.insert(note.id, candidate.judge);
-            } else {
-                self.attempted_notes.insert(note.id);
-            }
-
-            if note_vanishes
-                && note.kind == NoteKind::LongStart
-                && let Some(mut active) =
-                    make_active_long(chart, note.id, candidate.judge, candidate.delta, event_time)
-            {
-                if matches!(input.lane, Lane::Scratch | Lane::Scratch2) {
-                    active.scratch_direction = input.scratch_direction;
-                }
-                lane_state.active_long = Some(active);
-            }
-            advance_press_cursor(
-                chart,
-                input.lane,
-                &mut lane_state.next_note_index,
-                &self.judged_notes,
-            );
-
-            let mut events = Vec::with_capacity(multi_bad_candidates.len() + 1);
-            events.extend(multi_bad_candidates.into_iter().map(|multi_bad| JudgementEvent {
-                note_id: Some(multi_bad.note_id),
-                lane: input.lane,
-                judge: Judge::Bad,
-                side: side_from_delta(multi_bad.delta.0),
-                delta: multi_bad.delta,
-                time: input.time,
-                affects_score: !hln::is_hln_head(chart, multi_bad.note_id),
-                advances_score: self.bad_judge_vanish
-                    && !hln::is_hln_head(chart, multi_bad.note_id),
-            }));
-            events.push(JudgementEvent {
-                note_id: Some(note_id),
-                lane: input.lane,
-                judge: candidate.judge,
-                side,
-                delta: candidate.delta,
-                time: input.time,
-                affects_score: !note_vanishes
-                    || note.kind != NoteKind::LongStart
-                    || active_long_scores_on_start(chart, note.id),
-                advances_score: note_vanishes
-                    && (note.kind != NoteKind::LongStart
-                        || active_long_scores_on_start(chart, note.id)),
-            });
-
-            return JudgeOutcome {
-                events,
-                keysounds: vec![KeySoundEvent {
-                    note_id,
+                events.push(JudgementEvent {
+                    note_id: Some(extra.note_id),
+                    lane: input.lane,
+                    judge: Judge::Bad,
+                    side: side_from_delta(extra.delta.0),
+                    delta: extra.delta,
                     time: input.time,
-                    trigger: KeySoundTrigger::NoteJudged,
-                }],
-                consumed_input: true,
-                ..Default::default()
-            };
+                    affects_score: !hln,
+                    advances_score: self.bad_judge_vanish && !hln,
+                });
+            }
+        }
+        if candidate.judge == Judge::EmptyPoor {
+            if !self.bad_judge_vanish && candidate.delta.0 != 0 {
+                self.attempted_notes.insert(note_id);
+            }
+            return empty_poor(input.lane, side, candidate.delta, input.time, note_id, events);
+        }
+        let note_vanishes = candidate.judge != Judge::Bad
+            || self.bad_judge_vanish
+            || hln::is_hln_head(chart, note.id);
+        let lane_state = &mut self.lanes[input.lane.index()];
+        lane_state.last_press_time = Some(note.time);
+        if note_vanishes {
+            self.attempted_notes.remove(&note.id);
+            self.judged_notes.insert(note.id, candidate.judge);
+        } else {
+            self.attempted_notes.insert(note.id);
         }
 
-        // A regrab can restore the HCN body after its tail has already failed.
-        // Drop only the selected EmptyPoor, before recording its MissCondition.ONE history.
-        if self.hcn_pairs_at(chart, input.time).any(|pair| {
-            pair.lane == input.lane
-                && pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hcn
-                && pair.start_time <= input.time
-                && input.time < pair.end_time
-                && !chart.is_dummy_long(pair)
-        }) {
-            return JudgeOutcome { consumed_input: true, ..Default::default() };
+        if note_vanishes
+            && note.kind == NoteKind::LongStart
+            && let Some(mut active) =
+                make_active_long(chart, note.id, candidate.judge, candidate.delta, event_time)
+        {
+            if matches!(input.lane, Lane::Scratch | Lane::Scratch2) {
+                active.scratch_direction = input.scratch_direction;
+            }
+            lane_state.active_long = Some(active);
         }
-        if !self.bad_judge_vanish && candidate.delta.0 != 0 {
-            self.attempted_notes.insert(note_id);
+        advance_press_cursor(
+            chart,
+            input.lane,
+            &mut lane_state.next_note_index,
+            &self.judged_notes,
+        );
+        events.push(JudgementEvent {
+            note_id: Some(note_id),
+            lane: input.lane,
+            judge: candidate.judge,
+            side,
+            delta: candidate.delta,
+            time: input.time,
+            affects_score: !note_vanishes
+                || note.kind != NoteKind::LongStart
+                || active_long_scores_on_start(chart, note.id),
+            advances_score: note_vanishes
+                && (note.kind != NoteKind::LongStart
+                    || active_long_scores_on_start(chart, note.id)),
+        });
+
+        JudgeOutcome {
+            events,
+            keysounds: vec![KeySoundEvent {
+                note_id,
+                time: input.time,
+                trigger: KeySoundTrigger::NoteJudged,
+            }],
+            consumed_input: true,
+            ..Default::default()
         }
-        empty_poor(input.lane, side, candidate.delta, input.time, note_id)
     }
 
     fn process_release(
