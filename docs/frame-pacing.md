@@ -11,6 +11,22 @@ deadline列を維持します。遅れを取り戻すため次の間隔が周期
 現在時刻から再開して長短フレームの連発を防ぎます。スキン更新の即時描画は周期を変更せず、
 FPS・focus・実効present mode・window modeが変わった場合は周期をリセットします。
 
+focusedかつsurfaceが正常な場合、実効present modeがFifo / FifoRelaxedで、設定されたFPS上限が
+現在の表示リフレッシュレート以上なら、アプリ側の周期待機を省きます。保存する`target_fps`は変更せず、
+内部の待機だけをUnlimitedと同じ経路へ切り替えます。Mailbox / Immediate、Hz未満の上限、
+background、0サイズ・surface復旧中は従来の制限を維持します。設定値0の経路も維持します。
+
+Hzは分子・分母を保持して比較し、整数Hzへの丸めや許容幅は設けません。59.94Hzなら60FPSが対象、
+240.084Hzなら240FPSは制限を維持し、241FPS以上が対象です。Windowsでは既存のQueryDisplayConfig経路を使い、
+winitの整数Hz由来の値で代用しません。ほかのOSはwinitのmHzを使い、排他全画面ではそのVideoModeを参照します。
+取得不能・無効値・異なるHzの複製出力は上限を維持します。このHzはVRRの作動状態を示す値ではありません。
+
+表示情報の取得は対象条件でのみ行い、現在のmonitorを照合しながら1秒cacheします。
+移動・resize・scale・focus・window mode／表示先の設定変更ではcacheを無効化します。
+イベントのない外部mode変更も最大1秒で再取得します。表示世代が変わったら、次の待機を予約する前に
+古いdeadline・wake情報とFPS sampleをリセットします。実効present modeの変更も同じ状態同期を通します。
+Waylandのframe callback待ちと、Windows Immediateの既存の短時間待機は維持します。
+
 Windowsのfocused Immediate・FPS制限ありの場合だけ、期限の
 `min(600us, frame_budget / 8)`前にwinitの`WaitUntil`で起床します。
 RedrawRequested到着後、残りがこの範囲に収まる場合のみrender threadで短く待ちます。

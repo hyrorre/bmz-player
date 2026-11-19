@@ -2,6 +2,45 @@ use std::collections::HashMap;
 
 use winit::monitor::MonitorHandle;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RefreshRate {
+    pub(crate) numerator: u32,
+    pub(crate) denominator: u32,
+}
+
+impl RefreshRate {
+    pub(crate) fn is_valid(self) -> bool {
+        self.numerator != 0 && self.denominator != 0
+    }
+
+    pub(crate) fn covered_by(self, fps: u32) -> bool {
+        self.is_valid() && u64::from(fps) * u64::from(self.denominator) >= u64::from(self.numerator)
+    }
+}
+
+pub(crate) fn current_refresh_rate(
+    window: &winit::window::Window,
+    monitor: &MonitorHandle,
+) -> Option<RefreshRate> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = window;
+        // winit's Windows mHz value is based on the integer dmDisplayFrequency.
+        windows_display::current_refresh_rate(&monitor.name()?)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let millihertz = match window.fullscreen() {
+            Some(winit::window::Fullscreen::Exclusive(mode)) => {
+                Some(mode.refresh_rate_millihertz())
+            }
+            _ => monitor.refresh_rate_millihertz(),
+        }?;
+        Some(RefreshRate { numerator: millihertz, denominator: 1_000 })
+            .filter(|rate| rate.is_valid())
+    }
+}
+
 pub fn list_monitors() -> anyhow::Result<()> {
     struct Listing;
     impl winit::application::ApplicationHandler for Listing {
@@ -362,6 +401,22 @@ mod windows_display {
     use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS};
 
     use super::{PlatformMonitorIdentity, pick_platform_identities};
+
+    pub(super) fn current_refresh_rate(gdi_name: &str) -> Option<super::RefreshRate> {
+        let paths = active_paths().ok()?;
+        let mut rates = paths
+            .iter()
+            .filter(|path| {
+                source_gdi_name(path).is_some_and(|name| name.eq_ignore_ascii_case(gdi_name))
+            })
+            .map(|path| super::RefreshRate {
+                numerator: path.targetInfo.refreshRate.Numerator,
+                denominator: path.targetInfo.refreshRate.Denominator,
+            });
+        let rate = rates.next()?;
+        // Mirrored outputs with different rates do not identify one display cadence.
+        (rate.is_valid() && rates.all(|other| other == rate)).then_some(rate)
+    }
 
     /// 設定UIは毎フレーム列挙するため、OSへの問い合わせを短時間だけ再利用する。
     const CACHE_TTL: Duration = Duration::from_secs(2);
