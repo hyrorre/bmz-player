@@ -634,7 +634,7 @@ impl AutoKeysoundScheduler {
                 }
                 self.next_note_index[lane_index] += 1;
 
-                if !matches!(note.kind, NoteKind::Tap | NoteKind::LongStart | NoteKind::LongEnd) {
+                if !note.kind.is_scheduled_keysound() {
                     continue;
                 }
 
