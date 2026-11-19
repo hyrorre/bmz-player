@@ -201,8 +201,10 @@ pub(super) fn build_integration_settings_sections(
                     }
                 });
             let backend = match state.active_gamepad_backend {
-                Some("keyboard only") | None => text.text("settings-input-gamepad-inactive"),
-                Some(name) => name.to_owned(),
+                Some(name) if name != crate::input::capture::InputCapture::KEYBOARD_ONLY => {
+                    name.to_owned()
+                }
+                _ => text.text("settings-input-gamepad-inactive"),
             };
             ui.label(tr!(text, "settings-input-gamepad-active", "backend" => backend.as_str()));
             #[cfg(target_os = "macos")]
