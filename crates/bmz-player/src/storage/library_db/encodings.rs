@@ -80,7 +80,9 @@ impl LibraryDatabase {
                 "UPDATE chart_encoding_revision SET revision = revision + 1 WHERE id = 1",
                 [],
             )?;
-            tx.execute("UPDATE charts SET import_version = 0 WHERE sha256 = ?1", [&hash])?;
+            // Not 0: an unchanged archive treats 0 as an old failed row already recorded
+            // for its generation and skips it. A negative version forces the reimport.
+            tx.execute("UPDATE charts SET import_version = -1 WHERE sha256 = ?1", [&hash])?;
             // Failed files may have no hash, or a previous successful hash. A negative
             // version makes even an unchanged archive retry its failed entries.
             tx.execute(

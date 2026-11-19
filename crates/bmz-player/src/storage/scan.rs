@@ -726,6 +726,54 @@ mod tests {
     }
 
     #[test]
+    fn chart_encoding_override_reimports_registered_archive_charts_without_force() {
+        use bmz_chart::import::BmsTextEncoding;
+        use std::io::Write;
+
+        let root = tempfile::tempdir().unwrap();
+        let bytes = b"#TITLE \xC7\xD1\xB1\xDB\n#BPM 120\n#TOTAL 200\n#00111:01\n";
+        let mut writer =
+            zip::ZipWriter::new(std::fs::File::create(root.path().join("pack.zip")).unwrap());
+        writer.start_file("song.bms", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(bytes).unwrap();
+        writer.finish().unwrap();
+        let identity = bmz_chart::hash::compute_chart_identity(bytes);
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let roots = [PathEntry {
+            path: root.path().to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+        let scan = |db: &mut LibraryDatabase| {
+            scan_song_roots(db, &roots, &scan_config(), 1_700_000_023, false).unwrap().summary
+        };
+        let chart = |db: &LibraryDatabase| -> (String, i64) {
+            db.conn()
+                .query_row("SELECT title, import_version FROM charts", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+                .unwrap()
+        };
+        let current = CHART_IMPORT_VERSION;
+        assert_eq!(scan(&mut db).imported, 1);
+        let auto = chart(&db);
+        assert_eq!(auto.1, current);
+        assert_eq!(scan(&mut db).skipped, 1);
+
+        db.set_chart_encoding(&identity.file_sha256, Some(BmsTextEncoding::Ms949)).unwrap();
+        assert_eq!(scan(&mut db).imported, 1);
+        assert_eq!(chart(&db), ("한글".to_string(), current));
+        assert_eq!(scan(&mut db).skipped, 1);
+
+        db.set_chart_encoding(&identity.file_sha256, None).unwrap();
+        assert_eq!(scan(&mut db).imported, 1);
+        assert_eq!(chart(&db), auto);
+    }
+
+    #[test]
     fn encoding_override_change_during_scan_defers_the_batch_without_failing_the_scan() {
         let root = tempfile::tempdir().unwrap();
         for folder in ["a", "b"] {
