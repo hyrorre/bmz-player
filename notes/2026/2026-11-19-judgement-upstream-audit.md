@@ -16,14 +16,21 @@ beatoraja 0.8.9 `83574048ba489082eb46df7fe9806b464bf1f526` と
 ED-rian 1.7.0 `6f81c2b78e3de545b2ed86c7651a1479aa14395f` も比較用に取得した。
 採用する判定窓・式の基準は表のコミット。
 
-## 依頼で指定された挙動
+## 互換性の確認箇所
 
 - BSSの同方向Releaseと、直後30,000μs以内の最初の逆方向Pressの吸収はBMZの従来仕様。
   同時刻の地雷はこのエッジで起動せず、その後の保持で通過した地雷は通常どおり判定する。
-- 固定LR2oraja SHAの `EXHARDCLASS_LR2` のdeathは0。ED-rian 1.7.0では2。
-  依頼の2%をLR2orajaのLR2 propertyに実装した。
-- 固定DX SHAのMultiBadループにはHCN始点を終端到達前にスキップする分岐がある。
-  孤立終端の回帰では依頼に従い、MultiBadで始点を消費したCN／HCNの終端POORを通常窓の期限後に確定する。
+- 固定LR2oraja SHAの `EXHARDCLASS_LR2` ではコンストラクタの `border` が0、
+  `death` が2。ゲージが2%未満で閉店し、2%ちょうどは継続する。
+  [GaugeProperty](https://github.com/wcko87/lr2oraja/blob/c1c8e4e0148abd318a9375de1631227cc383d0e4/src/bms/player/beatoraja/play/GaugeProperty.java#L117-L168)
+  · [GrooveGauge](https://github.com/wcko87/lr2oraja/blob/c1c8e4e0148abd318a9375de1631227cc383d0e4/src/bms/player/beatoraja/play/GrooveGauge.java#L215-L223)
+- 固定DX SHAのMultiBadで終端時刻より前の始点を追加BADの対象から外す分岐は
+  `isHellLongNote` が判定するHLN（`TYPE_HELLLONGNOTE`）に適用される。
+  HCN（`TYPE_HELLCHARGENOTE`）はCNと同じ経路で、始点がMultiBadで消費されると、
+  未処理の終端は通常ノーツのlate BAD幅を過ぎた時点でPOORになる。
+  [ノーツ型](https://github.com/rian-eimu/lr2oraja-endlessdream/blob/3bc4b9b40dc6a44f7ebf0594a6ec1b8ffb7370fe/core/src/bms/player/beatoraja/play/JudgeManager.java#L249-L269)
+  · [MultiBad](https://github.com/rian-eimu/lr2oraja-endlessdream/blob/3bc4b9b40dc6a44f7ebf0594a6ec1b8ffb7370fe/core/src/bms/player/beatoraja/play/JudgeManager.java#L1005-L1021)
+  · [見逃し](https://github.com/rian-eimu/lr2oraja-endlessdream/blob/3bc4b9b40dc6a44f7ebf0594a6ec1b8ffb7370fe/core/src/bms/player/beatoraja/play/JudgeManager.java#L1346-L1395)
 - DXでは `JudgeManager` が任意倍率を無視し、`BMSPlayer` は100%超の設定をAssistとして扱う。
   設定を保持し、同じ保存・IR条件を使う。
 
@@ -35,7 +42,7 @@ ED-rian 1.7.0 `6f81c2b78e3de545b2ed86c7651a1479aa14395f` も比較用に取得�
 | 9K 700／750msの空POORと見逃し | 空POOR×2、POOR×1、BP 3 | 空POOR×1、BP 1、見逃しで消費・ghost POOR |
 | 9K 非消費BAD後に2ノーツ処理して中断 | 保存BP 1 | 処理済み2、ライブBP 1、保存BP 2 |
 | 7K DURATION 1000／1380ms | BAD×1、BP 1 | 空POOR×1、POOR×1、PGREAT×1、BP 2 |
-| MultiBad後の孤立終端 | BAD×2、ライブBP 2 | BAD×2、POOR×1、ライブ・CLEAR保存BP 3 |
+| LR2oraja／DX 7KのCN・HCNのMultiBad後の孤立終端 | BAD×2、ライブBP 2 | BAD×2、POOR×1、ライブ・CLEAR保存BP 3 |
 | DX NO_GOODで990／1000ms | BP 2 | PGREAT×2、BP 0 |
 | LR2oraja BMSON 100%、1000採点ノーツ | TOTAL約460.909 | TOTAL 352、NORMAL PGREAT +0.352 |
 
