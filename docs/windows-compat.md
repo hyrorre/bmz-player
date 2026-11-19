@@ -46,6 +46,8 @@ CIの確認は次の2段階です。
 
 - `scripts/verify-windows-compat-imports.ps1`: 同梱DLLのimport/export、updaterのCRT非依存、
   既知のWindows 10以降の直接importを検査します。すべてのOS APIを網羅するものではありません。
+  VC/UCRTのDLL（`vcruntime*`、`msvcp*`、`concrt*`、`api-ms-win-crt-*`など）は、
+  CIホストの`System32`にあっても同梱されていなければ失敗させます。
 - `scripts/test-windows-compat.ps1`: 配布物の一時コピーを作り、開発用DLLのPATHと保存先overrideを外して、
   player/updaterのCLI、AutoとRaw Inputでそれぞれ120 Result framesの描画・正常終了を確認します。
   音声デバイスのないホストでも検証できるよう、サンプルのResult画面を使います。
@@ -70,6 +72,8 @@ Windowsだけをビルド・起動確認できます。このモードでは`upl
   WGIの利用可否はAPIを実際に呼び出して判定し、接続台数には依存しません。
   このWGIは実験用のGameInput.dllとは別です。
 - gilrsの初期化に失敗した場合も、WindowsではRaw Inputを試します。
+- バックエンドがwindowへのattachに失敗した場合はgilrsを試します。
+  gilrsを使えない環境ではキーボードだけになり、実際のフォールバック先をログへ出します。
   HID登録は実際に生成できたバックエンドに合わせます。
   入力設定の「動作中」とログの`input backend: dedicated capture thread`を確認します。
 - WASAPI低遅延共有はIAudioClient3を使えない場合に通常の共有出力へ戻ります。

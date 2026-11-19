@@ -48,6 +48,9 @@ pub struct InputCapture {
 }
 
 impl InputCapture {
+    /// ゲームパッドのバックエンドを起動できず、キーボードだけを扱うときの名前。
+    pub const KEYBOARD_ONLY: &'static str = "keyboard only";
+
     pub fn new(
         kind: Option<GamepadBackendKind>,
         configs: [GamepadScratchConfig; 2],
@@ -82,7 +85,7 @@ impl InputCapture {
         let thread = thread::Builder::new().name("bmz-input-capture".into()).spawn(move || {
             // Construct and destroy GameInput on its owner thread, including its COM pointers.
             let mut backend = create_backend(kind, configs, bridge.clone());
-            let name = backend.as_ref().map_or("keyboard only", GamepadBackend::name);
+            let name = backend.as_ref().map_or(Self::KEYBOARD_ONLY, GamepadBackend::name);
             let _ = ready_tx.send(name);
             #[cfg(windows)]
             let mut native = super::native_capture::NativeCapture::new(
@@ -371,6 +374,9 @@ impl InputCapture {
     }
     pub fn name(&self) -> &'static str {
         self.name
+    }
+    pub fn has_gamepad_backend(&self) -> bool {
+        self.name != Self::KEYBOARD_ONLY
     }
     pub fn is_gilrs(&self) -> bool {
         self.name == "gilrs"
