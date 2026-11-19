@@ -301,3 +301,58 @@ fn restore_skin_slot_history(skin: &mut SkinConfig, slot: SkinSlot, app_paths: &
     *skin_slot_offsets_mut(skin, slot) = entry.offsets;
 }
 use super::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app_paths(temp: &tempfile::TempDir) -> AppPaths {
+        let root = temp.path().join("app");
+        AppPaths::from_dirs(
+            root.join("resources"),
+            root.join("data"),
+            root.join("cache"),
+            root.join("logs"),
+        )
+    }
+
+    #[test]
+    fn parent_dir_skin_path_does_not_share_history_with_a_real_subdirectory() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = app_paths(&temp);
+        // 手書き設定の絶対パス。実際には data/skins/B を指す。
+        let dotted = paths.data_dir.join("skins/A/../B/play.lua").to_string_lossy().into_owned();
+        let mut skin = SkinConfig {
+            play7: dotted,
+            play7_options: BTreeMap::from([("marker".to_owned(), "B".to_owned())]),
+            ..Default::default()
+        };
+
+        // A/B は実在する別スキンなので、B の履歴を引き継いではいけない。
+        assert!(switch_skin_slot(
+            &mut skin,
+            SkinSlot::Play7,
+            &paths,
+            "data:skins/A/B/play.lua".into()
+        ));
+        assert_eq!(skin.play7, "data:skins/A/B/play.lua");
+        assert!(!skin.play7_options.contains_key("marker"));
+
+        // B に戻すと元の履歴が復元される。
+        assert!(switch_skin_slot(
+            &mut skin,
+            SkinSlot::Play7,
+            &paths,
+            "data:skins/B/play.lua".into()
+        ));
+        assert_eq!(skin.play7_options.get("marker").map(String::as_str), Some("B"));
+
+        // 履歴キーも B と A/B で分かれている。
+        assert!(skin.history.contains_key("play7::data:skins/B/play.lua"));
+        assert!(skin.history.contains_key("play7::data:skins/A/B/play.lua"));
+        assert_ne!(
+            skin.history["play7::data:skins/B/play.lua"].options,
+            skin.history["play7::data:skins/A/B/play.lua"].options
+        );
+    }
+}
