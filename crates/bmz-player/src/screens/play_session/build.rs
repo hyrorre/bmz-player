@@ -796,6 +796,10 @@ pub struct InitialSessionHispeed {
     pub display_hispeed: f32,
     pub lift: f32,
     pub lane_cover: f32,
+    /// HS-FIXの基準BPM。LR2の表示変換係数とFloatingの再計算に使う。
+    pub hsfix_base_bpm: f32,
+    /// LR2 + HS-FIXで表示HSと実効倍率を変換する係数。それ以外は1.0。
+    pub classic_hsfix_scale: f32,
 }
 
 /// `build_game_session`が作るsessionの初期HSを、sessionを作らずに求める。
@@ -816,17 +820,15 @@ pub fn initial_session_hispeed(
         &mode_config,
         &InitialLaneSpeedOptions::from_session_options(options),
     );
+    let lr2_hispeed = !speed.speed_locked && mode_config.base_hispeed == BaseHispeedConfig::Lr2;
+    let classic_hsfix_scale = crate::screens::play_snapshot::classic_hsfix_scale_for_option(
+        lr2_hispeed,
+        options.hs_fix,
+        speed.hsfix_base_bpm,
+        options.playback_rate_percent,
+    );
     let display_hispeed = if speed.hispeed_mode == HispeedMode::Classic {
-        let lr2_hispeed = !speed.speed_locked && mode_config.base_hispeed == BaseHispeedConfig::Lr2;
-        crate::config::play::classic_display_hispeed(
-            speed.hispeed,
-            crate::screens::play_snapshot::classic_hsfix_scale_for_option(
-                lr2_hispeed,
-                options.hs_fix,
-                speed.hsfix_base_bpm,
-                options.playback_rate_percent,
-            ),
-        )
+        crate::config::play::classic_display_hispeed(speed.hispeed, classic_hsfix_scale)
     } else {
         speed.hispeed
     };
@@ -836,6 +838,8 @@ pub fn initial_session_hispeed(
         display_hispeed,
         lift: speed.lift,
         lane_cover: speed.lane_cover,
+        hsfix_base_bpm: speed.hsfix_base_bpm as f32,
+        classic_hsfix_scale,
     }
 }
 

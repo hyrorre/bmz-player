@@ -422,6 +422,8 @@ fn pending_lane_state_preserves_sub_one_hsfix_bpm() {
         display_hispeed: lane.display_hispeed(),
         lift: lane.lift,
         lane_cover: lane.lane_cover,
+        hsfix_base_bpm: 0.5,
+        classic_hsfix_scale: 1.0,
     };
     lane.rebase_to_prepared_chart(&snapshot, &mode_config, HsFixOption::MinBpm, initial, |_| {});
     assert_eq!(lane.hsfix_base_bpm, 0.5);

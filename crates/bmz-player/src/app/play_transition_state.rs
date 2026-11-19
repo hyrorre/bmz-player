@@ -137,6 +137,48 @@ pub(super) struct PendingPlayStart {
 }
 
 impl PendingPlayStart {
+    /// 実譜面の準備ができたら、ロード中のレーン状態を実sessionと同じ初期値と設定対象
+    /// キーモードから作り直し、ロード中の操作を最初から適用し直す。Play画面に入る前に
+    /// 準備が済んだ場合も、入った後に済んだ場合も、この処理を通す。
+    pub(super) fn rebase_lane_to_prepared_chart(
+        &mut self,
+        chart: &bmz_chart::model::PlayableChart,
+        snapshot: &mut RenderSnapshot,
+        profile: &ProfileConfig,
+        app_config: &AppConfig,
+        speed_locked: bool,
+    ) {
+        let mut session_options = crate::screens::play_start::play_session_options_from_start(
+            app_config,
+            self.options.clone(),
+        );
+        session_options.play_config_key_mode = Some(self.play_config_key_mode);
+        let initial =
+            crate::screens::play_session::initial_session_hispeed(chart, profile, &session_options);
+        let mode_config = profile.play_mode_config(self.play_config_key_mode);
+        let now_bpm = snapshot.now_bpm;
+        let actions = &self.lane_actions;
+        self.lane.rebase_to_prepared_chart(
+            snapshot,
+            &mode_config,
+            self.options.hs_fix,
+            initial,
+            |lane| {
+                for &action in actions {
+                    let _ = apply_pending_play_lane_action_to_state(
+                        lane,
+                        action,
+                        profile,
+                        now_bpm,
+                        speed_locked,
+                    );
+                }
+            },
+        );
+        self.lane.apply_to_snapshot(snapshot);
+        self.prepared_chart_applied = true;
+    }
+
     pub(super) fn from_snapshot(
         chart_id: i64,
         options: PlayStartOptions,
@@ -348,6 +390,9 @@ impl PendingPlayLaneState {
         // snapshotのLIFT / SUDDEN+はロード中の操作を反映済みなので、初期値へ戻してから適用し直す。
         lane.lift = initial.lift;
         lane.lane_cover = initial.lane_cover;
+        // snapshotのMAIN BPMは初期BPMのことがあるため、実効倍率と同じ計算の値を使う。
+        lane.hsfix_base_bpm = initial.hsfix_base_bpm;
+        lane.classic_hsfix_scale = initial.classic_hsfix_scale;
         lane.lane_cover_changing = lane_cover_changing;
         replay(&mut lane);
         *self = lane;

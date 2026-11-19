@@ -249,11 +249,7 @@ impl WinitApp {
             options.session_mode,
             options.battle_target.is_some(),
         );
-        let initial_hispeed = crate::screens::play_session::initial_session_hispeed(
-            &prepared.chart,
-            &self.boot.profile_config,
-            &play_session_options_from_start(&self.play_session_app_config(), options.clone()),
-        );
+        let app_config = self.play_session_app_config();
         let speed_locked = active_course_speed_locked(self.play.active_course.as_ref());
         let Some(snapshot) = &mut self.play.last_play_snapshot else {
             return;
@@ -280,29 +276,13 @@ impl WinitApp {
         if let Some(pending) =
             self.play.pending_play_start.as_mut().filter(|pending| pending.chart_id == chart_id)
         {
-            let profile = &self.boot.profile_config;
-            let mode_config = profile.play_mode_config(pending.play_config_key_mode);
-            let now_bpm = snapshot.now_bpm;
-            let actions = &pending.lane_actions;
-            pending.lane.rebase_to_prepared_chart(
+            pending.rebase_lane_to_prepared_chart(
+                &prepared.chart,
                 snapshot,
-                &mode_config,
-                pending.options.hs_fix,
-                initial_hispeed,
-                |lane| {
-                    for &action in actions {
-                        let _ = apply_pending_play_lane_action_to_state(
-                            lane,
-                            action,
-                            profile,
-                            now_bpm,
-                            speed_locked,
-                        );
-                    }
-                },
+                &self.boot.profile_config,
+                &app_config,
+                speed_locked,
             );
-            pending.lane.apply_to_snapshot(snapshot);
-            pending.prepared_chart_applied = true;
         }
         tracing::info!(
             chart_id,
