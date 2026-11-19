@@ -187,7 +187,8 @@ Windows 8.1自体の結果は引き続き未確認で、正式サポートの確
 - `verify-windows-compat-imports.ps1`で同梱DLLの関数と既知のWindows 10以降の直接importを検査する。
   OS APIの完全な互換性検査ではない。
 - `test-windows-compat.ps1`で配布物の一時コピーを別の作業フォルダーから起動し、
-  開発用PATHと保存先overrideなしでCLI、updater、Auto/Raw Inputの各120 Play framesを確認する。
+  開発用PATHと保存先overrideなしでCLI、updater、Auto/Raw Inputの各120 Result framesを確認する。
+  音声デバイスがないCIホストでも動かせるResult fixtureを使い、プレイ・音声の実機検証とは区別する。
   user dataを持つ入力は拒否し、配布stagingは変更しない。診断ログをActions artifactへ残す。
 - 手動実行の`windows_only=true`では`tag`にGit refを指定してWindowsだけ検証できる。
   `upload_to_release`に関係なく公開を無効にし、macOS/Linux/publish jobも実行しない。
@@ -195,4 +196,12 @@ Windows 8.1自体の結果は引き続き未確認で、正式サポートの確
 ローカルで互換ビルド、2,013件のDLL import/export、updaterのCRT非依存、
 配布物のCLIとAuto/Raw Inputの各サンプル再生・正常終了を確認した（Windows 11）。
 build flagの通常/encoded/失敗時の復旧をスクリプトテストで確認した。
+音声デバイスへの依存を避けるため、CI用の起動検証はResult fixtureに切り替え、
+ローカルでもAuto/Raw Inputの各120 Result frames・正常終了を確認した。
+
+初回Actions run `44504620277`は`asio-sys`のSDK自動取得で失敗した。
+Windows PowerShell 5からPowerShell 7のArchive moduleを読み込む際の
+`ExtractToDirectory` overloadエラーでSDKのヘッダーが不足したため、
+公式ASIO SDK 2.3.4のURLとSHA-256を固定し、CI側で明示的に展開して
+`CPAL_ASIO_DIR`を渡すようにした。同じZIPのhashと必須ヘッダーをローカルでも確認した。
 GitHub Actionsの結果は実行後に追記する。
