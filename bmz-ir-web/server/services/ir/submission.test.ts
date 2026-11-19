@@ -39,7 +39,8 @@ mock.module('../../utils/rate_limit', () => ({
 Object.assign(globalThis, { defineEventHandler })
 const { default: scoreHandler } = await import('../../api/v1/scores.post')
 const { default: courseHandler } = await import('../../api/v1/course-scores.post')
-const { submitScore, prepareBestScoreUpsert } = await import('./submission')
+const { deleteLocalBackfillScores, submitScore, prepareBestScoreUpsert } =
+  await import('./submission')
 const { parseRankingQuery, validateScoreSubmission } = await import('./common')
 const { getRanking, getRankingWithPreviousRank } = await import('./ranking')
 const { IrIdempotencyCollisionError } = await import('./idempotency')
@@ -236,6 +237,78 @@ function courseSubmission() {
     idempotency_key: 'course-test',
   }
 }
+
+test.each([false, true])(
+  'keeps a concurrent score when cleanup commits first=%s',
+  async (cleanupFirst) => {
+    const deleted = submission()
+    deleted.play_options.submission_source = 'local_backfill'
+    deleted.play_options.source_kind = 'lr2'
+    const backfill = await submitScore(user, validateScoreSubmission(deleted), [], 10)
+    const next = submission()
+    next.idempotency_key = 'after-backfill'
+    next.result.ex_score = 150
+    next.result.judges.fast.pgreat = 50
+    next.result.judges.fast.great = 50
+    const scoreIds = [backfill.score_id!]
+    const commit = db.batch.bind(db)
+    const batch = spyOn(db, 'batch').mockImplementationOnce(async (statements) => {
+      if (cleanupFirst) {
+        await deleteLocalBackfillScores(user, scoreIds)
+      } else {
+        await submitScore(user, validateScoreSubmission(next), [], 10)
+      }
+      return commit(statements)
+    })
+    try {
+      if (cleanupFirst) {
+        await submitScore(user, validateScoreSubmission(next), [], 10)
+      } else {
+        expect((await deleteLocalBackfillScores(user, scoreIds)).deleted_score_ids).toEqual(
+          scoreIds,
+        )
+      }
+    } finally {
+      batch.mockRestore()
+    }
+    const [history] = await db.select().from(schema.scores)
+    const best = await db.select().from(schema.bestScores)
+    expect(history?.id).not.toBe(backfill.score_id)
+    expect(best).toHaveLength(1)
+    expect(best[0]).toMatchObject({ exScore: 150, scoreId: history?.id })
+  },
+)
+
+test('a later course upsert cannot replace a concurrently committed higher EX score', async () => {
+  const low = courseSubmission()
+  const high = courseSubmission()
+  high.idempotency_key = 'course-high'
+  high.result.ex_score = 180
+
+  const execute = client.execute.bind(client)
+  let startedHigher = false
+  const spy = spyOn(client, 'execute').mockImplementation(async (...args) => {
+    const statement = args[0]
+    if (
+      !startedHigher &&
+      typeof statement === 'object' &&
+      statement.sql.startsWith('insert into "best_course_scores"')
+    ) {
+      startedHigher = true
+      await submitCourseScore(user, validateCourseScoreSubmission(high))
+    }
+    return execute(...args)
+  })
+  try {
+    const result = await submitCourseScore(user, validateCourseScoreSubmission(low))
+    expect(startedHigher).toBe(true)
+    expect(result.best_updated).toBe(false)
+  } finally {
+    spy.mockRestore()
+  }
+  expect(await db.select().from(schema.courseScores)).toHaveLength(2)
+  expect((await db.select().from(schema.bestCourseScores))[0]?.exScore).toBe(180)
+})
 
 test('new normalized course FORCE and historical AUTO remain accepted in separate buckets', async () => {
   for (const policy of ['AutoLn', 'AutoCn', 'AutoHcn', 'ForceLn', 'ForceCn', 'ForceHcn']) {

@@ -532,10 +532,11 @@ rank=7, scope_rank=2  ライバル
 ### 定期清掃
 
 `ir:storage-cleanup`を1時間ごとの毎時00分に実行します（`0 * * * *`）。
-期限切れリプレイの状態変更、rejectedのblob削除、失効鍵の削除は、それぞれ1回40件までとし、
+WranglerのCronトリガーとNitroのタスク設定の両方に登録します。
+期限切れリプレイの状態変更、rejectedのblob削除、スコア削除に伴うblobの削除、失効鍵の削除は、それぞれ1回40件までとし、
 残りは次の時間の実行へ回します。D1のbind上限100に収め、
 期限付きロックで同時実行を防ぎます。世代と状態を条件付きで更新し、新しいPUT・検証済みのリプレイを保護します。
-清掃用の索引は`0016_storage_cleanup_indexes.sql`に追加しています。
+スコア削除時はDBから消える前にblobのキーを同じトランザクションで`replay_blob_deletions`へ記録します。R2での削除が失敗したキーは1時間後から再試行します。Workerの更新前にD1のmigration `0018_score_cleanup_consistency.sql` を適用します。
 
 ## 判定・EXスコア・クリアランプ
 
@@ -584,8 +585,8 @@ rank=7, scope_rank=2  ライバル
 - 初回のコーススコア送信で共有のコース情報を登録します。以降の送信は`NULL`や空文字の項目を補い、保存済みのタイトル・種別・出典URLを保持します。
 - ローカルの`courses.course_key`とは独立に計算します。BMS-IR向けには、LR2互換の長い`course_key`を`course.course_key`として一緒に送ります。BMS-IRから取得した表はサーバーが提供したkeyをそのまま使い、それ以外は標準のDan headerと譜面順のMD5から作ります。rianIR用のhashとは別です。
 - score identityは`course_hash + gauge + ln_policy + rule_mode + scoring`です。段位（class系の制約）ではゲージが制約で決まりますが、通常のコースではユーザーが選ぶため、gaugeを含めます。`ln_policy`は、コース内の全譜面のLN情報とコースのLN制約から、単曲と同じ規則で正規化します。
-- bestは、EXスコア、クリア、BP（小さいほうが良い）、最大コンボの順で比べます。
-- 同じプレイヤー・同じ`idempotency_key`の重複投稿には、既存の`course_score_id`を返し、bestは再計算せず`best_updated=false`にします。
+- bestは、EXスコア、クリア、BP（小さいほうが良い）、最大コンボの順で比べます。比較と更新を同じSQLで行います。
+- 同じプレイヤー・同じ`idempotency_key`の重複投稿には、既存の`course_score_id`を返します。bestの書き込みが完了していなければ再試行し、実際に更新した場合だけ`best_updated=true`を返します。
 - `GET /api/v1/courses/{course_hash}/ranking`はglobalだけで、`gauge` / `ln_policy` / `rule_mode`（それぞれ`ALL`で全体）と`limit`（1〜200、既定100）で絞り込めます。認証付きの取得では、`limit`の範囲外でも`ranking.self`に自分の順位を返します。`ranking.pagination.total`は条件に合う全プレイヤー数です。BMZ Playerは、ログイン済みならコースランキングも認証付きで取得し、Course Resultの自分の順位と参加人数に使います。
 - BMZ Playerは、コースの終了時に`CourseResultSummary`からpayloadを作り、`ir_score_jobs`へ`kind=course`のjobを入れます。`local_score_id`にはローカルのcourse score ID、`chart_sha256`にはcourse hashを入れます。
 - 未登録の譜面がコースに含まれる場合は、metadataなしでSHA-256だけを登録します。
@@ -866,6 +867,7 @@ payloadと署名は次のとおりです。
 
 - Beatorajaの行と、譜面のhash、プレイ日時、EX、全判定の内訳、BP、CB、最大コンボ、random seedが一致する履歴を、dry-runで表示します。
 - `--apply`は、選んだprovider / accountの明示的な`local_backfill` scoreだけをサーバーで削除し、影響する`best_scores`を残りの履歴から作り直します。ローカルの重複に対応する通常のプレイや、旧形式のIRのscoreは残します。
+- 再集計中に同じプレイヤーの履歴が変わった場合は、最新の履歴を読み直してやり直します。3回続けて競合した場合はHTTP 409を返します。
 - 次に、ローカルのIRのjob / submissionの台帳を削除してから、`score.db`の履歴、`score_best`、`player_stats`を集計し直します。
 - 別のIR accountへの送信済みの候補がある場合は、ローカルの削除を止めます。
 - サーバーへの削除は1 requestあたり最大19 scoreで、batch間を200ms空けます。

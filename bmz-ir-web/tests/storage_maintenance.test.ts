@@ -65,7 +65,7 @@ const {
   REVOKED_DEVICE_KEY_RETENTION_MS,
 } = await import('../server/services/storage_cleanup')
 const { DEVICE_KEY_CREATE_RATE_LIMIT } = await import('../server/utils/rate_limit')
-const { submitScore } = await import('../server/services/ir/submission')
+const { deleteLocalBackfillScores, submitScore } = await import('../server/services/ir/submission')
 const { canonicalSubmissionJson, resolveVerification } =
   await import('../server/services/ir/verification')
 
@@ -73,6 +73,7 @@ const migrations = new URL('../../server/db/migrations/sqlite/', import.meta.url
 for (const name of (await readdir(migrations)).filter((name) => name.endsWith('.sql')).sort()) {
   await client.executeMultiple(await readFile(new URL(name, migrations), 'utf8'))
 }
+await client.execute('PRAGMA foreign_keys = ON')
 const users = ['owner', 'second', 'third', 'fourth', 'fifth']
 for (const id of users) {
   await db.insert(schema.users).values({ id, email: `${id}@example.invalid`, passwordHash: '' })
@@ -96,6 +97,7 @@ beforeEach(async () => {
   await db.delete(schema.replayObjects)
   await db.delete(schema.bestScores)
   await db.delete(schema.scores)
+  await db.delete(schema.replayBlobDeletions)
   await db.delete(schema.deviceKeys)
   await db.delete(schema.taskLocks)
   maxParameters = 0
@@ -178,8 +180,14 @@ async function replay(
   name: string,
   status: (typeof schema.replayObjects.$inferInsert)['status'],
   updatedAt: Date,
+  backfill = false,
 ) {
-  const score = await submitScore({ id: 'owner' }, submission(name), [], 10)
+  const payload = submission(name)
+  if (backfill) {
+    payload.play_options.submission_source = 'local_backfill'
+    payload.play_options.source_kind = 'lr2'
+  }
+  const score = await submitScore({ id: 'owner' }, payload, [], 10)
   const path = `owner/${score.score_id}/${name}`
   await db.insert(schema.replayObjects).values({
     id: name,
@@ -194,6 +202,29 @@ async function replay(
   objects.set(path, new TextEncoder().encode(name))
   return path
 }
+
+test('backfill deletion retains the blob key until scheduled storage deletion succeeds', async () => {
+  const now = new Date()
+  const backedUp = await replay('deleted-backfill', 'verified', now, true)
+  const kept = await replay('kept-play', 'verified', now)
+  const scoreIds = [backedUp, kept].map((path) => path.split('/')[1]!)
+  expect(await deleteLocalBackfillScores({ id: 'owner' }, scoreIds)).toMatchObject({
+    deleted_score_ids: [scoreIds[0]],
+    retained_score_ids: [scoreIds[1]],
+  })
+  expect(await db.select().from(schema.replayObjects)).toHaveLength(1)
+  const queue = schema.replayBlobDeletions
+  expect(await db.select({ path: queue.objectPath }).from(queue)).toEqual([{ path: backedUp }])
+
+  failingPaths.add(backedUp)
+  expect((await cleanupIrStorage(now)).deleted_replay_blobs).toBe(0)
+  expect(objects.has(backedUp)).toBe(true)
+  failingPaths.clear()
+  expect((await cleanupIrStorage(now)).deleted_replay_blobs).toBe(0)
+  expect((await cleanupIrStorage(new Date(now.getTime() + 3_600_000))).deleted_replay_blobs).toBe(1)
+  expect(await db.select().from(queue)).toHaveLength(0)
+  expect([...objects.keys()]).toEqual([kept])
+})
 
 test('scheduled cleanup removes only expired pending/uploaded blobs and retains verification records', async () => {
   const now = new Date()

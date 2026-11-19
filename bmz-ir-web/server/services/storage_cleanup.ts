@@ -1,10 +1,11 @@
-import { and, eq, inArray, isNotNull, lt, or } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, lt, lte, or } from 'drizzle-orm'
 import { blob } from 'hub:blob'
 import { db, schema } from 'hub:db'
 
 export const STORAGE_CLEANUP_BATCH_SIZE = 40
 export const UNVERIFIED_REPLAY_RETENTION_MS = 24 * 60 * 60 * 1000
 export const REVOKED_DEVICE_KEY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
+const BLOB_DELETION_RETRY_MS = 60 * 60 * 1000
 
 interface RejectedReplay {
   id: string
@@ -48,6 +49,38 @@ export async function deleteRejectedReplayBlobs(rows: RejectedReplay[]): Promise
   }
 }
 
+async function deleteQueuedReplayBlobs(now: Date): Promise<number> {
+  const queue = schema.replayBlobDeletions
+  const rows = await db
+    .select({ path: queue.objectPath })
+    .from(queue)
+    .where(lte(queue.nextAttemptAt, now))
+    .orderBy(queue.nextAttemptAt, queue.objectPath)
+    .limit(STORAGE_CLEANUP_BATCH_SIZE)
+  const results = await Promise.allSettled(rows.map(({ path }) => blob.del(path)))
+  const deleted: string[] = []
+  const retry: string[] = []
+  for (const [index, { path }] of rows.entries()) {
+    const result = results[index]!
+    if (result.status === 'fulfilled') {
+      deleted.push(path)
+    } else {
+      retry.push(path)
+      console.warn('queued replay blob deletion failed', result.reason)
+    }
+  }
+  if (retry.length > 0) {
+    await db
+      .update(queue)
+      .set({ nextAttemptAt: new Date(now.getTime() + BLOB_DELETION_RETRY_MS) })
+      .where(inArray(queue.objectPath, retry))
+  }
+  if (deleted.length > 0) {
+    await db.delete(queue).where(inArray(queue.objectPath, deleted))
+  }
+  return deleted.length
+}
+
 export async function cleanupIrStorage(now = new Date()) {
   // The subquery and status change are one SQL statement. A fresh upload,
   // verification or renewed intent wins if it commits before this claim.
@@ -83,6 +116,7 @@ export async function cleanupIrStorage(now = new Date()) {
   const deletedBlobs = await deleteRejectedReplayBlobs(
     rejected.filter((row): row is RejectedReplay => row.objectPath !== null),
   )
+  const deletedQueuedBlobs = await deleteQueuedReplayBlobs(now)
 
   // Historical score verification is persisted; device keys are only looked up
   // for new evidence, where revoked keys are already refused. No score FK targets them.
@@ -100,7 +134,7 @@ export async function cleanupIrStorage(now = new Date()) {
     .returning({ id: schema.deviceKeys.id })
   return {
     expired_replays: claimed.length,
-    deleted_replay_blobs: deletedBlobs,
+    deleted_replay_blobs: deletedBlobs + deletedQueuedBlobs,
     deleted_device_keys: deletedKeys.length,
   }
 }

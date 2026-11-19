@@ -93,6 +93,7 @@ export const profiles = sqliteTable('profiles', {
   displayName: text('display_name').notNull().default(''),
   bio: text('bio').notNull().default(''),
   dailyBoundaryMinutes: integer('daily_boundary_minutes').notNull().default(0),
+  scoreHistoryRevision: integer('score_history_revision').notNull().default(0),
   createdAt: integer('created_at', { mode: 'timestamp_ms' })
     .notNull()
     .default(sql`(unixepoch('subsec') * 1000)`),
@@ -456,6 +457,17 @@ export const replayObjects = sqliteTable(
       .on(table.status, table.updatedAt)
       .where(sql`${table.objectPath} IS NOT NULL`),
   ],
+)
+
+export const replayBlobDeletions = sqliteTable(
+  'replay_blob_deletions',
+  {
+    objectPath: text('object_path').primaryKey().notNull(),
+    nextAttemptAt: integer('next_attempt_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`0`),
+  },
+  (table) => [index('idx_replay_blob_deletions_due').on(table.nextAttemptAt, table.objectPath)],
 )
 
 export const irCourses = sqliteTable('ir_courses', {

@@ -3,7 +3,7 @@ import { and, desc, eq, inArray, ne, or, sql, type SQL } from 'drizzle-orm'
 import type { BatchItem } from 'drizzle-orm/batch'
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
 import { db, schema } from 'hub:db'
-import { isUniqueConstraintError } from '../../utils/db_errors'
+import { isScoreHistoryRevisionMismatch, isUniqueConstraintError } from '../../utils/db_errors'
 import { assertCanSubmit, assertCanWriteScore } from '../moderation/enforcement'
 import { assertIdempotentSubmission } from './idempotency'
 import { fillMissingMetadata } from './metadata'
@@ -30,7 +30,6 @@ import {
   type IrRequestUser,
   type LocalBackfillDeleteResult,
   type ScoreAttestationPayload,
-  bestCandidateWins,
   judgeTotal,
   normalizeDoubleOption,
   playedAtDate,
@@ -192,13 +191,11 @@ export async function submitScore(
   }
   const score = { id: scoreId, serverReceivedAt }
   const best = await prepareBestScoreUpsert(user.id, payload, scoreId, verification, candidate)
+  let bestUpdated: boolean
   try {
     const insertStatement = db.insert(schema.scores).values(scoreInsert)
-    if (best.statement) {
-      await db.batch([insertStatement, best.statement])
-    } else {
-      await insertStatement
-    }
+    const [, updated] = await db.batch([insertStatement, best.statement])
+    bestUpdated = updated.length > 0
   } catch (error) {
     if (!isUniqueConstraintError(error)) {
       throw error
@@ -226,7 +223,7 @@ export async function submitScore(
     )
     return idempotentScoreResponse(existing, rankings)
   }
-  const { bestUpdated, updatedFields } = best
+  const { updatedFields } = best
 
   const rankings = await submissionRankings(
     user,
@@ -316,6 +313,26 @@ export async function deleteLocalBackfillScores(
     )
   }
 
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const profile = await db.query.profiles.findFirst({
+      columns: { scoreHistoryRevision: true },
+      where: eq(schema.profiles.id, user.id),
+    })
+    if (!profile) throw new IrBackfillCleanupError('profile no longer exists')
+    try {
+      return await deleteLocalBackfillSnapshot(user.id, scoreIds, profile.scoreHistoryRevision)
+    } catch (error) {
+      if (!isScoreHistoryRevisionMismatch(error)) throw error
+    }
+  }
+  throw new IrBackfillCleanupError('score history changed during cleanup; retry the request')
+}
+
+async function deleteLocalBackfillSnapshot(
+  playerId: string,
+  scoreIds: string[],
+  revision: number,
+): Promise<LocalBackfillDeleteResult> {
   const rows = await db
     .select({
       id: schema.scores.id,
@@ -327,7 +344,7 @@ export async function deleteLocalBackfillScores(
       play_options: schema.scores.playOptions,
     })
     .from(schema.scores)
-    .where(and(eq(schema.scores.playerId, user.id), inArray(schema.scores.id, scoreIds)))
+    .where(and(eq(schema.scores.playerId, playerId), inArray(schema.scores.id, scoreIds)))
 
   const foundIds = new Set(rows.map((row) => row.id))
   const { localBackfillRows, retainedScoreIds } = partitionLocalBackfillRows(rows)
@@ -341,9 +358,9 @@ export async function deleteLocalBackfillScores(
   }
   const affectedKeys = uniqueBestScoreKeys(localBackfillRows)
   const affectedConditions = affectedKeys.map(bestScoreKeyCondition)
-  const affectedWhere = and(eq(schema.bestScores.playerId, user.id), or(...affectedConditions))
+  const affectedWhere = and(eq(schema.bestScores.playerId, playerId), or(...affectedConditions))
   const remainingWhere = and(
-    eq(schema.scores.playerId, user.id),
+    eq(schema.scores.playerId, playerId),
     eq(schema.scores.accepted, true),
     or(...affectedKeys.map(scoreHistoryKeyCondition)),
   )
@@ -370,7 +387,6 @@ export async function deleteLocalBackfillScores(
       played_at: schema.scores.playedAt,
       server_received_at: schema.scores.serverReceivedAt,
       verification: schema.scores.verification,
-      play_options: schema.scores.playOptions,
     })
     .from(schema.scores)
     .where(remainingWhere)
@@ -381,14 +397,21 @@ export async function deleteLocalBackfillScores(
       .map((row) => ({ ...rowToBestScoreRow({ ...row, score_id: row.id }), id: row.id })),
   )
   const updatedAt = new Date()
+  const profiles = schema.profiles
   const statements = [
-    // D1 は明示 transaction の BEGIN を受け付けない。batch は原子的に実行されるため、
-    // score を削除すると source score を参照する best_scores は cascade され得る。
-    // affected key 全体を同じ batch で組み直し、残存scoreから正しい代表行を復元する。
+    // Score writes advance the revision inside their own transaction. A stale
+    // snapshot fails the NOT NULL constraint and rolls back the entire D1 batch.
+    db
+      .update(profiles)
+      .set({
+        scoreHistoryRevision: sql`case when ${profiles.scoreHistoryRevision} = ${revision}
+          then ${profiles.scoreHistoryRevision} else null end`,
+      })
+      .where(eq(profiles.id, playerId)),
     db.delete(schema.bestScores).where(affectedWhere),
     db
       .delete(schema.scores)
-      .where(and(eq(schema.scores.playerId, user.id), inArray(schema.scores.id, deletedScoreIds))),
+      .where(and(eq(schema.scores.playerId, playerId), inArray(schema.scores.id, deletedScoreIds))),
     ...rebuilt.map((row) =>
       db.insert(schema.bestScores).values({
         id: randomUUID(),
@@ -724,8 +747,8 @@ export async function fetchPreviousBestExScoreExcluding(
 }
 
 /**
- * best_scores 更新の要否を判定し、必要なら未実行の upsert statement を返す。
- * 呼び出し側が score insert と同じ `db.batch` に載せて atomic に実行する。
+ * Build the upsert even if the snapshot already wins. Cleanup may remove that
+ * best before the score insert and upsert run together in the same batch.
  */
 export async function prepareBestScoreUpsert(
   playerId: string,
@@ -733,31 +756,14 @@ export async function prepareBestScoreUpsert(
   scoreId: string,
   verification: string,
   candidate: BestScoreCandidate,
-): Promise<{
-  bestUpdated: boolean
-  updatedFields: IrSubmitResponse['updated_fields']
-  statement: BatchItem<'sqlite'> | null
-}> {
+) {
   const current = await db.query.bestScores.findFirst({
     columns: {
-      scoreId: true,
       exScore: true,
-      clearType: true,
       clearRank: true,
       maxCombo: true,
       minBp: true,
       minCb: true,
-      deviceType: true,
-      gauge: true,
-      effectiveLnMode: true,
-      playedAt: true,
-      serverReceivedAt: true,
-      verification: true,
-      bestExScoreId: true,
-      bestClearScoreId: true,
-      bestMaxComboScoreId: true,
-      bestMinBpScoreId: true,
-      bestMinCbScoreId: true,
     },
     where: and(
       eq(schema.bestScores.playerId, playerId),
@@ -768,35 +774,13 @@ export async function prepareBestScoreUpsert(
       eq(schema.bestScores.ruleMode, payload.rule.rule_mode),
     ),
   })
-  const currentCandidate = current
-    ? {
-        ex_score: current.exScore,
-        clear_rank: current.clearRank,
-        max_combo: current.maxCombo,
-        min_bp: current.minBp,
-        min_cb: current.minCb,
-        server_received_at: current.serverReceivedAt,
-      }
-    : null
-
   const updatedFields = {
-    ex_score: !currentCandidate || candidate.ex_score > currentCandidate.ex_score,
-    clear: !currentCandidate || candidate.clear_rank > currentCandidate.clear_rank,
-    max_combo: !currentCandidate || candidate.max_combo > currentCandidate.max_combo,
-    min_bp: !currentCandidate || candidate.min_bp < currentCandidate.min_bp,
-    min_cb: !currentCandidate || candidate.min_cb < currentCandidate.min_cb,
+    ex_score: !current || candidate.ex_score > current.exScore,
+    clear: !current || candidate.clear_rank > current.clearRank,
+    max_combo: !current || candidate.max_combo > current.maxCombo,
+    min_bp: !current || candidate.min_bp < current.minBp,
+    min_cb: !current || candidate.min_cb < current.minCb,
   }
-  const rankingUpdated = !currentCandidate || bestCandidateWins(candidate, currentCandidate)
-  const shouldUpdate =
-    rankingUpdated ||
-    updatedFields.clear ||
-    updatedFields.max_combo ||
-    updatedFields.min_bp ||
-    updatedFields.min_cb
-  if (!shouldUpdate) {
-    return { bestUpdated: false, updatedFields, statement: null }
-  }
-
   const verificationStatus = verification as IrVerificationStatus
   const playedAt = playedAtDate(payload.result.played_at)
   const values = {
@@ -873,6 +857,8 @@ export async function prepareBestScoreUpsert(
         verification: choose(rankingWins, table.verification),
         updatedAt: new Date(),
       },
+      setWhere: or(rankingWins, clearWins, comboWins, bpWins, cbWins),
     })
-  return { bestUpdated: true, updatedFields, statement }
+    .returning({ id: table.id })
+  return { updatedFields, statement }
 }
