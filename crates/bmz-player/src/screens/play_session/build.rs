@@ -604,7 +604,7 @@ pub fn build_game_session_with_input_backend(
 
     let result_wait_end_time = (profile.play.wait_all_notes_result && !session_mode.is_practice())
         .then(|| result_wait_end_time(&chart));
-    GameSession {
+    let mut session = GameSession {
         play_end: Arc::default(),
         conditional: bmz_gameplay::session::conditional::ConditionalRuntime::from_player(
             replay_player.as_ref(),
@@ -664,6 +664,8 @@ pub fn build_game_session_with_input_backend(
         offsets: play_offsets_from_profile_for_mode(profile, play_config_key_mode),
         audio_mix: audio_mix_from_profile(profile),
         hispeed,
+        // 表示上のHS値は他のフィールドが揃ってから求める。
+        hispeed_change_base: hispeed,
         hispeed_mode,
         base_hispeed_mode: base_hispeed_mode(mode_config.base_hispeed),
         floating_policy: floating_policy(mode_config.floating_policy),
@@ -709,7 +711,10 @@ pub fn build_game_session_with_input_backend(
         scoring_closed_at: None,
         natural_result_settled_at: None,
         last_hcn_gauge_at: None,
-    }
+    };
+    session.hispeed_change_base =
+        crate::screens::play_snapshot::display_hispeed_for_session(&session);
+    session
 }
 
 pub(super) fn clamp_hispeed(hispeed: f32) -> f32 {

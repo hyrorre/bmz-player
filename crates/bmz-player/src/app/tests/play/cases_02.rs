@@ -232,6 +232,7 @@ fn pending_hispeed_changes_use_displayed_mode_without_mutating_profile() {
     let profile = ProfileConfig::new_default("default", "Default", 1);
     let profile_hispeed = profile.lane.hispeed;
     let mut lane = PendingPlayLaneState {
+        hispeed_change_base: 2.0,
         hispeed: 2.0,
         hispeed_mode: HispeedMode::Floating,
         base_hispeed_mode: HispeedMode::Classic,
@@ -271,6 +272,7 @@ fn pending_hispeed_changes_use_displayed_mode_without_mutating_profile() {
 fn pending_disabled_covers_use_zero_cover_as_auto_adjust_trigger() {
     let profile = ProfileConfig::new_default("default", "Default", 1);
     let mut lane = PendingPlayLaneState {
+        hispeed_change_base: 1.0,
         hispeed: 1.0,
         hispeed_mode: HispeedMode::Floating,
         base_hispeed_mode: HispeedMode::Classic,
@@ -311,6 +313,7 @@ fn pending_disabled_covers_use_zero_cover_as_auto_adjust_trigger() {
 fn pending_disabled_covers_without_auto_adjust_change_hispeed_directly() {
     let profile = ProfileConfig::new_default("default", "Default", 1);
     let mut lane = PendingPlayLaneState {
+        hispeed_change_base: 2.0,
         hispeed: 2.0,
         hispeed_mode: HispeedMode::Classic,
         base_hispeed_mode: HispeedMode::Classic,
@@ -357,6 +360,7 @@ fn pending_disabled_covers_without_auto_adjust_change_hispeed_directly() {
 fn pending_hidden_cover_reverses_digital_and_analog_lane_actions() {
     let profile = ProfileConfig::new_default("default", "Default", 1);
     let mut lane = PendingPlayLaneState {
+        hispeed_change_base: 2.0,
         hispeed: 2.0,
         hispeed_mode: HispeedMode::Classic,
         base_hispeed_mode: HispeedMode::Classic,
@@ -420,6 +424,7 @@ fn pending_lane_state_preserves_sub_one_hsfix_bpm() {
 fn pending_green_number_change_switches_displayed_state_to_floating() {
     let profile = ProfileConfig::new_default("default", "Default", 1);
     let mut lane = PendingPlayLaneState {
+        hispeed_change_base: 2.0,
         hispeed: 2.0,
         hispeed_mode: HispeedMode::Classic,
         base_hispeed_mode: HispeedMode::Classic,
@@ -462,6 +467,7 @@ fn pending_floating_to_normal_uses_full_lane_rounding_boundaries() {
     let profile = ProfileConfig::new_default("default", "Default", 1);
     for (green_number, expected_level) in [(580, 7), (581, 6)] {
         let mut lane = PendingPlayLaneState {
+            hispeed_change_base: 1.0,
             hispeed: crate::screens::play_snapshot::hispeed_for_green_number_values(
                 green_number as f32,
                 1.0,
@@ -508,6 +514,7 @@ fn pending_floating_to_normal_uses_full_lane_rounding_boundaries() {
 fn pending_normal_hispeed_action_changes_level_and_ignores_lane_effects() {
     let profile = ProfileConfig::new_default("default", "Default", 1);
     let mut lane = PendingPlayLaneState {
+        hispeed_change_base: 4.0,
         hispeed: 4.0,
         hispeed_mode: HispeedMode::Normal,
         base_hispeed_mode: HispeedMode::Normal,
@@ -546,6 +553,7 @@ fn pending_normal_hispeed_action_changes_level_and_ignores_lane_effects() {
 fn pending_hispeed_policy_rejects_unavailable_controls() {
     let profile = ProfileConfig::new_default("default", "Default", 1);
     let base = PendingPlayLaneState {
+        hispeed_change_base: 2.0,
         hispeed: 2.0,
         hispeed_mode: HispeedMode::Classic,
         base_hispeed_mode: HispeedMode::Classic,
@@ -602,6 +610,7 @@ fn pending_hispeed_policy_rejects_unavailable_controls() {
 fn pending_lane_state_rejects_all_no_speed_controls() {
     let profile = ProfileConfig::new_default("default", "Default", 1);
     let mut lane = PendingPlayLaneState {
+        hispeed_change_base: 2.0,
         hispeed: 2.0,
         hispeed_mode: HispeedMode::Floating,
         base_hispeed_mode: HispeedMode::Classic,

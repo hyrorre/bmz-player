@@ -1765,6 +1765,7 @@ fn session() -> GameSession {
             auto_keysound_mine: true,
         },
         hispeed: 2.0,
+        hispeed_change_base: 2.0,
         hispeed_mode: bmz_gameplay::session::HispeedMode::Classic,
         base_hispeed_mode: bmz_gameplay::session::HispeedMode::Classic,
         floating_policy: bmz_gameplay::session::FloatingPolicy::Toggle,

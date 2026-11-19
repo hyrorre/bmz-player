@@ -566,14 +566,14 @@ E1とE4を同時に押している場合は、両方を離すまでE1 holdを保
 
 | キー | 操作 |
 | --- | --- |
-| Left / Right | Normalは20段階を下げる / 上げる。Classic / Floatingは設定の刻みで倍率を下げる / 上げる |
+| Left / Right | Normalは20段階を下げる / 上げる。Classic / Floatingは[HS変更方式](hs.md#hs変更方式)の変更量で倍率を下げる / 上げる |
 | Up / Down | SUDDEN+の表示中はSUDDEN+、非表示中は有効なLIFT / HIDDEN+を調整。変化量は[レーンカバーとHS](#レーンカバーとhs)を参照 |
 | E2 hold + Up / Down | Up / Downと同じ対象を1ずつ微調整 |
 | 9KでE1 hold + KEY8 / KEY9 | Up / Downと同じ操作。設定の変化量と長押しの連続移動を使う |
 | 9KでE2 hold + KEY8 / KEY9 | E2 hold + Up / Downと同じ操作。押した瞬間も長押し中も1ずつ微調整 |
 | マウスホイール | Up / Downと同じ対象を調整。上へ回すとカバーが上がる |
 | E2 hold + マウスホイール | マウスホイールと同じ対象を、1目盛りで1ずつ微調整 |
-| E1 hold + 鍵盤 | キーモードごとのHSの方向に従い、Normalは段階、Classic / Floatingは倍率を変更 |
+| E1 hold + 鍵盤 | キーモードごとのHSの方向に従い、Normalは段階、Classic / Floatingは倍率を変更。倍率の変更量は[HS変更方式](hs.md#hs変更方式)に従う |
 | E1 hold + E2 | LIFT / HIDDEN+が両方有効なときは変更対象を切り替え。それ以外は、切り替えられる設定でFloatingを切り替え |
 | E1 hold + Scratch Up / Down | Up / Downと同じ対象のカバー量を変更 |
 | E2 hold + 鍵盤 | Floatingを使える設定では、E1と同じキーモードごとの方向に従い、緑数字を下げる / 上げる。設定で向きを反転できる |

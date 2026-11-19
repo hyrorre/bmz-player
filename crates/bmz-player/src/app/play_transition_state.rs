@@ -178,6 +178,8 @@ impl PendingPlayStart {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PendingPlayLaneState {
     pub(super) hispeed: f32,
+    /// プレイ画面に入った時点の表示上のHS値。比率方式のHS変更の基準にする。
+    pub(super) hispeed_change_base: f32,
     pub(super) hispeed_mode: HispeedMode,
     pub(super) base_hispeed_mode: HispeedMode,
     pub(super) floating_policy: FloatingPolicy,
@@ -216,8 +218,9 @@ impl PendingPlayLaneState {
         };
         let hsfix_base_bpm = hsfix_base_bpm_from_snapshot(snapshot, hs_fix);
         let lr2_hispeed = mode_config.base_hispeed == BaseHispeedConfig::Lr2;
-        Self {
+        let mut lane = Self {
             hispeed: snapshot.hispeed,
+            hispeed_change_base: snapshot.hispeed,
             hispeed_mode: if snapshot.hispeed_mode_index == 0 {
                 base_hispeed_mode
             } else {
@@ -259,7 +262,9 @@ impl PendingPlayLaneState {
             ),
             hispeed_auto_adjust: mode_config.hispeed_auto_adjust,
             playback_rate_percent,
-        }
+        };
+        lane.hispeed_change_base = lane.display_hispeed();
+        lane
     }
 
     /// skin表示とprofile保存に使うHS値。LR2 + HS-FIXではBPM150基準の値を返す。

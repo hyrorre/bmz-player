@@ -100,6 +100,8 @@ settings-entry-description-hispeed-mode = ハイスピードの決め方です�
 settings-entry-description-normal-hispeed-level = NORMAL で使う速さの段階です。1〜20 の段階ごとに緑数字が決まっています。
 settings-entry-description-classic-hispeed-step = CLASSIC でハイスピードを 1 回変えたときに増減する量です。
 settings-entry-description-floating-hispeed-step = FLOATING でハイスピードを 1 回変えたときに増減する量です。
+settings-entry-description-hispeed-change-type = プレイ中にE1+鍵盤や← / →でハイスピードを変えるときの増減量の決め方です。FIXEDは上の変更刻み、RATIOはプレイ開始時のHSにHS RATIOを掛けた量で変わります。選曲画面のHS変更は常に変更刻みを使います。
+settings-entry-description-hispeed-change-ratio = HS CHANGEがRATIOのとき、プレイ開始時のHSに掛ける比率です。1.00ならHS 3.00から3.00→6.00→9.00と変わります。
 settings-entry-description-sudden-enabled = レーンの上側を隠すカバー（SUDDEN+）を使えるようにします。
 settings-entry-description-sudden = SUDDEN+ でレーンの上側を隠す量です。
 settings-entry-description-lift-enabled = 判定ラインを上に持ち上げる機能（LIFT）を使えるようにします。
@@ -538,6 +540,11 @@ profile-display-normal-hispeed = Normal HS
 profile-display-classic-hispeed-step = Classic HS変更刻み
 profile-display-floating-hispeed-step = Floating HS変更刻み
 profile-display-step-range = HS変更刻みの範囲: Classic 0.01..=1.00 / Floating 0.05..=1.00
+profile-display-hispeed-change-type = HS変更方式
+profile-display-hispeed-change-type-fixed = 固定
+profile-display-hispeed-change-type-ratio = 比率
+profile-display-hispeed-change-ratio = HS変更比率
+profile-display-hispeed-change-ratio-help = 比率では、プレイ中のE1+鍵盤や← / →による1回の変更量が「プレイ開始時のHS × 比率」になります。範囲は0.01..=10.00です。選曲画面のHS変更とカバー操作によるHS変更は、変更刻みを使います。
 profile-display-sudden-enabled = SUDDEN+を有効にする
 profile-display-lift-enabled = LIFTを有効にする
 profile-display-auto-adjust-hispeed = レーンカバー変更時に現在BPMへHSを自動調整
