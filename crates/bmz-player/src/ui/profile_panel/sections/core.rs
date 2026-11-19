@@ -247,7 +247,6 @@ pub(in crate::ui::profile_panel) fn build_profile_replay_section(
                 ui.disable();
             }
             ui.checkbox(&mut profile.replay.auto_save, tr!(text, "profile-replay-auto-save"));
-            ui.checkbox(&mut profile.replay.compress, tr!(text, "profile-replay-compress"));
             for (index, rule) in profile.replay.slot_rules.iter_mut().enumerate() {
                 egui::ComboBox::new(
                     ("profile_replay_slot", index),

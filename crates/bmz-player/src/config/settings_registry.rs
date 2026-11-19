@@ -187,7 +187,6 @@ impl SettingsEntryId {
 
     pub const REPLAY_ENTRIES: &'static [Self] = &[
         Self::ReplayAutoSave,
-        Self::ReplayCompress,
         Self::ReplaySlot1Rule,
         Self::ReplaySlot2Rule,
         Self::ReplaySlot3Rule,
@@ -328,7 +327,6 @@ impl SettingsEntryId {
             Self::RandomMixMinBpm => "MIX MIN BPM",
             Self::RandomMixStages => "MIX STAGES",
             Self::ReplayAutoSave => "REPLAY SAVE",
-            Self::ReplayCompress => "REPLAY COMPRESS",
             Self::ReplaySlot1Rule => "REPLAY 1",
             Self::ReplaySlot2Rule => "REPLAY 2",
             Self::ReplaySlot3Rule => "REPLAY 3",
@@ -474,7 +472,6 @@ impl SettingsEntryId {
             Self::RandomMixMinBpm => "settings-entry-description-random-mix-min-bpm",
             Self::RandomMixStages => "settings-entry-description-random-mix-stages",
             Self::ReplayAutoSave => "settings-entry-description-replay-auto-save",
-            Self::ReplayCompress => "settings-entry-description-replay-compress",
             Self::ReplaySlot1Rule
             | Self::ReplaySlot2Rule
             | Self::ReplaySlot3Rule
@@ -836,8 +833,6 @@ mod tests {
         assert!(profile.lane.lift_enabled);
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::HispeedAutoAdjust, 1));
         assert!(!profile.lane.hispeed_auto_adjust);
-        assert!(adjust_settings_value(&mut profile, SettingsEntryId::ReplayCompress, 1));
-        assert!(profile.replay.compress);
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::ShowFps, 1));
         assert!(profile.ui.show_fps);
 

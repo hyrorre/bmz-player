@@ -434,8 +434,8 @@ pub fn load_replay_for_chart_policy_and_double_option(
     Ok(replay)
 }
 
-pub fn replay_file_name(chart_sha256: [u8; 32], played_at: i64) -> String {
-    format!("{}-{played_at}.toml", hex_encode(&chart_sha256))
+pub fn replay_file_name(chart_sha256: [u8; 32], played_at: i64, id: uuid::Uuid) -> String {
+    format!("{}-{played_at}-{id}.toml", hex_encode(&chart_sha256))
 }
 
 /// One queued replay inside a course attempt: keeps the current chart id, the
@@ -749,10 +749,10 @@ events = []
     }
 
     #[test]
-    fn replay_file_name_uses_hash_and_play_time() {
+    fn replay_file_name_uses_hash_play_time_and_unique_id() {
         assert_eq!(
-            replay_file_name([0xab; 32], 12),
-            "abababababababababababababababababababababababababababababababab-12.toml"
+            replay_file_name([0xab; 32], 12, uuid::Uuid::nil()),
+            "abababababababababababababababababababababababababababababababab-12-00000000-0000-0000-0000-000000000000.toml"
         );
     }
 

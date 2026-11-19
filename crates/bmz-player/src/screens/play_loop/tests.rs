@@ -229,7 +229,6 @@ fn advance_play_screen_until_result_returns_finished_outcome() {
     let mut network_db = NetworkDatabase::from_connection(network_conn);
     let replay_config = ReplayConfig {
         auto_save: false,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
 

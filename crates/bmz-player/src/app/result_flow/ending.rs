@@ -175,6 +175,10 @@ impl WinitApp {
             }
             FinishedPlayAction::ShowResult => {}
         }
+        if finished.stored.replay_save_failed {
+            let text = Localizer::new(self.boot.profile_config.ui.locale());
+            self.show_left_overlay_toast(text.text("toast-result-replay-save-failed"));
+        }
         self.select.score_refresh.mark_score_data_changed(finished.score_data_changed);
         record_skin_session_play(
             &mut self.select.player_stats,

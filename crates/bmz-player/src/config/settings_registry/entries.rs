@@ -1438,14 +1438,6 @@ define_settings! {
             },
         format: |profile| format_bool_on_off(profile.replay.auto_save),
     }
-    ReplayCompress(bool) {
-        value: [field replay.compress],
-        adjust: |profile, _delta| {
-            profile.replay.compress = !profile.replay.compress;
-            true
-        },
-        format: |profile| format_bool_on_off(profile.replay.compress),
-    }
     ReplaySlot1Rule(ReplaySlotRule) {
         value: [field replay.slot_rules[0]],
         adjust: |profile, delta| {
