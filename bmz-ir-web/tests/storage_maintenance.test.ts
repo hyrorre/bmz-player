@@ -226,6 +226,46 @@ test('backfill deletion retains the blob key until scheduled storage deletion su
   expect([...objects.keys()]).toEqual([kept])
 })
 
+test('the replay deletion queue handles 200 keys per run and backs off repeated failures', async () => {
+  const now = Date.now()
+  const hour = 3_600_000
+  const queue = schema.replayBlobDeletions
+  const stuck = 'queue/000'
+  for (let start = 0; start < 202; start += STORAGE_CLEANUP_BATCH_SIZE) {
+    const rows = Array.from(
+      { length: Math.min(STORAGE_CLEANUP_BATCH_SIZE, 202 - start) },
+      (_, i) => {
+        const objectPath = `queue/${String(start + i).padStart(3, '0')}`
+        objects.set(objectPath, new Uint8Array())
+        return { objectPath }
+      },
+    )
+    await db.insert(queue).values(rows)
+  }
+  failingPaths.add(stuck)
+  const warning = spyOn(console, 'warn').mockImplementation(() => {})
+  try {
+    expect((await cleanupIrStorage(new Date(now))).deleted_replay_blobs).toBe(199)
+    expect([...objects.keys()]).toEqual([stuck, 'queue/200', 'queue/201'])
+    expect((await cleanupIrStorage(new Date(now + hour))).deleted_replay_blobs).toBe(2)
+    expect((await cleanupIrStorage(new Date(now + 2 * hour))).deleted_replay_blobs).toBe(0)
+    expect(await db.select().from(queue)).toEqual([
+      { objectPath: stuck, failedAttempts: 3, nextAttemptAt: new Date(now + 26 * hour) },
+    ])
+    expect(warning).toHaveBeenCalledWith(
+      'queued replay blob deletion failed',
+      expect.objectContaining({ failed: 1, retryingDaily: 1 }),
+    )
+    failingPaths.clear()
+    expect((await cleanupIrStorage(new Date(now + 3 * hour))).deleted_replay_blobs).toBe(0)
+    expect((await cleanupIrStorage(new Date(now + 26 * hour))).deleted_replay_blobs).toBe(1)
+    expect(await db.select().from(queue)).toEqual([])
+    expect(maxParameters).toBeLessThanOrEqual(100)
+  } finally {
+    warning.mockRestore()
+  }
+})
+
 test('scheduled cleanup removes only expired pending/uploaded blobs and retains verification records', async () => {
   const now = new Date()
   const old = new Date(now.getTime() - UNVERIFIED_REPLAY_RETENTION_MS - 1)

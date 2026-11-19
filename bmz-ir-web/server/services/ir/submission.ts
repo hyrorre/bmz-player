@@ -177,10 +177,6 @@ export async function submitScore(
     serverReceivedAt,
   }
 
-  const previousBest = await fetchPreviousBest(user.id, payload)
-
-  // score insert と best 更新は D1 batch (implicit transaction) で atomic に
-  // 書く。挿入と best 更新の間で Worker が落ちても不整合が残らない。
   const candidate: BestScoreCandidate = {
     ex_score: payload.result.ex_score,
     clear_rank: clearRank,
@@ -190,12 +186,19 @@ export async function submitScore(
     server_received_at: serverReceivedAt,
   }
   const score = { id: scoreId, serverReceivedAt }
-  const best = await prepareBestScoreUpsert(user.id, payload, scoreId, verification, candidate)
-  let bestUpdated: boolean
+  const previousBestQuery = selectPreviousBest(user.id, payload)
+  const best = bestScoreUpsert(user.id, payload, scoreId, verification, candidate)
+  let previous: Awaited<typeof previousBestQuery>[number] | undefined
+  let updated: typeof previous
   try {
-    const insertStatement = db.insert(schema.scores).values(scoreInsert)
-    const [, updated] = await db.batch([insertStatement, best.statement])
-    bestUpdated = updated.length > 0
+    // The response and the writes must use the same previous best under concurrent submissions.
+    const [before, , after] = await db.batch([
+      previousBestQuery,
+      db.insert(schema.scores).values(scoreInsert),
+      best,
+    ])
+    previous = before[0]
+    updated = after[0]
   } catch (error) {
     if (!isUniqueConstraintError(error)) {
       throw error
@@ -223,7 +226,15 @@ export async function submitScore(
     )
     return idempotentScoreResponse(existing, rankings)
   }
-  const { updatedFields } = best
+  const previousBest = previous
+    ? {
+        clear_type: previous.clear_type,
+        ex_score: previous.ex_score,
+        max_combo: previous.max_combo,
+        min_bp: previous.min_bp,
+        min_cb: previous.min_cb,
+      }
+    : null
 
   const rankings = await submissionRankings(
     user,
@@ -237,8 +248,14 @@ export async function submitScore(
   return {
     accepted: true,
     score_id: score.id,
-    best_updated: bestUpdated,
-    updated_fields: updatedFields,
+    best_updated: updated !== undefined,
+    updated_fields: {
+      ex_score: !!updated && (!previous || updated.ex_score > previous.ex_score),
+      clear: !!updated && (!previous || updated.clear_rank > previous.clear_rank),
+      max_combo: !!updated && (!previous || updated.max_combo > previous.max_combo),
+      min_bp: !!updated && (!previous || updated.min_bp < previous.min_bp),
+      min_cb: !!updated && (!previous || updated.min_cb < previous.min_cb),
+    },
     server_received_at: score.serverReceivedAt.toISOString(),
     previous_best: previousBest,
     rankings: Object.keys(rankings).length > 0 ? rankings : undefined,
@@ -438,7 +455,11 @@ async function deleteLocalBackfillSnapshot(
         scoring: row.scoring,
         playedAt: row.played_at ? new Date(row.played_at) : null,
         serverReceivedAt: row.server_received_at,
-        verification: row.verification,
+        // Attestation does not invalidate the history snapshot. Read its latest value here.
+        verification: sql`(${db
+          .select({ verification: schema.scores.verification })
+          .from(schema.scores)
+          .where(eq(schema.scores.id, row.score_id))})`,
         updatedAt,
       }),
     ),
@@ -694,31 +715,31 @@ async function upsertChart(payload: IrScoreSubmission, doubleOption: IrDoubleOpt
   }
 }
 
-export async function fetchPreviousBest(
-  playerId: string,
-  payload: IrScoreSubmission,
-): Promise<IrSubmitResponse['previous_best']> {
-  const current = await db.query.bestScores.findFirst({
-    columns: { exScore: true, clearType: true, maxCombo: true, minBp: true, minCb: true },
-    where: and(
-      eq(schema.bestScores.playerId, playerId),
-      eq(schema.bestScores.chartSha256, payload.chart.sha256),
-      eq(schema.bestScores.lnPolicy, payload.rule.ln_policy),
-      eq(schema.bestScores.scoring, payload.rule.scoring),
-      eq(schema.bestScores.doubleOption, normalizeDoubleOption(payload.play_options.double_option)),
-      eq(schema.bestScores.ruleMode, payload.rule.rule_mode),
-    ),
-  })
-  if (!current) {
-    return null
-  }
-  return {
-    clear_type: current.clearType,
-    ex_score: current.exScore,
-    max_combo: current.maxCombo,
-    min_bp: current.minBp,
-    min_cb: current.minCb,
-  }
+const bestScoreValues = {
+  clear_type: schema.bestScores.clearType,
+  clear_rank: schema.bestScores.clearRank,
+  ex_score: schema.bestScores.exScore,
+  max_combo: schema.bestScores.maxCombo,
+  min_bp: schema.bestScores.minBp,
+  min_cb: schema.bestScores.minCb,
+}
+
+function selectPreviousBest(playerId: string, payload: IrScoreSubmission) {
+  const table = schema.bestScores
+  return db
+    .select(bestScoreValues)
+    .from(table)
+    .where(
+      and(
+        eq(table.playerId, playerId),
+        eq(table.chartSha256, payload.chart.sha256),
+        eq(table.lnPolicy, payload.rule.ln_policy),
+        eq(table.scoring, payload.rule.scoring),
+        eq(table.doubleOption, normalizeDoubleOption(payload.play_options.double_option)),
+        eq(table.ruleMode, payload.rule.rule_mode),
+      ),
+    )
+    .limit(1)
 }
 
 export async function fetchPreviousBestExScoreExcluding(
@@ -746,41 +767,13 @@ export async function fetchPreviousBestExScoreExcluding(
   return rows[0]?.ex_score ?? null
 }
 
-/**
- * Build the upsert even if the snapshot already wins. Cleanup may remove that
- * best before the score insert and upsert run together in the same batch.
- */
-export async function prepareBestScoreUpsert(
+function bestScoreUpsert(
   playerId: string,
   payload: IrScoreSubmission,
   scoreId: string,
   verification: string,
   candidate: BestScoreCandidate,
 ) {
-  const current = await db.query.bestScores.findFirst({
-    columns: {
-      exScore: true,
-      clearRank: true,
-      maxCombo: true,
-      minBp: true,
-      minCb: true,
-    },
-    where: and(
-      eq(schema.bestScores.playerId, playerId),
-      eq(schema.bestScores.chartSha256, payload.chart.sha256),
-      eq(schema.bestScores.lnPolicy, payload.rule.ln_policy),
-      eq(schema.bestScores.scoring, payload.rule.scoring),
-      eq(schema.bestScores.doubleOption, normalizeDoubleOption(payload.play_options.double_option)),
-      eq(schema.bestScores.ruleMode, payload.rule.rule_mode),
-    ),
-  })
-  const updatedFields = {
-    ex_score: !current || candidate.ex_score > current.exScore,
-    clear: !current || candidate.clear_rank > current.clearRank,
-    max_combo: !current || candidate.max_combo > current.maxCombo,
-    min_bp: !current || candidate.min_bp < current.minBp,
-    min_cb: !current || candidate.min_cb < current.minCb,
-  }
   const verificationStatus = verification as IrVerificationStatus
   const playedAt = playedAtDate(payload.result.played_at)
   const values = {
@@ -810,8 +803,7 @@ export async function prepareBestScoreUpsert(
     serverReceivedAt: candidate.server_received_at,
     verification: verificationStatus,
   }
-  // Compare with the row at write time, not the snapshot read above. Both values
-  // and provenance IDs must advance together when concurrent submissions arrive.
+  // Advance the values and provenance IDs in the same write.
   const table = schema.bestScores
   const rankingWins = sql`(excluded.ex_score > ${table.exScore} or
     (excluded.ex_score = ${table.exScore} and (excluded.clear_rank > ${table.clearRank} or
@@ -824,7 +816,7 @@ export async function prepareBestScoreUpsert(
   const cbWins = sql`excluded.min_cb < ${table.minCb}`
   const choose = (condition: SQL, column: AnySQLiteColumn) =>
     sql`case when ${condition} then excluded.${sql.identifier(column.name)} else ${column} end`
-  const statement = db
+  return db
     .insert(schema.bestScores)
     .values(values)
     .onConflictDoUpdate({
@@ -859,6 +851,5 @@ export async function prepareBestScoreUpsert(
       },
       setWhere: or(rankingWins, clearWins, comboWins, bpWins, cbWins),
     })
-    .returning({ id: table.id })
-  return { updatedFields, statement }
+    .returning(bestScoreValues)
 }

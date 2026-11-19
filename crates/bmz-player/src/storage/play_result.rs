@@ -11,7 +11,7 @@ use crate::paths::ProfilePaths;
 use crate::screens::play_session::SRandomScheme;
 use crate::select_options::{ArrangeOption, DoubleOption, DoubleOptionScoreBucket};
 
-use super::replay::{ReplayFile, replay_file_name, replay_slot_file_name, save_replay_with_hash};
+use super::replay::{ReplayFile, replay_file_name, save_replay_with_hash};
 use super::score_db::{
     ReplaySlotRecord, ScoreDatabase, ScoreInsertMode, ScoreRecord, ScoreRecordMetadata,
 };
@@ -289,12 +289,7 @@ pub fn save_existing_replay_to_slot(
     if !source.is_file() {
         return Ok(None);
     }
-    std::fs::create_dir_all(&profile_paths.replay_dir)?;
-    let file_name =
-        replay_slot_file_name(result.chart_sha256, ln_policy, double_option, rule_mode, slot);
-    let path = profile_paths.replay_dir.join(&file_name);
-    std::fs::copy(&source, &path)?;
-    let rel_path = format!("replay/{file_name}");
+    let rel_path = stored.replay_path.clone();
     let candidate = candidate_metrics(result);
     score_db.upsert_replay_slot(&ReplaySlotRecord {
         chart_sha256: result.chart_sha256,

@@ -189,7 +189,7 @@ fn store_play_result_skips_autoplay_replay_by_default() {
 }
 
 #[test]
-fn save_existing_replay_to_slot_overwrites_requested_slot() {
+fn save_existing_replay_to_slot_reuses_the_history_file() {
     let root = make_temp_dir("manual-replay-slot");
     let paths = ProfilePaths {
         root_dir: root.clone(),
@@ -262,7 +262,9 @@ fn save_existing_replay_to_slot_overwrites_requested_slot() {
     .unwrap()
     .expect("manual slot path");
 
-    assert!(root.join(&saved).exists());
+    assert_eq!(saved, stored.replay_path);
+    assert!(root.join(&saved).is_file());
+    assert_eq!(std::fs::read_dir(&paths.replay_dir).unwrap().count(), 1);
     let key = super::super::score_db::ScoreKey::new([4; 32], LnScorePolicy::ForceLn);
     let slot = score_db.replay_slot(key, 2).unwrap().expect("slot record");
     assert_eq!(slot.rule, ReplaySlotRule::Always);

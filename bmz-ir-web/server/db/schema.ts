@@ -466,6 +466,7 @@ export const replayBlobDeletions = sqliteTable(
     nextAttemptAt: integer('next_attempt_at', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`0`),
+    failedAttempts: integer('failed_attempts').notNull().default(0),
   },
   (table) => [index('idx_replay_blob_deletions_due').on(table.nextAttemptAt, table.objectPath)],
 )

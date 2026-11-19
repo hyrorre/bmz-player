@@ -384,6 +384,7 @@ KaleidBeat拡張を使った譜面と、拡張に部分対応した結果も、�
 ```
 
 - `rankings`には、要求したscopeだけが入ります。scopeごとの取得に失敗した場合は`succeeded: false`と`error`を返し、スコアの送信は成功として扱います。
+- `previous_best`と`updated_fields`は、スコアとベストを書き込むD1バッチ内の更新前後の値から求めます。
 - `previous_rank`は、送信したスコアを除いた自己ベストを、応答を作った時点の全体ランキングへ仮に置いたときの順位です。初回のプレイでは`0`です。リザルトスキンの`NUMBER_IR_PREVRANK(182)`に使います。
 - 不正な署名や不正なpayloadは400で拒否します。
 - リプレイのupload URLは応答に含めません。`POST /api/v1/scores/{id}/replay/upload-url`で別に取得します。
@@ -533,10 +534,11 @@ rank=7, scope_rank=2  ライバル
 
 `ir:storage-cleanup`を1時間ごとの毎時00分に実行します（`0 * * * *`）。
 WranglerのCronトリガーとNitroのタスク設定の両方に登録します。
-期限切れリプレイの状態変更、rejectedのblob削除、スコア削除に伴うblobの削除、失効鍵の削除は、それぞれ1回40件までとし、
-残りは次の時間の実行へ回します。D1のbind上限100に収め、
-期限付きロックで同時実行を防ぎます。世代と状態を条件付きで更新し、新しいPUT・検証済みのリプレイを保護します。
-スコア削除時はDBから消える前にblobのキーを同じトランザクションで`replay_blob_deletions`へ記録します。R2での削除が失敗したキーは1時間後から再試行します。Workerの更新前にD1のmigration `0018_score_cleanup_consistency.sql` を適用します。
+期限切れリプレイの状態変更、rejectedのblob削除、失効鍵の削除は、それぞれ1回40件まで実行します。
+D1のbind上限100に収め、期限付きロックで同時実行を防ぎます。世代と状態を条件付きで更新し、新しいPUT・検証済みのリプレイを保護します。
+スコア削除時はDBから消える前にblobのキーを同じトランザクションで`replay_blob_deletions`へ記録します。
+削除待ちのキーは40件ずつ、1回最大5バッチ処理します。R2削除に失敗すると警告を出して1時間後に再試行し、3回目の失敗からは24時間間隔に切り替えます。
+Workerの更新前にD1のmigration `0018_score_cleanup_consistency.sql`と`0019_score_cleanup_review.sql`を適用します。
 
 ## 判定・EXスコア・クリアランプ
 
