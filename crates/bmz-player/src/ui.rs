@@ -34,7 +34,8 @@ use crate::config::profile_config::{
     AssistLongNoteMode, AssistMineMode, AssistScrollMode, BUILTIN_IR_PROVIDER_COUNT,
     BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig, CLASSIC_HISPEED_STEP_MIN,
     DifficultyTableLevelDisplay, DoubleOptionConfig, FLOATING_HISPEED_STEP_MIN,
-    FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig, HISPEED_STEP_MAX,
+    FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig, HISPEED_CHANGE_RATIO_MAX,
+    HISPEED_CHANGE_RATIO_MIN, HISPEED_CHANGE_RATIO_UNIT, HISPEED_STEP_MAX, HispeedChangeTypeConfig,
     HispeedConfigPreset, HsFixConfig, IrConfig, IrCredentialStoreConfig, IrProviderConfig,
     IrProviderRoleConfig, IrSendPolicyConfig, JudgeAlgorithmConfig, ProfileConfig,
     RELEASE_BOUNCE_MS_MAX, RandomOptionConfig, ReplaySlotRule, SkinConfig, SkinHistoryEntryConfig,
@@ -57,7 +58,7 @@ use crate::storage::difficulty_table_db::DifficultyTableRecord;
 use crate::storage::replay_import::{ImportBeatorajaReplaysRequest, ReplayImportProgress};
 use crate::storage::score_import::{ScoreImportKind, ScoreImportRequest};
 use crate::update::{UpdateAssetKind, UpdateCandidate, current_version};
-use crate::window_config::monitor_config_name;
+use crate::window_config::{describe_monitors, match_configured_monitor, monitor_config_summary};
 
 const BUNDLED_THIRD_PARTY_NOTICES: &str = include_str!("../../../THIRD-PARTY-NOTICES.txt");
 const THIRD_PARTY_NOTICE_PATH: &str = "licenses/third-party-notices.txt";

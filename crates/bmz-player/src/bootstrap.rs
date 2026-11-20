@@ -30,6 +30,7 @@ pub struct BootstrappedApp {
     pub app_paths: AppPaths,
     pub profile_paths: ProfilePaths,
     pub library_db: LibraryDatabase,
+    pub(crate) chart_encoding_source: Option<PathBuf>,
     pub collection_db: CollectionDatabase,
     pub score_db: ScoreDatabase,
     pub network_db: NetworkDatabase,
@@ -193,14 +194,16 @@ pub fn bootstrap_viewer_with_paths(
     let chart_path = crate::chart_asset::canonical_chart_path(chart_path)?;
     let library_path = viewer_library_path();
     let cleanup = ViewerLibraryCleanup { path: library_path.clone() };
-    app_paths.library_db = library_path;
+    let encoding_source = std::mem::replace(&mut app_paths.library_db, library_path);
     let mut app = bootstrap_with_paths_mode(app_paths, false, profile_id)?;
-    let imported = crate::storage::import::import_chart_file(
+    app.chart_encoding_source = Some(encoding_source);
+    let imported = crate::storage::import::import_chart_file_with_encoding_source(
         &mut app.library_db,
         &chart_path,
         None,
         Some(bms_random_seed),
         now_unix_seconds(),
+        app.chart_encoding_source.as_deref(),
     )?;
     let start_time = viewer_measure_start_time(&imported.chart, start_measure)?;
     Ok(ViewerBootstrap { app, chart_path, chart_id: imported.chart_id, start_time, cleanup })
@@ -298,6 +301,7 @@ fn bootstrap_with_paths_mode(
         app_paths,
         profile_paths: profile.paths,
         library_db,
+        chart_encoding_source: None,
         collection_db: profile.collection_db,
         score_db: profile.score_db,
         network_db: profile.network_db,

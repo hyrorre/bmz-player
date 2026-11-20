@@ -4,9 +4,10 @@ use bmz_render::scene::SelectRowKind;
 use crate::config::app_config::{AppConfig, AudioBackend, AudioBufferSizeMode};
 use crate::config::app_settings_registry::{AppSettingsEntryId, format_app_settings_value};
 use crate::config::key_config::{
-    COMMON_SELECT_GROUPS, KEY_BINDING_SLOTS, KEY_CONFIG_MODES, KeyBindingGroup, KeyBindingTarget,
-    binding_row_label, binding_slots_for_group, format_play_binding, key_binding_targets_for_group,
-    key_mode_binding_targets, key_mode_settings_path,
+    COMMON_KEY_BINDING_SLOTS, KEY_BINDING_SLOTS, KEY_CONFIG_MODES, KeyBindingGroup,
+    KeyBindingTarget, binding_row_label, binding_slots_for_group, common_select_binding_targets,
+    format_play_binding, key_binding_targets_for_group, key_mode_binding_targets,
+    key_mode_settings_path,
 };
 use crate::config::profile_config::ProfileConfig;
 use crate::config::settings_registry::{SettingsEntryId, format_settings_value};
@@ -345,14 +346,14 @@ pub fn load_settings_items_for_config(
         Some(SettingsPath::Replay) => config_items(SettingsEntryId::REPLAY_ENTRIES),
         Some(SettingsPath::Ui) => config_items(SettingsEntryId::UI_ENTRIES),
         Some(SettingsPath::KeysRoot) => key_mode_folder_items(locale),
-        Some(SettingsPath::KeysCommonSelect) => COMMON_SELECT_GROUPS
-            .iter()
-            .copied()
-            .flat_map(|group| {
-                std::iter::once(SelectItem::SettingsHeader(group.label_key()))
-                    .chain(key_group_binding_items(group))
-            })
-            .collect(),
+        Some(SettingsPath::KeysCommonSelect) => {
+            common_select_binding_targets(COMMON_KEY_BINDING_SLOTS)
+                .into_iter()
+                .map(|target| {
+                    SelectItem::KeyBinding(KeyBindingSelectRow { key_mode: KeyMode::K7, target })
+                })
+                .collect()
+        }
         Some(SettingsPath::KeysPlay) => key_group_binding_items(KeyBindingGroup::Play),
         Some(SettingsPath::KeysResult) => key_group_binding_items(KeyBindingGroup::Result),
         Some(SettingsPath::KeysMode(key_mode)) => key_binding_items(key_mode),
@@ -702,45 +703,37 @@ mod tests {
     }
 
     #[test]
-    fn settings_keys_common_select_lists_both_groups_in_order() {
+    fn settings_keys_common_select_lists_bindings_in_default_key_order() {
         let items = load_settings_items(CONFIG_KEYS_COMMON_SELECT_PATH);
         assert!(matches!(items.first(), Some(SelectItem::SettingsBack)));
-        assert!(matches!(&items[1], SelectItem::SettingsHeader("settings-category-common")));
-        let select_index = items
+        let rows: Vec<_> = items[1..]
             .iter()
-            .position(|item| matches!(item, SelectItem::SettingsHeader("settings-nav-select")))
-            .unwrap();
-        let keyboard_row = |action| {
-            SelectItem::KeyBinding(KeyBindingSelectRow {
-                key_mode: KeyMode::K7,
-                target: KeyBindingTarget::Action { action, slot: KeyBindingSlot::KeyboardPrimary },
+            .map(|item| match item {
+                SelectItem::KeyBinding(row) => *row,
+                _ => panic!("expected a key binding row"),
             })
-        };
-        for action in [
-            InputActionConfig::E1,
-            InputActionConfig::Screenshot,
-            InputActionConfig::SelectOpenIr,
-            InputActionConfig::SelectFavoriteSong,
-            InputActionConfig::SelectFavoriteChart,
-        ] {
-            let row = keyboard_row(action);
-            assert!(items[2..select_index].contains(&row));
-            assert!(!items[select_index + 1..].contains(&row));
-        }
-        assert!(
-            items[select_index + 1..].contains(&keyboard_row(InputActionConfig::SelectOpenFolder))
+            .collect();
+        let profile = ProfileConfig::new_default("default", "Player", 0);
+        let keyboard_keys: Vec<_> = rows
+            .iter()
+            .filter(|row| row.target.slot() == KeyBindingSlot::KeyboardPrimary)
+            .map(|row| row.value_text(&profile))
+            .collect();
+        assert_eq!(
+            keyboard_keys,
+            [
+                "Q", "W", "E", "R", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "F3", "F5",
+                "F8", "F9", "F10", "F11", "F12", "(none)",
+            ]
         );
-        assert!(!items.iter().any(|item| matches!(
-            item,
-            SelectItem::KeyBinding(row)
-                if matches!(
-                    row.target,
-                    KeyBindingTarget::Action {
-                        action: InputActionConfig::SelectEnter | InputActionConfig::SelectOptionBga,
-                        ..
-                    }
-                )
-        )));
+        for (row, &slot) in
+            rows[rows.len() - KEY_BINDING_SLOTS.len()..].iter().zip(KEY_BINDING_SLOTS)
+        {
+            assert_eq!(
+                row.target,
+                KeyBindingTarget::Action { action: InputActionConfig::OpenRandomTrainer, slot }
+            );
+        }
     }
 
     #[test]
@@ -945,6 +938,8 @@ mod tests {
                     SettingsEntryId::HispeedMode,
                     SettingsEntryId::Hispeed,
                     SettingsEntryId::ClassicHispeedStep,
+                    SettingsEntryId::HispeedChangeType,
+                    SettingsEntryId::HispeedChangeRatio,
                 ],
             ),
             (
@@ -953,6 +948,8 @@ mod tests {
                     SettingsEntryId::HispeedMode,
                     SettingsEntryId::Hispeed,
                     SettingsEntryId::ClassicHispeedStep,
+                    SettingsEntryId::HispeedChangeType,
+                    SettingsEntryId::HispeedChangeRatio,
                 ],
             ),
             (
@@ -960,6 +957,8 @@ mod tests {
                 vec![
                     SettingsEntryId::HispeedMode,
                     SettingsEntryId::FloatingHispeedStep,
+                    SettingsEntryId::HispeedChangeType,
+                    SettingsEntryId::HispeedChangeRatio,
                     SettingsEntryId::TargetGreenNumber,
                     SettingsEntryId::NoteDisplayDurationMs,
                     SettingsEntryId::HispeedAutoAdjust,
@@ -971,6 +970,8 @@ mod tests {
                     SettingsEntryId::HispeedMode,
                     SettingsEntryId::NormalHispeedLevel,
                     SettingsEntryId::FloatingHispeedStep,
+                    SettingsEntryId::HispeedChangeType,
+                    SettingsEntryId::HispeedChangeRatio,
                     SettingsEntryId::TargetGreenNumber,
                     SettingsEntryId::NoteDisplayDurationMs,
                     SettingsEntryId::HispeedAutoAdjust,
@@ -983,6 +984,8 @@ mod tests {
                     SettingsEntryId::Hispeed,
                     SettingsEntryId::ClassicHispeedStep,
                     SettingsEntryId::FloatingHispeedStep,
+                    SettingsEntryId::HispeedChangeType,
+                    SettingsEntryId::HispeedChangeRatio,
                     SettingsEntryId::TargetGreenNumber,
                     SettingsEntryId::NoteDisplayDurationMs,
                     SettingsEntryId::HispeedAutoAdjust,
@@ -1038,10 +1041,6 @@ mod tests {
         assert!(items.iter().any(|item| matches!(
             item,
             SelectItem::Config(row) if row.entry_id == SettingsEntryId::ReplaySlot4Rule
-        )));
-        assert!(items.iter().any(|item| matches!(
-            item,
-            SelectItem::Config(row) if row.entry_id == SettingsEntryId::ReplayCompress
         )));
     }
 

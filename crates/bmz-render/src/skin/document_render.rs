@@ -627,11 +627,11 @@ pub(super) trait SkinDocumentRenderInternal {
         digit: u32,
         elapsed_ms: i32,
         source_size: SkinImageSize,
-        cell_width_px: f32,
-        cell_height_px: f32,
+        cell_width_px: i32,
+        cell_height_px: i32,
         divx: i32,
         divy: i32,
-    ) -> TextureRegion;
+    ) -> Option<TextureRegion>;
 
     fn gauge_image_render_item(
         &self,
@@ -803,6 +803,7 @@ pub(super) trait SkinDocumentRenderInternal {
     fn graph_render_item(
         &self,
         graph: &SkinGraphDef,
+        destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,

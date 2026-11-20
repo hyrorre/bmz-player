@@ -967,4 +967,18 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             "ALTER TABLE charts ADD COLUMN kaleid_json TEXT NOT NULL DEFAULT '{}';",
         ],
     },
+    Migration {
+        version: 39,
+        statements: &[
+            "CREATE TABLE chart_encoding_overrides (
+                sha256 TEXT PRIMARY KEY NOT NULL,
+                encoding TEXT NOT NULL
+            ) WITHOUT ROWID;",
+            "CREATE TABLE chart_encoding_revision (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                revision INTEGER NOT NULL
+            );",
+            "INSERT INTO chart_encoding_revision VALUES (1, 0);",
+        ],
+    },
 ];

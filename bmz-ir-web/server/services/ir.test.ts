@@ -168,7 +168,7 @@ describe('ranking best row aggregation', () => {
       rankingRow({ player_id: 'middle', score_id: 'middle', ex_score: 1400 }),
       rankingRow({ player_id: 'previous-tie', score_id: 'previous-tie', ex_score: 1000 }),
     ]
-    const entries = __test.rankRows(rows, 'self', new Set(), new Map())
+    const entries = __test.rankRows(rows, 'self', new Set())
 
     expect(__test.previousRankFromEntries(entries, 'self', 1000)).toBe(4)
     expect(__test.previousRankFromEntries(entries, 'self', null)).toBe(0)

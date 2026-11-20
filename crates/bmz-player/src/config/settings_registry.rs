@@ -7,12 +7,13 @@ use super::profile_config::{
     BgaModeConfig, BottomShiftableGaugeConfig, CLASSIC_HISPEED_STEP_MIN, CLASSIC_HISPEED_STEP_UNIT,
     DifficultyTableLevelDisplay, DoubleOptionConfig, FLOATING_HISPEED_STEP_MIN,
     FLOATING_HISPEED_STEP_UNIT, FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig,
-    HISPEED_STEP_MAX, HISPEED_TRANSITION_MS_MAX, HispeedConfigPreset, HispeedDirectionConfig,
-    HsFixConfig, JudgeAlgorithmConfig, KeyModeConversionConfig, LaneConfig, ProfileConfig,
-    RELEASE_BOUNCE_MS_MAX, RandomOptionConfig, ReplaySlotRule, SRandomCorrectionConfig,
-    SelectInputModeConfig, SevenToNinePattern, SevenToNineRuleMode, SevenToNineType,
-    SongPreviewMode, TargetOptionConfig, normalize_classic_hispeed_step,
-    normalize_floating_hispeed_step,
+    HISPEED_CHANGE_RATIO_MAX, HISPEED_CHANGE_RATIO_MIN, HISPEED_CHANGE_RATIO_UNIT,
+    HISPEED_STEP_MAX, HISPEED_TRANSITION_MS_MAX, HispeedChangeTypeConfig, HispeedConfigPreset,
+    HispeedDirectionConfig, HsFixConfig, JudgeAlgorithmConfig, KeyModeConversionConfig, LaneConfig,
+    ProfileConfig, RELEASE_BOUNCE_MS_MAX, RandomOptionConfig, ReplaySlotRule,
+    SRandomCorrectionConfig, SelectInputModeConfig, SevenToNinePattern, SevenToNineRuleMode,
+    SevenToNineType, SongPreviewMode, TargetOptionConfig, normalize_classic_hispeed_step,
+    normalize_floating_hispeed_step, normalize_hispeed_change_ratio,
 };
 use bmz_core::lane::KeyMode;
 use bmz_gameplay::rule::RuleMode;
@@ -111,6 +112,8 @@ impl SettingsEntryId {
         Self::Hispeed,
         Self::ClassicHispeedStep,
         Self::FloatingHispeedStep,
+        Self::HispeedChangeType,
+        Self::HispeedChangeRatio,
         Self::TargetGreenNumber,
         Self::NoteDisplayDurationMs,
         Self::HispeedAutoAdjust,
@@ -130,6 +133,9 @@ impl SettingsEntryId {
         match self {
             Self::NormalHispeedLevel => preset.supports_normal(),
             Self::Hispeed | Self::ClassicHispeedStep => preset.supports_classic(),
+            Self::HispeedChangeType | Self::HispeedChangeRatio => {
+                preset.supports_classic() || preset.supports_floating()
+            }
             Self::FloatingHispeedStep
             | Self::TargetGreenNumber
             | Self::NoteDisplayDurationMs
@@ -187,7 +193,6 @@ impl SettingsEntryId {
 
     pub const REPLAY_ENTRIES: &'static [Self] = &[
         Self::ReplayAutoSave,
-        Self::ReplayCompress,
         Self::ReplaySlot1Rule,
         Self::ReplaySlot2Rule,
         Self::ReplaySlot3Rule,
@@ -276,6 +281,8 @@ impl SettingsEntryId {
             Self::NormalHispeedLevel => "NORMAL HS",
             Self::ClassicHispeedStep => "CLASSIC HS STEP",
             Self::FloatingHispeedStep => "FLOATING HS STEP",
+            Self::HispeedChangeType => "HS CHANGE",
+            Self::HispeedChangeRatio => "HS RATIO",
             Self::SuddenEnabled => "SUDDEN+ ENABLED",
             Self::Sudden => "SUDDEN+",
             Self::LiftEnabled => "LIFT ENABLED",
@@ -328,7 +335,6 @@ impl SettingsEntryId {
             Self::RandomMixMinBpm => "MIX MIN BPM",
             Self::RandomMixStages => "MIX STAGES",
             Self::ReplayAutoSave => "REPLAY SAVE",
-            Self::ReplayCompress => "REPLAY COMPRESS",
             Self::ReplaySlot1Rule => "REPLAY 1",
             Self::ReplaySlot2Rule => "REPLAY 2",
             Self::ReplaySlot3Rule => "REPLAY 3",
@@ -415,6 +421,8 @@ impl SettingsEntryId {
             Self::NormalHispeedLevel => "settings-entry-description-normal-hispeed-level",
             Self::ClassicHispeedStep => "settings-entry-description-classic-hispeed-step",
             Self::FloatingHispeedStep => "settings-entry-description-floating-hispeed-step",
+            Self::HispeedChangeType => "settings-entry-description-hispeed-change-type",
+            Self::HispeedChangeRatio => "settings-entry-description-hispeed-change-ratio",
             Self::SuddenEnabled => "settings-entry-description-sudden-enabled",
             Self::Sudden => "settings-entry-description-sudden",
             Self::LiftEnabled => "settings-entry-description-lift-enabled",
@@ -474,7 +482,6 @@ impl SettingsEntryId {
             Self::RandomMixMinBpm => "settings-entry-description-random-mix-min-bpm",
             Self::RandomMixStages => "settings-entry-description-random-mix-stages",
             Self::ReplayAutoSave => "settings-entry-description-replay-auto-save",
-            Self::ReplayCompress => "settings-entry-description-replay-compress",
             Self::ReplaySlot1Rule
             | Self::ReplaySlot2Rule
             | Self::ReplaySlot3Rule
@@ -595,6 +602,29 @@ mod tests {
         profile.lane.floating_hispeed_step = 0.05;
         assert!(!adjust_settings_value(&mut profile, SettingsEntryId::FloatingHispeedStep, -1));
         assert_eq!(profile.lane.floating_hispeed_step, 0.05);
+    }
+
+    #[test]
+    fn hispeed_change_type_and_ratio_settings_cycle_and_clamp() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::HispeedChangeType), "FIXED");
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::HispeedChangeRatio), "0.25");
+
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::HispeedChangeType, 1));
+        assert_eq!(profile.lane.hispeed_change_type, HispeedChangeTypeConfig::Ratio);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::HispeedChangeType), "RATIO");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::HispeedChangeType, 1));
+        assert_eq!(profile.lane.hispeed_change_type, HispeedChangeTypeConfig::Fixed);
+
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::HispeedChangeRatio, 1));
+        assert_eq!(profile.lane.hispeed_change_ratio, 0.26);
+        profile.lane.hispeed_change_ratio = 0.01;
+        assert!(!adjust_settings_value(&mut profile, SettingsEntryId::HispeedChangeRatio, -1));
+        profile.lane.hispeed_change_ratio = 9.99;
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::HispeedChangeRatio, 1));
+        assert_eq!(profile.lane.hispeed_change_ratio, 10.0);
+        assert!(!adjust_settings_value(&mut profile, SettingsEntryId::HispeedChangeRatio, 1));
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::HispeedChangeRatio), "10.00");
     }
 
     #[test]
@@ -836,8 +866,6 @@ mod tests {
         assert!(profile.lane.lift_enabled);
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::HispeedAutoAdjust, 1));
         assert!(!profile.lane.hispeed_auto_adjust);
-        assert!(adjust_settings_value(&mut profile, SettingsEntryId::ReplayCompress, 1));
-        assert!(profile.replay.compress);
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::ShowFps, 1));
         assert!(profile.ui.show_fps);
 

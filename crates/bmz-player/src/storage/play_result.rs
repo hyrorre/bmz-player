@@ -11,9 +11,7 @@ use crate::paths::ProfilePaths;
 use crate::screens::play_session::SRandomScheme;
 use crate::select_options::{ArrangeOption, DoubleOption, DoubleOptionScoreBucket};
 
-use super::replay::{
-    ReplayFile, replay_file_name, replay_slot_file_name, save_replay, save_replay_with_hash,
-};
+use super::replay::{ReplayFile, replay_file_name, save_replay_with_hash};
 use super::score_db::{
     ReplaySlotRecord, ScoreDatabase, ScoreInsertMode, ScoreRecord, ScoreRecordMetadata,
 };
@@ -26,6 +24,7 @@ pub struct StoredPlayResult {
     /// 保存したリプレイファイル内容の SHA256 (hex)。保存時に serialize 済み
     /// バイト列から計算するので、IR 送信時にファイルを読み直す必要がない。
     pub replay_sha256: Option<String>,
+    pub replay_save_failed: bool,
     pub slot_paths: [Option<String>; 4],
     pub device_type: InputDeviceKind,
 }
@@ -121,51 +120,53 @@ pub fn store_play_result(
 ) -> Result<StoredPlayResult> {
     let arrange = request.arrange;
     let arrange_2p = request.arrange_2p;
-    let arrange_seed = request.arrange_seed;
-    let arrange_seed_2p = request.arrange_seed_2p;
-    let bms_random_choices = request.bms_random_choices.clone();
-    let bms_switch_choices = request.bms_switch_choices.clone();
-    let arrange_pattern = request.arrange_pattern.clone();
-    let replay_events = request.replay_events.clone();
     let rule_mode = bmz_gameplay::rule::RuleMode::from_str_opt(&request.rule_mode)
         .unwrap_or(bmz_gameplay::rule::RuleMode::Beatoraja);
-    let device_type = classify_replay_device_type(&replay_events);
+    let device_type = classify_replay_device_type(&request.replay_events);
+    let mut replay_save_failed = false;
 
-    let (replay_path, replay_sha256) = if request.update_score
-        && should_save_replay(replay_config, result)
-    {
-        let file_name = replay_file_name(result.chart_sha256, request.played_at);
-        let path = profile_paths.replay_dir.join(&file_name);
-        let mut replay = ReplayFile::new_with_policy(
-            result.chart_sha256,
-            request.ln_policy,
-            request.double_option,
-            request.played_at,
-            request.random_seed,
-            arrange,
-            arrange_2p,
-            arrange_seed,
-            arrange_pattern.clone(),
-            replay_events.clone(),
-        )
-        .with_branch_decisions(request.branch_decisions.clone())
-        .with_kaleid_evidence(request.kaleid.clone())
-        .with_randomization(arrange_seed_2p, bms_random_choices.clone(), bms_switch_choices.clone())
-        .with_seed_scheme(request.seed_scheme.clone())
-        .with_s_random_schemes(request.s_random_scheme, request.s_random_scheme_2p)
-        .with_playback_metadata(
-            request.applied_double_option,
-            result.gauge_type,
-            request.h_random_threshold_ms,
-        )
-        .with_freq_semitones(request.freq_semitones);
-        replay.lr2_seed = request.lr2_seed;
-        replay.judge_algorithm = Some(request.judge_algorithm);
-        let hash = save_replay_with_hash(&path, &replay)?;
-        (format!("replay/{file_name}"), Some(hash))
-    } else {
-        (String::new(), None)
-    };
+    let (replay_path, replay_sha256) =
+        if request.update_score && should_save_replay(replay_config, result) {
+            let mut replay = ReplayFile::new_with_policy(
+                result.chart_sha256,
+                request.ln_policy,
+                request.double_option,
+                request.played_at,
+                request.random_seed,
+                arrange,
+                arrange_2p,
+                request.arrange_seed,
+                request.arrange_pattern,
+                request.replay_events,
+            )
+            .with_branch_decisions(request.branch_decisions)
+            .with_kaleid_evidence(request.kaleid.clone())
+            .with_randomization(
+                request.arrange_seed_2p,
+                request.bms_random_choices,
+                request.bms_switch_choices,
+            )
+            .with_seed_scheme(request.seed_scheme.clone())
+            .with_s_random_schemes(request.s_random_scheme, request.s_random_scheme_2p)
+            .with_playback_metadata(
+                request.applied_double_option,
+                result.gauge_type,
+                request.h_random_threshold_ms,
+            )
+            .with_freq_semitones(request.freq_semitones);
+            replay.lr2_seed = request.lr2_seed;
+            replay.judge_algorithm = Some(request.judge_algorithm);
+            match save_play_history_replay(profile_paths, &replay, result.chart_sha256) {
+                Ok((path, hash)) => (path, Some(hash)),
+                Err(error) => {
+                    replay_save_failed = true;
+                    tracing::warn!(%error, "failed to save play history replay");
+                    (String::new(), None)
+                }
+            }
+        } else {
+            (String::new(), None)
+        };
 
     let mut record = ScoreRecord::from_play_result(
         result,
@@ -199,81 +200,51 @@ pub fn store_play_result(
     };
 
     let mut slot_paths: [Option<String>; 4] = [None, None, None, None];
-    if request.update_score
-        && request.mode.save_replay_slots()
-        && should_save_replay(replay_config, result)
-    {
+    if !replay_path.is_empty() && request.mode.save_replay_slots() {
+        // The finished play's file is immutable. A failed slot update leaves
+        // the previous row and its replay intact.
         let candidate = candidate_metrics(result);
+        let key = super::score_db::ScoreKey::with_options(
+            result.chart_sha256,
+            request.ln_policy,
+            request.double_option,
+            rule_mode,
+        );
         for (slot_index, &rule) in replay_config.slot_rules.iter().enumerate() {
             let slot = slot_index as u8;
-            let key = super::score_db::ScoreKey::with_options(
-                result.chart_sha256,
-                request.ln_policy,
-                request.double_option,
-                rule_mode,
-            );
-            let prev = score_db.replay_slot(key, slot)?;
-            if !evaluate_slot_update(rule, prev.as_ref(), &candidate) {
-                continue;
+            let update = (|| -> Result<bool> {
+                let prev = score_db.replay_slot(key, slot)?;
+                if !evaluate_slot_update(rule, prev.as_ref(), &candidate) {
+                    return Ok(false);
+                }
+                score_db.upsert_replay_slot(&ReplaySlotRecord {
+                    chart_sha256: result.chart_sha256,
+                    ln_policy: request.ln_policy,
+                    double_option: request.double_option,
+                    rule_mode,
+                    slot,
+                    rule,
+                    replay_path: replay_path.clone(),
+                    played_at: request.played_at,
+                    ex_score: Some(candidate.ex_score),
+                    bp: Some(candidate.bp),
+                    cb: Some(candidate.cb),
+                    max_combo: Some(candidate.max_combo),
+                    clear_rank: Some(candidate.clear_rank),
+                    source_kind: super::score_db::ScoreSourceKind::Local,
+                    source_path: String::new(),
+                    source_fingerprint: String::new(),
+                })?;
+                Ok(true)
+            })();
+            match update {
+                Ok(true) => slot_paths[slot_index] = Some(replay_path.clone()),
+                Ok(false) => {}
+                Err(error) => {
+                    replay_save_failed = true;
+                    tracing::warn!(slot, %error, "failed to save automatic replay slot");
+                }
             }
-            let file_name = replay_slot_file_name(
-                result.chart_sha256,
-                request.ln_policy,
-                request.double_option,
-                rule_mode,
-                slot,
-            );
-            let path = profile_paths.replay_dir.join(&file_name);
-            let mut replay = ReplayFile::new_with_policy(
-                result.chart_sha256,
-                request.ln_policy,
-                request.double_option,
-                request.played_at,
-                request.random_seed,
-                arrange,
-                arrange_2p,
-                arrange_seed,
-                arrange_pattern.clone(),
-                replay_events.clone(),
-            )
-            .with_branch_decisions(request.branch_decisions.clone())
-            .with_kaleid_evidence(request.kaleid.clone())
-            .with_randomization(
-                arrange_seed_2p,
-                bms_random_choices.clone(),
-                bms_switch_choices.clone(),
-            )
-            .with_seed_scheme(request.seed_scheme.clone())
-            .with_s_random_schemes(request.s_random_scheme, request.s_random_scheme_2p)
-            .with_playback_metadata(
-                request.applied_double_option,
-                result.gauge_type,
-                request.h_random_threshold_ms,
-            )
-            .with_freq_semitones(request.freq_semitones);
-            replay.lr2_seed = request.lr2_seed;
-            replay.judge_algorithm = Some(request.judge_algorithm);
-            save_replay(&path, &replay)?;
-            let rel_path = format!("replay/{file_name}");
-            score_db.upsert_replay_slot(&ReplaySlotRecord {
-                chart_sha256: result.chart_sha256,
-                ln_policy: request.ln_policy,
-                double_option: request.double_option,
-                rule_mode,
-                slot,
-                rule,
-                replay_path: rel_path.clone(),
-                played_at: request.played_at,
-                ex_score: Some(candidate.ex_score),
-                bp: Some(candidate.bp),
-                cb: Some(candidate.cb),
-                max_combo: Some(candidate.max_combo),
-                clear_rank: Some(candidate.clear_rank),
-                source_kind: super::score_db::ScoreSourceKind::Local,
-                source_path: String::new(),
-                source_fingerprint: String::new(),
-            })?;
-            slot_paths[slot_index] = Some(rel_path);
         }
     }
 
@@ -282,9 +253,23 @@ pub fn store_play_result(
         played_at: request.played_at,
         replay_path,
         replay_sha256,
+        replay_save_failed,
         slot_paths,
         device_type,
     })
+}
+
+fn save_play_history_replay(
+    paths: &ProfilePaths,
+    replay: &ReplayFile,
+    chart_sha256: [u8; 32],
+) -> Result<(String, String)> {
+    let mut random = [0; 16];
+    getrandom::getrandom(&mut random).map_err(|error| anyhow::anyhow!("replay ID: {error}"))?;
+    let id = uuid::Builder::from_random_bytes(random).into_uuid();
+    let file_name = replay_file_name(chart_sha256, replay.played_at, id);
+    let hash = save_replay_with_hash(&paths.replay_dir.join(&file_name), replay)?;
+    Ok((format!("replay/{file_name}"), hash))
 }
 
 pub fn save_existing_replay_to_slot(
@@ -304,12 +289,7 @@ pub fn save_existing_replay_to_slot(
     if !source.is_file() {
         return Ok(None);
     }
-    std::fs::create_dir_all(&profile_paths.replay_dir)?;
-    let file_name =
-        replay_slot_file_name(result.chart_sha256, ln_policy, double_option, rule_mode, slot);
-    let path = profile_paths.replay_dir.join(&file_name);
-    std::fs::copy(&source, &path)?;
-    let rel_path = format!("replay/{file_name}");
+    let rel_path = stored.replay_path.clone();
     let candidate = candidate_metrics(result);
     score_db.upsert_replay_slot(&ReplaySlotRecord {
         chart_sha256: result.chart_sha256,

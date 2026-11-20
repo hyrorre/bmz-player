@@ -33,8 +33,8 @@ use bmz_gameplay::input::translator::DefaultInputTranslator;
 use bmz_gameplay::judge::engine::JudgeEngine;
 use bmz_gameplay::judge::model::{JudgeAlgorithm, JudgeWindow, JudgeWindows};
 use bmz_gameplay::judge::window::{
-    judge_percent_at_time_for_keymode, judge_windows_for_keymode_and_rule_mode,
-    judge_windows_for_rule_mode_and_keymode, scale_judge_windows_for_playback_rate,
+    judge_percent_at_time_for_keymode, judge_windows_for_rule_mode_and_keymode,
+    replay_judge_windows_for_keymode_and_rule_mode, scale_judge_windows_for_playback_rate,
 };
 use bmz_gameplay::replay::{ReplayPlayer, ReplayRecorder};
 use bmz_gameplay::rule::RuleMode;
@@ -122,8 +122,10 @@ pub struct PlaySessionOptions {
     /// Preload workers read archive chart assets into memory. Other callers import only the
     /// chart, so the window thread never decodes an archive.
     pub read_archive_assets: bool,
-    /// Per-key presentation settings use the source chart mode. This differs
-    /// from `chart.metadata.key_mode` after BATTLE expands 5K/7K to 10K/14K.
+    /// Profile slot for per-key presentation settings and bindings; `None` uses
+    /// the played chart mode. G-BATTLE passes the source 5K/7K mode while the
+    /// chart is expanded to 10K/14K. D-BATTLE ignores this override and always
+    /// uses the 10K/14K slot, because the player plays both sides.
     pub play_config_key_mode: Option<KeyMode>,
     /// The authoritative launch mode. Practice-specific runtime state is
     /// derived from this value instead of being configured independently.
@@ -528,7 +530,8 @@ pub(crate) use arrange_pipeline::preview_arrange_pattern;
 pub(crate) use arrange_pipeline::second_player_lane_mask;
 pub use arrange_pipeline::{apply_arrange, apply_arrange_pair, generate_arrange_seed};
 pub use build::{
-    apply_placeholder_session_visuals, build_game_session, build_game_session_with_input_backend,
+    InitialSessionHispeed, apply_placeholder_session_visuals, build_game_session,
+    build_game_session_with_input_backend, initial_session_hispeed,
 };
 pub(crate) use build::{
     beatoraja_chart_last_time, effective_primary_key_mode, judge_algorithm_from_config,

@@ -1468,7 +1468,6 @@ pub(super) fn load_or_compute_chart_normalization_gain(
                 notes.clear();
             }
         }
-        audible_chart.long_notes.retain(|pair| !excluded[pair.lane.index()]);
         &audible_chart
     } else {
         chart

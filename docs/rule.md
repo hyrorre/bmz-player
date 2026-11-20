@@ -22,8 +22,8 @@ DX MODEも現在のLR2oraja Endless Dream本体に統合されているため、
 | item | Beatoraja | Lr2Oraja | Dx |
 | --- | --- | --- | --- |
 | 主な参照 | beatoraja | LR2oraja Endless Dream | LR2oraja Endless Dream DX MODE |
-| 判定property | key mode別`JudgeProperty` | `JudgeProperty.LR2` | 9Kは`JudgeProperty.POP`、それ以外は`IIDX` |
-| ゲージproperty | key mode別`GaugeProperty` | `GaugeProperty.LR2` | 9KはPOP用、それ以外はIIDX用gauge |
+| 判定property | key mode別`JudgeProperty` | `JudgeProperty.LR2` | 9K（PMS 5K含む）は`JudgeProperty.POP`、それ以外は`IIDX` |
+| ゲージproperty | key mode別`GaugeProperty` | `GaugeProperty.LR2` | 9K（PMS 5K含む）はPOP用、それ以外はIIDX用gauge |
 | `#RANK`未指定 | 100% | 75% (`#RANK 2`相当) | 固定窓のため無視 |
 | `#RANK 4` | 125% (`PMS`は133%) | 75% (`#RANK 2`相当) | 固定窓のため無視 |
 | `#EXRANKxx` / chA0 | importはするがruntimeでは無視 | importはするがruntimeでは無視 | 固定窓のため無視 |
@@ -31,7 +31,7 @@ DX MODEも現在のLR2oraja Endless Dream本体に統合されているため、
 | LN start late BAD抑制 | 無効 | 有効 | 有効 |
 | BAD消費 | 消費 (`PMS`だけ非消費) | 消費 | 9Kは非消費、それ以外は消費 |
 | EmptyPoor combo break | 5K / 10K / 9Kだけbreak | 継続 | 9Kはbreak、それ以外は継続 |
-| CN/HCN早離し猶予 | 9Kは200ms、それ以外は0 | 0 | 9Kは200ms、それ以外は0 |
+| CN/HCN早離し猶予 | 9Kは200ms、それ以外は0 | 0 | 9Kは116.667ms、それ以外は0 |
 | score / replay保存 | `rule_mode=Beatoraja` | `rule_mode=Lr2Oraja` | `rule_mode=Dx` |
 
 DX MODE固有のIR抑制はBMZ公式IR / rianIRには適用しません。
@@ -166,6 +166,8 @@ LR2orajaのjbms-parser経路ではchA0がruntimeの判定ランク変更とし�
 
 DX MODEはLR2oraja Endless Dreamの`dxMode`を参照します。custom judge rateは
 無効化し、9K以外は`JudgeProperty.IIDX`、9Kは`JudgeProperty.POP`に固定します。
+参照側の`POP`対象はPOPN_5K / POPN_9Kです。BMZはPMS 5K譜面も9K（`KeyMode::K9`）として
+取り込むため、同じPOP判定・POPゲージになります。beatoraja 5K（BEAT_5K）はIIDXのままです。
 
 9K以外の通常ノート / scratch:
 
@@ -186,26 +188,31 @@ DX MODEはLR2oraja Endless Dreamの`dxMode`を参照します。custom judge rat
 
 - PGREAT: `±25000us`
 - GREAT: `±50000us`
-- GOOD: `±87500us`
-- BAD: `±100000us`
-- EMPTY POOR FAST: `500000us`
-- EMPTY POOR SLOW: `112500us`
+- GOOD: `±116667us`
+- BAD: `±183333us`
+- EMPTY POOR FAST: `529167us`
+- EMPTY POOR SLOW: `183333us`
 
-9KのCN / HCN end:
+9KのLN / CN / HCN end（早離し側だけ広い）:
 
-- PGREAT: `±120000us`
-- GREAT: `±150000us`
-- GOOD: `±217000us`
-- BAD: `±283000us`
+- PGREAT / GREAT / GOOD: FAST（早離し）`233333us`、SLOW `116667us`
+- BAD: FAST `366667us`、SLOW `183333us`
 - EMPTY POOR: なし
+
+FAST側のPGREAT / GREAT / GOOD幅は、参照側の注記どおり判定幅116667us＋離し猶予116667usです。
 
 9KではBADがノーツを消費せず、後続入力でGOOD以上へ再判定できます。
 MultiBadで付いたBADも同じく非消費とします。EMPTY POORはコンボを切り、
 `MissCondition.ONE`として1ノーツにつき1回まで扱います。
 
-9KのCN / HCNをBAD / POOR相当の早さで離した場合は、200msの
+9KのLN / CN / HCNをBAD / POOR相当の早さで離した場合は、116667usの
 release margin中だけ終端判定を保留します。その間に押し直せば早離しを取り消し、
 押し直さなければ保留した判定を確定します。long scratchのmarginは0です。
+
+v0.5.2以前に記録した9K DX MODEのリプレイは、記録時の判定で再現するため旧POP窓で再生します
+（通常ノートGOOD `±87500us`・BAD `±100000us`・EMPTY POOR FAST / SLOW `500000us` / `112500us`、
+LN end PGREAT / GREAT / GOOD / BAD `±120000` / `150000` / `217000` / `283000us`、release margin `200000us`）。
+リプレイファイルの`judge_revision`がないものを旧判定として扱い、新しく記録するリプレイには`judge_revision = 1`を書きます。
 
 `#RANK`, `#DEFEXRANK`, `#EXRANKxx` / chA0は固定IIDX / POP窓へ反映しません。
 BMZの実装でもDX modeの`judge_percent_at_time`は常に100%を返し、
@@ -225,6 +232,7 @@ BMZの実装でもDX modeの`judge_percent_at_time`は常に100%を返し、
 
 `Duration`は時間差最小、`Lowest`は先に見つかったノーツ優先、`Combo`はcombo継続寄り、
 `Score`はscore寄りの比較を行います。BMZではすべてのrule modeで同じ設定値を使います。
+`Duration`で時間差が等しい候補が複数ある場合は、譜面のレーン内の順序で先の候補を採用します。
 
 リプレイに判定アルゴリズムの記録があれば、再生・動画出力・G-BATTLEでその記録を使います。
 記録がなければプロフィールの設定を使います。

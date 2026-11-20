@@ -226,12 +226,13 @@ pub fn print_effective(
         };
         let mut db = LibraryDatabase::open(std::path::Path::new(":memory:"))?;
         run_migrations(db.conn_mut(), LIBRARY_MIGRATIONS)?;
-        let imported = crate::storage::import::import_chart_file(
+        let imported = crate::storage::import::import_chart_file_with_encoding_source(
             &mut db,
             &crate::chart_asset::canonical_chart_path(path)?,
             None,
             play.seed,
             0,
+            Some(&paths.library_db),
         )?;
         profile.activate_play_mode(imported.chart.metadata.key_mode);
     }

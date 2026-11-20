@@ -1,5 +1,5 @@
-import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm'
-import type { BatchItem } from 'drizzle-orm/batch'
+import { and, desc, eq, sql } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/sqlite-core'
 import { db, schema } from 'hub:db'
 import { isUniqueConstraintError } from '../../utils/db_errors'
 import { publicChartCondition, publicPlayerCondition } from '../moderation/visibility'
@@ -77,15 +77,23 @@ async function buildRanking(
   const bestRows = await fetchRankingBestRows(sha256, query)
   const rivalIds = user ? await getRivalIds(user.id) : new Set<string>()
   const rankingRows = dedupeBestRowsByPlayer(bestRows)
-  const playerIds = [...new Set(rankingRows.map((row) => row.player_id))]
-  const names = await getPlayerNames(playerIds)
-  const ranked = rankRows(rankingRows, user?.id ?? null, rivalIds, names)
+  const ranked = rankRows(rankingRows, user?.id ?? null, rivalIds)
   const scoped = applyScope(ranked, query.scope, user?.id ?? null, rivalIds)
-  const entries = scoped.slice(query.offset, query.offset + query.limit).map((entry, index) => ({
+  const total = scoped.length
+  // 全プレイヤー中のクリア率 (%)。NoPlay/Failed を除いた割合。
+  const clearRate = rankingRows.length
+    ? Math.round(
+        (rankingRows.filter((row) => row.clear_rank > 1).length / rankingRows.length) * 100,
+      )
+    : null
+  const page = scoped.slice(query.offset, query.offset + query.limit)
+  const selfEntry = ranked.find((entry) => entry.relation.is_self)
+  const selfInPage = selfEntry !== undefined && page.includes(selfEntry)
+  await loadRankingEntryDetails(selfEntry && !selfInPage ? [...page, selfEntry] : page)
+  const entries = page.map((entry, index) => ({
     ...entry,
     scope_rank: query.offset + index + 1,
   }))
-  const selfEntry = ranked.find((entry) => entry.relation.is_self)
 
   return {
     data: {
@@ -102,29 +110,21 @@ async function buildRanking(
       ranking: {
         scope: query.scope,
         sort: 'ex_score_desc',
-        // 全プレイヤー中のクリア率 (%)。NoPlay/Failed を除いた割合。
-        clear_rate:
-          rankingRows.length > 0
-            ? Math.round(
-                (rankingRows.filter((row) => row.clear_rank > 1).length / rankingRows.length) * 100,
-              )
-            : null,
+        clear_rate: clearRate,
         entries,
         self: selfEntry
           ? {
               rank: selfEntry.rank,
               score_id: selfEntry.score.score_id,
-              included_in_entries: entries.some(
-                (entry) => entry.score.score_id === selfEntry.score.score_id,
-              ),
+              included_in_entries: selfInPage,
               entry: selfEntry,
             }
           : undefined,
         pagination: {
           limit: query.limit,
           offset: query.offset,
-          total: scoped.length,
-          has_more: query.offset + query.limit < scoped.length,
+          total,
+          has_more: query.offset + query.limit < total,
         },
       },
     },
@@ -147,10 +147,7 @@ export function previousRankFromEntries(
   )
 }
 
-export async function fetchRankingBestRows(
-  sha256: string,
-  query: RankingQuery,
-): Promise<BestScoreRow[]> {
+async function fetchRankingBestRows(sha256: string, query: RankingQuery): Promise<BestScoreRow[]> {
   const conditions = [
     eq(schema.bestScores.chartSha256, sha256),
     eq(schema.bestScores.scoring, query.scoring),
@@ -197,47 +194,52 @@ export async function fetchRankingBestRows(
     .where(and(...conditions))
     .orderBy(desc(schema.bestScores.exScore))
 
-  const cachedRows = rows.map(rowToBestScoreRow)
-  if (cachedRows.length > 0) {
-    return enrichBestRowsWithPlayOptions(cachedRows)
+  if (rows.length > 0) {
+    return rows.map(rowToBestScoreRow)
   }
   return fetchRankingBestRowsFromHistory(sha256, query)
 }
 
-export async function enrichBestRowsWithPlayOptions(rows: BestScoreRow[]): Promise<BestScoreRow[]> {
-  const scoreIds = [
-    ...new Set(
-      rows.flatMap((row) => [
-        row.score_id,
-        row.best_ex_score_id,
-        row.best_clear_score_id,
-        row.best_max_combo_score_id,
-        row.best_min_bp_score_id,
-        row.best_min_cb_score_id,
-      ]),
-    ),
-  ]
-  if (scoreIds.length === 0) {
-    return rows
-  }
+async function loadRankingEntryDetails(entries: IrRankingEntry[]): Promise<void> {
+  if (entries.length === 0) return
 
-  const scoreRows = await db
+  // A 200-entry page plus the player's own entry must fit D1's 100-bind limit.
+  const sources = JSON.stringify(
+    entries.map(({ player, score }) => ({
+      playerId: player.id,
+      scoreId: score.score_id,
+      exScoreId: score.source_score_ids?.ex_score ?? score.score_id,
+    })),
+  )
+  const playerId = sql<string>`json_extract(ranking_sources.value, '$.playerId')`
+  const representative = alias(schema.scores, 'representative')
+  const exBest = alias(schema.scores, 'ex_best')
+  const rows = await db
     .select({
-      id: schema.scores.id,
-      play_options: schema.scores.playOptions,
-      judges: schema.scores.judges,
+      playerId,
+      displayName: schema.profiles.displayName,
+      playOptions: representative.playOptions,
+      judges: exBest.judges,
     })
-    .from(schema.scores)
-    .where(inArray(schema.scores.id, scoreIds))
-  const scoreById = new Map(scoreRows.map((row) => [row.id, row]))
-  return rows.map((row) => ({
-    ...row,
-    ...arrangeOptionsFromPlayOptions(scoreById.get(row.score_id)?.play_options),
-    judges: rankingJudges(scoreById.get(row.best_ex_score_id)?.judges),
-  }))
+    .from(sql`json_each(${sources}) as ranking_sources`)
+    .leftJoin(schema.profiles, eq(schema.profiles.id, playerId))
+    .leftJoin(
+      representative,
+      eq(representative.id, sql`json_extract(ranking_sources.value, '$.scoreId')`),
+    )
+    .leftJoin(exBest, eq(exBest.id, sql`json_extract(ranking_sources.value, '$.exScoreId')`))
+
+  const byPlayer = new Map(rows.map((row) => [row.playerId, row]))
+  for (const entry of entries) {
+    const details = byPlayer.get(entry.player.id)
+    entry.player.display_name = details?.displayName || 'Player'
+    Object.assign(entry.score, arrangeOptionsFromPlayOptions(details?.playOptions), {
+      judges: rankingJudges(details?.judges),
+    })
+  }
 }
 
-export async function fetchRankingBestRowsFromHistory(
+async function fetchRankingBestRowsFromHistory(
   sha256: string,
   query: RankingQuery,
 ): Promise<BestScoreRow[]> {
@@ -277,8 +279,6 @@ export async function fetchRankingBestRowsFromHistory(
       played_at: schema.scores.playedAt,
       server_received_at: schema.scores.serverReceivedAt,
       verification: schema.scores.verification,
-      judges: schema.scores.judges,
-      play_options: schema.scores.playOptions,
     })
     .from(schema.scores)
     .where(and(...conditions))
@@ -313,14 +313,9 @@ export function rowToBestScoreRow(row: {
   played_at: Date | null
   server_received_at: Date
   verification: BestScoreRow['verification']
-  judges?: Record<string, unknown> | null
-  play_options?: Record<string, unknown> | null
 }): BestScoreRow {
-  const { play_options: playOptions, ...rowFields } = row
-  const arrangeOptions = arrangeOptionsFromPlayOptions(playOptions)
   return {
-    ...rowFields,
-    ...arrangeOptions,
+    ...row,
     best_ex_score_id: row.best_ex_score_id ?? row.score_id,
     best_clear_score_id: row.best_clear_score_id ?? row.score_id,
     best_max_combo_score_id: row.best_max_combo_score_id ?? row.score_id,
@@ -333,7 +328,6 @@ export function rowToBestScoreRow(row: {
     rule_mode: row.rule_mode as IrRuleMode,
     device_type: row.device_type as IrDeviceType,
     played_at: row.played_at?.toISOString() ?? null,
-    judges: rankingJudges(row.judges),
   }
 }
 
@@ -455,7 +449,6 @@ export function rankRows(
   rows: BestScoreRow[],
   selfId: string | null,
   rivalIds: Set<string>,
-  names: Map<string, string>,
 ): IrRankingEntry[] {
   const sorted = [...rows].sort(
     (a, b) =>
@@ -480,7 +473,7 @@ export function rankRows(
       scope_rank: index + 1,
       player: {
         id: row.player_id,
-        display_name: names.get(row.player_id) || 'Player',
+        display_name: 'Player',
       },
       score: {
         score_id: row.score_id,
@@ -494,11 +487,8 @@ export function rankRows(
         double_option: row.double_option,
         rule_mode: row.rule_mode,
         device_type: row.device_type,
-        arrange_1p: row.arrange_1p,
-        arrange_2p: row.arrange_2p,
         played_at: row.played_at,
         verification: row.verification,
-        judges: row.judges,
         source_score_ids: {
           ex_score: row.best_ex_score_id,
           clear: row.best_clear_score_id,
@@ -557,17 +547,6 @@ export async function getRivalIds(playerId: string): Promise<Set<string>> {
       ),
     )
   return new Set(rows.map((row) => row.target_player_id))
-}
-
-export async function getPlayerNames(playerIds: string[]): Promise<Map<string, string>> {
-  if (playerIds.length === 0) {
-    return new Map()
-  }
-  const rows = await db
-    .select({ id: schema.profiles.id, display_name: schema.profiles.displayName })
-    .from(schema.profiles)
-    .where(inArray(schema.profiles.id, playerIds))
-  return new Map(rows.map((row) => [row.id, row.display_name || 'Player']))
 }
 
 /**

@@ -317,6 +317,8 @@ clear / max combo / min BPだけを全履歴から集約します。ETagが一�
 
 `RIVALCHART MIRROR`のスコアは反転後の配置種別とseedで保存・送信します。
 規則は[操作説明](controls.md)のG-BATTLEの項を参照してください。
+5K / 7Kの譜面でD-BATTLE / BATTLE ASにするかどうかは自分の選択を保ち、ライバルからはDP譜面のFLIPだけを写します。
+D-BATTLE同士では、ライバルの`play_seed`から1P / 2Pの両方のseedを適用します。
 
 structured配置をlegacy `play_option`より優先するため、BMZから送信された
 F-RANDOM / MF-RANDOMも再現できます。ghostによる進行ターゲットは実装対象外です。

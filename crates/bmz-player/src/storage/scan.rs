@@ -30,6 +30,9 @@ pub struct ScanSummary {
     pub warnings: u32,
     /// Successfully imported copies that reused the analysis of identical bytes.
     pub reused: u32,
+    /// Charts left for the next scan because encoding overrides changed while they were
+    /// being decoded. Their previous registrations stay as they were.
+    pub deferred: u32,
     pub removed_files: usize,
 }
 
@@ -668,6 +671,156 @@ mod tests {
         assert_eq!(status, "Parsed");
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn chart_encoding_override_reimports_unchanged_bytes_and_is_shared_by_loaders() {
+        use bmz_chart::import::{BmsRandomSource, BmsTextEncoding};
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("song.bms");
+        let bytes = b"#TITLE \xC7\xD1\xB1\xDB\n#BPM 120\n#TOTAL 200\n#WAV01 \xC7\xD1\xB1\xDB.wav\n#00111:01\n";
+        std::fs::write(&path, bytes).unwrap();
+        std::fs::write(root.path().join("한글.wav"), []).unwrap();
+        let identity = bmz_chart::hash::compute_chart_identity(bytes);
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let roots = [PathEntry {
+            path: root.path().to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+        let scan = |db: &mut LibraryDatabase| {
+            scan_song_roots(db, &roots, &scan_config(), 1_700_000_022, false).unwrap().summary
+        };
+        db.set_chart_encoding(&identity.file_sha256, Some(BmsTextEncoding::Cp932)).unwrap();
+        assert_eq!(scan(&mut db).imported, 1);
+        let chart_id: i64 =
+            db.conn().query_row("SELECT id FROM charts", [], |row| row.get(0)).unwrap();
+        db.set_chart_encoding(&identity.file_sha256, Some(BmsTextEncoding::Ms949)).unwrap();
+        assert_eq!(scan(&mut db).imported, 1);
+        assert_eq!(scan(&mut db).skipped, 1);
+        let title: String = db
+            .conn()
+            .query_row("SELECT title FROM charts WHERE id = ?1", [chart_id], |row| row.get(0))
+            .unwrap();
+        assert_eq!(title, "한글");
+
+        let random = BmsRandomSource::Choices { random: Vec::new(), switches: Vec::new() };
+        let (_, saved) = db.load_chart_source_bytes(chart_id, random.clone()).unwrap();
+        let (_, _, play) = db.load_chart_source_with_assets(chart_id, random).unwrap();
+        let direct =
+            crate::storage::import::import_chart_file(&mut db, &path, None, None, 1).unwrap();
+        for chart in [saved.chart, play.chart, direct.chart] {
+            assert_eq!(chart.identity, identity);
+            assert_eq!(chart.metadata.title, "한글");
+            assert_eq!(chart.sounds[0].path, root.path().join("한글.wav"));
+        }
+        assert_eq!(direct.chart_id, chart_id);
+
+        db.set_chart_encoding(&identity.file_sha256, None).unwrap();
+        assert_eq!(db.chart_encoding(&identity.file_sha256).unwrap().1, None);
+        assert_eq!(scan(&mut db).imported, 1);
+    }
+
+    #[test]
+    fn chart_encoding_override_reimports_registered_archive_charts_without_force() {
+        use bmz_chart::import::BmsTextEncoding;
+        use std::io::Write;
+
+        let root = tempfile::tempdir().unwrap();
+        let bytes = b"#TITLE \xC7\xD1\xB1\xDB\n#BPM 120\n#TOTAL 200\n#00111:01\n";
+        let mut writer =
+            zip::ZipWriter::new(std::fs::File::create(root.path().join("pack.zip")).unwrap());
+        writer.start_file("song.bms", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(bytes).unwrap();
+        writer.finish().unwrap();
+        let identity = bmz_chart::hash::compute_chart_identity(bytes);
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let roots = [PathEntry {
+            path: root.path().to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+        let scan = |db: &mut LibraryDatabase| {
+            scan_song_roots(db, &roots, &scan_config(), 1_700_000_023, false).unwrap().summary
+        };
+        let chart = |db: &LibraryDatabase| -> (String, i64) {
+            db.conn()
+                .query_row("SELECT title, import_version FROM charts", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+                .unwrap()
+        };
+        let current = CHART_IMPORT_VERSION;
+        assert_eq!(scan(&mut db).imported, 1);
+        let auto = chart(&db);
+        assert_eq!(auto.1, current);
+        assert_eq!(scan(&mut db).skipped, 1);
+
+        db.set_chart_encoding(&identity.file_sha256, Some(BmsTextEncoding::Ms949)).unwrap();
+        assert_eq!(scan(&mut db).imported, 1);
+        assert_eq!(chart(&db), ("한글".to_string(), current));
+        assert_eq!(scan(&mut db).skipped, 1);
+
+        db.set_chart_encoding(&identity.file_sha256, None).unwrap();
+        assert_eq!(scan(&mut db).imported, 1);
+        assert_eq!(chart(&db), auto);
+    }
+
+    #[test]
+    fn encoding_override_change_during_scan_defers_the_batch_without_failing_the_scan() {
+        let root = tempfile::tempdir().unwrap();
+        for folder in ["a", "b"] {
+            std::fs::create_dir(root.path().join(folder)).unwrap();
+        }
+        write_file(&root.path().join("a/a.bms"), "#TITLE A\n#BPM 120\n#00011:01\n");
+        write_file(&root.path().join("b/b.bms"), "#TITLE B\n#BPM 120\n#00011:01\n");
+        let data = tempfile::tempdir().unwrap();
+        let db_path = data.path().join("library.db");
+        crate::storage::migration::migrate_library_db(&db_path).unwrap();
+        let mut db = LibraryDatabase::open(&db_path).unwrap();
+        let roots = [PathEntry {
+            path: root.path().to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+        // Another process (the `songs encoding` command) changes an override after the
+        // scan read the overrides and before it writes the decoded charts.
+        let mut changed = false;
+        let report = scan_song_roots_with_progress(
+            &mut db,
+            &roots,
+            &scan_config(),
+            1_700_000_030,
+            false,
+            |_| {
+                if !std::mem::replace(&mut changed, true) {
+                    let mut other = LibraryDatabase::open(&db_path).unwrap();
+                    other
+                        .set_chart_encoding(
+                            &[7; 32],
+                            Some(bmz_chart::import::BmsTextEncoding::Ms949),
+                        )
+                        .unwrap();
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(report.summary.imported, 0);
+        assert_eq!(report.summary.deferred, 2);
+        assert!(report.failures.is_empty());
+        let charts: i64 =
+            db.conn().query_row("SELECT COUNT(*) FROM charts", [], |row| row.get(0)).unwrap();
+        assert_eq!(charts, 0);
+
+        let next = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_031, false).unwrap();
+        assert_eq!((next.summary.imported, next.summary.deferred), (2, 0));
     }
 
     #[test]

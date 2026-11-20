@@ -39,7 +39,18 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-20 | [REMI-S の GREAT／GOOD 点滅と LR2 の画像分割](2026/2026-11-20-lr2-judge-blink.md) |
+| 2026-11-19 | [FIFO系でHz以上のFPS上限の周期待機を省く（#136）](2026/2026-11-19-issue-136-frame-pacing.md) |
+| 2026-11-19 | [譜面音量正規化の発音対象とLN始点の重複（#134）](2026/2026-11-19-chart-loudness-events.md) |
+| 2026-11-19 | [監査で見つかったスコア保存とリプレイ清掃の修正](2026/2026-11-19-score-replay-audit-fixes.md) |
+| 2026-11-19 | [単曲IRランキングの明細取得を応答ページに絞る](2026/2026-11-19-ir-ranking-page-joins.md) |
+| 2026-11-19 | [BMS譜面のBOM・UTF-16/32・MS949対応と文字コード拡張計画](2026/2026-11-19-bms-chart-encodings.md) |
+| 2026-11-19 | [選曲画面のESC長押し終了の既定値](2026/2026-11-19-select-exit-hold-default.md) |
+| 2026-11-19 | [Antique Playのロード進捗表示](2026/2026-11-19-antique-loading-progress.md) |
+| 2026-11-19 | [高密度オートプレイの判定と中断](2026/2026-11-19-dense-autoplay-and-escape.md) |
+| 2026-11-18 | [DX MODEのPOP判定を参照側の変更へ追従](2026/2026-11-18-dx-pop-judge.md) |
 | 2026-11-18 | [oraja_helper の named pipe 連携](2026/2026-11-18-oraja-helper-pipe.md) |
+| 2026-11-17 | [DOUBLE BATTLEの入力・リプレイ・IR送信（#119）](2026/2026-11-17-double-battle-review.md) |
 | 2026-11-17 | [BMS-IRのseed対戦とLR2譜面再現のレビュー（#120）](2026/2026-11-17-bms-ir-lr2-seed-review.md) |
 | 2026-11-17 | [選曲の検索欄への貼り付けとCtrlのスクロール（#117）](2026/2026-11-17-select-search-paste.md) |
 | 2026-11-17 | [選曲のスライダードラッグと同梱スキンのクリック座標](2026/2026-11-17-skin-scrollbar-drag.md) |

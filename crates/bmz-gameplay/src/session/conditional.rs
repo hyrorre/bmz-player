@@ -478,7 +478,7 @@ pub(super) fn advance_before_boundary(
 
 /// Split held-note intervals even when the owner crosses an entire LN in one wake.
 pub(super) fn advance_time(session: &mut GameSession, at: TimeUs) -> Vec<JudgementEvent> {
-    if session.state == PlayState::Failed {
+    if session.state == PlayState::Failed || session.play_end_reached() {
         return Vec::new();
     }
     let previous = session.conditional.processed_time.unwrap_or(TimeUs(-1));
@@ -513,6 +513,9 @@ pub(super) fn advance_time(session: &mut GameSession, at: TimeUs) -> Vec<Judgeme
     points.dedup();
     let mut events = Vec::new();
     for time in points {
+        if session.play_end_reached() {
+            break;
+        }
         // Integrate the old hold state up to this boundary, then apply its discrete events.
         apply_hcn_gauge(session, time);
         super::frame::sync_judge_windows(session, time);

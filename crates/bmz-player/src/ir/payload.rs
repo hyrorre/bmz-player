@@ -117,7 +117,31 @@ pub fn build_score_submission(
 
     let mut chart_payload =
         build_ir_chart_payload_with_ln_profile(chart, context.source_ln_profile);
+    // The hash identifies the original SP chart. D-BATTLE doubles the scoring
+    // denominator, but must not register that hash as a DP chart in either IR.
+    if context.applied_double_option.is_battle()
+        && let Some(mode) = DoubleOption::battle_source_key_mode(chart.metadata.key_mode)
+    {
+        chart_payload.mode = mode.as_str().to_string();
+        // BATTLE copies every note, LN and mine to both sides, so each count
+        // must be even before it is halved back to the source chart.
+        let notes = &mut chart_payload.notes;
+        for count in [
+            &mut notes.total,
+            &mut notes.ln,
+            &mut notes.cn,
+            &mut notes.hcn,
+            &mut notes.hln,
+            &mut notes.mine,
+        ] {
+            debug_assert!(*count % 2 == 0, "BATTLE chart count is not doubled: {count}");
+            *count /= 2;
+        }
+        chart_payload.total =
+            Some(gauge_total_for_chart(chart.metadata.total, chart_payload.notes.total));
+    }
     chart_payload.length_ms = context.chart_length_ms;
+    let key_mode = chart_payload.mode.clone();
 
     IrScoreSubmission {
         client: IrClientInfo {
@@ -127,8 +151,8 @@ pub fn build_score_submission(
         },
         chart: chart_payload,
         rule: IrRulePayload {
-            play_mode: play_mode_payload(chart.metadata.key_mode.as_str()),
-            key_mode: chart.metadata.key_mode.as_str().to_string(),
+            play_mode: play_mode_payload(&key_mode),
+            key_mode,
             gauge: context.gauge_option,
             ln_policy: context.ln_policy,
             effective_ln_mode: effective_ln_mode_payload(effective_ln_mode),
@@ -514,10 +538,225 @@ mod tests {
             payload.play_options.get("bms_switch_choices"),
             Some(&serde_json::json!([2_000_000_000_000_u64]))
         );
+        for (dp, sp) in [(KeyMode::K10, "5K"), (KeyMode::K14, "7K")] {
+            let mut battle_chart = chart.clone();
+            battle_chart.metadata.key_mode = dp;
+            battle_chart.metadata.source_format = bmz_chart::model::ChartSourceFormat::Bms;
+            battle_chart.metadata.kaleid = bmz_chart::kaleid::KaleidProvenance::imported();
+            battle_chart.total_notes = 2;
+            battle_chart.metadata.total = None;
+            for (index, lane) in
+                [bmz_core::lane::Lane::Key1, bmz_core::lane::Lane::Key8].into_iter().enumerate()
+            {
+                battle_chart.lane_notes[lane.index()].push(bmz_chart::model::NoteEvent {
+                    id: bmz_core::ids::NoteId(index as u32),
+                    lane,
+                    tick: bmz_core::time::ChartTick(0),
+                    time: bmz_core::time::TimeUs(0),
+                    kind: NoteKind::Tap,
+                    sound: None,
+                    layered_sounds: Vec::new(),
+                    damage: None,
+                });
+            }
+            for double in [DoubleOption::Battle, DoubleOption::BattleAutoScratch] {
+                let battle = build_score_submission(
+                    &battle_chart,
+                    &PlayResult { total_notes: 2, ..result.clone() },
+                    IrSubmissionContext {
+                        double_option: double.score_bucket(),
+                        applied_double_option: double,
+                        ..context.clone()
+                    },
+                );
+                assert_eq!(battle.chart.mode, sp);
+                assert_eq!(battle.rule.key_mode, sp);
+                assert_eq!(battle.rule.play_mode, "single");
+                assert_eq!(battle.chart.notes.total, 1);
+                assert_eq!(battle.result.notes, 2);
+                assert_eq!(battle.chart.total, Some(gauge_total_for_chart(None, 1)));
+                assert_eq!(battle.play_options["double_option"], double.ir_value());
+                crate::ir::bms_ir::ensure_score_payload_supported(&battle).unwrap();
+            }
+        }
         let replay = payload.replay.expect("replay payload");
         assert_eq!(replay.hash, "ab".repeat(32));
         assert_eq!(replay.format, "bmz-replay-v1");
         assert_eq!(replay.upload_intent, "later");
+    }
+
+    #[test]
+    fn battle_submission_restores_source_ln_mine_counts_and_total() {
+        use bmz_chart::model::{LongNotePair, LongNoteStyle, NoteEvent};
+        use bmz_core::lane::Lane;
+
+        fn note(id: u32, lane: Lane, kind: NoteKind, tick: u64) -> NoteEvent {
+            NoteEvent {
+                id: bmz_core::ids::NoteId(id),
+                lane,
+                tick: bmz_core::time::ChartTick(tick),
+                time: bmz_core::time::TimeUs(tick as i64 * 1_000),
+                kind,
+                sound: None,
+                layered_sounds: Vec::new(),
+                damage: (kind == NoteKind::Mine).then_some(10.0),
+            }
+        }
+        fn long(id: u32, lane: Lane, mode: Option<LongNoteMode>) -> (LongNotePair, [NoteEvent; 2]) {
+            let pair = LongNotePair {
+                lane,
+                style: LongNoteStyle::ChannelPair,
+                mode,
+                start_note_id: bmz_core::ids::NoteId(id),
+                end_note_id: bmz_core::ids::NoteId(id + 1),
+                start_tick: bmz_core::time::ChartTick(0),
+                end_tick: bmz_core::time::ChartTick(96),
+                start_time: bmz_core::time::TimeUs(0),
+                end_time: bmz_core::time::TimeUs(96_000),
+                sound: None,
+            };
+            let start = note(id, lane, NoteKind::LongStart, 0);
+            (pair, [start, note(id + 1, lane, NoteKind::LongEnd, 96)])
+        }
+        // Mirrors `apply_battle_double_option`: every 1P note is copied to the
+        // matching 2P lane with a fresh ID.
+        fn build(
+            key_mode: KeyMode,
+            lanes: &[(Lane, Lane)],
+            doubled: bool,
+            total: Option<f64>,
+        ) -> PlayableChart {
+            let mut chart = PlayableChart {
+                identity: ChartIdentity { file_md5: [1; 16], file_sha256: [2; 32] },
+                metadata: ChartMetadata {
+                    title: "Title".to_string(),
+                    key_mode,
+                    total,
+                    source_format: bmz_chart::model::ChartSourceFormat::Bms,
+                    kaleid: bmz_chart::kaleid::KaleidProvenance::imported(),
+                    ..ChartMetadata::default()
+                },
+                lane_notes: Default::default(),
+                long_notes: Vec::new(),
+                bgm_events: Vec::new(),
+                bga_events: Vec::new(),
+                timing_events: Vec::new(),
+                scroll_events: Vec::new(),
+                speed_events: Vec::new(),
+                judge_rank_events: Vec::new(),
+                bgm_volume_events: Vec::new(),
+                key_volume_events: Vec::new(),
+                text_events: Vec::new(),
+                bga_opacity_events: Vec::new(),
+                bga_argb_events: Vec::new(),
+                swbga_definitions: Vec::new(),
+                bga_keybound_events: Vec::new(),
+                bga_asset_by_bmp_key: Default::default(),
+                bar_lines: Vec::new(),
+                sounds: Vec::new(),
+                bga_assets: Vec::new(),
+                total_notes: 0,
+                end_time: bmz_core::time::TimeUs(96_000),
+            };
+            let sides = if doubled { 2 } else { 1 };
+            for side in 0..sides {
+                let lane = |index: usize| if side == 0 { lanes[index].0 } else { lanes[index].1 };
+                let base = side * 100;
+                chart.lane_notes[lane(0).index()].push(note(base, lane(0), NoteKind::Tap, 0));
+                chart.lane_notes[lane(1).index()].push(note(base + 1, lane(1), NoteKind::Mine, 48));
+                for (offset, index, mode) in [
+                    (10, 2, Some(LongNoteMode::Ln)),
+                    (20, 3, Some(LongNoteMode::Cn)),
+                    (30, 4, Some(LongNoteMode::Hcn)),
+                    (40, 5, Some(LongNoteMode::Hln)),
+                ] {
+                    let (pair, notes) = long(base + offset, lane(index), mode);
+                    chart.lane_notes[pair.lane.index()].extend(notes);
+                    chart.long_notes.push(pair);
+                }
+                // Tap and four LN heads; CN/HCN ends are added by the scorer.
+                chart.total_notes += 5;
+            }
+            chart
+        }
+
+        let context = IrSubmissionContext {
+            played_at: 100,
+            play_duration_ms: Some(96),
+            chart_length_ms: Some(96),
+            ln_policy: LnScorePolicy::AutoLn,
+            source_ln_profile: ChartLnProfile {
+                has_defined_ln: true,
+                has_defined_cn: true,
+                has_defined_hcn: true,
+                has_defined_hln: true,
+                ..Default::default()
+            },
+            gauge_option: "normal".to_string(),
+            device_type: InputDeviceKind::Keyboard,
+            idempotency_key: "score_local_1".to_string(),
+            arrange: ArrangeOption::Normal,
+            arrange_2p: ArrangeOption::Normal,
+            double_option: DoubleOptionScoreBucket::Off,
+            applied_double_option: DoubleOption::Off,
+            arrange_seed: None,
+            random_seed: None,
+            seed_scheme: String::new(),
+            bms_random_choices: Vec::new(),
+            bms_switch_choices: Vec::new(),
+            rule_mode: "Beatoraja".to_string(),
+            course_stage: false,
+            replay_hash: None,
+        };
+        fn counts(notes: IrChartNotes) -> (u32, u32, u32, u32, u32, u32) {
+            (notes.total, notes.ln, notes.cn, notes.hcn, notes.hln, notes.mine)
+        }
+        // Lanes shared by 5K and 7K, paired with their 2P copies.
+        let lanes = [
+            (Lane::Scratch, Lane::Scratch2),
+            (Lane::Key1, Lane::Key8),
+            (Lane::Key2, Lane::Key9),
+            (Lane::Key3, Lane::Key10),
+            (Lane::Key4, Lane::Key11),
+            (Lane::Key5, Lane::Key12),
+        ];
+        for (source_mode, doubled_mode) in
+            [(KeyMode::K7, KeyMode::K14), (KeyMode::K5, KeyMode::K10)]
+        {
+            for total in [Some(300.0), None] {
+                let source = build(source_mode, &lanes, false, total);
+                let battle_chart = build(doubled_mode, &lanes, true, total);
+                let source_result = PlayResult {
+                    chart_sha256: [2; 32],
+                    clear_type: ClearType::Normal,
+                    gauge_type: GaugeType::Normal,
+                    gauge_value: 80.0,
+                    total_notes: scored_note_count(&source),
+                    score: ScoreState::default(),
+                    autoplay: false,
+                };
+                let expected = build_score_submission(&source, &source_result, context.clone());
+                assert_eq!(counts(expected.chart.notes), (7, 4, 1, 1, 1, 1));
+                assert_eq!(expected.chart.total, Some(gauge_total_for_chart(total, 7)));
+                assert_eq!(scored_note_count(&battle_chart), 14);
+                for double in [DoubleOption::Battle, DoubleOption::BattleAutoScratch] {
+                    let battle = build_score_submission(
+                        &battle_chart,
+                        &PlayResult { total_notes: 14, ..source_result.clone() },
+                        IrSubmissionContext {
+                            double_option: double.score_bucket(),
+                            applied_double_option: double,
+                            ..context.clone()
+                        },
+                    );
+                    let label = format!("{source_mode:?} {total:?} {double:?}");
+                    assert_eq!(battle.chart.mode, expected.chart.mode, "{label}");
+                    assert_eq!(counts(battle.chart.notes), counts(expected.chart.notes), "{label}");
+                    assert_eq!(battle.chart.total, expected.chart.total, "{label}");
+                    assert_eq!(battle.result.notes, 14, "{label}");
+                }
+            }
+        }
     }
 
     #[test]

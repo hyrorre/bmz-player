@@ -14,6 +14,9 @@ use crate::screens::play_session::SRandomScheme;
 use crate::select_options::{ArrangeOption, DoubleOption, DoubleOptionScoreBucket};
 
 pub const REPLAY_FILE_VERSION: u32 = 8;
+/// Judge rule revision written by this build. 0 (missing) means a replay from
+/// before the DX MODE POP judge revision; 1 adopts the revised POP windows.
+pub const REPLAY_JUDGE_REVISION: u32 = 1;
 pub const SEED_SCHEME_BEATORAJA_24BIT_V1: &str = "beatoraja_24bit_v1";
 pub const SEED_SCHEME_LEGACY_SHARED_V3: &str = "legacy_shared_v3";
 pub const S_RANDOM_SCHEME_LEGACY_40MS_V1: &str = SRandomScheme::LEGACY_40MS_V1;
@@ -55,6 +58,9 @@ pub struct ReplayFile {
     pub freq_semitones: Option<i8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judge_algorithm: Option<JudgeAlgorithm>,
+    /// See [`REPLAY_JUDGE_REVISION`].
+    #[serde(default)]
+    pub judge_revision: u32,
     /// beatoraja input timestamps omit the chart's runtime start-note margin.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub input_excludes_start_margin: bool,
@@ -94,6 +100,7 @@ impl ReplayFile {
             kaleid: self.kaleid.clone(),
             events: self.events.clone(),
             judge_algorithm: self.judge_algorithm,
+            legacy_dx_pop_judge: self.judge_revision < 1,
             input_excludes_start_margin: self.input_excludes_start_margin,
             branch_decisions: self.branch_decisions.clone(),
             next_index: 0,
@@ -170,6 +177,7 @@ impl ReplayFile {
             h_random_threshold_ms: None,
             freq_semitones: None,
             judge_algorithm: None,
+            judge_revision: REPLAY_JUDGE_REVISION,
             input_excludes_start_margin: false,
             arrange_seed,
             arrange_seed_2p: None,
@@ -434,8 +442,8 @@ pub fn load_replay_for_chart_policy_and_double_option(
     Ok(replay)
 }
 
-pub fn replay_file_name(chart_sha256: [u8; 32], played_at: i64) -> String {
-    format!("{}-{played_at}.toml", hex_encode(&chart_sha256))
+pub fn replay_file_name(chart_sha256: [u8; 32], played_at: i64, id: uuid::Uuid) -> String {
+    format!("{}-{played_at}-{id}.toml", hex_encode(&chart_sha256))
 }
 
 /// One queued replay inside a course attempt: keeps the current chart id, the
@@ -715,6 +723,19 @@ events = []
     }
 
     #[test]
+    fn replays_without_judge_revision_use_the_earlier_dx_pop_windows() {
+        let replay = ReplayFile::new([7; 32], 1, None, ArrangeOption::Normal, None, None, vec![]);
+        assert_eq!(replay.judge_revision, REPLAY_JUDGE_REVISION);
+        assert!(!replay.player().legacy_dx_pop_judge);
+        let text = toml::to_string(&replay).unwrap();
+        let reloaded = parse_replay(&text).unwrap();
+        assert!(!reloaded.player().legacy_dx_pop_judge);
+        let legacy = text.replace(&format!("judge_revision = {REPLAY_JUDGE_REVISION}\n"), "");
+        assert_ne!(legacy, text);
+        assert!(parse_replay(&legacy).unwrap().player().legacy_dx_pop_judge);
+    }
+
+    #[test]
     fn replay_judge_algorithm_uses_stable_serialized_names() {
         let mut replay =
             ReplayFile::new([1; 32], 1, None, ArrangeOption::Normal, None, None, Vec::new());
@@ -749,10 +770,10 @@ events = []
     }
 
     #[test]
-    fn replay_file_name_uses_hash_and_play_time() {
+    fn replay_file_name_uses_hash_play_time_and_unique_id() {
         assert_eq!(
-            replay_file_name([0xab; 32], 12),
-            "abababababababababababababababababababababababababababababababab-12.toml"
+            replay_file_name([0xab; 32], 12, uuid::Uuid::nil()),
+            "abababababababababababababababababababababababababababababababab-12-00000000-0000-0000-0000-000000000000.toml"
         );
     }
 

@@ -334,7 +334,11 @@ impl JudgeEngine {
                             active,
                             classify_normal_delta(
                                 end_delta.0,
-                                long_end_window(self.window_set, self.scratch_lane_mask[idx]),
+                                long_end_window(
+                                    self.window_set,
+                                    self.scratch_lane_mask[idx],
+                                    end_delta.0,
+                                ),
                             )
                             .unwrap_or(Judge::Poor),
                             end_delta,

@@ -167,6 +167,9 @@ pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
     let inputs = collect_player_lane_inputs(session);
     let mut judgements = Vec::new();
     for input in inputs {
+        if session.play_end_reached() {
+            break;
+        }
         if !session.display_only_lane_mask[input.lane.index()] {
             if let Some(projection) = &session.replay_lane_projection {
                 if let Some(source_lane) = projection.record_to_source[input.lane.index()] {
@@ -373,6 +376,9 @@ pub fn discard_human_inputs(session: &mut GameSession) {
 }
 
 pub fn process_replay_inputs(session: &mut GameSession, audio_now: TimeUs) -> Vec<JudgementEvent> {
+    if session.play_end_reached() {
+        return Vec::new();
+    }
     let Some(player) = &mut session.replay_player else {
         return Vec::new();
     };
@@ -386,6 +392,9 @@ pub fn process_replay_inputs(session: &mut GameSession, audio_now: TimeUs) -> Ve
     update_lane_key_states(session, &inputs);
     let mut judgements = Vec::new();
     for input in inputs {
+        if session.play_end_reached() {
+            break;
+        }
         judgements.extend(process_session_input(session, input));
     }
     judgements
@@ -447,6 +456,9 @@ pub fn process_autoplay_inputs(
     session: &mut GameSession,
     audio_now: TimeUs,
 ) -> Vec<JudgementEvent> {
+    if session.play_end_reached() {
+        return Vec::new();
+    }
     let Some(auto) = &mut session.autoplay else {
         return Vec::new();
     };
@@ -458,6 +470,9 @@ pub fn process_autoplay_inputs(
 
     let mut judgements = Vec::new();
     for input in inputs {
+        if session.play_end_reached() {
+            break;
+        }
         judgements.extend(process_session_input(session, input));
     }
     judgements
@@ -522,7 +537,7 @@ pub(super) fn process_hln_inputs(session: &mut GameSession, now: TimeUs) -> Vec<
     inputs.sort_by_key(|(input, _)| input.time);
     let mut events = Vec::new();
     for (mut input, human) in inputs {
-        if session.state == PlayState::Failed {
+        if session.state == PlayState::Failed || session.play_end_reached() {
             break;
         }
         if ordered_timeline {

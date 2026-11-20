@@ -102,7 +102,6 @@ fn finish(client: &GameplayClient) -> crate::screens::play_finish::FinishedPlayS
             profile_paths: &paths,
             replay_config: &crate::config::profile_config::ReplayConfig {
                 auto_save: false,
-                compress: false,
                 slot_rules: crate::config::profile_config::default_slot_rules(),
             },
             ir_config: &Default::default(),

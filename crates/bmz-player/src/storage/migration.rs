@@ -232,7 +232,7 @@ fn repair_ir_score_migration_20_collision(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
-fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
+pub(super) fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
     Ok(conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
         [table],
@@ -353,7 +353,7 @@ mod tests {
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 38);
+        assert_eq!(version, LIBRARY_MIGRATIONS.last().unwrap().version);
 
         let mut stmt = conn.prepare("PRAGMA table_info(charts)").unwrap();
         let columns = stmt
@@ -617,7 +617,7 @@ mod tests {
             conn.query_row("SELECT headers_json FROM charts", [], |row| row.get(0)).unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(headers_json, "{}");
-        assert_eq!(version, 38);
+        assert_eq!(version, LIBRARY_MIGRATIONS.last().unwrap().version);
     }
 
     #[test]
@@ -684,7 +684,7 @@ mod tests {
             .unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(chart_ids, vec![Some(10), Some(20), None, Some(99)]);
-        assert_eq!(version, 38);
+        assert_eq!(version, LIBRARY_MIGRATIONS.last().unwrap().version);
     }
 
     #[test]

@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
 use bmz_core::lane::KeyMode;
 
 use super::play::{lane_from_config, lane_to_config};
@@ -8,6 +11,7 @@ use super::play_input::{
 use super::profile_config::{
     BindingConfigEntry, InputActionConfig, KeyboardBindingSlotConfig, LaneConfig,
     PlayModeInputConfig, ProfileConfig, ProfileInputConfig, ScratchDirectionConfig,
+    default_keyboard_bindings,
 };
 
 /// 選曲画面のキー設定で編集対象とする KEY モード。
@@ -292,6 +296,39 @@ pub fn binding_target_label(key_mode: KeyMode, target: KeyBindingTarget) -> Stri
 
 pub fn common_key_binding_targets(slot: KeyBindingSlot) -> Vec<KeyBindingTarget> {
     key_binding_targets_for_group(KeyBindingGroup::Common, slot)
+}
+
+pub(crate) fn common_select_binding_targets(slots: &[KeyBindingSlot]) -> Vec<KeyBindingTarget> {
+    static DEFAULT_KEY_ORDER: LazyLock<HashMap<InputActionConfig, usize>> = LazyLock::new(|| {
+        let keys = [
+            "Q", "W", "E", "R", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "F3", "F4", "F5",
+            "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+        ];
+        let mut order = HashMap::new();
+        for binding in default_keyboard_bindings() {
+            if let Some(action) = binding.action {
+                let position = keys.iter().position(|&key| key == binding.control);
+                order.entry(action).or_insert(position.unwrap_or(keys.len()));
+            }
+        }
+        order
+    });
+
+    let mut targets: Vec<_> = slots
+        .iter()
+        .flat_map(|&slot| {
+            COMMON_SELECT_GROUPS
+                .iter()
+                .flat_map(move |&group| key_binding_targets_for_group(group, slot))
+        })
+        .collect();
+    targets.sort_by_key(|target| match target {
+        KeyBindingTarget::Action { action, .. } => {
+            DEFAULT_KEY_ORDER.get(action).copied().unwrap_or(usize::MAX)
+        }
+        _ => usize::MAX,
+    });
+    targets
 }
 
 pub fn key_binding_targets_for_group(

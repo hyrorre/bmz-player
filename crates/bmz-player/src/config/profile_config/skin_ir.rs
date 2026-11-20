@@ -631,6 +631,8 @@ impl ProfileConfig {
                 normal_hispeed_level: default_normal_hispeed_level(),
                 classic_hispeed_step: default_classic_hispeed_step(),
                 floating_hispeed_step: default_floating_hispeed_step(),
+                hispeed_change_type: HispeedChangeTypeConfig::Fixed,
+                hispeed_change_ratio: default_hispeed_change_ratio(),
                 sudden: DEFAULT_LANE_COVER_AMOUNT,
                 lift: DEFAULT_LANE_COVER_AMOUNT,
                 lift_enabled: false,
@@ -649,11 +651,7 @@ impl ProfileConfig {
                 chart_replication_mode: ChartReplicationModeConfig::default(),
                 entries: Vec::new(),
             },
-            replay: ReplayConfig {
-                auto_save: true,
-                compress: false,
-                slot_rules: default_slot_rules(),
-            },
+            replay: ReplayConfig { auto_save: true, slot_rules: default_slot_rules() },
             ir: IrConfig::default(),
             ui: UiConfig {
                 language: AppLocale::system_default().code().to_owned(),

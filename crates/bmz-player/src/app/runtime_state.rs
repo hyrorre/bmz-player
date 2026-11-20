@@ -404,6 +404,8 @@ pub(super) struct UiRuntimeState {
     /// 現在ウィンドウへ適用済みのウィンドウモード。
     /// config 側との差分検出でライブ反映の要否を判定する。
     pub(super) applied_window_mode: WindowMode,
+    /// 現在ウィンドウへ適用済みのモニター設定値。モニターだけの変更もライブ反映する。
+    pub(super) applied_monitor_name: String,
     /// 排他surface初期化失敗後、この起動セッションだけBorderlessを維持する。
     pub(super) exclusive_fullscreen_fallback_active: bool,
     /// キーボード backend 変更後、次の about_to_wait で winit の

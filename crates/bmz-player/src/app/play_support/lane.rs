@@ -45,7 +45,12 @@ pub(in crate::app) fn apply_pending_play_lane_action_to_state(
                     adjusted_normal_hispeed_level(lane.normal_hispeed_level, change);
                 lane.refresh_normal_hispeed(now_bpm, false);
             } else {
-                let step = hispeed_step_for_profile(profile, lane.hispeed_mode);
+                let step = PlayHispeedSteps::for_profile(
+                    profile,
+                    lane.hispeed_mode,
+                    lane.hispeed_change_base,
+                )
+                .key;
                 lane.hispeed = adjust_hispeed_in_display_units(
                     lane.hispeed,
                     lane.hispeed_mode,
@@ -172,7 +177,7 @@ pub(in crate::app) fn apply_play_lane_action_to_session(
     lane_target: &mut PlayLaneTarget,
     action: PlayLaneAction,
     speed_locked: bool,
-    hispeed_step: f32,
+    hispeed_steps: PlayHispeedSteps,
 ) -> bool {
     if speed_locked {
         return false;
@@ -216,16 +221,24 @@ pub(in crate::app) fn apply_play_lane_action_to_session(
                 session.hispeed =
                     hispeed_for_normal_level(session, session.normal_hispeed_level, now);
             } else {
-                apply_hispeed_change_to_session(session, change, hispeed_step);
+                apply_hispeed_change_to_session(session, change, hispeed_steps.key);
             }
             true
         }
-        PlayLaneAction::LaneCoverDelta(delta) => {
-            apply_lane_cover_action_to_session(session, lane_target, delta, false, hispeed_step)
-        }
-        PlayLaneAction::AnalogLaneCoverDelta(delta) => {
-            apply_lane_cover_action_to_session(session, lane_target, delta, true, hispeed_step)
-        }
+        PlayLaneAction::LaneCoverDelta(delta) => apply_lane_cover_action_to_session(
+            session,
+            lane_target,
+            delta,
+            false,
+            hispeed_steps.cover,
+        ),
+        PlayLaneAction::AnalogLaneCoverDelta(delta) => apply_lane_cover_action_to_session(
+            session,
+            lane_target,
+            delta,
+            true,
+            hispeed_steps.cover,
+        ),
         PlayLaneAction::GreenNumberDelta(delta) => {
             apply_green_number_step_to_session(session, delta, false)
         }
@@ -281,7 +294,7 @@ pub(in crate::app) fn apply_play_option_control_to_session(
     session: &mut bmz_gameplay::session::GameSession,
     action: PlayOptionControl,
     speed_locked: bool,
-    hispeed_step: f32,
+    hispeed_steps: PlayHispeedSteps,
 ) -> bool {
     let mut lane_target = PlayLaneTarget::Lift;
     apply_play_lane_action_to_session(
@@ -289,7 +302,7 @@ pub(in crate::app) fn apply_play_option_control_to_session(
         &mut lane_target,
         lane_action_from_option(action, false).expect("button option always maps to a lane action"),
         speed_locked,
-        hispeed_step,
+        hispeed_steps,
     )
 }
 
@@ -301,8 +314,13 @@ pub(in crate::app) fn replay_pending_play_lane_actions(
     speed_locked: bool,
 ) {
     for &action in actions {
-        let step = hispeed_step_for_profile(profile, session.hispeed_mode);
-        let _ = apply_play_lane_action_to_session(session, lane_target, action, speed_locked, step);
+        let steps = PlayHispeedSteps::for_profile(
+            profile,
+            session.hispeed_mode,
+            session.hispeed_change_base,
+        );
+        let _ =
+            apply_play_lane_action_to_session(session, lane_target, action, speed_locked, steps);
     }
 }
 

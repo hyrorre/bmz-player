@@ -22,7 +22,9 @@ use anyhow::{Result, anyhow};
 use bmz_audio::command::AudioEngineHandle;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::runtime::GameplayRuntime;
-use bmz_gameplay::session::{FrameOutput, GameSession, PlayState, SkinRuntimeEvent};
+use bmz_gameplay::session::{
+    FrameOutput, GameSession, PlayEndRequest, PlayEndSignal, PlayState, SkinRuntimeEvent,
+};
 use bmz_render::snapshot::RenderSnapshot;
 
 mod observation;
@@ -72,6 +74,7 @@ struct Publication {
 type EditSession = Box<dyn FnOnce(&mut GameSession) + Send>;
 struct Worker {
     commands: mpsc::SyncSender<EditSession>,
+    play_end: Arc<PlayEndSignal>,
     latest: Arc<Mutex<Option<Publication>>>,
     stop: Arc<AtomicBool>,
     snapshot_requested: Arc<AtomicBool>,
@@ -159,6 +162,15 @@ impl GameplayClient {
         }
     }
 
+    pub fn request_play_end(&self, request: PlayEndRequest) -> bool {
+        let Some(worker) = &self.worker else {
+            return false;
+        };
+        worker.play_end.request(request);
+        worker.thread.thread().unpark();
+        true
+    }
+
     /// Latest render-only setting wins even when the session command queue is full.
     pub fn set_hispeed_transition_ms(&self, duration_ms: u32) {
         let duration_ms = duration_ms.min(1000);
@@ -175,6 +187,7 @@ impl GameplayClient {
             return Ok(());
         }
         let runtime = self.local.take().ok_or_else(|| anyhow!("gameplay is not prepared"))?;
+        let play_end = runtime.session.play_end.clone();
         let times = bmz_gameplay::session::compute_frame_times(&runtime.session);
         let projection_pool = PlayfieldProjection::pool(&runtime.session, &config.cache);
         self.projection = Some(projection_pool[0].clone());
@@ -233,6 +246,7 @@ impl GameplayClient {
             })?;
         self.worker = Some(Worker {
             commands,
+            play_end,
             latest,
             stop,
             snapshot_requested,
@@ -412,7 +426,7 @@ fn run(
     while !stop.load(Ordering::Acquire) {
         let iteration_started = Instant::now();
         let previous_state = runtime.session.state;
-        for edit in commands.try_iter() {
+        for edit in commands.try_iter().take(COMMAND_CAPACITY) {
             edit(&mut runtime.session);
         }
         if !runtime.session.audio_clock.running && runtime.session.audio_clock.now() < last_time {

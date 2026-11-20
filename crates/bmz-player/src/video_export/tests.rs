@@ -26,6 +26,33 @@ fn archive_export_prepare_resolves_media_and_replay_by_internal_chart_hash() {
     assert!(Path::new(&chart.metadata.stage_file).is_absolute());
 }
 
+#[test]
+fn export_uses_library_chart_encoding_without_writing_to_library() {
+    use crate::storage::{library_db::LibraryDatabase, migration::migrate_library_db};
+    use bmz_chart::hash::compute_chart_identity;
+    use bmz_chart::import::BmsTextEncoding;
+
+    let fixture = Fixture::new();
+    let (bytes, _, errors) = encoding_rs::EUC_KR.encode("#TITLE 한글음악\n#BPM 120\n#00011:01\n");
+    assert!(!errors);
+    fs::write(&fixture.options.chart, &bytes).unwrap();
+    let hash = compute_chart_identity(&bytes).file_sha256;
+    migrate_library_db(&fixture.paths.library_db).unwrap();
+    let mut db = LibraryDatabase::open(&fixture.paths.library_db).unwrap();
+    db.set_chart_encoding(&hash, Some(BmsTextEncoding::Ms949)).unwrap();
+
+    let prepared = prepare::prepare(&fixture.options, &fixture.paths, Some("default")).unwrap();
+    assert_eq!(prepared.play.session.chart.metadata.title, "한글음악");
+    assert_eq!(prepared.play.session.chart.identity.file_sha256, hash);
+    let imported_count: i64 =
+        db.conn().query_row("SELECT COUNT(*) FROM charts", [], |row| row.get(0)).unwrap();
+    assert_eq!(imported_count, 0);
+
+    db.set_chart_encoding(&hash, None).unwrap();
+    let automatic = prepare::prepare(&fixture.options, &fixture.paths, Some("default")).unwrap();
+    assert_ne!(automatic.play.session.chart.metadata.title, "한글음악");
+}
+
 struct Fixture {
     root: PathBuf,
     paths: AppPaths,

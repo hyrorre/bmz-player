@@ -133,6 +133,29 @@ pub(super) fn select_press_candidate(
     let scan_slow_us = windows.bad_slow_us.max(windows.empty_poor_slow_us);
 
     let notes = chart.notes_for_lane(lane);
+    if algorithm == JudgeAlgorithm::Duration
+        && windows.pgreat_us >= 0
+        && scan_fast_us >= 0
+        && scan_slow_us >= 0
+    {
+        // A normal hit at zero distance wins over every other candidate.
+        // Start at the first equal timestamp to preserve the original tie order.
+        let exact = notes.partition_point(|note| note.time < input_time);
+        if let Some(note) = notes[exact..]
+            .iter()
+            .take_while(|note| note.time == input_time)
+            .find(|note| is_press_reference_note(note) && !judged_notes.contains_key(&note.id))
+        {
+            return Some(PressCandidate {
+                note_id: Some(note.id),
+                keysound_note_id: Some(note.id),
+                judge: Judge::PGreat,
+                side: side_from_delta(0),
+                delta: TimeUs(0),
+                consumes_note: true,
+            });
+        }
+    }
     let earliest = input_time.0.saturating_sub(scan_slow_us);
     let start = notes.partition_point(|note| note.time.0 < earliest);
     for note in &notes[start..] {

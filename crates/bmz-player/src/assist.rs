@@ -251,6 +251,22 @@ pub fn apply_custom_judge_windows(
             config.scratch_great_rate,
             config.scratch_good_rate,
         ),
+        long_note_end_fast: windows.long_note_end_fast.map(|window| {
+            scale_window(
+                window,
+                config.key_pgreat_rate,
+                config.key_great_rate,
+                config.key_good_rate,
+            )
+        }),
+        long_scratch_end_fast: windows.long_scratch_end_fast.map(|window| {
+            scale_window(
+                window,
+                config.scratch_pgreat_rate,
+                config.scratch_great_rate,
+                config.scratch_good_rate,
+            )
+        }),
         long_note_release_margin_us: scale_us(
             windows.long_note_release_margin_us,
             config.long_note_margin_rate,
@@ -765,6 +781,8 @@ mod tests {
             scratch: window,
             long_note_end: window,
             long_scratch_end: window,
+            long_note_end_fast: None,
+            long_scratch_end_fast: None,
             long_note_release_margin_us: 50_000,
             long_scratch_release_margin_us: 60_000,
         };

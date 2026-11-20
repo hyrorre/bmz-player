@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
 import { isUniqueConstraintError } from '../utils/db_errors'
 import { assertCanSubmit } from './moderation/enforcement'
@@ -338,22 +338,19 @@ export async function submitCourseScore(
   // D1 batch 内で直前に作った course_score_id を best_course_scores から
   // 参照すると FK で失敗するため、course score を先に確定保存してから
   // best を更新する。重複 retry 時もここで best の復旧を試みる。
-  const bestStatement = await prepareBestCourseScoreUpsert(
+  const bestUpdated = await upsertBestCourseScore(
     user.id,
     payload,
     score,
     clearRank,
     score.verification,
   )
-  if (bestStatement) {
-    await bestStatement
-  }
 
   if (score.id !== courseScoreId) {
     return {
       accepted: true,
       course_score_id: score.id,
-      best_updated: bestStatement !== null,
+      best_updated: bestUpdated,
       server_received_at: score.serverReceivedAt.toISOString(),
     }
   }
@@ -361,7 +358,7 @@ export async function submitCourseScore(
   return {
     accepted: true,
     course_score_id: courseScoreId,
-    best_updated: bestStatement !== null,
+    best_updated: bestUpdated,
     server_received_at: serverReceivedAt.toISOString(),
   }
 }
@@ -392,50 +389,13 @@ async function upsertCourse(payload: CourseScoreSubmission) {
     })
 }
 
-/**
- * best_course_scores 更新の要否を判定し、必要なら未実行の upsert statement を
- * 返す。course score insert の確定後に単体実行する。
- */
-async function prepareBestCourseScoreUpsert(
+async function upsertBestCourseScore(
   playerId: string,
   payload: CourseScoreSubmission,
   score: { id: string; serverReceivedAt: Date },
   clearRank: number,
   verification: IrVerificationStatus,
-) {
-  const current = await db.query.bestCourseScores.findFirst({
-    columns: { exScore: true, clearRank: true, bp: true, maxCombo: true },
-    where: and(
-      eq(schema.bestCourseScores.playerId, playerId),
-      eq(schema.bestCourseScores.courseHash, payload.course.course_hash),
-      eq(schema.bestCourseScores.gauge, payload.rule.gauge),
-      eq(schema.bestCourseScores.lnPolicy, payload.rule.ln_policy),
-      eq(schema.bestCourseScores.ruleMode, payload.rule.rule_mode),
-      eq(schema.bestCourseScores.scoring, payload.rule.scoring),
-    ),
-  })
-
-  const next = {
-    exScore: payload.result.ex_score,
-    clearRank,
-    bp: payload.result.bp,
-    maxCombo: payload.result.max_combo,
-  }
-  const wins =
-    !current ||
-    next.exScore > current.exScore ||
-    (next.exScore === current.exScore && next.clearRank > current.clearRank) ||
-    (next.exScore === current.exScore &&
-      next.clearRank === current.clearRank &&
-      next.bp < current.bp) ||
-    (next.exScore === current.exScore &&
-      next.clearRank === current.clearRank &&
-      next.bp === current.bp &&
-      next.maxCombo > current.maxCombo)
-  if (!wins) {
-    return null
-  }
-
+): Promise<boolean> {
   const values = {
     id: randomUUID(),
     playerId,
@@ -456,17 +416,18 @@ async function prepareBestCourseScoreUpsert(
     serverReceivedAt: score.serverReceivedAt,
     verification,
   }
-  return db
-    .insert(schema.bestCourseScores)
+  const best = schema.bestCourseScores
+  const updated = await db
+    .insert(best)
     .values(values)
     .onConflictDoUpdate({
       target: [
-        schema.bestCourseScores.playerId,
-        schema.bestCourseScores.courseHash,
-        schema.bestCourseScores.gauge,
-        schema.bestCourseScores.lnPolicy,
-        schema.bestCourseScores.ruleMode,
-        schema.bestCourseScores.scoring,
+        best.playerId,
+        best.courseHash,
+        best.gauge,
+        best.lnPolicy,
+        best.ruleMode,
+        best.scoring,
       ],
       set: {
         courseScoreId: values.courseScoreId,
@@ -481,7 +442,12 @@ async function prepareBestCourseScoreUpsert(
         serverReceivedAt: values.serverReceivedAt,
         verification: values.verification,
       },
+      // Compare against the committed best at write time. Lower BP wins ties.
+      setWhere: sql`(excluded.ex_score, excluded.clear_rank, -excluded.bp, excluded.max_combo)
+        > (${best.exScore}, ${best.clearRank}, -${best.bp}, ${best.maxCombo})`,
     })
+    .returning({ id: best.id })
+  return updated.length > 0
 }
 
 function playedAtDate(value: unknown): Date | null {

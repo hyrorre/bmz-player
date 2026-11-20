@@ -72,11 +72,12 @@ use crate::config::play::{
 use crate::config::profile_config::{
     BaseHispeedConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, FloatingPolicyConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
-    HispeedConfigPreset, HispeedDirectionConfig, HsFixConfig, InputActionConfig,
-    JudgeAlgorithmConfig, KeyModeConversionConfig, LaneEffectConfig, LaneViewConfig,
-    PlayDefaultsConfig, PlayModeConfig, ProfileConfig, ProfileInputConfig, RandomOptionConfig,
-    SkinConfig, SkinOffsetConfig, TargetOptionConfig, normalize_classic_hispeed_step,
-    normalize_floating_hispeed_step, replay_slot_rule_indices,
+    HispeedChangeTypeConfig, HispeedConfigPreset, HispeedDirectionConfig, HsFixConfig,
+    InputActionConfig, JudgeAlgorithmConfig, KeyModeConversionConfig, LaneEffectConfig,
+    LaneViewConfig, PlayDefaultsConfig, PlayModeConfig, ProfileConfig, ProfileInputConfig,
+    RandomOptionConfig, SkinConfig, SkinOffsetConfig, TargetOptionConfig,
+    normalize_classic_hispeed_step, normalize_floating_hispeed_step,
+    normalize_hispeed_change_ratio, replay_slot_rule_indices,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
@@ -183,7 +184,7 @@ use crate::ui::{
     UpdateDialog, UpdateDialogAction,
 };
 use crate::update::{DownloadedUpdate, UpdateAssetKind, UpdateCandidate};
-use crate::window_config::{monitor_config_name, select_monitor};
+use crate::window_config::{describe_monitors, resolve_monitor};
 use bmz_render::skin::{
     DestinationListEntry, SKIN_EVENT_DAILY_STATISTICS_RESET, SKIN_EVENT_IR_SCOPE_GLOBAL,
     SKIN_EVENT_IR_SCOPE_RIVAL, SKIN_EVENT_IR_SCOPE_TOGGLE, SKIN_EVENT_RESULT_PANEL_GRAPH,
@@ -666,12 +667,13 @@ fn prepare_boot_chart_options(
     // An explicit PATH means the current file, even when a previous scan indexed
     // different contents or the containing song root has since been disabled.
     // Import as a standalone source, just like a previously unregistered PATH.
-    let chart_id = crate::storage::import::import_chart_file(
+    let chart_id = crate::storage::import::import_chart_file_with_encoding_source(
         &mut boot.library_db,
         &canonical,
         None,
         None,
         now_unix_seconds(),
+        boot.chart_encoding_source.as_deref(),
     )?
     .chart_id;
     if options.boot_start_time_us.is_none()

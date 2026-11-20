@@ -3,7 +3,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use super::content_cache::{ChartContentCache, ImportWork, ScanChart, ScanImportError};
-use crate::storage::library_db::{ChartImportSource, library_path_key};
+use crate::storage::library_db::{ChartImportSource, encoding_revision_matches, library_path_key};
 
 /// 1回のバッチで並列パースするファイル数
 pub(super) const IMPORT_BATCH_SIZE: usize = 256;
@@ -54,6 +54,7 @@ pub fn scan_song_roots_with_progress(
     }
 
     let total_start = Instant::now();
+    let (encoding_revision, encodings) = db.chart_encodings()?;
     let mut report = ScanReport::default();
     let enabled_roots: Vec<&PathEntry> = roots.iter().filter(|r| r.enabled).collect();
     let root_count = enabled_roots.len();
@@ -154,6 +155,7 @@ pub fn scan_song_roots_with_progress(
                 discovered_roots
                     .iter()
                     .flat_map(|root| root.entries.iter().map(|(_, entry)| entry.file_size)),
+                encodings.clone(),
             )
         })
     };
@@ -269,7 +271,7 @@ pub fn scan_song_roots_with_progress(
                 &fingerprints,
                 &archive_entries,
                 generation,
-                cache_for_import,
+                (encoding_revision, cache_for_import),
             ) {
                 Ok(archive) => {
                     report.summary.imported += archive.summary.imported;
@@ -277,6 +279,7 @@ pub fn scan_song_roots_with_progress(
                     report.summary.failed += archive.summary.failed;
                     report.summary.warnings += archive.summary.warnings;
                     report.summary.reused += archive.summary.reused;
+                    report.summary.deferred += archive.summary.deferred;
                     report.timing.parse_ms += archive.timing.parse_ms;
                     report.failures.extend(archive.failures);
                 }
@@ -416,6 +419,8 @@ pub fn scan_song_roots_with_progress(
                 let commit_ms;
                 {
                     let tx = db.conn_mut().transaction()?;
+                    let summary_before = report.summary.clone();
+                    let failures_before = report.failures.len();
                     for p in &parsed {
                         match &p.result {
                             Ok((chart, preview_file)) => {
@@ -473,7 +478,23 @@ pub fn scan_song_roots_with_progress(
                         }
                     }
                     let commit_start = Instant::now();
-                    tx.commit()?;
+                    if encoding_revision_matches(&tx, encoding_revision)? {
+                        tx.commit()?;
+                    } else {
+                        // Decoded with outdated overrides. Roll back and leave these
+                        // charts to the next scan instead of failing the whole scan.
+                        drop(tx);
+                        report.summary = ScanSummary {
+                            deferred: summary_before.deferred + usize_to_u32(parsed.len()),
+                            ..summary_before
+                        };
+                        report.failures.truncate(failures_before);
+                        tracing::warn!(
+                            files = parsed.len(),
+                            root = %root_path.display(),
+                            "chart encoding overrides changed during the scan; deferring the batch"
+                        );
+                    }
                     let committed = commit_start.elapsed();
                     commit_time += committed;
                     commit_ms = committed.as_millis();

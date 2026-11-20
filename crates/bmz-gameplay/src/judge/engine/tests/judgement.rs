@@ -262,7 +262,7 @@ fn dx_9key_bad_does_not_consume_and_can_be_rejudged() {
         KeyMode::K9,
     );
 
-    let bad = engine.process_input(&chart, press_at(TimeUs(900_000)));
+    let bad = engine.process_input(&chart, press_at(TimeUs(850_000)));
     assert_eq!(bad.events[0].judge, Judge::Bad);
     assert!(engine.bad_attempted_notes.contains(&NoteId(1)));
     assert_eq!(engine.judged_notes.get(&NoteId(1)), None);
@@ -301,6 +301,30 @@ fn duration_candidate_prefers_closest_note() {
     assert_eq!(outcome.events[0].note_id, Some(NoteId(2)));
     assert_eq!(outcome.events[0].judge, Judge::PGreat);
     assert_eq!(outcome.events[0].delta, TimeUs(-10_000));
+}
+
+#[test]
+fn duration_exact_hit_keeps_tie_order_and_falls_back_after_exact_notes() {
+    let time = TimeUs(1_040_000);
+    let mut chart = chart_with_two_taps(time, time);
+    let notes = &mut chart.lane_notes[Lane::Key1.index()];
+    notes.insert(0, NoteEvent { id: NoteId(3), time: TimeUs(1_010_000), ..notes[0].clone() });
+    let mut engine = JudgeEngine::new_with_window_set_and_algorithm(
+        JudgeWindows::uniform(windows()),
+        RuleMode::Beatoraja,
+        JudgeAlgorithm::Duration,
+    );
+    engine.bad_attempted_notes.insert(NoteId(1));
+
+    for (id, delta, judge) in [
+        (NoteId(1), 0, Judge::PGreat),
+        (NoteId(2), 0, Judge::PGreat),
+        (NoteId(3), 30_000, Judge::Great),
+    ] {
+        let outcome = engine.process_input(&chart, press_at(time));
+        let event = &outcome.events[0];
+        assert_eq!((event.note_id, event.delta, event.judge), (Some(id), TimeUs(delta), judge));
+    }
 }
 
 #[test]
@@ -408,7 +432,7 @@ fn dx_mode_fast_empty_poor_window_ends_at_500ms() {
 
 #[test]
 fn dx_9key_multi_bad_does_not_consume_the_bad_note() {
-    let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_050_000));
+    let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_110_000));
     let mut engine = JudgeEngine::new_with_window_set_algorithm_and_keymode(
         crate::judge::window::dx_pop_judge_windows(),
         RuleMode::Dx,
@@ -416,7 +440,7 @@ fn dx_9key_multi_bad_does_not_consume_the_bad_note() {
         KeyMode::K9,
     );
 
-    let outcome = engine.process_input(&chart, press_at(TimeUs(1_100_000)));
+    let outcome = engine.process_input(&chart, press_at(TimeUs(1_150_000)));
 
     assert_eq!(outcome.events.len(), 2);
     assert_eq!(outcome.events[0].note_id, Some(NoteId(1)));
@@ -425,7 +449,7 @@ fn dx_9key_multi_bad_does_not_consume_the_bad_note() {
     assert_eq!(engine.judged_notes.get(&NoteId(1)), None);
     assert_eq!(engine.judged_notes.get(&NoteId(2)), Some(&Judge::Great));
 
-    let missed = engine.process_misses(&chart, TimeUs(1_100_001));
+    let missed = engine.process_misses(&chart, TimeUs(1_183_334));
     assert!(missed.events.is_empty());
     assert_eq!(engine.judged_notes.get(&NoteId(1)), Some(&Judge::Poor));
 }
@@ -679,9 +703,9 @@ fn dx_9key_ln_early_bad_release_can_be_cancelled_during_margin() {
             .is_some_and(|active| active.pending_release.is_some())
     );
 
-    let before_margin = engine.process_misses(&chart, TimeUs(1_900_000));
+    let before_margin = engine.process_misses(&chart, TimeUs(1_850_000));
     assert!(before_margin.events.is_empty());
-    let repress = engine.process_input(&chart, press_at(TimeUs(1_940_000)));
+    let repress = engine.process_input(&chart, press_at(TimeUs(1_866_666)));
     assert!(repress.events.is_empty());
     assert!(repress.consumed_input);
 
@@ -706,11 +730,79 @@ fn dx_9key_cn_early_bad_release_finalizes_after_margin() {
     let release = engine.process_input(&chart, release_at(TimeUs(1_750_000)));
     assert!(release.events.is_empty());
 
-    let finalized = engine.process_misses(&chart, TimeUs(1_950_000));
+    let finalized = engine.process_misses(&chart, TimeUs(1_866_667));
     assert_eq!(finalized.events.len(), 1);
     assert_eq!(finalized.events[0].note_id, Some(NoteId(2)));
     assert_eq!(finalized.events[0].judge, Judge::Bad);
     assert_eq!(engine.judged_notes.get(&NoteId(2)), Some(&Judge::Bad));
+}
+
+fn dx_pop_engine() -> JudgeEngine {
+    JudgeEngine::new_with_window_set_algorithm_and_keymode(
+        crate::judge::window::dx_pop_judge_windows(),
+        RuleMode::Dx,
+        JudgeAlgorithm::Combo,
+        KeyMode::K9,
+    )
+}
+
+#[test]
+fn dx_pop_cn_release_boundaries_widen_only_the_early_side() {
+    // 参照側 JudgeProperty.POP の LN 終端は PG/GR/GD が {-116667, 233333}、BD が
+    // {-183333, 366667} ({LATE, EARLY})。BMZ の差分は「離し時刻 - 終端」なので EARLY が負。
+    // BD 以下の早離しは longnoteMargin (116667) の間だけ保留され、その後に確定する。
+    for (offset_us, expected, pending) in [
+        (-233_333, Judge::PGreat, false),
+        (-233_334, Judge::Bad, true),
+        (-366_667, Judge::Bad, true),
+        (-366_668, Judge::Poor, true),
+        (116_667, Judge::PGreat, false),
+        (116_668, Judge::Bad, false),
+        (183_333, Judge::Bad, false),
+        (183_334, Judge::Poor, false),
+    ] {
+        let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+        chart.long_notes[0].mode = Some(LongNoteMode::Cn);
+        let mut engine = dx_pop_engine();
+        engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+
+        let released_at = 2_000_000 + offset_us;
+        let release = engine.process_input(&chart, release_at(TimeUs(released_at)));
+        let events = if pending {
+            assert!(release.events.is_empty(), "{offset_us}");
+            let before = engine.process_misses(&chart, TimeUs(released_at + 116_666));
+            assert!(before.events.is_empty(), "{offset_us}");
+            engine.process_misses(&chart, TimeUs(released_at + 116_667)).events
+        } else {
+            release.events
+        };
+
+        assert_eq!(events.len(), 1, "{offset_us}");
+        assert_eq!(events[0].note_id, Some(NoteId(2)), "{offset_us}");
+        assert_eq!(events[0].judge, expected, "{offset_us}");
+    }
+}
+
+#[test]
+fn dx_pop_ln_early_release_boundary_uses_widened_window() {
+    for (offset_us, pending) in [(-233_333, false), (-233_334, true)] {
+        let chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+        let mut engine = dx_pop_engine();
+        engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+
+        let release = engine.process_input(&chart, release_at(TimeUs(2_000_000 + offset_us)));
+
+        let active = engine.lanes[Lane::Key1.index()].active_long;
+        if pending {
+            assert!(release.events.is_empty());
+            assert!(active.is_some_and(|active| active.pending_release.is_some()));
+        } else {
+            assert!(active.is_none());
+            assert_eq!(release.events.len(), 1);
+            assert_eq!(release.events[0].note_id, Some(NoteId(1)));
+            assert_eq!(release.events[0].judge, Judge::PGreat);
+        }
+    }
 }
 
 #[test]

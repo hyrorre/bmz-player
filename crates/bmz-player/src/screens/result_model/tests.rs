@@ -112,6 +112,7 @@ fn stored_result() -> StoredPlayResult {
         played_at: 0,
         replay_path: "replay/test.toml".to_string(),
         replay_sha256: None,
+        replay_save_failed: false,
         slot_paths: [None, None, None, None],
         device_type: bmz_core::input::InputDeviceKind::Keyboard,
     }

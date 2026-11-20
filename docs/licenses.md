@@ -39,6 +39,11 @@ Installed-package compatibility tests are ignored by default and do not redistri
 their inputs. Preserve the generated dependency notices for `serde_yaml_ng` and
 `unsafe-libyaml` when packaging releases.
 
+## BMS text encoding
+
+BMS text detection uses `chardetng` (Apache-2.0 OR MIT) and `encoding_rs`
+((Apache-2.0 OR MIT) AND BSD-3-Clause). Preserve their generated dependency notices.
+
 ## Song archive readers
 
 ZIP, RAR, 7z, tar.gz and LZH song playback uses Rust library decoders. Releases do not require

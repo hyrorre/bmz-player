@@ -40,9 +40,13 @@ fn build_game_session_applies_dx_9key_pop_rules() {
     let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
 
     assert_eq!(session.base_judge_window.pgreat_us, 25_000);
-    assert_eq!(session.base_judge_window.good_us, 87_500);
-    assert_eq!(session.judge.window_set.long_note_end.good_us, 217_000);
-    assert_eq!(session.judge.window_set.long_note_release_margin_us, 200_000);
+    assert_eq!(session.base_judge_window.good_us, 116_667);
+    assert_eq!(session.judge.window_set.long_note_end.good_us, 116_667);
+    assert_eq!(
+        session.judge.window_set.long_note_end_fast.map(|window| window.good_us),
+        Some(233_333)
+    );
+    assert_eq!(session.judge.window_set.long_note_release_margin_us, 116_667);
     assert!(session.score.empty_poor_breaks_combo);
     let normal = session
         .gauge
@@ -64,7 +68,7 @@ fn dx_9key_replay_judgements_apply_current_pop_damage() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
     profile.play.rule_mode = RuleMode::Dx;
     for (input_time, expected_judge, expected_gauge) in [
-        (Some(900_000), Judge::Bad, 28.008),
+        (Some(850_000), Judge::Bad, 28.008),
         (Some(800_000), Judge::EmptyPoor, 24.024),
         (None, Judge::Poor, 24.024),
     ] {

@@ -43,6 +43,8 @@ BMZはプレイ終了時に次の順で保存可否を決めます。
 
 アシストを有効にしていても`Failed` / `NoPlay`はassist lampへ昇格しません。
 
+単曲の履歴リプレイを書けない場合も、スコア・ランプ・回数を保存します。自動保存とリザルトでの手動保存は、どちらもプレイごとの履歴リプレイを参照します。スロットの更新に失敗した場合は、そのスロットの前の記録を保持します。リザルトではリプレイの保存失敗を通知します。旧形式のスロット専用ファイルは、既存の参照から引き続き再生できるよう保持します。
+
 ### ASSIST EASYゲージ
 
 ASSIST EASYゲージのみの使用は実効アシスト扱いとせず、通常の数値スコア保存とIR送信の
@@ -72,6 +74,8 @@ FULL COMBOでも`LightAssistEasy` / `AssistEasy`になります。
 
 `BATTLE AS`のscratch autoplayは部分autoplayであり、BMZのfull autoplay判定には
 なりません。したがって現状は`BattleAutoScratch` bucketへ通常スコアを保存します。
+リプレイには人間の入力を記録し、再生時は両側のスクラッチを自動演奏します。
+リプレイの判定時計で自動演奏も進めるため、再生速度やフレーム間隔に依存しません。
 
 `G-BATTLE`は相手リプレイを表示専用レーンで進め、プレイヤー側だけを採点するBMZ
 独自モードです。beatorajaの`BATTLE` / `BATTLE AS`と同じものではありません。
@@ -136,6 +140,7 @@ BATTLEはBMZでは`Off` / `Battle` / `BattleAutoScratch`のscore bucketを分離
 ローカル保存する設計です。BMZ公式IRもそのbucketをpayloadに持ちます。rianIRは
 BATTLE専用ランキングを持たないためclient側で除外します。BMS-IRは`Battle`と
 `BattleAutoScratch`を互いに分離したnative rankingとして保存し、通常bucketへ混ぜません。
+この保存・送信の仕様はBMZ独自仕様として維持します。
 
 ### H-RANDOMの閾値
 
@@ -463,12 +468,9 @@ assist courseも数値0のattempt行として残し、best scoreとbest lampを�
 
 優先度順の未解決事項は次のとおりです。
 
-1. **BATTLEの仕様選択**: beatoraja準拠のLight Assistに戻すか、BMZ固有の専用
-   score bucketとして維持するかを明示します。後者ならBMZ公式IRのランキングも
-   DOUBLE bucketで必ず分離します。
-2. **アシスト履歴・日次統計**: beatorajaのscoredatalog相当を必要とするか決めます。
+1. **アシスト履歴・日次統計**: beatorajaのscoredatalog相当を必要とするか決めます。
    profile全体統計とは分離したassist attempt logを追加する余地があります。
-3. **通常bestと`UpdateScore`**: CBと同EX scoreのtie-breakをBMZ固有仕様として
+2. **通常bestと`UpdateScore`**: CBと同EX scoreのtie-breakをBMZ固有仕様として
    維持するなら、その差をIR server / UIと共有します。
 
 ## 実装参照

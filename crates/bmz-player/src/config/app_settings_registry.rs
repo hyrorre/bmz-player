@@ -151,7 +151,7 @@ pub fn format_app_settings_value(
             internal_resolution_label(&config.video.internal_resolution, text)
         }
         AppSettingsEntryId::VideoMonitor => display_optional_name(
-            &config.video.monitor_name,
+            &crate::window_config::monitor_config_summary(&config.video.monitor_name),
             text.text("settings-video-primary-monitor"),
         ),
         AppSettingsEntryId::VideoVsyncMode => match config.video.vsync_mode {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::window_config::{MonitorFacts, MonitorMatch};
 
 pub(super) struct AudioVideoSectionContext<'a, 'state> {
     pub(super) unrestricted: bool,
@@ -276,23 +277,16 @@ pub(super) fn build_audio_video_settings_sections(
                     tr!(text, "settings-video-internal-resolution-skin"),
                 );
             });
-            let available_monitors = window.available_monitors().collect::<Vec<_>>();
-            let selected_monitor = if config.video.monitor_name.is_empty() {
-                tr!(text, "settings-video-primary-monitor")
-            } else if available_monitors
-                .iter()
-                .any(|monitor| monitor_config_name(monitor) == config.video.monitor_name)
-            {
-                config.video.monitor_name.clone()
-            } else {
-                tr!(
-                    text,
-                    "settings-video-monitor-disconnected",
-                    "name" => config.video.monitor_name.as_str()
-                )
-            };
+            let available_monitors = describe_monitors(window.available_monitors())
+                .into_iter()
+                .map(|monitor| monitor.facts)
+                .collect::<Vec<_>>();
             egui::ComboBox::new("video_monitor", tr!(text, "settings-video-monitor"))
-                .selected_text(selected_monitor)
+                .selected_text(fullscreen_monitor_label(
+                    &config.video.monitor_name,
+                    &available_monitors,
+                    text,
+                ))
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
                         &mut config.video.monitor_name,
@@ -300,8 +294,11 @@ pub(super) fn build_audio_video_settings_sections(
                         tr!(text, "settings-video-primary-monitor"),
                     );
                     for monitor in &available_monitors {
-                        let name = monitor_config_name(monitor);
-                        ui.selectable_value(&mut config.video.monitor_name, name.clone(), name);
+                        ui.selectable_value(
+                            &mut config.video.monitor_name,
+                            monitor.config_value(),
+                            monitor.label(),
+                        );
                     }
                 });
             egui::ComboBox::new("video_vsync_mode", tr!(text, "settings-video-vsync-mode"))
@@ -375,6 +372,30 @@ pub(super) fn build_audio_video_settings_sections(
         });
 }
 
+fn fullscreen_monitor_label(
+    configured: &str,
+    monitors: &[MonitorFacts],
+    text: Localizer,
+) -> String {
+    if configured.is_empty() {
+        return tr!(text, "settings-video-primary-monitor");
+    }
+    match match_configured_monitor(configured, monitors) {
+        Some((index, MonitorMatch::Position)) => tr!(
+            text,
+            "settings-video-monitor-position-fallback",
+            "name" => monitor_config_summary(configured),
+            "fallback" => monitors[index].label(),
+        ),
+        Some((index, _)) => monitors[index].label(),
+        None => tr!(
+            text,
+            "settings-video-monitor-disconnected",
+            "name" => monitor_config_summary(configured),
+        ),
+    }
+}
+
 /// ドラッグ中の低い値でUI自体が低FPSにならないよう、確定時だけ設定へ反映する。
 fn target_fps_editor(ui: &mut egui::Ui, target_fps: &mut u32) -> egui::Response {
     let id = ui.make_persistent_id("target_fps_draft");
@@ -393,6 +414,29 @@ fn target_fps_editor(ui: &mut egui::Ui, target_fps: &mut u32) -> egui::Response 
         *target_fps = draft;
     }
     response
+}
+
+#[cfg(test)]
+mod monitor_label_tests {
+    use super::*;
+    use crate::window_config::PlatformMonitorIdentity;
+
+    #[test]
+    fn position_fallback_label_shows_saved_monitor_and_fallback() {
+        let configured = r"\\?\DISPLAY#MONA#1#{GUID} [1920, 0]";
+        let monitor = MonitorFacts {
+            name: Some(r"\\.\DISPLAY1".to_owned()),
+            position: (1920, 0),
+            identity: Some(PlatformMonitorIdentity {
+                device_path: r"\\?\DISPLAY#MONB#1#{GUID}".to_owned(),
+                friendly_name: Some("Monitor B".to_owned()),
+            }),
+        };
+        assert_eq!(
+            fullscreen_monitor_label(configured, &[monitor], Localizer::new(AppLocale::Ja)),
+            r"MONA [1920, 0]（未接続・代替先 Monitor B (\\.\DISPLAY1 [1920, 0])）"
+        );
+    }
 }
 
 #[cfg(test)]

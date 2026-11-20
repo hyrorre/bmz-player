@@ -39,8 +39,9 @@ mock.module('../../utils/rate_limit', () => ({
 Object.assign(globalThis, { defineEventHandler })
 const { default: scoreHandler } = await import('../../api/v1/scores.post')
 const { default: courseHandler } = await import('../../api/v1/course-scores.post')
-const { submitScore, prepareBestScoreUpsert } = await import('./submission')
-const { validateScoreSubmission } = await import('./common')
+const { deleteLocalBackfillScores, submitScore } = await import('./submission')
+const { parseRankingQuery, validateScoreSubmission } = await import('./common')
+const { getRanking, getRankingWithPreviousRank } = await import('./ranking')
 const { IrIdempotencyCollisionError } = await import('./idempotency')
 const { submitCourseScore, computeCourseHash, validateCourseScoreSubmission } =
   await import('../course_ir')
@@ -106,6 +107,105 @@ function withNotes(payload: IrScoreSubmission, notes: number) {
   return payload
 }
 
+test('joins details only for a full ranking page and the player outside that page', async () => {
+  const playerIds = Array.from({ length: 202 }, (_, i) => `ranking-player-${i}`)
+  await client.execute(`
+    WITH RECURSIVE players(i) AS (VALUES(0) UNION ALL SELECT i + 1 FROM players WHERE i < 201)
+    INSERT INTO users (id, email, password_hash)
+    SELECT 'ranking-player-' || i, 'ranking-' || i || '@example.invalid', '' FROM players
+  `)
+  await client.execute(`
+    INSERT INTO profiles (id, display_name)
+    SELECT id, 'Name ' || id FROM users WHERE id LIKE 'ranking-player-%'
+  `)
+  for (const [i, id] of playerIds.entries()) {
+    const payload = submission()
+    payload.result.played_at = Number(payload.result.played_at) + i
+    if (i >= 101) payload.result.clear = 'Failed'
+    await submitScore({ id }, validateScoreSubmission(payload), [], 10)
+  }
+  const own = submission()
+  own.result.clear = 'Failed'
+  own.result.ex_score = 100
+  own.result.judges.fast.pgreat = 0
+  own.result.judges.fast.great = 100
+  own.play_options.arrange_1p = 'mirror'
+  const { score_id } = await submitScore(user, validateScoreSubmission(own), [], 10)
+  const execute = spyOn(client, 'execute')
+  let result
+  try {
+    result = await getRankingWithPreviousRank(
+      user,
+      own.chart.sha256,
+      parseRankingQuery({ limit: 200, offset: 2 }),
+      199,
+    )
+    const detailQueries = execute.mock.calls.flatMap(([statement]) =>
+      typeof statement === 'object' && statement.sql.includes('as ranking_sources')
+        ? [statement]
+        : [],
+    )
+    expect(detailQueries).toHaveLength(1)
+    const binds = detailQueries[0]!.args
+    expect(binds).toHaveLength(1)
+    const sources = JSON.parse(String((binds as unknown[])[0]))
+    expect(sources.map((source: { playerId: string }) => source.playerId)).toEqual([
+      ...playerIds.slice(2),
+      user.id,
+    ])
+  } finally {
+    execute.mockRestore()
+  }
+
+  const { ranking } = result.data
+  expect(result.previousRank).toBe(203)
+  expect(ranking.clear_rate).toBe(50)
+  expect(ranking.pagination).toEqual({ limit: 200, offset: 2, total: 203, has_more: true })
+  expect(ranking.entries).toHaveLength(200)
+  expect(ranking.entries[0]).toMatchObject({
+    rank: 1,
+    scope_rank: 3,
+    player: { id: playerIds[2], display_name: `Name ${playerIds[2]}` },
+  })
+  expect(ranking.self).toMatchObject({
+    rank: 203,
+    score_id,
+    included_in_entries: false,
+    entry: { scope_rank: 203, score: { arrange_1p: 'mirror', judges: own.result.judges } },
+  })
+})
+
+test('keeps independent bests and their details when falling back to history', async () => {
+  const bestEx = submission()
+  bestEx.play_options.arrange_1p = 'random'
+  const ex = await submitScore(user, validateScoreSubmission(bestEx), [], 10)
+  const bestClear = submission()
+  bestClear.idempotency_key = 'best-clear'
+  bestClear.rule.ln_policy = 'ForceCn'
+  bestClear.rule.effective_ln_mode = 'cn'
+  bestClear.result.clear = 'Hard'
+  bestClear.result.ex_score = 100
+  bestClear.result.judges.fast.pgreat = 0
+  bestClear.result.judges.fast.great = 100
+  bestClear.play_options.arrange_1p = 'mirror'
+  const clear = await submitScore(user, validateScoreSubmission(bestClear), [], 10)
+  const query = parseRankingQuery({ scope: 'around_self', limit: 1 })
+  const cached = await getRanking(user, bestEx.chart.sha256, query)
+  expect(cached.ranking.entries[0]).toMatchObject({
+    rank: 1,
+    score: {
+      score_id: ex.score_id,
+      clear: 'Hard',
+      arrange_1p: 'random',
+      judges: bestEx.result.judges,
+      source_score_ids: { ex_score: ex.score_id, clear: clear.score_id },
+    },
+  })
+  expect(cached.ranking.self?.included_in_entries).toBe(true)
+  await db.delete(schema.bestScores)
+  expect(await getRanking(user, bestEx.chart.sha256, query)).toEqual(cached)
+})
+
 function courseSubmission() {
   const charts = ['a'.repeat(64)]
   const constraints = { gauge: 'Normal' }
@@ -136,6 +236,108 @@ function courseSubmission() {
     idempotency_key: 'course-test',
   }
 }
+
+test.each([false, true])(
+  'keeps a concurrent score when cleanup commits first=%s',
+  async (cleanupFirst) => {
+    const deleted = submission()
+    deleted.play_options.submission_source = 'local_backfill'
+    deleted.play_options.source_kind = 'lr2'
+    const backfill = await submitScore(user, validateScoreSubmission(deleted), [], 10)
+    const next = submission()
+    next.idempotency_key = 'after-backfill'
+    next.result.ex_score = 150
+    next.result.judges.fast.pgreat = 50
+    next.result.judges.fast.great = 50
+    const scoreIds = [backfill.score_id!]
+    const commit = db.batch.bind(db)
+    const batch = spyOn(db, 'batch').mockImplementationOnce(async (statements) => {
+      if (cleanupFirst) {
+        await deleteLocalBackfillScores(user, scoreIds)
+      } else {
+        await submitScore(user, validateScoreSubmission(next), [], 10)
+      }
+      return commit(statements)
+    })
+    try {
+      if (cleanupFirst) {
+        await submitScore(user, validateScoreSubmission(next), [], 10)
+      } else {
+        expect((await deleteLocalBackfillScores(user, scoreIds)).deleted_score_ids).toEqual(
+          scoreIds,
+        )
+      }
+    } finally {
+      batch.mockRestore()
+    }
+    const [history] = await db.select().from(schema.scores)
+    const best = await db.select().from(schema.bestScores)
+    expect(history?.id).not.toBe(backfill.score_id)
+    expect(best).toHaveLength(1)
+    expect(best[0]).toMatchObject({ exScore: 150, scoreId: history?.id })
+  },
+)
+
+test('cleanup can commit across an attestation and rebuilds the latest verification', async () => {
+  const deleted = submission()
+  deleted.play_options.submission_source = 'local_backfill'
+  deleted.play_options.source_kind = 'lr2'
+  const backfill = await submitScore(user, validateScoreSubmission(deleted), [], 10)
+  const kept = submission()
+  kept.idempotency_key = 'attested-while-cleaning'
+  const keptScore = await submitScore(user, validateScoreSubmission(kept), [], 10)
+  const commit = db.batch.bind(db)
+  const batch = spyOn(db, 'batch').mockImplementationOnce(async (statements) => {
+    await db
+      .update(schema.scores)
+      .set({ evidence: { attestation: {} }, verification: 'verified_play' })
+      .where(eq(schema.scores.id, keptScore.score_id!))
+    return commit(statements)
+  })
+  try {
+    expect((await deleteLocalBackfillScores(user, [backfill.score_id!])).deleted_score_ids).toEqual(
+      [backfill.score_id],
+    )
+    expect(batch).toHaveBeenCalledTimes(1)
+  } finally {
+    batch.mockRestore()
+  }
+  expect((await db.select().from(schema.bestScores))[0]).toMatchObject({
+    scoreId: keptScore.score_id,
+    verification: 'verified_play',
+  })
+})
+
+test('a later course upsert cannot replace a concurrently committed higher EX score', async () => {
+  const low = courseSubmission()
+  const high = courseSubmission()
+  high.idempotency_key = 'course-high'
+  high.result.ex_score = 180
+
+  const execute = client.execute.bind(client)
+  let startedHigher = false
+  const spy = spyOn(client, 'execute').mockImplementation(async (...args) => {
+    const statement = args[0]
+    if (
+      !startedHigher &&
+      typeof statement === 'object' &&
+      statement.sql.startsWith('insert into "best_course_scores"')
+    ) {
+      startedHigher = true
+      await submitCourseScore(user, validateCourseScoreSubmission(high))
+    }
+    return execute(...args)
+  })
+  try {
+    const result = await submitCourseScore(user, validateCourseScoreSubmission(low))
+    expect(startedHigher).toBe(true)
+    expect(result.best_updated).toBe(false)
+  } finally {
+    spy.mockRestore()
+  }
+  expect(await db.select().from(schema.courseScores)).toHaveLength(2)
+  expect((await db.select().from(schema.bestCourseScores))[0]?.exScore).toBe(180)
+})
 
 test('new normalized course FORCE and historical AUTO remain accepted in separate buckets', async () => {
   for (const policy of ['AutoLn', 'AutoCn', 'AutoHcn', 'ForceLn', 'ForceCn', 'ForceHcn']) {
@@ -637,38 +839,58 @@ describe('score submission idempotency', () => {
     expect(ranked.self && [ranked.self.rank, ranked.self.row.player_id]).toEqual([2, 'second'])
     expect(ranked.total).toBe(2)
   })
-  test('concurrent prepared best updates preserve independent maxima and their source IDs', async () => {
-    const high = submission()
-    const low = submission()
-    low.idempotency_key = 'lower-score'
-    low.result.ex_score = 100
-    low.result.clear = 'hard'
-    low.rule.gauge = 'hard'
-    const first = await submitScore(user, high, [], 10)
-    const second = await submitScore(user, low, [], 10)
-    await db.delete(schema.bestScores)
-    const prepare = (payload: IrScoreSubmission, id: string, rank: number) =>
-      prepareBestScoreUpsert(user.id, payload, id, 'unverified', {
-        ex_score: payload.result.ex_score,
-        clear_rank: rank,
-        max_combo: payload.result.max_combo,
-        min_bp: payload.result.min_bp,
-        min_cb: payload.result.min_cb,
-        server_received_at: new Date(),
+  test.each([false, true])(
+    'concurrent submission reports only the fields it changes (better clear=%s)',
+    async (betterClear) => {
+      const high = validateScoreSubmission(submission())
+      const lowPayload = submission()
+      lowPayload.idempotency_key = 'lower-score'
+      lowPayload.result.ex_score = 100
+      lowPayload.result.judges.fast.pgreat = 0
+      lowPayload.result.judges.fast.great = 100
+      if (betterClear) {
+        lowPayload.result.clear = 'Hard'
+        lowPayload.rule.gauge = 'hard'
+      }
+      const low = validateScoreSubmission(lowPayload)
+      const commit = db.batch.bind(db)
+      let firstId: string | undefined
+      const batch = spyOn(db, 'batch').mockImplementationOnce(async (statements) => {
+        firstId = (await submitScore(user, high, [], 10)).score_id
+        return commit(statements)
       })
-    // Both requests observe no best row, then the higher score commits first.
-    const a = await prepare(high, first.score_id!, 4)
-    const b = await prepare(low, second.score_id!, 5)
-    await a.statement!
-    await b.statement!
-    const best = (await db.select().from(schema.bestScores))[0]!
-    expect(best.exScore).toBe(200)
-    expect(best.scoreId).toBe(first.score_id)
-    expect(best.bestExScoreId).toBe(first.score_id)
-    expect(best.clearRank).toBe(5)
-    expect(best.bestClearScoreId).toBe(second.score_id)
-    expect(best.gauge).toBe(high.rule.gauge)
-  })
+      try {
+        const second = await submitScore(user, low, [], 10)
+        expect(second).toMatchObject({
+          best_updated: betterClear,
+          updated_fields: {
+            ex_score: false,
+            clear: betterClear,
+            max_combo: false,
+            min_bp: false,
+            min_cb: false,
+          },
+          previous_best: {
+            clear_type: high.result.clear,
+            ex_score: 200,
+            max_combo: 100,
+            min_bp: 0,
+            min_cb: 0,
+          },
+        })
+        expect((await db.select().from(schema.bestScores))[0]).toMatchObject({
+          scoreId: firstId,
+          bestExScoreId: firstId,
+          exScore: 200,
+          bestClearScoreId: betterClear ? second.score_id : firstId,
+          clearType: betterClear ? low.result.clear : high.result.clear,
+          gauge: high.rule.gauge,
+        })
+      } finally {
+        batch.mockRestore()
+      }
+    },
+  )
   test.each([false, true])(
     'checks the concurrent insert conflict path (collision=%s)',
     async (collision) => {

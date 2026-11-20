@@ -227,7 +227,14 @@ impl WinitApp {
             Some(SelectItem::Course(row)) => row.common_key_mode,
             _ => self.select.select_mode_filter.key_mode(),
         };
-        detail_edit_mode(source, self.selected_key_mode_conversion())
+        let mode = detail_edit_mode(source, self.selected_key_mode_conversion());
+        play_skin_key_mode_for_options(
+            mode,
+            self.select.double_option,
+            self.select.session_mode,
+            KeyModeConversionConfig::Off,
+            self.select.ir_battle.active,
+        )
     }
 
     fn detail_options_nine_key(&self) -> bool {
