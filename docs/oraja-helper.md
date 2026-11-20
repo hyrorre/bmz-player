@@ -23,6 +23,8 @@ lr2oraja-endlessdream の `OrajaHelperClient` と共通です。
 `epr/lpr` は見逃し POOR、`ems/lms` は空 POOR を表します。
 判定は描画用の FAST/SLOW 表示フィルタを通さず、gameplay が確定した結果から取得します。
 クイックリトライでも正式な `song_result` は作らず、`song_play_end` の統計だけを送ります。
+コース各曲の `song_result` のランプは単曲の保存時と同じ区分に補正し、
+フルコンボ・パーフェクト・MAX以外は `NoPlay` にします。`song_play_end` は確定したプレイ結果を送ります。
 
 `randomPlacement` / `randomPlacement2P` は、各配置先にある元レーンを並べた文字列です。
 beatoraja のレーン番号に合わせて1から数え、固定スクラッチを末尾から除きます。

@@ -1,5 +1,30 @@
 # oraja_helper の named pipe 連携
 
+## 2026-11-20: コース曲リザルトのランプ
+
+コース各曲の `song_result` に生のクリア種別を渡していたため、保存時と同じ
+`course_stage_clear_type` を使い、フルコンボ系以外を NoPlay に補正する。
+単曲と `song_play_end` は元の結果を維持する。
+
+## 2026-11-20: ED 版送信処理との比較
+
+手元の `../lr2oraja-endlessdream` の HEAD `2f2598b4` の `OrajaHelperClient`、
+`NamedPipeSender`、`MusicSelector`、`BMSPlayer`、`MusicResult` と BMZ の送信経路を静的に比較した。
+レビューで参照された ED の `3bc4b9b4` は手元に存在せず、その版との完全一致は未検証。
+
+- ED の `song_select` は `scoreBest` / `minBpBest` / `scores` を条件付きで送る。BMZ は送らず、helper の DB・履歴に依存する。
+- ED の 9K オプション ID は `OPTION_PMS` で解釈する。BMZ の `optionId` は共通 ID で、特に 7〜9 の意味が一致しない。
+- 未指定 seed は ED の `-1` に対し BMZ は `null` を送り得る。BMZ 固有の F-RANDOM / MF-RANDOM の ID も `null`。
+- `song_play_end` は ED がメトリクスと判定を送り、BMZ はこれに score・ランプ・BP も追加する。BMZ は確定結果がなければ終了イベントを送らない。
+- ED の再送は最大8回で待機間隔を延ばす。BMZ は専用 worker・64件の有界キュー・1件1秒・待機2秒上限で破棄する。
+- ED は送信 payload と各試行を JSONL に記録する。BMZ はこれらの専用ダンプを行わず、送信失敗は debug、キュー破棄は種別に応じてログ出力する。
+- BMZ は `source: bmz-player` と既定 OFF の設定を追加する。対応 helper は送信元と選択プレイヤーを照合する。
+- ED の選曲保留は SongData のオブジェクト単位、BMZ は SHA-256 単位であり、同一ハッシュの別行へ移動したときは挙動が異なり得る。
+- ED は FREQ trainer 使用時にリザルトのランプを NoPlay に補正する。BMZ は負の FREQ を送信対象外とし、0以上は BMZ の保存規則に従う。
+
+両者の早期中断・短い FAILED 演出と終了メトリクスの確定タイミング、互換 helper の
+実処理・各配置の全モードは実機比較していない。送信前後のタイミングや最終表示の完全一致は未確認。
+
 ## 2026-11-20: キュー満杯時のログと設定表示
 
 満杯による選曲通知の破棄は debug、プレイ通知の破棄と worker 切断は warning に記録する。
