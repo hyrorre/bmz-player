@@ -7,7 +7,31 @@ use serde_json::{Value, json};
 pub(super) struct HelperClient {
     sender: Option<std::sync::mpsc::SyncSender<(Instant, Value)>>,
     enabled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    selection: Option<[u8; 32]>,
+    selection: SelectionDebounce,
+}
+
+#[derive(Default)]
+struct SelectionDebounce {
+    pending: Option<([u8; 32], Instant, bool)>,
+}
+
+impl SelectionDebounce {
+    fn observe(&mut self, hash: Option<[u8; 32]>, now: Instant) -> bool {
+        let Some(hash) = hash else {
+            self.pending = None;
+            return false;
+        };
+        if self.pending.as_ref().is_none_or(|(previous, _, _)| *previous != hash) {
+            self.pending = Some((hash, now, false));
+            return false;
+        }
+        let (_, changed_at, sent) = self.pending.as_mut().expect("selection checked above");
+        if *sent || now.saturating_duration_since(*changed_at) < Duration::from_secs(1) {
+            return false;
+        }
+        *sent = true;
+        true
+    }
 }
 
 impl HelperClient {
@@ -16,7 +40,7 @@ impl HelperClient {
             enabled.store(false, std::sync::atomic::Ordering::Relaxed);
         }
         self.sender = None;
-        self.selection = None;
+        self.selection = SelectionDebounce::default();
     }
 
     fn send(&mut self, payload: Value) {
@@ -132,7 +156,11 @@ fn option(option: crate::select_options::ArrangeOption) -> (&'static str, Option
 /// The helper expects source key numbers, with scratches last and excluded when fixed.
 fn placement(arrange: &AppliedArrange, mode: KeyMode, side: usize) -> String {
     let option = if side == 0 { arrange.arrange } else { arrange.arrange_2p };
-    if arrange.pattern.is_none() && option != crate::select_options::ArrangeOption::Normal {
+    if matches!(
+        option,
+        crate::select_options::ArrangeOption::Normal | crate::select_options::ArrangeOption::Mirror
+    ) || arrange.pattern.is_none()
+    {
         return String::new();
     }
     // A per-note side has no single lane placement even if the other side does.
@@ -228,16 +256,15 @@ impl WinitApp {
             return;
         }
         if scene != AppSceneKind::Select {
-            self.integrations.oraja_helper.selection = None;
+            self.integrations.oraja_helper.selection = SelectionDebounce::default();
             return;
         }
-        let chart = self.selected_chart_row().and_then(|row| row.chart.as_ref());
-        let hash = chart.map(|chart| chart.sha256);
-        if hash == self.integrations.oraja_helper.selection {
+        let hash =
+            self.selected_chart_row().and_then(|row| row.chart.as_ref()).map(|chart| chart.sha256);
+        if !self.integrations.oraja_helper.selection.observe(hash, Instant::now()) {
             return;
         }
-        let Some(chart) = chart else {
-            self.integrations.oraja_helper.selection = hash;
+        let Some(chart) = self.selected_chart_row().and_then(|row| row.chart.as_ref()) else {
             return;
         };
         let payload = json!({"event": "song_select", "scene": "select", "source": "bmz-player",
@@ -245,7 +272,6 @@ impl WinitApp {
             "artist": format!("{} {}", chart.artist, chart.subartist).trim(),
             "sha256": crate::storage::common::hash_to_hex(&chart.sha256),
             "md5": crate::storage::common::hash_to_hex(&chart.md5)});
-        self.integrations.oraja_helper.selection = hash;
         self.integrations.oraja_helper.send(payload);
     }
 
@@ -394,6 +420,23 @@ mod tests {
     use crate::select_options::ArrangeOption;
 
     #[test]
+    fn selection_waits_for_stability_and_cancels_on_change_or_exit() {
+        let mut selection = SelectionDebounce::default();
+        let start = Instant::now();
+        let a = Some([1; 32]);
+        let b = Some([2; 32]);
+        assert!(!selection.observe(a, start));
+        assert!(!selection.observe(a, start + Duration::from_millis(999)));
+        assert!(!selection.observe(b, start + Duration::from_millis(999)));
+        assert!(!selection.observe(b, start + Duration::from_millis(1998)));
+        assert!(selection.observe(b, start + Duration::from_millis(1999)));
+        assert!(!selection.observe(b, start + Duration::from_secs(3)));
+        assert!(!selection.observe(None, start + Duration::from_secs(4)));
+        assert!(!selection.observe(b, start + Duration::from_secs(5)));
+        assert!(selection.observe(b, start + Duration::from_secs(6)));
+    }
+
+    #[test]
     fn helper_freq_eligibility_is_shared_by_play_end_and_result() {
         for (freq, expected) in [(-1, false), (0, true)] {
             let mut options = PlayStartOptions::default();
@@ -437,27 +480,31 @@ mod tests {
         let mut client = HelperClient {
             sender: Some(sender),
             enabled: Some(enabled.clone()),
-            selection: Some([1; 32]),
+            selection: SelectionDebounce { pending: Some(([1; 32], Instant::now(), false)) },
         };
         client.disable();
         assert!(!enabled.load(std::sync::atomic::Ordering::Relaxed));
         assert!(client.sender.is_none());
-        assert!(client.selection.is_none());
+        assert!(client.selection.pending.is_none());
     }
 
     #[test]
     fn helper_placements_use_beatoraja_source_numbers() {
         let mut arrange = AppliedArrange::default();
-        assert_eq!(placement(&arrange, KeyMode::K7, 0), "1234567");
-        assert_eq!(placement(&arrange, KeyMode::K5, 0), "12345");
-        assert_eq!(placement(&arrange, KeyMode::K9, 0), "123456789");
-        assert_eq!(placement(&arrange, KeyMode::K14, 1), "9101112131415");
-        assert_eq!(placement(&arrange, KeyMode::K10, 1), "7891011");
+        assert_eq!(placement(&arrange, KeyMode::K7, 0), "");
+        assert_eq!(placement(&arrange, KeyMode::K14, 1), "");
         let mut pattern: Vec<u8> = (0..16).collect();
         pattern[1..8].reverse();
         arrange.pattern = Some(pattern.clone());
         arrange.arrange = ArrangeOption::Mirror;
+        assert_eq!(placement(&arrange, KeyMode::K7, 0), "");
+        arrange.arrange = ArrangeOption::Random;
         assert_eq!(placement(&arrange, KeyMode::K7, 0), "7654321");
+        arrange.arrange_2p = ArrangeOption::Mirror;
+        assert_eq!(placement(&arrange, KeyMode::K14, 1), "");
+        arrange.arrange_2p = ArrangeOption::Random;
+        assert_eq!(placement(&arrange, KeyMode::K14, 1), "9101112131415");
+        assert_eq!(placement(&arrange, KeyMode::K10, 1), "7891011");
         pattern.swap(0, 7);
         arrange.pattern = Some(pattern);
         assert_eq!(placement(&arrange, KeyMode::K7, 0), "76543281");
