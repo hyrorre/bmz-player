@@ -351,6 +351,26 @@ mod tests {
         return WgpuBackend::Metal;
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn vulkan_failure_retries_opengl_including_auto_without_dx12() {
+        for requested in [WgpuBackend::Vulkan, WgpuBackend::Auto] {
+            let mut attempted = Vec::new();
+            let chosen = try_backend_candidates(
+                requested,
+                wgpu::Backends::VULKAN | wgpu::Backends::GL,
+                |candidate| {
+                    attempted.push(candidate);
+                    anyhow::ensure!(candidate != WgpuBackend::Vulkan, "injected device failure");
+                    Ok(candidate)
+                },
+            )
+            .unwrap();
+            assert_eq!(chosen, WgpuBackend::Gl);
+            assert_eq!(attempted, [WgpuBackend::Vulkan, WgpuBackend::Gl]);
+        }
+    }
+
     #[test]
     fn opengl_failure_retries_and_stops_at_first_success() {
         let mut attempted = Vec::new();

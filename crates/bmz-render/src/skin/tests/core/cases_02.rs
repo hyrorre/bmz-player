@@ -1266,7 +1266,8 @@ fn image_negative_crop_size_uses_remaining_source_extent() {
         clickable: None,
     };
 
-    let uv = skin_image_texture_region(&image, SkinImageSize { width: 110.0, height: 220.0 }, 0);
+    let uv = skin_image_texture_region(&image, SkinImageSize { width: 110.0, height: 220.0 }, 0)
+        .unwrap();
 
     assert!(approx_eq(uv.x, 10.0 / 110.0));
     assert!(approx_eq(uv.y, 20.0 / 220.0));
@@ -1284,13 +1285,13 @@ fn image_past_the_source_keeps_its_rectangle_except_lr2_clipping() {
     )
     .unwrap();
     let size = SkinImageSize { width: 2000.0, height: 3000.0 };
-    let uv = skin_image_texture_region(&image, size, 0);
+    let uv = skin_image_texture_region(&image, size, 0).unwrap();
     assert!(approx_eq(uv.y, 2964.0 / 3000.0));
     assert!(approx_eq(uv.height, 240.0 / 3000.0));
 
     // LR2 shortens the rectangle to the image.
     let lr2 = SkinImageDef { lr2_clip: true, ..image };
-    let uv = skin_image_texture_region(&lr2, size, 0);
+    let uv = skin_image_texture_region(&lr2, size, 0).unwrap();
     assert!(approx_eq(uv.y, 2964.0 / 3000.0));
     assert!(approx_eq(uv.height, 36.0 / 3000.0));
 }
@@ -1314,7 +1315,8 @@ fn qwilight_frame_cells_map_held_frames_to_shared_atlas_cells() {
                 &image,
                 SkinImageSize { width: 20.0, height: 20.0 },
                 elapsed,
-            );
+            )
+            .unwrap();
             ((uv.x / uv.width).round() as i32, (uv.y / uv.height).round() as i32)
         };
         assert_eq!(cell(0), (0, 0));

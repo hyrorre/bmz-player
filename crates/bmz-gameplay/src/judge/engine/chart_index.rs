@@ -13,6 +13,7 @@ pub(super) struct ChartIndex {
     hcn_prefix_end: Vec<TimeUs>,
     hcn_sorted: bool,
     result_end_time: TimeUs,
+    has_mines: bool,
     bpm_reflections: Vec<TickTimePoint>,
 }
 
@@ -48,6 +49,7 @@ impl JudgeEngine {
             .collect();
         self.judged_notes.reserve(count.saturating_sub(self.judged_notes.len()));
         let result_end_time = result_end_time(&chart);
+        let has_mines = contains_mines(&chart);
         let bpm_reflections = chart_reflections(&chart);
         self.chart_index = Some(Arc::new(ChartIndex {
             chart,
@@ -56,6 +58,7 @@ impl JudgeEngine {
             hcn_prefix_end,
             hcn_sorted,
             result_end_time,
+            has_mines,
             bpm_reflections,
         }));
         self
@@ -63,6 +66,10 @@ impl JudgeEngine {
 
     fn matching_index(&self, chart: &PlayableChart) -> Option<&ChartIndex> {
         self.chart_index.as_deref().filter(|index| std::ptr::eq(index.chart.as_ref(), chart))
+    }
+
+    pub(crate) fn has_mines(&self, chart: &PlayableChart) -> bool {
+        self.matching_index(chart).map_or_else(|| contains_mines(chart), |index| index.has_mines)
     }
 
     /// Last event that can affect scoring or gauges. Invisible notes only change keysounds.
@@ -130,4 +137,8 @@ fn result_end_time(chart: &PlayableChart) -> TimeUs {
         .chain(chart.long_notes.iter().map(|pair| pair.end_time))
         .max()
         .unwrap_or(chart.end_time)
+}
+
+fn contains_mines(chart: &PlayableChart) -> bool {
+    chart.lane_notes.iter().flatten().any(|note| note.kind == NoteKind::Mine)
 }

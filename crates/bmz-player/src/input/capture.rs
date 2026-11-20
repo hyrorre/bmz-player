@@ -48,11 +48,17 @@ pub struct InputCapture {
 }
 
 impl InputCapture {
+    /// ゲームパッドのバックエンドを起動できず、キーボードだけを扱うときの名前。
+    pub const KEYBOARD_ONLY: &'static str = "keyboard only";
+
     pub fn new(
         kind: Option<GamepadBackendKind>,
         configs: [GamepadScratchConfig; 2],
         bridge: Option<RawInputBridge>,
     ) -> anyhow::Result<Self> {
+        let requested = kind;
+        let kind = kind
+            .map(|kind| super::availability::BackendAvailability::current().resolve_gamepad(kind));
         #[cfg(target_os = "macos")]
         let gc_pads = (kind == Some(GamepadBackendKind::GameController))
             .then(|| super::gamecontroller::Pads::start(configs))
@@ -79,12 +85,12 @@ impl InputCapture {
         let thread = thread::Builder::new().name("bmz-input-capture".into()).spawn(move || {
             // Construct and destroy GameInput on its owner thread, including its COM pointers.
             let mut backend = create_backend(kind, configs, bridge.clone());
-            let name = backend.as_ref().map_or("keyboard only", GamepadBackend::name);
+            let name = backend.as_ref().map_or(Self::KEYBOARD_ONLY, GamepadBackend::name);
             let _ = ready_tx.send(name);
             #[cfg(windows)]
             let mut native = super::native_capture::NativeCapture::new(
                 bridge,
-                matches!(kind, Some(GamepadBackendKind::RawInput)),
+                matches!(backend, Some(GamepadBackend::RawInput(_))),
             )
             .map_err(|error| tracing::error!(%error, "independent keyboard capture unavailable"))
             .ok();
@@ -189,7 +195,7 @@ impl InputCapture {
         let name = ready_rx.recv_timeout(Duration::from_secs(5))?;
         #[cfg(target_os = "macos")]
         let name = if gc_pads.is_some() { "GameController" } else { name };
-        tracing::info!(backend = name, "input backend: dedicated capture thread");
+        tracing::info!(?requested, backend = name, "input backend: dedicated capture thread");
         Ok(Self {
             #[cfg(all(target_os = "linux", feature = "linux-evdev"))]
             linux_keyboard: Mutex::new((None, None)),
@@ -369,6 +375,9 @@ impl InputCapture {
     pub fn name(&self) -> &'static str {
         self.name
     }
+    pub fn has_gamepad_backend(&self) -> bool {
+        self.name != Self::KEYBOARD_ONLY
+    }
     pub fn is_gilrs(&self) -> bool {
         self.name == "gilrs"
     }
@@ -532,12 +541,12 @@ fn create_backend(
 ) -> Option<GamepadBackend> {
     let kind = kind?;
     #[cfg(windows)]
-    if kind == GamepadBackendKind::RawInput
-        && let Some(bridge) = bridge
-    {
-        return Some(GamepadBackend::RawInput(Box::new(super::rawinput::RawInputBackend::new(
-            bridge, configs,
-        ))));
+    if kind == GamepadBackendKind::RawInput {
+        return bridge.map(|bridge| {
+            GamepadBackend::RawInput(Box::new(super::rawinput::RawInputBackend::new(
+                bridge, configs,
+            )))
+        });
     }
     #[cfg(not(windows))]
     let _ = (kind, bridge);
@@ -551,7 +560,19 @@ fn create_backend(
         Ok(backend) => Some(GamepadBackend::Gilrs(Box::new(backend))),
         Err(error) => {
             tracing::warn!(%error, "gamepad capture initialization failed");
-            None
+            #[cfg(windows)]
+            {
+                tracing::warn!("falling back to Raw Input after gilrs initialization failure");
+                bridge.map(|bridge| {
+                    GamepadBackend::RawInput(Box::new(super::rawinput::RawInputBackend::new(
+                        bridge, configs,
+                    )))
+                })
+            }
+            #[cfg(not(windows))]
+            {
+                None
+            }
         }
     }
 }
@@ -559,6 +580,20 @@ fn create_backend(
 mod tests {
     use super::*;
     use bmz_gameplay::input::backend::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn explicit_raw_input_requires_bridge_and_does_not_fall_back_to_gilrs() {
+        let configs = [GamepadScratchConfig::default(); 2];
+        assert!(create_backend(Some(GamepadBackendKind::RawInput), configs, None).is_none());
+        let backend = create_backend(
+            Some(GamepadBackendKind::RawInput),
+            configs,
+            Some(RawInputBridge::new()),
+        )
+        .unwrap();
+        assert!(matches!(backend, GamepadBackend::RawInput(_)));
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

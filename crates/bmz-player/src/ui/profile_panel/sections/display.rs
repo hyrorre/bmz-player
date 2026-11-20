@@ -68,6 +68,41 @@ pub(in crate::ui::profile_panel) fn build_profile_display_section(
             if preset.supports_classic() || preset.supports_floating() {
                 ui.label(tr!(text, "profile-display-step-range"));
             }
+            if preset.supports_classic() || preset.supports_floating() {
+                let change_type_label = |value| match value {
+                    HispeedChangeTypeConfig::Fixed => {
+                        tr!(text, "profile-display-hispeed-change-type-fixed")
+                    }
+                    HispeedChangeTypeConfig::Ratio => {
+                        tr!(text, "profile-display-hispeed-change-type-ratio")
+                    }
+                };
+                egui::ComboBox::new(
+                    "profile_hispeed_change_type",
+                    tr!(text, "profile-display-hispeed-change-type"),
+                )
+                .selected_text(change_type_label(profile.lane.hispeed_change_type))
+                .show_ui(ui, |ui| {
+                    for value in HispeedChangeTypeConfig::ORDER {
+                        ui.selectable_value(
+                            &mut profile.lane.hispeed_change_type,
+                            value,
+                            change_type_label(value),
+                        );
+                    }
+                });
+                if profile.lane.hispeed_change_type == HispeedChangeTypeConfig::Ratio {
+                    ui.add(
+                        egui::Slider::new(
+                            &mut profile.lane.hispeed_change_ratio,
+                            HISPEED_CHANGE_RATIO_MIN..=HISPEED_CHANGE_RATIO_MAX,
+                        )
+                        .step_by(f64::from(HISPEED_CHANGE_RATIO_UNIT))
+                        .text(tr!(text, "profile-display-hispeed-change-ratio")),
+                    );
+                    ui.label(tr!(text, "profile-display-hispeed-change-ratio-help"));
+                }
+            }
             if preset.supports_floating() {
                 ui.checkbox(
                     &mut profile.lane.hispeed_auto_adjust,

@@ -3,6 +3,7 @@ use crate::config::app_config::{GamepadBackendKind, GlobalInputConfig, InputBack
 
 #[derive(Clone, Copy)]
 pub(crate) struct BackendAvailability {
+    gilrs: bool,
     raw_input: bool,
     macos_hid: bool,
     gamecontroller: bool,
@@ -13,6 +14,26 @@ pub(crate) struct BackendAvailability {
 impl BackendAvailability {
     pub(crate) fn current() -> Self {
         Self {
+            gilrs: {
+                #[cfg(windows)]
+                {
+                    static WGI: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+                    *WGI.get_or_init(|| {
+                        // Probe the API, not the number of connected controllers or OS manifest.
+                        match windows::Gaming::Input::RawGameController::RawGameControllers() {
+                            Ok(_) => true,
+                            Err(error) => {
+                                tracing::warn!(%error, "WGI unavailable; using Raw Input for gamepads");
+                                false
+                            }
+                        }
+                    })
+                }
+                #[cfg(not(windows))]
+                {
+                    true
+                }
+            },
             raw_input: cfg!(windows),
             linux_evdev: cfg!(all(target_os = "linux", feature = "linux-evdev")),
             macos_hid: cfg!(all(target_os = "macos", feature = "macos-iohid")),
@@ -43,10 +64,21 @@ impl BackendAvailability {
 
     fn supports_gamepad(self, backend: GamepadBackendKind) -> bool {
         match backend {
-            GamepadBackendKind::Auto | GamepadBackendKind::Gilrs => true,
+            GamepadBackendKind::Auto => true,
+            GamepadBackendKind::Gilrs => self.gilrs,
             GamepadBackendKind::RawInput => self.raw_input,
             GamepadBackendKind::GameController => self.gamecontroller,
             GamepadBackendKind::GameInput => self.gameinput,
+        }
+    }
+
+    pub(crate) fn resolve_gamepad(self, requested: GamepadBackendKind) -> GamepadBackendKind {
+        if requested != GamepadBackendKind::Auto && self.supports_gamepad(requested) {
+            requested
+        } else if self.gilrs {
+            GamepadBackendKind::Gilrs
+        } else {
+            GamepadBackendKind::RawInput
         }
     }
 
@@ -85,8 +117,9 @@ impl BackendAvailability {
             config.backend = InputBackendKind::Auto;
         }
         if !self.supports_gamepad(config.gamepad_backend) {
-            tracing::warn!(backend = ?config.gamepad_backend, "gamepad backend unavailable on this platform; using gilrs");
-            config.gamepad_backend = GamepadBackendKind::Gilrs;
+            let fallback = self.resolve_gamepad(config.gamepad_backend);
+            tracing::warn!(backend = ?config.gamepad_backend, ?fallback, "gamepad backend unavailable on this platform");
+            config.gamepad_backend = fallback;
         }
     }
 }
@@ -119,12 +152,48 @@ mod tests {
 
     fn platform(raw_input: bool, macos_hid: bool, gamecontroller: bool) -> BackendAvailability {
         BackendAvailability {
+            gilrs: true,
             raw_input,
             macos_hid,
             gamecontroller,
             gameinput: false,
             linux_evdev: false,
         }
+    }
+
+    #[test]
+    fn windows_without_wgi_uses_raw_input_for_auto_and_saved_gilrs() {
+        let mut available = platform(true, false, false);
+        available.gilrs = false;
+        assert_eq!(
+            available.gamepads().collect::<Vec<_>>(),
+            [GamepadBackendKind::Auto, GamepadBackendKind::RawInput]
+        );
+        for requested in [
+            GamepadBackendKind::Auto,
+            GamepadBackendKind::Gilrs,
+            GamepadBackendKind::RawInput,
+            GamepadBackendKind::GameInput,
+        ] {
+            assert_eq!(available.resolve_gamepad(requested), GamepadBackendKind::RawInput);
+            let mut config = crate::config::app_config::AppConfig::default().input;
+            config.gamepad_backend = requested;
+            available.normalize_config(&mut config);
+            assert_eq!(
+                available.resolve_gamepad(config.gamepad_backend),
+                GamepadBackendKind::RawInput
+            );
+        }
+    }
+
+    #[test]
+    fn windows_with_wgi_keeps_auto_on_gilrs_and_explicit_raw_input() {
+        let available = platform(true, false, false);
+        assert_eq!(available.resolve_gamepad(GamepadBackendKind::Auto), GamepadBackendKind::Gilrs);
+        assert_eq!(
+            available.resolve_gamepad(GamepadBackendKind::RawInput),
+            GamepadBackendKind::RawInput
+        );
     }
 
     #[test]

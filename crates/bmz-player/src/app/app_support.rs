@@ -427,7 +427,24 @@ pub(super) fn initialize_gamepad_backend(
 pub(super) fn initialize_gilrs_backend(
     configs: [crate::input::gamepad::GamepadScratchConfig; 2],
 ) -> Option<crate::input::capture::InputCapture> {
-    initialize_gamepad_backend(GamepadBackendKind::Gilrs, configs, None)
+    let kind = crate::input::availability::BackendAvailability::current()
+        .gamepads()
+        .find(|kind| *kind == GamepadBackendKind::Gilrs);
+    if kind.is_none() {
+        // WGI のない Windows 8.1 などでは gilrs を候補にできない。
+        tracing::warn!("gilrs is unavailable for the gamepad fallback");
+    }
+    let capture = crate::input::capture::InputCapture::new(kind, configs, None)
+        .map_err(|error| tracing::error!(%error, "failed to start fallback input capture"))
+        .ok();
+    match &capture {
+        Some(capture) if capture.has_gamepad_backend() => {
+            tracing::warn!(backend = capture.name(), "using fallback gamepad backend");
+        }
+        Some(_) => tracing::warn!("no gamepad backend is available; using keyboard only"),
+        None => {}
+    }
+    capture
 }
 
 pub(super) fn gamepad_scratch_configs(

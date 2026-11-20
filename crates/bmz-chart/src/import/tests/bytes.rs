@@ -127,6 +127,32 @@ fn valid_cp932_keeps_half_width_kana_that_the_detector_guesses_as_big5() {
 }
 
 #[test]
+fn encoding_override_keeps_importing_charts_with_invalid_bytes() {
+    let text = encoded_chart("한글");
+    let (body, _, unmappable) = encoding_rs::EUC_KR.encode(&text);
+    assert!(!unmappable);
+    // A stray byte that MS949 cannot decode, as in charts edited with mixed encodings.
+    let bytes = [&b"#ARTIST \xFF\r\n"[..], &body].concat();
+    let result = crate::import::import_chart_bytes_with_encoding(
+        Path::new("song.bms"),
+        &bytes,
+        BmsRandomSource::Seed(None),
+        AssetLookup::Declared,
+        Some(BmsTextEncoding::Ms949),
+    )
+    .unwrap();
+    assert_eq!(result.chart.identity, compute_chart_identity(&bytes));
+    assert_eq!(result.chart.metadata.title, "한글");
+    assert_eq!(result.chart.metadata.artist, "\u{FFFD}");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| matches!(warning, ImportWarning::TextReplacementOccurred))
+    );
+}
+
+#[test]
 fn byte_import_matches_file_import_and_keeps_raw_identity_for_all_formats() {
     let fixtures = [
         (

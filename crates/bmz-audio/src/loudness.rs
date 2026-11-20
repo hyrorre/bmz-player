@@ -371,6 +371,9 @@ fn collect_loudness_events(chart: &PlayableChart, sample_rate: u32) -> Vec<Loudn
 
     for lane_notes in &chart.lane_notes {
         for note in lane_notes {
+            if !note.kind.is_scheduled_keysound() {
+                continue;
+            }
             for sound_id in note.sounds() {
                 let volume = chart_channel_volume_factor(chart_volume_at_time(
                     &chart.key_volume_events,
@@ -385,19 +388,6 @@ fn collect_loudness_events(chart: &PlayableChart, sample_rate: u32) -> Vec<Loudn
         }
     }
 
-    for pair in &chart.long_notes {
-        if let Some(sound_id) = pair.sound {
-            let volume = chart_channel_volume_factor(chart_volume_at_time(
-                &chart.key_volume_events,
-                pair.start_time,
-            ));
-            events.push(LoudnessEvent {
-                start_frame: time_to_frame(pair.start_time, sample_rate),
-                sound_id,
-                volume,
-            });
-        }
-    }
     events
 }
 
@@ -443,11 +433,12 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
 
     use bmz_chart::model::{
-        BarLine, BgaAssetRef, ChartMetadata, NoteEvent, NoteKind, PlayableChart, SoundAssetRef,
-        SoundEvent,
+        BarLine, BgaAssetRef, ChartMetadata, LongNotePair, LongNoteStyle, NoteEvent, NoteKind,
+        PlayableChart, SoundAssetRef, SoundEvent,
     };
     use bmz_core::chart::ChartIdentity;
     use bmz_core::ids::{NoteId, SoundId};
+    use bmz_core::lane::Lane;
     use bmz_core::time::{ChartTick, TimeUs};
 
     use super::*;
@@ -657,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn analyze_chart_loudness_uses_bgm_and_key_events() {
+    fn chart_loudness_uses_bgm_and_scheduled_keysounds_once_per_note() {
         let mut samples = SampleBank::default();
         samples.insert(
             SoundId(1),
@@ -667,6 +658,10 @@ mod tests {
             SoundId(2),
             DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.25; 48] },
         );
+        samples.insert(
+            SoundId(3),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0; 48] },
+        );
 
         let mut chart = chart();
         chart.bgm_events.push(SoundEvent {
@@ -674,23 +669,82 @@ mod tests {
             time: TimeUs(0),
             sound: SoundId(1),
         });
-        chart.lane_notes[0].push(NoteEvent {
+        let long_start = NoteEvent {
+            id: NoteId(2),
+            lane: Lane::Key1,
+            kind: NoteKind::LongStart,
+            tick: ChartTick(96),
+            time: TimeUs(500_000),
+            sound: Some(SoundId(2)),
+            layered_sounds: vec![SoundId(1)],
+            damage: None,
+        };
+        let long_end = NoteEvent {
+            id: NoteId(3),
+            kind: NoteKind::LongEnd,
+            tick: ChartTick(192),
+            time: TimeUs(1_000_000),
+            layered_sounds: Vec::new(),
+            ..long_start.clone()
+        };
+        chart.long_notes.push(LongNotePair {
+            lane: Lane::Key1,
+            style: LongNoteStyle::ChannelPair,
+            mode: None,
+            start_note_id: long_start.id,
+            end_note_id: long_end.id,
+            start_tick: long_start.tick,
+            end_tick: long_end.tick,
+            start_time: long_start.time,
+            end_time: long_end.time,
+            sound: long_start.sound,
+        });
+        chart.lane_notes[Lane::Key1.index()].extend([long_start, long_end.clone()]);
+        chart.lane_notes[Lane::Key2.index()].push(NoteEvent {
             id: NoteId(1),
-            lane: bmz_core::lane::Lane::Key1,
+            lane: Lane::Key2,
             kind: NoteKind::Tap,
             tick: ChartTick(0),
             time: TimeUs(0),
-            sound: Some(SoundId(2)),
-            layered_sounds: Vec::new(),
-            damage: None,
+            ..long_end.clone()
         });
-        chart.end_time = TimeUs(1_000);
+        for (index, kind) in [
+            NoteKind::Invisible,
+            NoteKind::Mine,
+            NoteKind::Potion,
+            NoteKind::DummyTap,
+            NoteKind::DummyLongStart,
+            NoteKind::DummyLongEnd,
+            NoteKind::DummyMine,
+            NoteKind::DummyPotion,
+            NoteKind::FreeZoneEnd,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            chart.lane_notes[Lane::Key3.index()].push(NoteEvent {
+                id: NoteId(4 + index as u32),
+                lane: Lane::Key3,
+                kind,
+                sound: Some(SoundId(3)),
+                ..long_end.clone()
+            });
+        }
+        chart.end_time = TimeUs(1_001_000);
 
-        let result = analyze_chart_loudness(&chart, &samples, 48_000).unwrap();
-        assert!(result.loudness_lufs.is_finite());
-        let gain = play_normalization_gain_for_analysis(result);
-        assert!(gain > 0.0);
-        assert!(gain <= 1.0);
+        let analysis = analyze_chart_loudness(&chart, &samples, 48_000).unwrap();
+        assert_eq!(analysis.peak_abs, 0.5);
+        let events = collect_loudness_events(&chart, 48_000);
+        assert_eq!(
+            events.iter().map(|event| (event.start_frame, event.sound_id)).collect::<Vec<_>>(),
+            [
+                (0, SoundId(1)),      // BGM
+                (24_000, SoundId(2)), // LN start
+                (24_000, SoundId(1)), // LN start layer
+                (48_000, SoundId(2)), // LN end
+                (0, SoundId(2)),      // Tap
+            ],
+        );
     }
 
     #[test]

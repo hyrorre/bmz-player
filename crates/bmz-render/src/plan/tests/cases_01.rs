@@ -767,7 +767,7 @@ fn result_skin_state_maps_effective_long_note_state() {
     snapshot.rule_mode_index = 1;
     snapshot.ln_score_policy_index = Some(5);
     let window = bmz_gameplay::judge::model::JudgeWindow::symmetric(
-        8_333, 16_666, 58_333, 100_000, 500_000, 100_000, 0,
+        8_333, 16_666, 58_333, 100_000, 500_000, 100_000,
     );
     snapshot.note_judge_window = Some(window);
 

@@ -1,4 +1,5 @@
 use super::*;
+use bmz_gameplay::judge::window::judge_windows_for_keymode_and_rule_mode;
 
 #[test]
 fn build_game_session_maps_profile_bga_expand() {
@@ -291,6 +292,42 @@ fn build_freq_replay_keeps_recorded_windows_after_viewing_speed_changes() {
 }
 
 #[test]
+fn dx_pop_replays_from_before_the_judge_revision_keep_the_earlier_windows() {
+    use bmz_gameplay::judge::window::{dx_pop_judge_windows, dx_pop_legacy_judge_windows};
+
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.play.rule_mode = RuleMode::Dx;
+    let build = |key_mode, legacy| {
+        let mut source = chart();
+        source.metadata.key_mode = key_mode;
+        build_game_session(
+            Arc::new(source),
+            &profile,
+            PlaySessionOptions {
+                replay_player: Some(ReplayPlayer {
+                    legacy_dx_pop_judge: legacy,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .base_judge_windows
+    };
+    // Profile judge settings still apply on top, so compare the LN fields they keep.
+    let (legacy, current) = (build(KeyMode::K9, true), build(KeyMode::K9, false));
+    let (old_pop, new_pop) = (dx_pop_legacy_judge_windows(), dx_pop_judge_windows());
+    assert_eq!(legacy.long_note_end, old_pop.long_note_end);
+    assert_eq!(legacy.long_note_end_fast, None);
+    assert_eq!(legacy.long_note_release_margin_us, old_pop.long_note_release_margin_us);
+    assert_eq!(current.long_note_end, new_pop.long_note_end);
+    assert_eq!(current.long_note_end_fast, new_pop.long_note_end_fast);
+    assert_eq!(current.long_note_release_margin_us, new_pop.long_note_release_margin_us);
+    assert_ne!(legacy.note, current.note);
+    // Only POP changed; other DX MODE key modes keep the current windows either way.
+    assert_eq!(build(KeyMode::K7, true), build(KeyMode::K7, false));
+}
+
+#[test]
 fn practice_gauge_inherits_profile_auto_shift_mode() {
     use crate::config::profile_config::{
         BottomShiftableGaugeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
@@ -448,7 +485,12 @@ fn build_practice_session_preserves_preloaded_hsfix_and_rule_mode() {
     let prepared = build_practice_prepared_from_preloaded(
         preloaded_play_session(bpm_chart),
         &profile,
-        &PracticeProperty::default(),
+        &PracticeProperty {
+            gauge_category: Some(GaugeProperty::Pms),
+            gauge: PracticeGaugeType::Normal,
+            start_gauge: 30,
+            ..Default::default()
+        },
         options,
         Box::new(NullInputBackend),
     );
@@ -457,7 +499,74 @@ fn build_practice_session_preserves_preloaded_hsfix_and_rule_mode() {
     assert_eq!(prepared.session.hsfix_base_bpm, 240.0);
     assert_eq!(prepared.session.hispeed_mode, HispeedMode::Floating);
     assert_eq!(prepared.session.rule_mode, RuleMode::Lr2Oraja);
+    assert_eq!(prepared.session.gauge.current().value, 30.0);
+    assert_eq!(prepared.session.gauge.current().definition.max, 120.0);
     assert_eq!(prepared.skin_attempt.hsfix_index, Some(2));
+}
+
+#[test]
+fn practice_autosave_preserves_rule_dependent_gauges_across_rule_changes() {
+    use crate::config::profile_config::GaugeTypeConfig;
+    use crate::screens::practice::{
+        PracticeRuleContext, load_practice_property, save_practice_property,
+    };
+    use RuleMode::{Beatoraja, Dx, Lr2Oraja};
+
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    let paths = crate::paths::resolve_profile_paths(&data.paths, "default").unwrap();
+    let mut source = chart();
+    let hash = &source.identity.file_sha256;
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+
+    for modes in [
+        [Lr2Oraja, Beatoraja, Dx, Lr2Oraja],
+        [Beatoraja, Lr2Oraja, Dx, Beatoraja],
+        [Dx, Lr2Oraja, Beatoraja, Dx],
+    ] {
+        for (version, category, key_mode, capped_rule) in [
+            (0, None, KeyMode::K9, Lr2Oraja),
+            (1, Some(GaugeProperty::Pms), KeyMode::K9, Lr2Oraja),
+            (1, None, KeyMode::K9, Lr2Oraja),
+            (2, None, KeyMode::K9, Lr2Oraja),
+            (2, Some(GaugeProperty::Pms), KeyMode::K7, Dx),
+        ] {
+            source.metadata.key_mode = key_mode;
+            let saved = PracticeProperty {
+                format_version: version,
+                gauge_category: category,
+                start_gauge: 117,
+                ..Default::default()
+            };
+            save_practice_property(&paths, hash, &saved).unwrap();
+            for mode in modes {
+                profile.play.rule_mode = mode;
+                let rules = PracticeRuleContext { rule_mode: mode, key_mode };
+                let loaded = load_practice_property(
+                    &paths,
+                    hash,
+                    &source,
+                    GaugeTypeConfig::Normal,
+                    rules,
+                    &Default::default(),
+                )
+                .unwrap();
+                let prepared = build_practice_prepared_from_preloaded(
+                    preloaded_play_session(source.clone()),
+                    &profile,
+                    &loaded,
+                    PlaySessionOptions::default(),
+                    Box::new(NullInputBackend),
+                );
+                let gauge = prepared.session.gauge.current();
+                let expected = if mode == capped_rule { (100.0, 100.0) } else { (117.0, 120.0) };
+                assert_eq!((gauge.value, gauge.definition.max), expected, "{modes:?} {mode:?}");
+                assert_eq!(loaded.gauge_category, category);
+                assert_eq!(loaded.start_gauge, 117);
+                assert_eq!(loaded.format_version, version.max(1));
+                save_practice_property(&paths, hash, &loaded).unwrap();
+            }
+        }
+    }
 }
 
 #[test]
@@ -524,7 +633,8 @@ fn practice_dx_preloaded_gauges_match_effective_rules_and_keep_fixed_scoring() {
         assert_eq!(rules.gauge_bounds(&property).initial, initial);
         assert_eq!(rules.gauge_bounds(&property).max, max);
         clamp_practice_property(&mut property, &source, rules);
-        assert_eq!(property.start_gauge, max);
+        assert_eq!(property.start_gauge, 120);
+        assert_eq!(rules.gauge_bounds(&property).start(&property), max);
         let prepared = build_practice_prepared_from_preloaded(
             preloaded_play_session(source.clone()),
             &profile,
@@ -1584,6 +1694,7 @@ fn preload_reports_prepared_chart_before_audio_progress() {
         &mut snapshot,
         &reported_chart.chart,
         &reported_chart.render_snapshot_cache,
+        reported_chart.score_key.rule_mode,
         false,
     );
     assert_eq!(snapshot.total_notes, 1);

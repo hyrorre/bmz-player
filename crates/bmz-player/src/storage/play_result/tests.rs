@@ -30,7 +30,6 @@ fn store_play_result_writes_replay_and_score() {
     let mut score_db = ScoreDatabase::from_connection(conn);
     let config = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let result = play_result(false);
@@ -65,6 +64,7 @@ fn store_play_result_writes_replay_and_score() {
             rule_mode: String::new(),
             assist_mask: 0,
             kaleid: Some(evidence.clone()),
+            judge_window_rates: None,
             branch_decisions: Some(decisions.clone()),
             replay_events: vec![ReplayEvent {
                 lane: Lane::Key1,
@@ -141,7 +141,6 @@ fn store_play_result_skips_autoplay_replay_by_default() {
     let mut score_db = ScoreDatabase::from_connection(conn);
     let config = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let result = play_result(true);
@@ -163,6 +162,7 @@ fn store_play_result_skips_autoplay_replay_by_default() {
             rule_mode: String::new(),
             assist_mask: 0,
             kaleid: None,
+            judge_window_rates: None,
             branch_decisions: None,
             replay_events: Vec::new(),
             arrange: ArrangeOption::Normal,
@@ -191,7 +191,7 @@ fn store_play_result_skips_autoplay_replay_by_default() {
 }
 
 #[test]
-fn save_existing_replay_to_slot_overwrites_requested_slot() {
+fn save_existing_replay_to_slot_reuses_the_history_file() {
     let root = make_temp_dir("manual-replay-slot");
     let paths = ProfilePaths {
         root_dir: root.clone(),
@@ -205,11 +205,7 @@ fn save_existing_replay_to_slot_overwrites_requested_slot() {
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
     let mut score_db = ScoreDatabase::from_connection(conn);
-    let config = ReplayConfig {
-        auto_save: true,
-        compress: false,
-        slot_rules: [ReplaySlotRule::Disabled; 4],
-    };
+    let config = ReplayConfig { auto_save: true, slot_rules: [ReplaySlotRule::Disabled; 4] };
     let result = play_result(false);
     let stored = store_play_result(
         &mut score_db,
@@ -228,6 +224,7 @@ fn save_existing_replay_to_slot_overwrites_requested_slot() {
             rule_mode: String::new(),
             assist_mask: 0,
             kaleid: None,
+            judge_window_rates: None,
             branch_decisions: None,
             replay_events: vec![ReplayEvent {
                 lane: Lane::Key1,
@@ -268,7 +265,9 @@ fn save_existing_replay_to_slot_overwrites_requested_slot() {
     .unwrap()
     .expect("manual slot path");
 
-    assert!(root.join(&saved).exists());
+    assert_eq!(saved, stored.replay_path);
+    assert!(root.join(&saved).is_file());
+    assert_eq!(std::fs::read_dir(&paths.replay_dir).unwrap().count(), 1);
     let key = super::super::score_db::ScoreKey::new([4; 32], LnScorePolicy::ForceLn);
     let slot = score_db.replay_slot(key, 2).unwrap().expect("slot record");
     assert_eq!(slot.rule, ReplaySlotRule::Always);
@@ -296,7 +295,6 @@ fn store_play_result_saves_failed_replay_for_non_autoplay() {
     let mut score_db = ScoreDatabase::from_connection(conn);
     let config = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let mut result = play_result(false);
@@ -319,6 +317,7 @@ fn store_play_result_saves_failed_replay_for_non_autoplay() {
             rule_mode: String::new(),
             assist_mask: 0,
             kaleid: None,
+            judge_window_rates: None,
             branch_decisions: None,
             replay_events: Vec::new(),
             arrange: ArrangeOption::Normal,
@@ -363,7 +362,6 @@ fn store_play_result_course_stage_updates_single_best_with_rounded_clear() {
     let mut score_db = ScoreDatabase::from_connection(conn);
     let config = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let mut result = play_result(false);
@@ -386,6 +384,7 @@ fn store_play_result_course_stage_updates_single_best_with_rounded_clear() {
             rule_mode: String::new(),
             assist_mask: 0,
             kaleid: None,
+            judge_window_rates: None,
             branch_decisions: None,
             replay_events: Vec::new(),
             arrange: ArrangeOption::Normal,
@@ -447,7 +446,7 @@ fn course_stage_clear_type_keeps_only_combo_lamps() {
 }
 
 #[test]
-fn store_play_result_writes_history_and_default_slot_files() {
+fn store_play_result_keeps_score_and_previous_slot_when_replay_saving_fails() {
     let root = make_temp_dir("store-slot-files");
     let paths = ProfilePaths {
         root_dir: root.clone(),
@@ -460,97 +459,64 @@ fn store_play_result_writes_history_and_default_slot_files() {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER fail_auto_replay_slot BEFORE INSERT ON replay_slots
+         WHEN NEW.slot = 0 AND NEW.played_at = 1700000102
+         BEGIN SELECT RAISE(ABORT, 'test replay slot write failed'); END;",
+    )
+    .unwrap();
     let mut score_db = ScoreDatabase::from_connection(conn);
     let config = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let result = play_result(false);
+    let request = |played_at| StorePlayResultRequest {
+        judge_algorithm: JudgeAlgorithm::Combo,
+        ln_policy: LnScorePolicy::ForceLn,
+        double_option: DoubleOptionScoreBucket::Off,
+        applied_double_option: DoubleOption::Off,
+        played_at,
+        playtime_seconds: 0,
+        random_seed: None,
+        gauge_option: String::new(),
+        rule_mode: String::new(),
+        assist_mask: 0,
+        kaleid: None,
+        judge_window_rates: None,
+        branch_decisions: None,
+        replay_events: Vec::new(),
+        arrange: ArrangeOption::Normal,
+        arrange_2p: ArrangeOption::Normal,
+        arrange_seed: None,
+        arrange_seed_2p: None,
+        lr2_seed: None,
+        bms_random_choices: Vec::new(),
+        bms_switch_choices: Vec::new(),
+        seed_scheme: String::new(),
+        s_random_scheme: crate::screens::play_session::SRandomScheme::Lm120HzV1,
+        s_random_scheme_2p: None,
+        h_random_threshold_ms: None,
+        freq_semitones: 0,
+        arrange_pattern: None,
+        update_score: true,
+        mode: StorePlayResultMode::Normal,
+    };
 
-    let stored = store_play_result(
-        &mut score_db,
-        &paths,
-        &config,
-        &result,
-        StorePlayResultRequest {
-            judge_algorithm: JudgeAlgorithm::Combo,
-            ln_policy: LnScorePolicy::ForceLn,
-            double_option: DoubleOptionScoreBucket::Off,
-            applied_double_option: DoubleOption::Off,
-            played_at: 1_700_000_100,
-            playtime_seconds: 0,
-            random_seed: None,
-            gauge_option: String::new(),
-            rule_mode: String::new(),
-            assist_mask: 0,
-            kaleid: None,
-            branch_decisions: None,
-            replay_events: Vec::new(),
-            arrange: ArrangeOption::Normal,
-            arrange_2p: ArrangeOption::Normal,
-            arrange_seed: None,
-            arrange_seed_2p: None,
-            lr2_seed: None,
-            bms_random_choices: Vec::new(),
-            bms_switch_choices: Vec::new(),
-            seed_scheme: String::new(),
-            s_random_scheme: crate::screens::play_session::SRandomScheme::Lm120HzV1,
-            s_random_scheme_2p: None,
-            h_random_threshold_ms: None,
-            freq_semitones: 0,
-            arrange_pattern: None,
-            update_score: true,
-            mode: StorePlayResultMode::Normal,
-        },
-    )
-    .unwrap();
+    let stored =
+        store_play_result(&mut score_db, &paths, &config, &result, request(1_700_000_100)).unwrap();
 
     // First play with empty slot table -> enabled default slots are populated.
     assert!(stored.slot_paths[..3].iter().all(|p| p.is_some()));
     assert!(stored.slot_paths[3].is_none());
     for path in stored.slot_paths.iter().flatten() {
+        assert_eq!(path, &stored.replay_path);
         assert!(root.join(path).exists());
     }
 
     // Second play with same score: Always slot updates, but score/miss/combo rules do not
-    let stored2 = store_play_result(
-        &mut score_db,
-        &paths,
-        &config,
-        &result,
-        StorePlayResultRequest {
-            judge_algorithm: JudgeAlgorithm::Combo,
-            ln_policy: LnScorePolicy::ForceLn,
-            double_option: DoubleOptionScoreBucket::Off,
-            applied_double_option: DoubleOption::Off,
-            played_at: 1_700_000_101,
-            playtime_seconds: 0,
-            random_seed: None,
-            gauge_option: String::new(),
-            rule_mode: String::new(),
-            assist_mask: 0,
-            kaleid: None,
-            branch_decisions: None,
-            replay_events: Vec::new(),
-            arrange: ArrangeOption::Normal,
-            arrange_2p: ArrangeOption::Normal,
-            arrange_seed: None,
-            arrange_seed_2p: None,
-            lr2_seed: None,
-            bms_random_choices: Vec::new(),
-            bms_switch_choices: Vec::new(),
-            seed_scheme: String::new(),
-            s_random_scheme: crate::screens::play_session::SRandomScheme::Lm120HzV1,
-            s_random_scheme_2p: None,
-            h_random_threshold_ms: None,
-            freq_semitones: 0,
-            arrange_pattern: None,
-            update_score: true,
-            mode: StorePlayResultMode::Normal,
-        },
-    )
-    .unwrap();
+    let stored2 =
+        store_play_result(&mut score_db, &paths, &config, &result, request(1_700_000_101)).unwrap();
 
     // Default slot 0 = Always (always overwrites)
     assert!(stored2.slot_paths[0].is_some());
@@ -558,6 +524,35 @@ fn store_play_result_writes_history_and_default_slot_files() {
     assert!(stored2.slot_paths[1].is_none());
     assert!(stored2.slot_paths[2].is_none());
     assert!(stored2.slot_paths[3].is_none());
+
+    let slot_failed =
+        store_play_result(&mut score_db, &paths, &config, &result, request(1_700_000_102)).unwrap();
+    assert!(slot_failed.replay_save_failed);
+    assert!(slot_failed.slot_paths[0].is_none());
+    let key = super::super::score_db::ScoreKey::with_options(
+        result.chart_sha256,
+        LnScorePolicy::ForceLn,
+        DoubleOptionScoreBucket::Off,
+        bmz_gameplay::rule::RuleMode::Beatoraja,
+    );
+    let previous = score_db.replay_slot(key, 0).unwrap().unwrap();
+    assert_eq!(previous.replay_path, stored2.replay_path);
+    assert_ne!(previous.replay_path, slot_failed.replay_path);
+    assert!(root.join(previous.replay_path).is_file());
+    assert_eq!(score_db.recent_history(10, 0).unwrap().len(), 3);
+
+    let mut blocked_paths = paths.clone();
+    blocked_paths.replay_dir = root.join("not-a-directory");
+    std::fs::write(&blocked_paths.replay_dir, []).unwrap();
+    let replay_failed =
+        store_play_result(&mut score_db, &blocked_paths, &config, &result, request(1_700_000_103))
+            .unwrap();
+    assert!(replay_failed.replay_save_failed);
+    assert!(replay_failed.replay_path.is_empty());
+    assert!(replay_failed.replay_sha256.is_none());
+    assert!(replay_failed.slot_paths.iter().all(Option::is_none));
+    assert_eq!(score_db.replay_path_for_history(replay_failed.score_history_id).unwrap(), None);
+    assert_eq!(score_db.recent_history(10, 0).unwrap().len(), 4);
 
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -579,7 +574,6 @@ fn store_play_result_skips_slots_for_autoplay_when_disabled() {
     let mut score_db = ScoreDatabase::from_connection(conn);
     let config = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let result = play_result(true);
@@ -601,6 +595,7 @@ fn store_play_result_skips_slots_for_autoplay_when_disabled() {
             rule_mode: String::new(),
             assist_mask: 0,
             kaleid: None,
+            judge_window_rates: None,
             branch_decisions: None,
             replay_events: Vec::new(),
             arrange: ArrangeOption::Normal,

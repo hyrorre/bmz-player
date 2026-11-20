@@ -1120,6 +1120,13 @@ pub struct LaneViewConfig {
     /// Floating のプレイ中 HS 変更刻み。0.05..=1.0 の範囲で持つ。
     #[serde(default = "default_floating_hispeed_step", alias = "hispeed_step_fhs")]
     pub floating_hispeed_step: f32,
+    /// プレイ中のE1+鍵盤によるHS変更の方式。Fixedは上の固定刻み、
+    /// Ratioはプレイ開始時のHSに `hispeed_change_ratio` を掛けた量で変更する。
+    #[serde(default)]
+    pub hispeed_change_type: HispeedChangeTypeConfig,
+    /// Ratio方式の比率。Classic / Floatingで共有し、0.01..=10.0の範囲で持つ。
+    #[serde(default = "default_hispeed_change_ratio")]
+    pub hispeed_change_ratio: f32,
     /// SUDDEN+ レーンカバー量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
     pub sudden: u32,
     /// LIFT 量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
@@ -1347,6 +1354,38 @@ pub const CLASSIC_HISPEED_STEP_UNIT: f32 = 0.01;
 pub const FLOATING_HISPEED_STEP_MIN: f32 = 0.05;
 pub const FLOATING_HISPEED_STEP_UNIT: f32 = 0.05;
 pub const HISPEED_STEP_MAX: f32 = 1.0;
+
+/// プレイ中のE1+鍵盤によるHS変更の方式。beatoraja の「HI-SPEED変化間隔」を
+/// HS-FIX有効時に基準HSへの比率として扱う挙動を、HS-FIXと独立に選べるようにしたもの。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum HispeedChangeTypeConfig {
+    /// `classic_hispeed_step` / `floating_hispeed_step` の固定量で変更する。
+    #[default]
+    Fixed,
+    /// プレイ開始時のHSに `hispeed_change_ratio` を掛けた量で変更する。
+    Ratio,
+}
+
+impl HispeedChangeTypeConfig {
+    pub const ORDER: [Self; 2] = [Self::Fixed, Self::Ratio];
+}
+
+pub const HISPEED_CHANGE_RATIO_MIN: f32 = 0.01;
+pub const HISPEED_CHANGE_RATIO_MAX: f32 = 10.0;
+pub const HISPEED_CHANGE_RATIO_UNIT: f32 = 0.01;
+
+pub fn default_hispeed_change_ratio() -> f32 {
+    0.25
+}
+
+pub fn normalize_hispeed_change_ratio(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(HISPEED_CHANGE_RATIO_MIN, HISPEED_CHANGE_RATIO_MAX)
+    } else {
+        default_hispeed_change_ratio()
+    }
+}
 
 pub fn default_classic_hispeed_step() -> f32 {
     0.25

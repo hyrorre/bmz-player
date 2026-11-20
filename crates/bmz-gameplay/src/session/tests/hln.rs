@@ -183,6 +183,7 @@ fn hln_independent_battle_autoplay_matches_primary() {
         gauge_max_started_at: None,
         full_combo_started_at: None,
         lane_keyon_started_at: Default::default(),
+        lane_key_hold: Default::default(),
         lane_hcn_timer: Default::default(),
         last_hcn_gauge_at: None,
     });

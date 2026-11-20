@@ -2,6 +2,56 @@ use std::collections::HashMap;
 
 use winit::monitor::MonitorHandle;
 
+#[cfg(target_os = "macos")]
+mod macos_display;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RefreshRate {
+    pub(crate) numerator: u32,
+    pub(crate) denominator: u32,
+}
+
+impl RefreshRate {
+    pub(crate) fn is_valid(self) -> bool {
+        self.numerator != 0 && self.denominator != 0
+    }
+
+    pub(crate) fn covered_by(self, fps: u32) -> bool {
+        self.is_valid() && u64::from(fps) * u64::from(self.denominator) >= u64::from(self.numerator)
+    }
+}
+
+pub(crate) fn current_refresh_rate(
+    monitor: &MonitorHandle,
+    exclusive_mode: Option<&winit::monitor::VideoModeHandle>,
+) -> Option<RefreshRate> {
+    #[cfg(target_os = "windows")]
+    {
+        use winit::platform::windows::MonitorHandleExtWindows;
+
+        let _ = exclusive_mode;
+        // winit's Windows mHz value is based on the integer dmDisplayFrequency.
+        windows_display::current_refresh_rate(monitor.hmonitor() as _)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::MonitorHandleExtMacOS;
+
+        // Both windowed and exclusive fullscreen use the active display mode.
+        let _ = exclusive_mode;
+        macos_display::current_refresh_rate(monitor.native_id())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let millihertz = match exclusive_mode {
+            Some(mode) => Some(mode.refresh_rate_millihertz()),
+            None => monitor.refresh_rate_millihertz(),
+        }?;
+        Some(RefreshRate { numerator: millihertz, denominator: 1_000 })
+            .filter(|rate| rate.is_valid())
+    }
+}
+
 pub fn list_monitors() -> anyhow::Result<()> {
     struct Listing;
     impl winit::application::ApplicationHandler for Listing {
@@ -149,13 +199,15 @@ pub(crate) fn match_configured_monitor(
 /// 一致したモニターの保存値が設定値と異なる場合、置き換え後の値を返す。
 ///
 /// 従来形式の設定値は選択先の保存値へ移行する。安定した識別子で指定済みの場合は、
-/// 同じ識別子が確認できたときだけ座標を更新する。
+/// 同じ識別子が確認できたときだけ座標を更新する。座標だけの一致は推測なので移行せず、
+/// 設定値をそのまま残す（次回も同じ照合をやり直し、ユーザーが選び直したときに保存する）。
 pub(crate) fn migrated_monitor_config_value(
     configured: &str,
     matched: &MonitorFacts,
+    kind: MonitorMatch,
 ) -> Option<String> {
     let configured = configured.trim();
-    if configured.is_empty() {
+    if configured.is_empty() || !kind.is_exact() {
         return None;
     }
     let (head, _) = split_position_suffix(configured);
@@ -285,8 +337,7 @@ impl MonitorSelection {
 
     /// 設定値を新しい保存値へ置き換える必要があれば、その値を返す。
     pub(crate) fn migrated_config_value(&self, configured: &str) -> Option<String> {
-        self.matched?;
-        migrated_monitor_config_value(configured, &self.monitor.as_ref()?.facts)
+        migrated_monitor_config_value(configured, &self.monitor.as_ref()?.facts, self.matched?)
     }
 
     /// 選択したモニターを、ガタつきの切り分けに使えるよう1行で記録する。
@@ -359,8 +410,42 @@ mod windows_display {
         QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
     };
     use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS};
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, HMONITOR, MONITORINFO, MONITORINFOEXW,
+    };
 
     use super::{PlatformMonitorIdentity, pick_platform_identities};
+
+    pub(super) fn current_refresh_rate(monitor: HMONITOR) -> Option<super::RefreshRate> {
+        // winit's MonitorHandle::name unwraps GetMonitorInfoW, but a queued handle may be detached.
+        // SAFETY: MONITORINFOEXW is a C structure with valid zero initialization.
+        let mut info = unsafe { std::mem::zeroed::<MONITORINFOEXW>() };
+        info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
+        // SAFETY: info includes MONITORINFO and cbSize describes the full writable structure.
+        if unsafe {
+            GetMonitorInfoW(monitor, (&mut info as *mut MONITORINFOEXW).cast::<MONITORINFO>())
+        } == 0
+        {
+            return None;
+        }
+        let gdi_name = wide_to_string(&info.szDevice);
+        if gdi_name.is_empty() {
+            return None;
+        }
+        let paths = active_paths().ok()?;
+        let mut rates = paths
+            .iter()
+            .filter(|path| {
+                source_gdi_name(path).is_some_and(|name| name.eq_ignore_ascii_case(&gdi_name))
+            })
+            .map(|path| super::RefreshRate {
+                numerator: path.targetInfo.refreshRate.Numerator,
+                denominator: path.targetInfo.refreshRate.Denominator,
+            });
+        let rate = rates.next()?;
+        // Mirrored outputs with different rates do not identify one display cadence.
+        (rate.is_valid() && rates.all(|other| other == rate)).then_some(rate)
+    }
 
     /// 設定UIは毎フレーム列挙するため、OSへの問い合わせを短時間だけ再利用する。
     const CACHE_TTL: Duration = Duration::from_secs(2);
@@ -499,6 +584,12 @@ mod tests {
         split_position_suffix,
     };
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn invalid_monitor_handle_returns_unknown_refresh_without_panicking() {
+        assert_eq!(super::windows_display::current_refresh_rate(std::ptr::null_mut()), None);
+    }
+
     const DELL_PATH: &str =
         r"\\?\DISPLAY#DEL4321#5&2a1b3c4d&0&UID4353#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}";
     const LG_PATH: &str =
@@ -580,10 +671,8 @@ mod tests {
         let configured = r"\\.\DISPLAY2 [1920, 0]";
         let (index, matched) = match_configured_monitor(configured, &monitors).unwrap();
         assert_eq!((index, matched), (1, MonitorMatch::Position));
-        assert_eq!(
-            migrated_monitor_config_value(configured, &monitors[index]),
-            Some(format!("{LG_PATH} [1920, 0]"))
-        );
+        // 座標だけの一致は推測なので、保存値を別モニターの識別子へ書き換えない。
+        assert_eq!(migrated_monitor_config_value(configured, &monitors[index], matched), None);
         // 識別子が変わった新形式の値も、座標が一意なら同じモニターを選ぶ。
         let unknown_path = DELL_PATH.replace("UID4353", "UID9999");
         assert_eq!(
@@ -616,12 +705,20 @@ mod tests {
     fn migration_replaces_legacy_value_with_stable_identifier() {
         let monitor = stable_monitor(r"\\.\DISPLAY1", 1920, 0, LG_PATH, "LG");
         assert_eq!(
-            migrated_monitor_config_value(r"\\.\DISPLAY2 [1920, 0]", &monitor),
+            migrated_monitor_config_value(
+                r"\\.\DISPLAY1 [1920, 0]",
+                &monitor,
+                MonitorMatch::Legacy
+            ),
             Some(format!("{LG_PATH} [1920, 0]"))
         );
         // 識別子が一致して座標だけ変わった場合も、保存値の座標を更新する。
         assert_eq!(
-            migrated_monitor_config_value(&format!("{LG_PATH} [-1920, 0]"), &monitor),
+            migrated_monitor_config_value(
+                &format!("{LG_PATH} [-1920, 0]"),
+                &monitor,
+                MonitorMatch::StableId
+            ),
             Some(format!("{LG_PATH} [1920, 0]"))
         );
     }
@@ -631,7 +728,14 @@ mod tests {
         // 識別子の取得に失敗した状態では、座標が一致しても保存済みの安定した
         // 識別子を従来形式へ退行させない。
         let legacy = legacy_monitor(Some(r"\\.\DISPLAY2"), 1920, 0);
-        assert_eq!(migrated_monitor_config_value(&format!("{LG_PATH} [1920, 0]"), &legacy), None);
+        assert_eq!(
+            migrated_monitor_config_value(
+                &format!("{LG_PATH} [1920, 0]"),
+                &legacy,
+                MonitorMatch::StableId
+            ),
+            None
+        );
     }
 
     #[test]
@@ -641,7 +745,7 @@ mod tests {
         let monitors = [fallback];
         let (index, matched) = match_configured_monitor(&configured, &monitors).unwrap();
         assert_eq!((index, matched), (0, MonitorMatch::Position));
-        let saved = migrated_monitor_config_value(&configured, &monitors[index])
+        let saved = migrated_monitor_config_value(&configured, &monitors[index], matched)
             .unwrap_or_else(|| configured.clone());
         assert_eq!(saved, configured);
 
@@ -656,11 +760,21 @@ mod tests {
     #[test]
     fn migration_keeps_current_or_empty_value() {
         let monitor = stable_monitor(r"\\.\DISPLAY1", 1920, 0, LG_PATH, "LG");
-        assert_eq!(migrated_monitor_config_value(&format!("{LG_PATH} [1920, 0]"), &monitor), None);
-        assert_eq!(migrated_monitor_config_value("", &monitor), None);
+        assert_eq!(
+            migrated_monitor_config_value(
+                &format!("{LG_PATH} [1920, 0]"),
+                &monitor,
+                MonitorMatch::StableId
+            ),
+            None
+        );
+        assert_eq!(migrated_monitor_config_value("", &monitor, MonitorMatch::Legacy), None);
         // 識別子を取得できない環境では従来形式のまま。
         let legacy = legacy_monitor(Some("HDMI-1"), 0, 0);
-        assert_eq!(migrated_monitor_config_value("HDMI-1 [0, 0]", &legacy), None);
+        assert_eq!(
+            migrated_monitor_config_value("HDMI-1 [0, 0]", &legacy, MonitorMatch::Legacy),
+            None
+        );
     }
 
     #[test]

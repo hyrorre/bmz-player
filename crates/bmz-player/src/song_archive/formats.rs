@@ -57,7 +57,7 @@ impl Backend {
                 if volume {
                     return Err(super::unsupported("split song archives are unsupported"));
                 }
-                let mut entries = Vec::new();
+                let mut raw = Vec::new();
                 for member in archive.members() {
                     let meta = &member.meta;
                     if meta.is_encrypted {
@@ -75,15 +75,29 @@ impl Backend {
                             "archive reparse points are unsupported"
                         );
                     }
-                    entries.push(ArchiveEntry {
-                        name: safety::normalize_name(
-                            &safety::decode_name(&meta.name, member.name_is_unicode())?,
-                            meta.is_directory,
-                        )?,
-                        size: meta.unpacked_size,
-                        is_directory: meta.is_directory,
-                    });
+                    raw.push((
+                        meta.name.clone(),
+                        member.name_is_unicode(),
+                        meta.is_directory,
+                        meta.unpacked_size,
+                    ));
                 }
+                let names = safety::LegacyNames::detect(
+                    raw.iter().map(|(name, unicode, ..)| (&name[..], *unicode)),
+                );
+                let entries = raw
+                    .iter()
+                    .map(|(name, unicode, directory, size)| {
+                        Ok(ArchiveEntry {
+                            name: safety::normalize_name(
+                                &names.decode(name, *unicode)?,
+                                *directory,
+                            )?,
+                            size: *size,
+                            is_directory: *directory,
+                        })
+                    })
+                    .collect::<Result<_>>()?;
                 Ok((Self::Rar(archive), entries))
             }
             ArchiveFormat::SevenZ => {

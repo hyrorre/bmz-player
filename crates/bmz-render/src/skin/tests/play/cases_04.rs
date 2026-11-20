@@ -375,10 +375,10 @@ fn timing_judge_areas_follow_beatoraja_mode_windows() {
         ..SkinDrawState::default()
     });
 
-    assert_eq!(areas[0], TimingJudgeArea { late_ms: -20.0, early_ms: 20.0 });
-    assert_eq!(areas[1], TimingJudgeArea { late_ms: -60.0, early_ms: 60.0 });
-    assert_eq!(areas[2], TimingJudgeArea { late_ms: -150.0, early_ms: 150.0 });
-    assert_eq!(areas[3], TimingJudgeArea { late_ms: -220.0, early_ms: 280.0 });
+    assert_eq!(areas[0], TimingJudgeArea { late_ms: -15.0, early_ms: 15.0 });
+    assert_eq!(areas[1], TimingJudgeArea { late_ms: -45.0, early_ms: 45.0 });
+    assert_eq!(areas[2], TimingJudgeArea { late_ms: -112.5, early_ms: 112.5 });
+    assert_eq!(areas[3], TimingJudgeArea { late_ms: -165.0, early_ms: 210.0 });
     assert_eq!(areas[4], TimingJudgeArea { late_ms: -500.0, early_ms: 150.0 });
 }
 
@@ -403,7 +403,7 @@ fn timing_judge_bands_use_effective_window_instead_of_rank_and_rule() {
         bad_fast_us: 100_000,
         bad_slow_us: 125_000,
         ..bmz_gameplay::judge::model::JudgeWindow::symmetric(
-            25_000, 50_000, 116_667, 183_333, 529_167, 183_333, 0,
+            25_000, 50_000, 116_667, 183_333, 529_167, 183_333,
         )
     };
     let state = SkinDrawState {

@@ -419,13 +419,15 @@ macro_rules! skin_document_render_core_resolve_methods {
                 return Some(None);
             };
             let pixel_rect = skin_image_pixel_rect(image);
-            let mut uv = skin_image_texture_region_for_destination(
+            let Some(mut uv) = skin_image_texture_region_for_destination(
                 image,
                 destination,
                 source.source_size,
                 state,
                 pixel_rect,
-            );
+            ) else {
+                return Some(None);
+            };
             if let Some(animation) = &image.qwilight_animation
                 && !crate::skin::qwilight_animation::transform(
                     animation, state, &mut frame, &mut uv,
@@ -619,17 +621,19 @@ macro_rules! skin_document_render_core_resolve_methods {
             let Some(source) = resolve_document_source(sources, &image.src) else {
                 return Some(None);
             };
-            let pixel_rect = skin_image_pixel_rect(image);
+            let Some(uv) = skin_image_texture_region_for_destination(
+                image,
+                destination,
+                source.source_size,
+                state,
+                skin_image_pixel_rect(image),
+            ) else {
+                return Some(None);
+            };
             let (rect, uv) = stretch_skin_image_geometry(
                 destination.stretch,
                 normalize_skin_frame_rect(frame, self.w, self.h),
-                skin_image_texture_region_for_destination(
-                    image,
-                    destination,
-                    source.source_size,
-                    state,
-                    pixel_rect,
-                ),
+                uv,
                 source.source_size,
                 self.w,
                 self.h,
@@ -686,7 +690,7 @@ macro_rules! skin_document_render_core_resolve_methods {
                     source.source_size,
                     state,
                     pixel_rect,
-                );
+                )?;
                 if self.should_clip_image_at_disappear_line(destination, image)
                     && let Some((disappear_line, link_lift)) =
                         self.disappear_line_for_lane_cover_clip()

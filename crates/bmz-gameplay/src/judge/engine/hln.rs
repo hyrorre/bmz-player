@@ -166,6 +166,7 @@ impl JudgeEngine {
                     delta: TimeUs(missed_at.0 - pair.start_time.0),
                     time: missed_at,
                     affects_score: true,
+                    advances_score: true,
                 });
                 body.activated = Some(missed_at);
                 body.last = missed_at;

@@ -23,6 +23,7 @@ pub struct PlaySessionObservation {
     pub hispeed: f32,
     /// skin表示とprofile保存に使うHS値。Classic + HS-FIXではBPM150基準。
     pub display_hispeed: f32,
+    pub hispeed_change_base: f32,
     pub hispeed_mode: HispeedMode,
     pub base_hispeed_mode: HispeedMode,
     pub floating_policy: FloatingPolicy,
@@ -68,6 +69,7 @@ impl PlaySessionObservation {
             audio_mix: session.audio_mix,
             hispeed: session.hispeed,
             display_hispeed: crate::screens::play_snapshot::display_hispeed_for_session(session),
+            hispeed_change_base: session.hispeed_change_base,
             hispeed_mode: session.hispeed_mode,
             base_hispeed_mode: session.base_hispeed_mode,
             floating_policy: session.floating_policy,

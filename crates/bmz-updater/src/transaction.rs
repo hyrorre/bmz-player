@@ -1,5 +1,5 @@
 use crate::manifest::{
-    PackageKind, PackageManifest, checked_path, managed_path, reject_link, safe_relative,
+    PackageKind, PackageManifest, checked_path, hash_file, managed_path, reject_link, safe_relative,
 };
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -130,6 +130,19 @@ pub fn preflight(root: &Path, work: &Path) -> Result<()> {
             );
         }
     }
+    if new.uses_sxs() {
+        let stale = stale_root_dlls(root, &old, &new)?;
+        for name in
+            new.assembly_dlls().chain(["dll.dll", "dll.manifest", "bmz-player.exe.manifest"])
+        {
+            let was_managed = old.files.iter().any(|entry| entry.path.eq_ignore_ascii_case(name));
+            let is_stale = stale.iter().any(|path| path.eq_ignore_ascii_case(name));
+            ensure!(
+                was_managed || is_stale || !checked_path(root, name)?.try_exists()?,
+                "unmanaged root file conflicts with the new private assembly: {name}"
+            );
+        }
+    }
     for entry in old.files.iter().chain(&new.files) {
         let path = checked_path(root, &entry.path)?;
         ensure!(!path.exists() || path.is_file(), "update target is not a file");
@@ -141,6 +154,57 @@ pub fn preflight(root: &Path, work: &Path) -> Result<()> {
     drop(file);
     fs::remove_file(probe)?;
     Ok(())
+}
+
+/// Root DLLs that an in-place extraction of an SxS package over a flat one left beside the executable.
+///
+/// The installed manifest no longer lists them, so they look like user files. A DLL is retired only
+/// when a previous manifest (the installed one, or a flat manifest left at the root) recorded the
+/// same name and SHA-256. Anything else stays untouched as a user file.
+fn stale_root_dlls(
+    root: &Path,
+    old: &PackageManifest,
+    new: &PackageManifest,
+) -> Result<Vec<String>> {
+    if !new.uses_sxs() {
+        return Ok(Vec::new());
+    }
+    // The leftover flat manifest is not authoritative, so an unreadable one is simply ignored.
+    let leftover = (old.manifest_path() == crate::MANIFEST)
+        .then(|| PackageManifest::read_at(root, crate::LEGACY_MANIFEST).ok().flatten())
+        .flatten();
+    let recorded: Vec<(String, String)> = old
+        .files
+        .iter()
+        .chain(leftover.iter().flat_map(|manifest| &manifest.files))
+        .filter_map(|entry| {
+            let name = entry.path.strip_prefix("dll/").unwrap_or(&entry.path);
+            let lower = name.to_ascii_lowercase();
+            (!lower.contains('/') && lower.ends_with(".dll"))
+                .then(|| (lower, entry.sha256.to_ascii_lowercase()))
+        })
+        .collect();
+    let mut stale = Vec::new();
+    for item in fs::read_dir(root)? {
+        let item = item?;
+        let Some(name) = item.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let lower = name.to_ascii_lowercase();
+        if !recorded.iter().any(|(recorded, _)| *recorded == lower)
+            || managed_path(&name).is_err()
+            || old.files.iter().any(|entry| entry.path.eq_ignore_ascii_case(&name))
+            || !item.file_type()?.is_file()
+        {
+            continue;
+        }
+        let hash = hash_file(&checked_path(root, &name)?)?.to_ascii_lowercase();
+        if recorded.iter().any(|(recorded, sha256)| *recorded == lower && *sha256 == hash) {
+            stale.push(name);
+        }
+    }
+    stale.sort();
+    Ok(stale)
 }
 
 pub fn apply(root: &Path, work: &Path) -> Result<()> {
@@ -160,6 +224,8 @@ fn apply_with_checkpoint(
     new.verify_files(&work.join("stage"), || Ok(()))?;
     let mut paths: BTreeSet<String> =
         old.files.iter().chain(&new.files).map(|f| f.path.clone()).collect();
+    // Retire leftovers of a manual extraction like managed files, so a rollback restores them.
+    paths.extend(stale_root_dlls(root, &old, &new)?);
     // The package manifest is the last file committed, and is rolled back like the executable.
     paths.insert(old.manifest_path().to_owned());
     paths.remove(new.manifest_path());
@@ -192,6 +258,9 @@ fn apply_with_checkpoint(
                 fs::create_dir_all(target.parent().context("missing parent")?)?;
                 durable_rename(&checked_path(&work.join("stage"), &op.path)?, &target)?;
             }
+        }
+        if new.uses_sxs() {
+            crate::process::verify_player_startup(root, work, &new.version)?;
         }
         journal.complete = true;
         atomic_json(&active_path(root), &journal)?;
@@ -439,6 +508,166 @@ mod tests {
         assert!(apply(temp.path(), &work).is_err());
         assert_eq!(fs::read(temp.path().join("new.dll")).unwrap(), b"user library");
         assert!(!active_path(temp.path()).exists());
+    }
+
+    fn sxs_fixture() -> (tempfile::TempDir, PathBuf) {
+        let (temp, work) = fixture();
+        package(
+            &work.join("stage"),
+            "0.6.0",
+            &[
+                ("bmz-player.exe", b"invalid executable"),
+                (crate::HELPER, b"new updater"),
+                ("dll/dll.manifest", b"assembly"),
+                ("dll/old.dll", b"new library"),
+                ("dll/vcruntime140.dll", b"vc"),
+                ("dll/ucrtbase.dll", b"ucrt"),
+                ("dll/api-ms-win-crt-runtime-l1-1-0.dll", b"forwarder"),
+            ],
+        );
+        (temp, work)
+    }
+
+    #[test]
+    fn failed_sxs_loader_check_restores_old_package_and_modified_dll() {
+        let (temp, work) = sxs_fixture();
+        let root = temp.path();
+        fs::write(root.join("old.dll"), b"user-modified managed library").unwrap();
+        assert!(apply(root, &work).unwrap_err().to_string().contains("previous version restored"));
+        assert_eq!(fs::read(root.join("old.dll")).unwrap(), b"user-modified managed library");
+        assert_eq!(fs::read(root.join("bmz-player.exe")).unwrap(), b"old app");
+        assert_eq!(PackageManifest::read(root).unwrap().version, "0.4.0");
+        assert!(!root.join("dll/dll.manifest").exists());
+        assert!(pending_update(root).unwrap().is_none());
+        assert_user_data(root);
+    }
+
+    #[test]
+    fn sxs_preflight_protects_unmanaged_root_files_that_can_override_loader_resolution() {
+        let (temp, work) = sxs_fixture();
+        for name in ["ucrtbase.dll", "dll.dll", "dll.manifest", "bmz-player.exe.manifest"] {
+            let path = temp.path().join(name);
+            fs::write(&path, b"user file").unwrap();
+            assert!(preflight(temp.path(), &work).is_err(), "{name}");
+            assert_eq!(fs::read(&path).unwrap(), b"user file");
+            fs::remove_file(&path).unwrap();
+        }
+        preflight(temp.path(), &work).unwrap();
+        assert_original(temp.path());
+    }
+
+    /// A flat portable install that was overwritten in place with an SxS package.
+    fn manually_extracted_sxs_fixture() -> (tempfile::TempDir, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        package(
+            root,
+            "0.4.0",
+            &[
+                ("bmz-player.exe", b"flat app"),
+                (crate::LEGACY_HELPER, b"flat updater"),
+                ("old.dll", b"old library"),
+                ("vcruntime140.dll", b"flat vc"),
+            ],
+        );
+        package(
+            root,
+            "0.5.0",
+            &[
+                ("bmz-player.exe", b"sxs app"),
+                (crate::HELPER, b"sxs updater"),
+                ("dll/dll.manifest", b"assembly"),
+                ("dll/avcodec-63.dll", b"codec"),
+                ("dll/vcruntime140.dll", b"vc"),
+                ("dll/ucrtbase.dll", b"ucrt"),
+                ("dll/api-ms-win-crt-runtime-l1-1-0.dll", b"forwarder"),
+            ],
+        );
+        // A copy of the installed private DLL, and a file the user placed.
+        fs::write(root.join("avcodec-63.dll"), b"codec").unwrap();
+        fs::write(root.join("user.dll"), b"user library").unwrap();
+        let work = new_work_dir(root).unwrap();
+        package(
+            &work.join("stage"),
+            "0.6.0",
+            &[
+                ("bmz-player.exe", b"invalid executable"),
+                (crate::HELPER, b"new updater"),
+                ("dll/dll.manifest", b"assembly"),
+                ("dll/avcodec-63.dll", b"new codec"),
+                ("dll/vcruntime140.dll", b"new vc"),
+                ("dll/ucrtbase.dll", b"new ucrt"),
+                ("dll/api-ms-win-crt-runtime-l1-1-0.dll", b"new forwarder"),
+            ],
+        );
+        (temp, work)
+    }
+
+    #[test]
+    fn sxs_update_retires_root_dlls_recorded_by_a_previous_manifest() {
+        let (temp, work) = manually_extracted_sxs_fixture();
+        let root = temp.path();
+        assert_eq!(PackageManifest::read(root).unwrap().version, "0.5.0");
+        preflight(root, &work).unwrap();
+
+        let absent_during_update = std::cell::Cell::new(false);
+        let error = apply_with_checkpoint(root, &work, |_| {
+            if !root.join("vcruntime140.dll").exists() && !root.join("avcodec-63.dll").exists() {
+                absent_during_update.set(true);
+            }
+            Ok(())
+        })
+        .unwrap_err();
+        // The fixture executable cannot start, so the loader check rolls the update back.
+        assert!(error.to_string().contains("previous version restored"));
+        assert!(absent_during_update.get());
+        let result: Journal =
+            serde_json::from_reader(File::open(work.join("result.json")).unwrap()).unwrap();
+        for name in ["old.dll", "vcruntime140.dll", "avcodec-63.dll"] {
+            assert!(
+                result.operations.iter().any(|op| op.path == name && op.existed && !op.install),
+                "{name}"
+            );
+        }
+        assert!(!result.operations.iter().any(|op| op.path == "user.dll"));
+        assert_eq!(fs::read(root.join("old.dll")).unwrap(), b"old library");
+        assert_eq!(fs::read(root.join("vcruntime140.dll")).unwrap(), b"flat vc");
+        assert_eq!(fs::read(root.join("avcodec-63.dll")).unwrap(), b"codec");
+        assert_eq!(fs::read(root.join("user.dll")).unwrap(), b"user library");
+        assert_eq!(PackageManifest::read(root).unwrap().version, "0.5.0");
+        assert!(pending_update(root).unwrap().is_none());
+    }
+
+    #[test]
+    fn sxs_preflight_still_rejects_root_dlls_that_no_manifest_recorded() {
+        let (temp, work) = manually_extracted_sxs_fixture();
+        let root = temp.path();
+        fs::write(root.join("vcruntime140.dll"), b"modified by the user").unwrap();
+        assert!(preflight(root, &work).is_err());
+        fs::write(root.join("vcruntime140.dll"), b"flat vc").unwrap();
+        fs::write(root.join("ucrtbase.dll"), b"never packaged").unwrap();
+        assert!(preflight(root, &work).is_err());
+        fs::remove_file(root.join("ucrtbase.dll")).unwrap();
+        preflight(root, &work).unwrap();
+    }
+
+    #[test]
+    fn interrupted_sxs_migration_can_restore_retired_root_dlls() {
+        let (temp, work) = sxs_fixture();
+        let root = temp.path();
+        let outcome = std::panic::catch_unwind(|| {
+            apply_with_checkpoint(root, &work, |_| {
+                assert!(root.join("old.dll").exists(), "simulated process interruption");
+                Ok(())
+            })
+        });
+        assert!(outcome.is_err());
+        assert!(pending_update(root).unwrap().is_some());
+        assert!(root.join("dll/dll.manifest").is_file());
+        recover(root).unwrap();
+        recover(root).unwrap();
+        assert_original(root);
+        assert!(!root.join("dll/dll.manifest").exists());
     }
 
     #[cfg(windows)]

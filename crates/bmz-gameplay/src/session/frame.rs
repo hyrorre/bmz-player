@@ -6,7 +6,7 @@ pub fn sync_judge_windows(session: &mut GameSession, now: TimeUs) {
         session.primary_key_mode,
         session.rule_mode,
     );
-    let windows = judge_windows_for_rule_mode_and_keymode(
+    let windows = session.judge.window_rates.for_rank(
         session.base_judge_windows,
         percent,
         session.rule_mode,
@@ -17,8 +17,7 @@ pub fn sync_judge_windows(session: &mut GameSession, now: TimeUs) {
     } else {
         session.audio_clock.playback_rate_percent()
     };
-    let windows = scale_judge_windows_for_playback_rate(windows, rate);
-    session.judge.set_window_set(windows);
+    session.judge.set_window_set(scale_judge_windows_for_playback_rate(windows, rate));
 }
 
 use super::judgement::{
@@ -97,15 +96,19 @@ pub fn advance_session_frame(
                     break;
                 }
                 sync_judge_windows(session, now);
-                judgements.extend(process_replay_inputs(session, now));
-                // Partial autoplay (D-BATTLE AS) is not recorded in the human
-                // input log. Run it on the same scoring clock as the replay.
-                judgements.extend(process_autoplay_inputs(session, now));
+                if session.judge.has_mines(&session.chart) {
+                    judgements.extend(super::input::process_timed_inputs(session, now));
+                } else {
+                    judgements.extend(process_replay_inputs(session, now));
+                    // Partial autoplay (D-BATTLE AS) is not recorded in the human
+                    // input log. Run it on the same scoring clock as the replay.
+                    judgements.extend(process_autoplay_inputs(session, now));
+                    if session.autoplay.is_some() {
+                        apply_auto_key_release(session, now);
+                    }
+                }
                 if session.play_end_reached() {
                     break;
-                }
-                if session.autoplay.is_some() {
-                    apply_auto_key_release(session, now);
                 }
                 judgements.extend(process_mine_passes(session, now));
                 judgements.extend(process_misses(session, now));
@@ -119,10 +122,12 @@ pub fn advance_session_frame(
                     break;
                 }
             }
-        } else if session.chart.long_notes.iter().any(|pair| {
-            pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Hln
-        }) {
-            judgements.extend(super::input::process_hln_inputs(session, times.audio_now));
+        } else if session.judge.has_mines(&session.chart)
+            || session.chart.long_notes.iter().any(|pair| {
+                pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Hln
+            })
+        {
+            judgements.extend(super::input::process_timed_inputs(session, times.audio_now));
         } else {
             if session.autoplay.as_ref().is_some_and(AutoplayController::is_full) {
                 // フルオート中は人間のキー入力を判定にも視覚エフェクトにも渡さない。
@@ -426,6 +431,7 @@ fn viewer_pgreat_prefix_events(
                 delta: TimeUs(0),
                 time: note.time,
                 affects_score: true,
+                advances_score: true,
             });
         }
     }
@@ -555,8 +561,6 @@ fn advance_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
 }
 
 fn score_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
-    use bmz_chart::timing::{bpm_reflection_at, reflect_time};
-
     let playback_rate_percent = session.audio_clock.playback_rate_percent();
     let Some(opponent) = &mut session.opponent.independent else {
         return;
@@ -575,7 +579,7 @@ fn score_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
         opponent.key_mode,
         opponent.rule_mode,
     );
-    let windows = judge_windows_for_rule_mode_and_keymode(
+    let windows = opponent.judge.window_rates.for_rank(
         opponent.base_judge_windows,
         percent,
         opponent.rule_mode,
@@ -602,49 +606,45 @@ fn score_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
         Vec::new()
     };
     inputs.sort_by_key(|input| input.time);
-    let reflected_now = bpm_reflection_at(&opponent.judge.bpm_reflections(&opponent.chart), now)
-        .map(|point| reflect_time(now, point.time));
     let mut display_judgements = Vec::new();
-    for input in inputs {
-        let judge_time = if input.source == InputSource::Auto {
-            input.time
-        } else {
-            bpm_reflection_at(&opponent.judge.bpm_reflections(&opponent.chart), input.time)
-                .map_or(input.time, |point| reflect_time(input.time, point.time))
-        };
-        match input.kind {
-            InputKind::Press => {
-                opponent.lane_keyon_started_at[input.lane.index()] = Some(input.time)
-            }
-            InputKind::Release => opponent.lane_keyon_started_at[input.lane.index()] = None,
+    let has_mines = opponent.judge.has_mines(&opponent.chart);
+    for group in inputs.chunk_by(|left, right| left.time == right.time) {
+        let time = group[0].time;
+        let before = TimeUs(time.0.saturating_sub(1));
+        if has_mines {
+            let outcome = battle_opponent_passes(opponent, before);
+            display_judgements.extend(apply_battle_opponent_outcome(opponent, outcome));
         }
-        let outcome = opponent.judge.process_input_at(&opponent.chart, input, judge_time);
-        display_judgements.extend(apply_battle_opponent_outcome(opponent, outcome));
-    }
-    let mut mine_keyon = opponent.lane_keyon_started_at;
-    if let Some(autoplay) = &opponent.autoplay {
-        for lane in Lane::ALL {
-            if autoplay.is_lane_enabled(lane) {
-                mine_keyon[lane.index()] = None;
-            }
-        }
-    }
-    let mine_outcome =
-        opponent.judge.process_mine_passes_at(&opponent.chart, now, reflected_now, &mine_keyon);
-    display_judgements.extend(apply_battle_opponent_outcome(opponent, mine_outcome));
-    let autoplay = opponent.autoplay.as_ref();
-    let miss_outcome = opponent.judge.process_misses_at(
-        &opponent.chart,
-        now,
-        |lane| {
-            if autoplay.is_some_and(|auto| auto.is_lane_enabled(lane)) {
-                now
+        let misses = battle_opponent_misses(opponent, before);
+        display_judgements.extend(apply_battle_opponent_outcome(opponent, misses));
+        let mut outcomes = Vec::new();
+        for &input in group {
+            let judge_time = if input.source == InputSource::Auto {
+                input.time
             } else {
-                reflected_now.unwrap_or(now)
+                opponent_reflected_time(opponent, input.time).unwrap_or(input.time)
+            };
+            let lane = input.lane.index();
+            let held = &mut opponent.lane_key_hold[lane];
+            held.update(input.kind, input.scratch_direction);
+            if input.kind == InputKind::Press {
+                opponent.lane_keyon_started_at[lane] = Some(input.time);
+            } else if !held.is_held() {
+                opponent.lane_keyon_started_at[lane] = None;
             }
-        },
-        false,
-    );
+            outcomes.push(opponent.judge.process_input_at(&opponent.chart, input, judge_time));
+        }
+        if has_mines {
+            let outcome = battle_opponent_passes(opponent, time);
+            display_judgements.extend(apply_battle_opponent_outcome(opponent, outcome));
+        }
+        for outcome in outcomes {
+            display_judgements.extend(apply_battle_opponent_outcome(opponent, outcome));
+        }
+    }
+    let mine_outcome = battle_opponent_passes(opponent, now);
+    display_judgements.extend(apply_battle_opponent_outcome(opponent, mine_outcome));
+    let miss_outcome = battle_opponent_misses(opponent, now);
     display_judgements.extend(apply_battle_opponent_outcome(opponent, miss_outcome));
     update_battle_opponent_hcn(opponent, now);
     update_battle_opponent_skin_timers(opponent, &display_judgements, now);
@@ -674,6 +674,43 @@ fn score_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
         .recent_judgements
         .extend(display_judgements.iter().map(|display| display.judgement.clone()));
     session.recent_display_judgements.extend(display_judgements);
+}
+
+fn opponent_reflected_time(opponent: &BattleOpponentSession, at: TimeUs) -> Option<TimeUs> {
+    use bmz_chart::timing::{bpm_reflection_at, reflect_time};
+
+    bpm_reflection_at(&opponent.judge.bpm_reflections(&opponent.chart), at)
+        .map(|point| reflect_time(at, point.time))
+}
+
+fn battle_opponent_misses(opponent: &mut BattleOpponentSession, at: TimeUs) -> JudgeOutcome {
+    let reflected = opponent_reflected_time(opponent, at);
+    let autoplay = opponent.autoplay.as_ref();
+    opponent.judge.process_misses_at(
+        &opponent.chart,
+        at,
+        |lane| {
+            if autoplay.is_some_and(|auto| auto.is_lane_enabled(lane)) {
+                at
+            } else {
+                reflected.unwrap_or(at)
+            }
+        },
+        false,
+    )
+}
+
+fn battle_opponent_passes(opponent: &mut BattleOpponentSession, at: TimeUs) -> JudgeOutcome {
+    let mut held = opponent.lane_keyon_started_at;
+    if let Some(autoplay) = &opponent.autoplay {
+        for lane in Lane::ALL {
+            if autoplay.is_lane_enabled(lane) {
+                held[lane.index()] = None;
+            }
+        }
+    }
+    let reflected = opponent_reflected_time(opponent, at);
+    opponent.judge.process_mine_passes_at(&opponent.chart, at, reflected, &held)
 }
 
 fn apply_battle_opponent_outcome(
@@ -712,8 +749,8 @@ fn apply_battle_opponent_outcome(
             let previous = opponent.gauge.current().value;
             match effect {
                 Effect::Judge(event) => {
+                    opponent.score.apply(&event);
                     if event.affects_score {
-                        opponent.score.apply(&event);
                         opponent.gauge.apply_judge(event.judge, 1.0);
                     }
                     judgements.push(DisplayJudgementEvent {
@@ -751,8 +788,8 @@ fn apply_battle_opponent_outcome(
                 opponent.gauge.apply_hcn_drain();
             }
         }
+        opponent.score.apply(&event);
         if event.affects_score {
-            opponent.score.apply(&event);
             let previous_gauge = opponent.gauge.current().value;
             opponent.gauge.apply_judge(event.judge, 1.0);
             let current = opponent.gauge.current();

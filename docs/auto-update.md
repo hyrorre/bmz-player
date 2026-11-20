@@ -16,14 +16,20 @@ BMZ Playerの更新確認・ダウンロード・適用の動作と、更新の�
 - 再起動は同じデータ・キャッシュ・ログ・リソースの保存先とプロファイルを引き継ぎ、Selectへ戻ります。譜面起動・Viewer・export等の元の引数は再実行しません。
 - 既存の旧版からは、この機能を搭載する版まで一度手動更新します。
 
-## Windows portable
+## Windows installer
 
 Windows Setupは配布ファイルのみを上書きし、`resources`を一括削除しません。
 配布物に含まれない追加スキン・フォント等は、同梱スキン内の追加ファイルも含めて残します。
-旧版にだけ含まれるファイルもSetupでは残します。アンインストールでも未知ファイルとユーザーデータは削除しません。
+SxS 版への上書きでは、新しい本体と `dll/` のハッシュを確認してから、旧 installer manifest に記録された
+exe 横 DLL のうち SHA-256 が一致するものを `updater/installer-dll-backup/` へ退避します。
+旧 manifest で確認できない DLL、利用者が変更した DLL、ほかの旧配布ファイルは保持します。
+使用中の DLL は元の場所に残り、アプリを閉じて同じ Setup を再実行すると退避を再試行します。
+配布ファイルのインストールが完了しなかった場合や、新しい本体と `dll/` の検証に失敗した場合は、旧 DLL を保持します。
+アンインストールでも未知ファイル、退避した DLL、ユーザーデータは削除しません。
 配布物と同じパスの編集済みファイルはSetupの上書き対象なので、編集用コピーは`data_dir/skins`へ置きます。
 この仕様は修正版Setupから適用され、旧Setupによって既に消えたファイルを復元するものではありません。
 
+## Windows portable
 
 `updater/bmz-package.json`は配布形式・target・version・updater protocol・配布物のファイル一覧とSHA256を持ちます。
 `data`の有無やカレントディレクトリから配布形式を推測しません。メタデータのない旧版・開発ビルドは自動適用しません。
@@ -35,6 +41,7 @@ portableのデータは環境変数の上書きを最優先とし、未指定時
 
 更新アーカイブには`BMZ Player/`が一つあり、本体exe、DLL、`resources/`、
 `updater/bmz-updater.exe`、`updater/bmz-package.json`、空の`updater/instance.lock`だけを収録します。
+protocol 4 の SxS パッケージでは、DLL と SxS manifest を `dll/` に置きます。
 manifestにないファイル・リンク・Windowsの特殊名・展開先外のパスを拒否します。
 ダウンロードは署名済みのサイズ・SHA256を照合し、展開ファイルも個別に照合します。
 
@@ -50,6 +57,13 @@ helperが準備完了してから本体を正常終了し、すべてのpackaged
 設定、DB、スコア、リプレイ、追加曲、ユーザースキン、未知のファイルは更新対象にしません。
 旧版で管理していた廃止DLLも退避して除去します。新しい配布ファイルと未知の既存ファイルが衝突した場合は更新を拒否します。
 同梱ファイルへのユーザー変更を含め、旧ファイルは`job-*/backup`に保持します。
+protocol 4 の `dll/` 移行では、新しい同梱 DLL と同名の未管理ルート DLL がある場合も適用前に停止します。
+flat 版へ SxS 版を手で上書き展開した場合など、ルートに残った DLL のうち、
+インストール済みの manifest かルートに残った旧 `bmz-package.json` に同名・同じ SHA-256 の記録があるものは、
+同梱ファイルと同様に退避します。記録と一致しない DLL はユーザーのファイルとして扱い、同名なら適用前に停止します。
+排他ロック中に新版を配置し、旧 DLL を退避した状態で新版の `--version` を実行します。
+loader エラー・タイムアウト（30 秒）・version 不一致なら旧配置を復元してから再起動します。
+`--version` は保存先の初期化や DB migration より前に終了します。
 更新結果と退避ファイルの対応表は`job-*/result.json`、結果ログは`job-*/update.log`に残ります。
 退避ファイルは自動削除しません。容量を空ける際は内容を確認して、完了済みjobディレクトリを削除します。
 
@@ -75,7 +89,7 @@ helperが準備完了してから本体を正常終了し、すべてのpackaged
 
 ### updater の互換性
 
-現在のprotocolは3です。新しい本体は署名付き`release.json`を優先し、assetが存在しない場合だけ
+実装上の最新 protocol は4です。新しい本体は署名付き`release.json`を優先し、assetが存在しない場合だけ
 従来の`updates.json`を読みます。新形式の取得・署名・内容検証が失敗した場合は旧形式へ戻りません。
 署名済み更新情報の`min_updater_protocol`を満たさない場合は、
 `bridge_tag`が指す旧形式の橋渡し版へ先に更新します。次回起動後、新updaterが最新版を取得します。
@@ -102,6 +116,22 @@ protocol 3は統合Releaseメタデータへの対応を示します。grouped�
 橋渡し版Bも、旧`updates.json`の最低protocolは2にします。B公開後に最低protocolを3へ
 引き上げる場合は、`BMZ_UPDATE_BRIDGE_TAG`をBへ切り替えます。
 形式・公開設定・段階的な移行は[Releaseメタデータ](release-metadata.md)を参照してください。
+
+### protocol 4 の配布順
+
+1. Windows 8.1 または Server 2012 R2 の app-local UCRT と更新経路を
+   [互換ビルドの手順](windows-compat.md#sxs-版の検証)で検証します。
+2. exe 横 DLL と旧 updater 配置の橋渡し版を公開します。本体と helper は protocol 4、
+   package / release の最低 protocol は 1 です。`BMZ_WINDOWS_DLL_LAYOUT=flat`、
+   `BMZ_WINDOWS_UPDATER_LAYOUT=legacy`、`BMZ_MIN_UPDATER_PROTOCOL=1` を使います。
+3. 次の版で `dll/` と grouped updater に移行します。package / release の最低 protocol は 4、
+   `BMZ_WINDOWS_DLL_LAYOUT=sxs`、`BMZ_WINDOWS_UPDATER_LAYOUT=grouped`、
+   `BMZ_MIN_UPDATER_PROTOCOL=4`、`BMZ_UPDATE_BRIDGE_TAG=橋渡し版のタグ` を使います。
+   旧版向けに橋渡し版と `updates.json` を保持します。
+
+初期設定は `flat` です。SxS の公開 CI は、橋渡しタグの updater protocol、公開済み portable ZIP と Setup、
+互換 `updates.json` の両形式の最低 protocol を照合します。Windows-only 検証の `windows_sxs` は、
+repository variable にかかわらず検証対象の配置を選びます。
 
 ## 更新の署名と公開設定
 

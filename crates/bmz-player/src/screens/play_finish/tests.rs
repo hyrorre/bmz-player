@@ -72,7 +72,6 @@ fn bokutachi_course_stage_device_policy_and_later_failure_are_independent() {
                     profile_paths: &paths,
                     replay_config: &ReplayConfig {
                         auto_save: false,
-                        compress: false,
                         slot_rules: crate::config::profile_config::default_slot_rules(),
                     },
                     ir_config: &config,
@@ -246,7 +245,6 @@ fn bokutachi_enqueues_only_verified_new_native_scores_and_display_battles() {
                     profile_paths: &paths,
                     replay_config: &ReplayConfig {
                         auto_save: false,
-                        compress: false,
                         slot_rules: crate::config::profile_config::default_slot_rules(),
                     },
                     ir_config: &config,
@@ -350,7 +348,6 @@ fn last_play_result_uses_saved_attempt_including_clear_only_and_excludes_unsaved
                 profile_paths: &paths,
                 replay_config: &ReplayConfig {
                     auto_save: false,
-                    compress: false,
                     slot_rules: crate::config::profile_config::default_slot_rules(),
                 },
                 ir_config: &IrConfig::default(),
@@ -413,7 +410,6 @@ fn latency_stall_test_never_persists_manual_result() {
     let mut network_db = open_network_db();
     let replay = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let ir = IrConfig {
@@ -579,7 +575,6 @@ fn effective_assist_persists_clear_lamp_counts_and_player_stats() {
         &paths,
         &ReplayConfig {
             auto_save: true,
-            compress: false,
             slot_rules: crate::config::profile_config::default_slot_rules(),
         },
         &IrConfig::default(),
@@ -629,7 +624,6 @@ fn seven_to_nine_7k_rule_saves_normal_source_mode_replay() {
     let mut network_db = open_network_db();
     let replay_config = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let mut session = session();
@@ -691,7 +685,6 @@ fn finish_session_result_returns_summary() {
     let mut network_db = open_network_db();
     let replay_config = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let mut session = session();
@@ -831,7 +824,6 @@ fn finish_session_result_course_stage_rounds_summary_clear_type() {
     let mut network_db = open_network_db();
     let replay_config = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let session = session();
@@ -891,7 +883,6 @@ fn finish_session_result_course_stage_enqueues_ir_with_rounded_clear_type() {
     let mut network_db = open_network_db();
     let replay_config = ReplayConfig {
         auto_save: false,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let ir_config = IrConfig {
@@ -963,7 +954,6 @@ fn seven_to_nine_7k_rule_enqueues_ir_as_source_7k() {
     let mut network_db = open_network_db();
     let replay_config = ReplayConfig {
         auto_save: false,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let ir_config = IrConfig {
@@ -1043,7 +1033,6 @@ fn finish_session_result_once_reuses_cached_result() {
     let mut network_db = open_network_db();
     let replay_config = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let session = session();
@@ -1121,7 +1110,6 @@ fn finish_session_result_skips_storage_for_autoplay() {
     let mut network_db = open_network_db();
     let replay_config = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let mut session = session();
@@ -1177,7 +1165,6 @@ fn finish_session_result_skips_all_storage_for_key_mode_conversion() {
     let mut network_db = open_network_db();
     let replay_config = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let session = session();
@@ -1238,7 +1225,6 @@ fn finish_session_result_skips_storage_for_replay_playback() {
     let mut network_db = open_network_db();
     let replay_config = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let mut session = session();
@@ -1294,7 +1280,6 @@ fn store_session_result_rejects_unfinished_session() {
     let mut network_db = open_network_db();
     let replay_config = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let mut session = session();
@@ -1336,7 +1321,6 @@ fn finish_settled_session_result_accepts_playing_session_after_judgement() {
     let mut network_db = open_network_db();
     let replay_config = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let mut session = session();
@@ -1429,7 +1413,6 @@ fn spawned_settled_session_result_persists_on_background_worker() {
     crate::storage::migration::migrate_network_db(&paths.network_db).unwrap();
     let replay_config = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let mut session = session();
@@ -1506,7 +1489,6 @@ fn directly_owned_session_saves_its_settled_gauge_end_points() {
     crate::storage::migration::migrate_network_db(&paths.network_db).unwrap();
     let replay_config = ReplayConfig {
         auto_save: true,
-        compress: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let mut session = session();
@@ -1734,7 +1716,7 @@ fn session() -> GameSession {
         recent_inputs: Vec::new(),
         lane_keyon_started_at: Default::default(),
         lane_keyoff_started_at: Default::default(),
-        lane_scratch_direction: Default::default(),
+        lane_key_hold: Default::default(),
         lane_scratch_angle_delta_ms: Default::default(),
         scratch_angle_last_render_at: None,
         lane_auto_release_at: Default::default(),
@@ -1765,6 +1747,7 @@ fn session() -> GameSession {
             auto_keysound_mine: true,
         },
         hispeed: 2.0,
+        hispeed_change_base: 2.0,
         hispeed_mode: bmz_gameplay::session::HispeedMode::Classic,
         base_hispeed_mode: bmz_gameplay::session::HispeedMode::Classic,
         floating_policy: bmz_gameplay::session::FloatingPolicy::Toggle,
@@ -1953,7 +1936,6 @@ fn double_battle_saves_separate_bests_and_enqueues_only_supported_ir_providers()
                     profile_paths: &paths,
                     replay_config: &ReplayConfig {
                         auto_save: false,
-                        compress: false,
                         slot_rules: crate::config::profile_config::default_slot_rules(),
                     },
                     ir_config: &all_ir_providers(),
@@ -2014,6 +1996,7 @@ fn assist_easy_session(gauge: bmz_gameplay::gauge::GaugeState) -> GameSession {
             delta: TimeUs(0),
             time: TimeUs(0),
             affects_score: true,
+            advances_score: true,
         });
     }
     session
@@ -2056,7 +2039,6 @@ fn finish_with_all_providers(
             profile_paths: paths,
             replay_config: &ReplayConfig {
                 auto_save: false,
-                compress: false,
                 slot_rules: crate::config::profile_config::default_slot_rules(),
             },
             ir_config: &all_ir_providers(),
@@ -2300,7 +2282,6 @@ fn complete_song_policy_skips_manually_stopped_play() {
         let mut network_db = open_network_db();
         let replay_config = ReplayConfig {
             auto_save: false,
-            compress: false,
             slot_rules: crate::config::profile_config::default_slot_rules(),
         };
         let ir_config = IrConfig {

@@ -44,7 +44,9 @@ region・scheduler・判定状態は引き継ぎません。cacheはプロセス
 ## 入力と時計
 
 ロード時に変換済み譜面のノートID・HCN区間索引と判定map容量を準備します。
-入力候補とMineは時刻窓から調べ、HCNは現在時刻を含み得る区間だけ更新します。
+入力候補は判定窓から調べ、HCNは現在時刻を含み得る区間だけ更新します。
+地雷は通過時刻で処理します。通常プレイ・本人リプレイ・対戦相手リプレイは、入力の時刻順に
+通過までの保持状態を進めます。同時刻の入力を反映してからその時刻の地雷を処理します。
 別の譜面に差し替わった場合は索引を使わず、通常の探索へ戻ります。
 
 - Windowsキーボードは入力専用スレッドのmessage-only windowでRaw Inputを受け取ります。
@@ -52,6 +54,9 @@ region・scheduler・判定状態は引き継ぎません。cacheはプロセス
   foreground windowを入力スレッドでも確認します。キーのrepeat / releaseとscancodeは
   winitのPhysicalKeyと既存の共通`DeviceInputEvent`へ正規化します。
 - Windows HID Raw Inputは同じmessage threadが取得します。
+  ゲームパッドのAutoはWGIのRawGameController APIを利用できる場合にgilrsを選び、
+  利用できない場合はRaw Inputを選びます。設定の候補・読み込み時の補正・再初期化は
+  同じ利用可否判定を使い、HID登録は実際に生成したバックエンドに従います。
 - gilrs / experimental GameInputとanalog scratchのpolling・停止検知も入力スレッドで行います。
   GameInputの構築、COM使用、破棄は同じowner thread上に保ちます。
 - macOS GameControllerは専用の直列dispatch queueから直接SharedInputBackendへ配送します。

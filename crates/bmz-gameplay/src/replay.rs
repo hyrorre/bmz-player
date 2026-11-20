@@ -26,10 +26,14 @@ pub const REPLAY_SCORING_STEP_US: i64 = 1_000;
 
 #[derive(Debug, Clone, Default)]
 pub struct ReplayPlayer {
+    pub judge_window_rates: Option<crate::judge::window::JudgeWindowRates>,
     pub kaleid: Option<bmz_chart::kaleid::KaleidPlayEvidence>,
     pub branch_decisions: Option<Vec<bmz_core::replay::BranchDecision>>,
     pub events: Vec<ReplayEvent>,
     pub judge_algorithm: Option<JudgeAlgorithm>,
+    /// Recorded by v0.5.2 or earlier, before the DX MODE POP judge revision. Such replays
+    /// reproduce with the earlier POP windows.
+    pub legacy_dx_pop_judge: bool,
     /// The source recorded input relative to the chart before the start-note margin.
     pub input_excludes_start_margin: bool,
     pub next_index: usize,

@@ -249,6 +249,8 @@ impl WinitApp {
             options.session_mode,
             options.battle_target.is_some(),
         );
+        let app_config = self.play_session_app_config();
+        let speed_locked = active_course_speed_locked(self.play.active_course.as_ref());
         let Some(snapshot) = &mut self.play.last_play_snapshot else {
             return;
         };
@@ -256,6 +258,7 @@ impl WinitApp {
             snapshot,
             &prepared.chart,
             &prepared.render_snapshot_cache,
+            prepared.score_key.rule_mode,
             battle_presentation,
         );
         snapshot.skin_attempt.merge_known(prepared.skin_attempt);
@@ -274,8 +277,13 @@ impl WinitApp {
         if let Some(pending) =
             self.play.pending_play_start.as_mut().filter(|pending| pending.chart_id == chart_id)
         {
-            pending.lane.sync_chart_bpm(snapshot, pending.options.hs_fix);
-            pending.prepared_chart_applied = true;
+            pending.rebase_lane_to_prepared_chart(
+                &prepared.chart,
+                snapshot,
+                &self.boot.profile_config,
+                &app_config,
+                speed_locked,
+            );
         }
         tracing::info!(
             chart_id,

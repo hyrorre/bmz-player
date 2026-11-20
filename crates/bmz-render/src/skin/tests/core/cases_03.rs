@@ -254,13 +254,15 @@ fn skin_image_act_uses_event_index_for_button_frame_row() {
         source_size,
         &SkinDrawState::default(),
         (0, 0, 68, 99),
-    );
+    )
+    .unwrap();
     let on = skin_image_texture_region_for_state(
         &image,
         source_size,
         &SkinDrawState { judge_timing_auto_adjust: true, ..SkinDrawState::default() },
         (0, 0, 68, 99),
-    );
+    )
+    .unwrap();
 
     assert!(approx_eq(off.y, 0.0));
     assert!(approx_eq(on.y, 1.0 / 3.0));

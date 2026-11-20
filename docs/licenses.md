@@ -61,6 +61,14 @@ The small RAR regression archives are generated from BMZ-owned test data with
 the `rars` writer; see their [fixture README](../crates/bmz-player/src/song_archive/fixtures/README.md). Third-party song archives used for
 local validation are not distributed with BMZ.
 
+## Windows runtime
+
+Windows互換パッケージには、Visual Studio 2022とWindows SDKの再配布用VC/UCRT DLLも含みます。
+`resources/licenses/windows-runtime-notice.txt`と`windows-runtime.json`へ出所・version・hashを記録します。
+System32のDLLを配布用にコピーせず、SDK/Visual Studioの再配布ディレクトリを使います。
+Microsoftの[再配布手順](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files)と
+[UCRT配置手順](https://learn.microsoft.com/en-us/cpp/windows/universal-crt-deployment)を参照してください。
+
 ## FFmpeg
 
 BMZ Player uses FFmpeg through the Rust `ffmpeg-next` crate.

@@ -32,7 +32,7 @@ macro_rules! skin_document_render_core_clip_methods {
             let source = resolve_document_source(sources, &image.src)?;
             let pixel_rect = skin_image_pixel_rect(image);
             let uv =
-                skin_image_texture_region_for_state(image, source.source_size, state, pixel_rect);
+                skin_image_texture_region_for_state(image, source.source_size, state, pixel_rect)?;
             let (rect, uv) = stretch_skin_image_geometry(
                 destination.stretch,
                 normalize_skin_frame_rect(frame, self.w, self.h),

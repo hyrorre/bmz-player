@@ -938,6 +938,8 @@ mod tests {
                     SettingsEntryId::HispeedMode,
                     SettingsEntryId::Hispeed,
                     SettingsEntryId::ClassicHispeedStep,
+                    SettingsEntryId::HispeedChangeType,
+                    SettingsEntryId::HispeedChangeRatio,
                 ],
             ),
             (
@@ -946,6 +948,8 @@ mod tests {
                     SettingsEntryId::HispeedMode,
                     SettingsEntryId::Hispeed,
                     SettingsEntryId::ClassicHispeedStep,
+                    SettingsEntryId::HispeedChangeType,
+                    SettingsEntryId::HispeedChangeRatio,
                 ],
             ),
             (
@@ -953,6 +957,8 @@ mod tests {
                 vec![
                     SettingsEntryId::HispeedMode,
                     SettingsEntryId::FloatingHispeedStep,
+                    SettingsEntryId::HispeedChangeType,
+                    SettingsEntryId::HispeedChangeRatio,
                     SettingsEntryId::TargetGreenNumber,
                     SettingsEntryId::NoteDisplayDurationMs,
                     SettingsEntryId::HispeedAutoAdjust,
@@ -964,6 +970,8 @@ mod tests {
                     SettingsEntryId::HispeedMode,
                     SettingsEntryId::NormalHispeedLevel,
                     SettingsEntryId::FloatingHispeedStep,
+                    SettingsEntryId::HispeedChangeType,
+                    SettingsEntryId::HispeedChangeRatio,
                     SettingsEntryId::TargetGreenNumber,
                     SettingsEntryId::NoteDisplayDurationMs,
                     SettingsEntryId::HispeedAutoAdjust,
@@ -976,6 +984,8 @@ mod tests {
                     SettingsEntryId::Hispeed,
                     SettingsEntryId::ClassicHispeedStep,
                     SettingsEntryId::FloatingHispeedStep,
+                    SettingsEntryId::HispeedChangeType,
+                    SettingsEntryId::HispeedChangeRatio,
                     SettingsEntryId::TargetGreenNumber,
                     SettingsEntryId::NoteDisplayDurationMs,
                     SettingsEntryId::HispeedAutoAdjust,
@@ -1031,10 +1041,6 @@ mod tests {
         assert!(items.iter().any(|item| matches!(
             item,
             SelectItem::Config(row) if row.entry_id == SettingsEntryId::ReplaySlot4Rule
-        )));
-        assert!(items.iter().any(|item| matches!(
-            item,
-            SelectItem::Config(row) if row.entry_id == SettingsEntryId::ReplayCompress
         )));
     }
 

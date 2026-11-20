@@ -274,6 +274,8 @@ fn lane_view_migrates_old_hispeed_fields_to_classic_floating_defaults() {
     assert_eq!(lane.normal_hispeed_level, 18);
     assert_eq!(lane.classic_hispeed_step, 0.25);
     assert_eq!(lane.floating_hispeed_step, 0.50);
+    assert_eq!(lane.hispeed_change_type, HispeedChangeTypeConfig::Fixed);
+    assert_eq!(lane.hispeed_change_ratio, 0.25);
     assert!(lane.lift_enabled);
     assert!(lane.hispeed_auto_adjust);
 
@@ -284,6 +286,8 @@ fn lane_view_migrates_old_hispeed_fields_to_classic_floating_defaults() {
     assert!(serialized.contains("normal_hispeed_level = 18"));
     assert!(serialized.contains("classic_hispeed_step = 0.25"));
     assert!(serialized.contains("floating_hispeed_step = 0.5"));
+    assert!(serialized.contains("hispeed_change_type = \"Fixed\""));
+    assert!(serialized.contains("hispeed_change_ratio = 0.25"));
     assert!(serialized.contains("floating_target_green = 300"));
     assert!(serialized.contains("lift_enabled = true"));
     assert!(serialized.contains("hispeed_auto_adjust = true"));
@@ -785,7 +789,7 @@ fn replay_slot_rule_empty_string_disables_slot() {
 
             [replay]
             auto_save = true
-            compress = false
+            compress = true
             slot_rules = ["Always", "ScoreUpdate", "BpUpdate", ""]
 
             [ir]
@@ -816,7 +820,9 @@ fn replay_slot_rule_empty_string_disables_slot() {
     )
     .unwrap();
 
+    assert!(profile.replay.auto_save);
     assert_eq!(profile.replay.slot_rules[3], ReplaySlotRule::Disabled);
+    assert!(!toml::to_string(&profile.replay).unwrap().contains("compress"));
     assert!(profile.ir.prefetch_global_ranking_on_score_submit);
     assert!(profile.ir.prefetch_rival_ranking_on_score_submit);
     assert!(profile.audio_mix.normalize_system_bgm_volume);
@@ -1358,4 +1364,20 @@ fn s_random_correction_roundtrips_each_choice() {
     }
     let profile = ProfileConfig::new_default("default", "Player", 0);
     assert!(toml::to_string(&profile).unwrap().contains("s_random_correction = \"Lm120Hz\""));
+}
+
+#[test]
+fn hispeed_change_ratio_profile_round_trips() {
+    let mut lane = ProfileConfig::new_default("default", "Default", 0).lane;
+    lane.hispeed_change_type = HispeedChangeTypeConfig::Ratio;
+    lane.hispeed_change_ratio = 1.0;
+
+    let serialized = toml::to_string(&lane).unwrap();
+    assert!(serialized.contains("hispeed_change_type = \"Ratio\""));
+    let restored: LaneViewConfig = toml::from_str(&serialized).unwrap();
+    assert_eq!(restored.hispeed_change_type, HispeedChangeTypeConfig::Ratio);
+    assert_eq!(restored.hispeed_change_ratio, 1.0);
+    assert_eq!(normalize_hispeed_change_ratio(0.0), HISPEED_CHANGE_RATIO_MIN);
+    assert_eq!(normalize_hispeed_change_ratio(100.0), HISPEED_CHANGE_RATIO_MAX);
+    assert_eq!(normalize_hispeed_change_ratio(f32::INFINITY), 0.25);
 }

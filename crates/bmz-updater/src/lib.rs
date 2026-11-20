@@ -1,11 +1,12 @@
-//! Portable package validation and recoverable replacement. No audio/GPU dependencies.
+//! Windows package validation, replacement and cleanup. No audio/GPU dependencies.
 pub mod archive;
+pub mod installer;
 pub mod manifest;
 pub mod process;
 pub mod release;
 pub mod transaction;
 
-pub const PROTOCOL: u32 = 3;
+pub const PROTOCOL: u32 = 4;
 pub const MANIFEST: &str = "updater/bmz-package.json";
 pub const HELPER: &str = "updater/bmz-updater.exe";
 pub const INSTANCE_LOCK: &str = "updater/instance.lock";

@@ -12,7 +12,7 @@ pub(super) fn open(
         return Err(super::super::unsupported("self-extracting ZIP archives are unsupported"));
     }
     ensure!(archive.len() == count, "duplicate ZIP directory entries");
-    let mut entries = Vec::with_capacity(count);
+    let mut raw = Vec::with_capacity(count);
     for index in 0..count {
         let entry = archive.by_index_raw(index)?;
         if entry.encrypted() {
@@ -28,13 +28,24 @@ pub(super) fn open(
         if let Some(mode) = entry.unix_mode() {
             safety::regular_mode(mode, directory)?;
         }
-        let name = safety::decode_name(entry.name_raw(), entry.get_metadata().is_utf8)?;
-        entries.push(ArchiveEntry {
-            name: safety::normalize_name(&name, directory)?,
-            size: entry.size(),
-            is_directory: directory,
-        });
+        raw.push((
+            entry.name_raw().to_vec(),
+            entry.get_metadata().is_utf8,
+            directory,
+            entry.size(),
+        ));
     }
+    let names = safety::LegacyNames::detect(raw.iter().map(|(name, utf8, ..)| (&name[..], *utf8)));
+    let entries = raw
+        .iter()
+        .map(|(name, utf8, directory, size)| {
+            Ok(ArchiveEntry {
+                name: safety::normalize_name(&names.decode(name, *utf8)?, *directory)?,
+                size: *size,
+                is_directory: *directory,
+            })
+        })
+        .collect::<Result<_>>()?;
     Ok((archive, entries))
 }
 

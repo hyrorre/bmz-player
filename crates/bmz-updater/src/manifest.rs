@@ -156,10 +156,21 @@ pub fn managed_path(value: &str) -> Result<PathBuf> {
             || value == super::HELPER
             || value == super::LEGACY_HELPER
             || (lower.ends_with(".dll") && !value.contains('/'))
+            || value == "dll/dll.manifest"
+            || assembly_dll_name(value).is_some()
             || value.starts_with("resources/"),
         "package must not manage user files: {value}"
     );
     Ok(path)
+}
+
+fn assembly_dll_name(path: &str) -> Option<&str> {
+    let name = path.strip_prefix("dll/")?;
+    (!name.eq_ignore_ascii_case("dll.dll")
+        && name.to_ascii_lowercase().ends_with(".dll")
+        && name.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)))
+    .then_some(name)
 }
 
 /// Reject links/reparse points at every existing component, including junctions.
@@ -197,17 +208,31 @@ impl PackageManifest {
     /// Prefer the grouped layout, but never hide a corrupt manifest behind a legacy fallback.
     pub fn read_optional(root: &Path) -> Result<Option<Self>> {
         for relative in [super::MANIFEST, super::LEGACY_MANIFEST] {
-            let path = checked_path(root, relative)?;
-            if !path.try_exists()? {
-                continue;
+            if let Some(manifest) = Self::read_at(root, relative)? {
+                return Ok(Some(manifest));
             }
-            ensure!(path.metadata()?.len() <= 16 * 1024 * 1024, "package manifest too large");
-            let manifest: Self = serde_json::from_reader(File::open(path)?)?;
-            manifest.validate()?;
-            ensure!(manifest.manifest_path() == relative, "package layout mismatch");
-            return Ok(Some(manifest));
         }
         Ok(None)
+    }
+
+    /// Reads the manifest of one layout only, even when the other layout's manifest also exists.
+    pub(crate) fn read_at(root: &Path, relative: &str) -> Result<Option<Self>> {
+        let path = checked_path(root, relative)?;
+        let manifest = Self::read_file(&path)?;
+        if let Some(manifest) = &manifest {
+            ensure!(manifest.manifest_path() == relative, "package layout mismatch");
+        }
+        Ok(manifest)
+    }
+
+    pub(crate) fn read_file(path: &Path) -> Result<Option<Self>> {
+        if !path.try_exists()? {
+            return Ok(None);
+        }
+        ensure!(path.metadata()?.len() <= 16 * 1024 * 1024, "package manifest too large");
+        let manifest: Self = serde_json::from_reader(File::open(path)?)?;
+        manifest.validate()?;
+        Ok(Some(manifest))
     }
 
     pub fn read(root: &Path) -> Result<Self> {
@@ -225,6 +250,15 @@ impl PackageManifest {
     pub fn manifest_path(&self) -> &'static str {
         if self.helper_path() == super::HELPER { super::MANIFEST } else { super::LEGACY_MANIFEST }
     }
+
+    pub(crate) fn assembly_dlls(&self) -> impl Iterator<Item = &str> {
+        self.files.iter().filter_map(|entry| assembly_dll_name(&entry.path))
+    }
+
+    pub(crate) fn uses_sxs(&self) -> bool {
+        self.files.iter().any(|entry| entry.path.starts_with("dll/"))
+    }
+
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.schema == 1 && self.min_updater_protocol <= super::PROTOCOL,
@@ -261,6 +295,26 @@ impl PackageManifest {
         for required in ["bmz-player.exe", self.helper_path()] {
             ensure!(self.files.iter().any(|f| f.path == required), "missing {required}");
         }
+        if self.uses_sxs() {
+            ensure!(
+                self.min_updater_protocol >= 4
+                    && self.target == "windows-x64"
+                    && self.helper_path() == super::HELPER,
+                "SxS layout requires the grouped Windows x64 package and protocol 4"
+            );
+            for required in [
+                "dll/dll.manifest",
+                "dll/vcruntime140.dll",
+                "dll/ucrtbase.dll",
+                "dll/api-ms-win-crt-runtime-l1-1-0.dll",
+            ] {
+                ensure!(seen.contains(required), "missing {required}");
+            }
+            ensure!(
+                !seen.iter().any(|path| !path.contains('/') && path.ends_with(".dll")),
+                "SxS package contains a DLL beside the executable"
+            );
+        }
         Ok(())
     }
     pub fn verify_files(
@@ -272,14 +326,23 @@ impl PackageManifest {
         for entry in &self.files {
             checkpoint()?;
             let path = checked_path(root, &entry.path)?;
-            if !path.is_file()
-                || path.metadata()?.len() != entry.size
-                || !hash_file_checked(&path, &mut checkpoint)?.eq_ignore_ascii_case(&entry.sha256)
-            {
+            if !entry.matches(&path, &mut checkpoint)? {
                 bail!("package file verification failed: {}", entry.path);
             }
         }
         Ok(())
+    }
+}
+
+impl PackageFile {
+    pub(crate) fn matches(
+        &self,
+        path: &Path,
+        checkpoint: &mut impl FnMut() -> Result<()>,
+    ) -> Result<bool> {
+        Ok(path.is_file()
+            && path.metadata()?.len() == self.size
+            && hash_file_checked(path, checkpoint)?.eq_ignore_ascii_case(&self.sha256))
     }
 }
 
@@ -303,7 +366,9 @@ pub(crate) fn write_test_package(root: &Path, version: &str, files: &[(&str, &[u
         kind: PackageKind::Portable,
         target: "windows-x64".into(),
         version: version.into(),
-        min_updater_protocol: if files.iter().any(|(name, _)| *name == crate::HELPER) {
+        min_updater_protocol: if files.iter().any(|(name, _)| name.starts_with("dll/")) {
+            4
+        } else if files.iter().any(|(name, _)| *name == crate::HELPER) {
             2
         } else {
             1
@@ -360,12 +425,49 @@ mod tests {
             "updater/job-123/backup/0",
             "updater/instance.lock",
             "resources//a",
+            "dll/data.txt",
+            "dll/nested/library.dll",
+            "dll/NUL.dll",
+            "dll/dll.dll",
+            "DLL/library.dll",
         ] {
             assert!(managed_path(path).is_err(), "{path}");
         }
         assert!(managed_path("resources/日本語 skin.png").is_ok());
         assert!(managed_path("bmz-updater.exe").is_ok());
         assert!(managed_path(crate::HELPER).is_ok());
+    }
+
+    #[test]
+    fn sxs_package_requires_protocol_four_and_a_complete_private_runtime() {
+        let root = tempfile::tempdir().unwrap();
+        write_test_package(
+            root.path(),
+            "0.5.2",
+            &[
+                ("bmz-player.exe", b"app"),
+                (crate::HELPER, b"helper"),
+                ("dll/dll.manifest", b"assembly"),
+                ("dll/avcodec-63.dll", b"codec"),
+                ("dll/vcruntime140.dll", b"vc"),
+                ("dll/ucrtbase.dll", b"ucrt"),
+                ("dll/api-ms-win-crt-runtime-l1-1-0.dll", b"forwarder"),
+            ],
+        );
+        let valid = PackageManifest::read(root.path()).unwrap();
+        assert_eq!(valid.assembly_dlls().count(), 4);
+        let mut package = valid.clone();
+        package.min_updater_protocol = 3;
+        assert!(package.validate().is_err());
+        let mut package = valid.clone();
+        package.files.retain(|entry| entry.path != "dll/ucrtbase.dll");
+        assert!(package.validate().is_err());
+        let mut package = valid;
+        let mut duplicate =
+            package.files.iter().find(|entry| entry.path == "dll/avcodec-63.dll").unwrap().clone();
+        duplicate.path = "avcodec-63.dll".into();
+        package.files.push(duplicate);
+        assert!(package.validate().is_err());
     }
 
     #[test]

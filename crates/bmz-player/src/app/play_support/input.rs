@@ -195,6 +195,43 @@ pub(in crate::app) fn hispeed_step_for_profile(profile: &ProfileConfig, mode: Hi
     }
 }
 
+/// プレイ中のHS変更量。`key` はE1+鍵盤、`cover` は操作できるレーンカバーがない
+/// ときのカバー操作（EndlessDream互換のHS操作）に使う。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::app) struct PlayHispeedSteps {
+    pub(in crate::app) key: f32,
+    pub(in crate::app) cover: f32,
+}
+
+impl PlayHispeedSteps {
+    #[cfg(test)]
+    pub(in crate::app) const fn uniform(step: f32) -> Self {
+        Self { key: step, cover: step }
+    }
+
+    /// `change_base` はプレイ開始時の表示上のHS値。HS変更方式がRatioのときだけ
+    /// E1+鍵盤の変更量に使い、カバー操作は常に固定刻みにする。
+    pub(in crate::app) fn for_profile(
+        profile: &ProfileConfig,
+        mode: HispeedMode,
+        change_base: f32,
+    ) -> Self {
+        let fixed = hispeed_step_for_profile(profile, mode);
+        let key = match profile.lane.hispeed_change_type {
+            HispeedChangeTypeConfig::Fixed => fixed,
+            HispeedChangeTypeConfig::Ratio => {
+                ratio_hispeed_step(change_base, profile.lane.hispeed_change_ratio)
+            }
+        };
+        Self { key, cover: fixed }
+    }
+}
+
+/// 基準HSに比率を掛けた変更量。0.01単位へ丸め、0.01..=20.0に収める。
+pub(in crate::app) fn ratio_hispeed_step(change_base: f32, ratio: f32) -> f32 {
+    crate::config::play::quantize_hispeed(change_base * normalize_hispeed_change_ratio(ratio))
+}
+
 pub(in crate::app) fn adjusted_normal_hispeed_level(current: u8, change: HispeedChange) -> u8 {
     let delta = match change {
         HispeedChange::Down => -1,

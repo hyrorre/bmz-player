@@ -210,13 +210,17 @@ mod tests {
 
     #[cfg(not(all(windows, feature = "experimental-gameinput")))]
     #[test]
-    fn parse_app_config_migrates_disabled_gameinput_to_gilrs() {
+    fn parse_app_config_migrates_disabled_gameinput_to_available_backend() {
         let mut config = AppConfig::default();
         config.input.gamepad_backend = GamepadBackendKind::GameInput;
 
         let loaded = parse_app_config(&toml::to_string(&config).unwrap()).unwrap();
 
-        assert_eq!(loaded.input.gamepad_backend, GamepadBackendKind::Gilrs);
+        assert_eq!(
+            loaded.input.gamepad_backend,
+            crate::input::availability::BackendAvailability::current()
+                .resolve_gamepad(GamepadBackendKind::GameInput)
+        );
     }
 
     #[test]

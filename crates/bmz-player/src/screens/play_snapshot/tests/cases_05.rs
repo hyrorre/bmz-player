@@ -50,6 +50,21 @@ fn timing_judge_window_tracks_runtime_rules_and_playback_speed() {
 }
 
 #[test]
+fn judge_area_uses_fast_good_edge_for_approaching_notes() {
+    let profile = ProfileConfig::new_default("default", "Default", 1);
+    let mut session = build_game_session(Arc::new(chart()), &profile, Default::default());
+    session.assist.judge_area = true;
+    let mut windows = session.judge.window_set;
+    windows.note.fast_bands = Some([15_000, 45_000, 165_000]);
+    windows.note.good_us = 210_000;
+    windows.note.bad_fast_us = 165_000;
+    session.judge.set_window_set(windows);
+    let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+    assert!(snapshot.judge_area_key_y[1] < snapshot.judge_area_key_y[2]);
+    assert_eq!(snapshot.judge_area_key_y[2], snapshot.judge_area_key_y[3]);
+}
+
+#[test]
 fn snapshot_auto_note_lanes_exclude_full_autoplay_and_display_only_opponent() {
     use bmz_gameplay::autoplay::AutoplayController;
     let profile = ProfileConfig::new_default("default", "Default", 1);
@@ -79,6 +94,7 @@ fn prepared_chart_populates_play_skin_data_without_marking_media_ready() {
     chart.metadata.artist = "Prepared artist".to_string();
     chart.metadata.has_bga = true;
     chart.metadata.judge_rank = Some(75);
+    chart.metadata.bmson_total_percent = Some(100.0);
     chart.end_time = TimeUs(3_000_000);
     chart.timing_events.push(TimingEvent {
         tick: ChartTick(960),
@@ -93,14 +109,20 @@ fn prepared_chart_populates_play_skin_data_without_marking_media_ready() {
         ..Default::default()
     };
 
-    apply_prepared_chart_to_render_snapshot(&mut snapshot, &chart, &cache, false);
+    apply_prepared_chart_to_render_snapshot(
+        &mut snapshot,
+        &chart,
+        &cache,
+        bmz_gameplay::rule::RuleMode::Lr2Oraja,
+        false,
+    );
 
     assert_eq!(snapshot.title, "Prepared title");
     assert_eq!(snapshot.subtitle, "Prepared subtitle");
     assert_eq!(snapshot.artist, "Prepared artist");
     assert_eq!(snapshot.duration, TimeUs(3_000_000));
     assert_eq!(snapshot.total_notes, 1);
-    assert_eq!(snapshot.chart_total_gauge, 160.0);
+    assert_eq!(snapshot.chart_total_gauge, 160.16);
     assert_eq!(snapshot.now_bpm, 120.0);
     assert_eq!(snapshot.min_bpm, 120.0);
     assert_eq!(snapshot.max_bpm, 120.0);
@@ -122,7 +144,13 @@ fn prepared_battle_chart_keeps_7k_as_the_skin_key_mode() {
     let cache = PlayRenderSnapshotCache::from_chart(&chart);
     let mut snapshot = bmz_render::snapshot::RenderSnapshot::default();
 
-    apply_prepared_chart_to_render_snapshot(&mut snapshot, &chart, &cache, true);
+    apply_prepared_chart_to_render_snapshot(
+        &mut snapshot,
+        &chart,
+        &cache,
+        bmz_gameplay::rule::RuleMode::Beatoraja,
+        true,
+    );
 
     assert_eq!(snapshot.key_mode, KeyMode::K14);
     assert_eq!(snapshot.skin_attempt.effective_key_mode, Some(KeyMode::K7));
@@ -250,6 +278,7 @@ fn build_render_snapshot_selects_current_bga_frames() {
         delta: TimeUs(0),
         time: TimeUs(400_000),
         affects_score: true,
+        advances_score: true,
     }];
 
     let early =
@@ -330,6 +359,7 @@ fn build_render_snapshot_uses_zero_asset_for_initial_poor_before_later_event() {
             delta: TimeUs(0),
             time: TimeUs(time),
             affects_score: true,
+            advances_score: true,
         }];
         // The miss image is selected at judgement time, even across a later change.
         let active = build_render_snapshot_with_bga_frames(
@@ -380,6 +410,7 @@ fn misslayer_good_clear_respects_event_order_offsets_and_raw_snapshot_fallback()
         delta: TimeUs(0),
         time: TimeUs(100_000),
         affects_score: true,
+        advances_score: true,
     };
     for judge in
         [Judge::PGreat, Judge::Great, Judge::Good, Judge::Bad, Judge::Poor, Judge::EmptyPoor]

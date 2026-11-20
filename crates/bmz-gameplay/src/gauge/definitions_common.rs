@@ -31,8 +31,8 @@ pub(super) const HARD_GUTS: &[(f32, f32)] =
 // beatoraja CLASS guts テーブル（7keys / PMS / KB 共通）。
 pub(super) const CLASS_GUTS: &[(f32, f32)] =
     &[(5.0, 0.4), (10.0, 0.5), (15.0, 0.6), (20.0, 0.7), (25.0, 0.8)];
-// beatoraja LR2 CLASS / EXCLASS の guts。32% 未満で減衰量を 60% に弱める。
-pub(super) const LR2_CLASS_GUTS: &[(f32, f32)] = &[(32.0, 0.6)];
+// beatoraja の GAUGE_LR2 の guts。30% 未満で減衰量を 60% に弱める。
+pub(super) const BEATORAJA_LR2_GUTS: &[(f32, f32)] = &[(30.0, 0.6)];
 // LR2oraja 0.8.3+ の LR2 HARD 系 guts。32% 未満で減衰量を 60% に弱める。
 pub(super) const LR2_HARD_GUTS: &[(f32, f32)] = &[(32.0, 0.6)];
 pub(super) const DX_HARD_GUTS: &[(f32, f32)] = &[(30.0, 0.5)];

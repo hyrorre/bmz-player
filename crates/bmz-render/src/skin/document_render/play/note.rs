@@ -251,7 +251,7 @@ macro_rules! skin_document_render_play_note_methods {
             Some(NoteSprite {
                 frame: ResolvedSkinFrame::default(),
                 texture: source.texture,
-                uv: skin_image_texture_region(image, source.source_size, elapsed_ms),
+                uv: skin_image_texture_region(image, source.source_size, elapsed_ms)?,
                 source_size: source.source_size,
             })
         }

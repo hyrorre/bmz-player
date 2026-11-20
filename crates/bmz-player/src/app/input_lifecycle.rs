@@ -202,7 +202,7 @@ impl WinitApp {
             initialize_gamepad_backend(requested, configs, self.raw_input_bridge.clone());
         let attach_error = gamepad.as_mut().and_then(|backend| backend.attach_window(window).err());
         if let Some(error) = attach_error {
-            tracing::warn!(%error, ?requested, "gamepad backend could not attach to the window; falling back to gilrs");
+            tracing::warn!(%error, ?requested, "gamepad backend could not attach to the window; trying gilrs fallback");
             gamepad = initialize_gilrs_backend(configs);
         }
         let slots = resolve_gamepad_runtime_slots(&self.boot.app_config.input, gamepad.as_ref());
@@ -508,7 +508,7 @@ impl WinitApp {
                     == WindowMode::ExclusiveFullscreen
                     && effective_mode == WindowMode::BorderlessFullscreen;
                 let effective_backend = self.renderer.effective_backend();
-                if backend == bmz_render::WgpuBackend::Gl
+                if backend != bmz_render::WgpuBackend::Auto
                     && let Some(effective) =
                         effective_backend.filter(|effective| *effective != backend)
                 {
@@ -531,7 +531,7 @@ impl WinitApp {
                 let raw_input_attach_error =
                     self.gamepad.as_mut().and_then(|backend| backend.attach_window(&window).err());
                 if let Some(error) = raw_input_attach_error {
-                    tracing::warn!(%error, "gamepad backend could not attach to the window; falling back to gilrs");
+                    tracing::warn!(%error, "gamepad backend could not attach to the window; trying gilrs fallback");
                     let configs = gamepad_scratch_configs(&self.boot.profile_config.input);
                     self.gamepad = initialize_gilrs_backend(configs);
                     self.apply_gamepad_analog_config();

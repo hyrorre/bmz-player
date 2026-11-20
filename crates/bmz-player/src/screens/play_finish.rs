@@ -256,6 +256,7 @@ pub struct FinishSessionSnapshot {
     primary_key_mode: KeyMode,
     replay_events: Vec<ReplayEvent>,
     judge_algorithm: JudgeAlgorithm,
+    judge_window_rates: Option<bmz_gameplay::judge::window::JudgeWindowRates>,
     branch_decisions: Option<Vec<bmz_core::replay::BranchDecision>>,
     reference_total: Option<u32>,
     kaleid: bmz_chart::kaleid::KaleidPlayEvidence,
@@ -391,6 +392,7 @@ impl FinishSessionSnapshot {
             primary_key_mode: session.primary_key_mode,
             replay_events: session.replay_recorder.events.clone(),
             judge_algorithm: session.judge.algorithm,
+            judge_window_rates: Some(session.judge.window_rates),
             branch_decisions: session
                 .chart
                 .metadata
@@ -553,6 +555,7 @@ fn finish_session_snapshot_result(
                 played_at,
                 replay_path: String::new(),
                 replay_sha256: None,
+                replay_save_failed: false,
                 slot_paths: [None, None, None, None],
                 device_type: InputDeviceKind::Keyboard,
             }
@@ -578,6 +581,7 @@ fn finish_session_snapshot_result(
                     assist_mask: crate::assist::recorded_mask(snapshot.assist),
                     replay_events: snapshot.replay_events.clone(),
                     judge_algorithm: snapshot.judge_algorithm,
+                    judge_window_rates: snapshot.judge_window_rates,
                     branch_decisions: snapshot.branch_decisions.clone(),
                     kaleid: Some(snapshot.kaleid.clone()),
                     arrange,
@@ -603,12 +607,11 @@ fn finish_session_snapshot_result(
             )?
         };
     let mut summary = ResultSummary::from_play_result(&result, &stored, &snapshot.chart);
-    if let Some(reference_total) = snapshot.reference_total {
-        summary.total_gauge = bmz_gameplay::gauge::gauge_total_for_chart(
-            snapshot.chart.metadata.total,
-            reference_total,
-        ) as f32;
-    }
+    summary.total_gauge = bmz_gameplay::gauge::gauge_total_for_play(
+        &snapshot.chart.metadata,
+        snapshot.reference_total.unwrap_or(result.total_notes),
+        snapshot.rule_mode,
+    ) as f32;
     summary.last_played_at =
         score_data_changed.then_some(stored.played_at).filter(|date| *date > 0);
     summary.skin_attempt = snapshot.skin_attempt;

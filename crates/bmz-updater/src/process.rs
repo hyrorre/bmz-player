@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
@@ -186,6 +186,53 @@ pub fn run_request(path: &Path) -> Result<()> {
         restart(&root, &request.restart)?;
     }
     result
+}
+
+pub(crate) fn verify_player_startup(root: &Path, work: &Path, version: &str) -> Result<()> {
+    let cwd = checked_path(work, "startup-probe")?;
+    fs::create_dir(&cwd)?;
+    let output = checked_path(work, "startup-version.txt")?;
+    let stdout = File::options().write(true).create_new(true).open(&output)?;
+    let mut command = Command::new(checked_path(root, "bmz-player.exe")?);
+    command
+        .current_dir(cwd)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(stdout)
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let system = std::env::var_os("SystemRoot").context("SystemRoot is missing")?;
+        let system = Path::new(&system);
+        command.env("PATH", std::env::join_paths([system.join("System32"), system.to_path_buf()])?);
+        command.creation_flags(0x08000000);
+    }
+    // --version exits before the player's startup guard and any data migration.
+    let mut child =
+        command.spawn().context("SxS loader check could not start the updated player")?;
+    // The first start of a new executable can wait for antivirus scans of every bundled DLL,
+    // which takes several seconds on Windows 8.1 VMs and slow disks.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            child.wait().context("could not stop the timed-out SxS loader check")?;
+            bail!("SxS loader check timed out");
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    ensure!(status.success(), "SxS loader check failed: {status}");
+    let mut version_text = String::new();
+    File::open(output)?.take(4096).read_to_string(&mut version_text)?;
+    ensure!(
+        version_text.starts_with(&format!("bmz-player {version} (")),
+        "unexpected player version in the SxS loader check"
+    );
+    Ok(())
 }
 
 fn restart(root: &Path, context: &RestartContext) -> Result<()> {

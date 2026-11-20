@@ -312,6 +312,7 @@ impl EguiLayer {
             update_dialog,
             obs_connection_status,
             connected_gamepads,
+            active_gamepad_backend,
             audio_stream_info,
             audio_open_error,
         } = context;
@@ -523,6 +524,7 @@ impl EguiLayer {
                                 obs_scene_picker: &mut self.obs_scene_picker,
                                 obs_connection_status,
                                 connected_gamepads,
+                                active_gamepad_backend,
                                 audio_stream_info,
                                 audio_open_error,
                                 data_dir: &app_paths.data_dir,

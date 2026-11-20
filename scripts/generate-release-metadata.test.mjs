@@ -123,6 +123,31 @@ test('dry run produces explicitly unsigned release metadata without update instr
   await assert.rejects(readFile(path.join(root, 'updates.json')), /ENOENT/)
 })
 
+test('SxS metadata requires protocol four and a bridge, while the legacy bridge is readable by protocol one', async (t) => {
+  const root = await fixture(t)
+  const options = { dllLayout: 'sxs', bridge: 'v0.4.9' }
+  await assert.rejects(
+    generateRelease(root, version, commit, { ...options, minProtocol: 3 }),
+    /protocol/,
+  )
+  await assert.rejects(
+    generateRelease(root, version, commit, { dllLayout: 'sxs' }),
+    /bridge release/,
+  )
+  const sxs = await generateRelease(root, version, commit, options)
+  assert(
+    legacyUpdates(sxs).packages.every(
+      (p) => p.min_updater_protocol === 4 && p.bridge_tag === 'v0.4.9',
+    ),
+  )
+  const bridge = await generateRelease(root, version, commit, { layout: 'legacy' })
+  assert(
+    legacyUpdates(bridge).packages.every(
+      (p) => p.min_updater_protocol === 1 && p.bridge_tag === null,
+    ),
+  )
+})
+
 test('canonicalization is independent of key order/whitespace and rejects unsupported numbers/Unicode', () => {
   assert.equal(
     canonicalJson({ z: '\u000f日本語', a: [true, null, 123] }),

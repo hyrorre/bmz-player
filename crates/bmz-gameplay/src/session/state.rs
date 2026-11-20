@@ -203,8 +203,8 @@ pub struct GameSession {
     pub lane_keyon_started_at: [Option<TimeUs>; LANE_COUNT],
     /// 各レーンのキー解放時刻。離した直後のみ Some(次の Press でクリア)。skin の keyoff タイマー(120..=127)。
     pub lane_keyoff_started_at: [Option<TimeUs>; LANE_COUNT],
-    /// Scratch lane rotation direction while the scratch input is held.
-    pub lane_scratch_direction: [Option<ScratchDirection>; LANE_COUNT],
+    /// Held inputs and the active turntable direction for each lane.
+    pub lane_key_hold: [LaneKeyHold; LANE_COUNT],
     /// Extra turntable phase accumulated by scratch input, in beatoraja scratch-angle ms.
     pub lane_scratch_angle_delta_ms: [i64; LANE_COUNT],
     pub scratch_angle_last_render_at: Option<TimeUs>,
@@ -249,6 +249,8 @@ pub struct GameSession {
     pub input_offset_auto_adjust: Option<InputOffsetAutoAdjustState>,
     pub audio_mix: PlayAudioMix,
     pub hispeed: f32,
+    /// プレイ開始時の表示上のHS値。比率方式のHS変更で、1回の変化量の基準にする。
+    pub hispeed_change_base: f32,
     pub hispeed_mode: HispeedMode,
     pub base_hispeed_mode: HispeedMode,
     pub floating_policy: FloatingPolicy,
@@ -403,6 +405,7 @@ pub struct BattleOpponentSession {
     pub gauge_max_started_at: Option<TimeUs>,
     pub full_combo_started_at: Option<TimeUs>,
     pub lane_keyon_started_at: [Option<TimeUs>; LANE_COUNT],
+    pub lane_key_hold: [LaneKeyHold; LANE_COUNT],
     pub lane_hcn_timer: [Option<HcnLaneTimer>; LANE_COUNT],
     pub last_hcn_gauge_at: Option<TimeUs>,
 }
@@ -632,7 +635,7 @@ impl AutoKeysoundScheduler {
                 }
                 self.next_note_index[lane_index] += 1;
 
-                if !matches!(note.kind, NoteKind::Tap | NoteKind::LongStart | NoteKind::LongEnd) {
+                if !note.kind.is_scheduled_keysound() {
                     continue;
                 }
 

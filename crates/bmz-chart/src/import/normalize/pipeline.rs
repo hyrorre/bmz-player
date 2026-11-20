@@ -167,6 +167,7 @@ pub(super) fn normalize_metadata(input: &IntermediateMetadata) -> ChartMetadata 
         play_level: input.play_level.clone(),
         initial_bpm: input.initial_bpm,
         total: input.total,
+        bmson_total_percent: None,
         stage_file: input.stage_file.clone(),
         banner_file: input.banner_file.clone(),
         backbmp_file: input.backbmp_file.clone(),

@@ -38,15 +38,23 @@ impl BmsTextEncoding {
         }
     }
 
-    pub fn decode_strict(self, bytes: &[u8]) -> Option<Cow<'_, str>> {
-        let encoding = match self {
+    const fn codec(self) -> &'static encoding_rs::Encoding {
+        match self {
             Self::Utf8 => UTF_8,
             Self::Cp932 => SHIFT_JIS,
             Self::Ms949 => EUC_KR,
             Self::Gb18030 => GB18030,
             Self::Big5 => BIG5,
-        };
-        encoding.decode_without_bom_handling_and_without_replacement(bytes)
+        }
+    }
+
+    pub fn decode_strict(self, bytes: &[u8]) -> Option<Cow<'_, str>> {
+        self.codec().decode_without_bom_handling_and_without_replacement(bytes)
+    }
+
+    /// Decodes everything, replacing invalid sequences. Returns whether any were replaced.
+    pub fn decode_lossy(self, bytes: &[u8]) -> (Cow<'_, str>, bool) {
+        self.codec().decode_without_bom_handling(bytes)
     }
 }
 
@@ -89,17 +97,21 @@ pub fn decode_cjk_fallback(bytes: &[u8]) -> Option<(BmsTextEncoding, Cow<'_, str
 
 const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
 
+/// An explicit override always yields text. Charts often mix encodings, so bytes the
+/// chosen decoder cannot read become replacement characters with a warning instead of
+/// failing the whole import.
 pub(super) fn decode_bms_source<'a>(
-    path: &std::path::Path,
+    _path: &std::path::Path,
     (bytes, encoding): (&'a [u8], Option<BmsTextEncoding>),
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<Cow<'a, str>, super::error::ImportError> {
     let Some(encoding) = encoding else { return Ok(decode_bms_text_cow(bytes, warnings)) };
     let body = bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes);
-    encoding.decode_strict(body).ok_or_else(|| super::error::ImportError::Parse {
-        path: path.to_path_buf(),
-        message: format!("chart text is not valid {}", encoding.name()),
-    })
+    let (text, had_errors) = encoding.decode_lossy(body);
+    if had_errors {
+        warnings.push(ImportWarning::TextReplacementOccurred);
+    }
+    Ok(text)
 }
 
 #[derive(Clone, Copy)]

@@ -163,14 +163,14 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
             bounce_filter: Default::default(),
         },
         judge: JudgeEngine::new(JudgeWindow::symmetric(
-            16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000,
+            16_000, 40_000, 80_000, 120_000, 500_000, 200_000,
         ))
         .with_chart_index(chart.clone()),
         base_judge_window: JudgeWindow::symmetric(
-            16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000,
+            16_000, 40_000, 80_000, 120_000, 500_000, 200_000,
         ),
         base_judge_windows: JudgeWindows::uniform(JudgeWindow::symmetric(
-            16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000,
+            16_000, 40_000, 80_000, 120_000, 500_000, 200_000,
         )),
         rule_mode: RuleMode::Beatoraja,
         score: ScoreState::default(),
@@ -189,7 +189,7 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
         recent_inputs: Vec::new(),
         lane_keyon_started_at: Default::default(),
         lane_keyoff_started_at: Default::default(),
-        lane_scratch_direction: Default::default(),
+        lane_key_hold: Default::default(),
         lane_scratch_angle_delta_ms: Default::default(),
         scratch_angle_last_render_at: None,
         lane_auto_release_at: Default::default(),
@@ -220,6 +220,7 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
             auto_keysound_mine: true,
         },
         hispeed: 2.0,
+        hispeed_change_base: 2.0,
         hispeed_mode: HispeedMode::Classic,
         base_hispeed_mode: HispeedMode::Classic,
         floating_policy: FloatingPolicy::Toggle,
@@ -345,6 +346,7 @@ fn judgement_event(judge: Judge, delta_us: i64) -> JudgementEvent {
         delta: TimeUs(delta_us),
         time: TimeUs(0),
         affects_score: true,
+        advances_score: true,
     }
 }
 

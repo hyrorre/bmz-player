@@ -198,13 +198,15 @@ pub(super) fn render_fields(
                     let Some(source) = resolve_document_source(sources, &image.src) else {
                         continue;
                     };
-                    let uv = skin_image_texture_region_for_destination(
+                    let Some(uv) = skin_image_texture_region_for_destination(
                         image,
                         dst,
                         source.source_size,
                         state,
                         skin_image_pixel_rect(image),
-                    );
+                    ) else {
+                        continue;
+                    };
                     let (rect, uv) = stretch_skin_image_geometry(
                         dst.stretch,
                         normalize_skin_frame_rect(frame, document.w, document.h),

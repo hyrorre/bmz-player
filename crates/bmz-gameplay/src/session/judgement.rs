@@ -197,24 +197,25 @@ fn apply_untimed_judge_outcome(
     let mut display_only_combos = Vec::with_capacity(outcome.events.len());
     for event in &mut outcome.events {
         if session.display_only_lane_mask[event.lane.index()] {
-            if event.affects_score {
-                if let Some(score) = &mut session.opponent.score {
-                    score.apply(event);
-                }
-                if let Some(gauge) = &mut session.opponent.gauge {
-                    let previous_gauge = gauge.current().value;
-                    gauge.apply_judge(event.judge, 1.0);
-                    let current = gauge.current();
-                    update_gauge_increase_timer_state(
-                        &mut session.opponent.gauge_increase_started_at,
-                        previous_gauge,
-                        current.value,
-                        current.definition.max,
-                        event.time,
-                    );
-                }
+            if let Some(score) = &mut session.opponent.score {
+                score.apply(event);
+            }
+            if event.affects_score
+                && let Some(gauge) = &mut session.opponent.gauge
+            {
+                let previous_gauge = gauge.current().value;
+                gauge.apply_judge(event.judge, 1.0);
+                let current = gauge.current();
+                update_gauge_increase_timer_state(
+                    &mut session.opponent.gauge_increase_started_at,
+                    previous_gauge,
+                    current.value,
+                    current.definition.max,
+                    event.time,
+                );
             }
             event.affects_score = false;
+            event.advances_score = false;
             display_only_combos
                 .push(session.opponent.score.as_ref().map_or(0, |score| score.combo));
         } else {
@@ -244,8 +245,8 @@ fn apply_untimed_judge_outcome(
     });
     let mut events = Vec::new();
     for (event, display_only_combo) in outcome.events.into_iter().zip(display_only_combos) {
+        session.score.apply(&event);
         if event.affects_score {
-            session.score.apply(&event);
             update_course_combo_state(session, &event);
             let previous_gauge = session.gauge.current().value;
             session.gauge.apply_judge(event.judge, 1.0);

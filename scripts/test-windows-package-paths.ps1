@@ -14,6 +14,8 @@ $version = [regex]::Match((Get-Content -Raw (Join-Path $repo "Cargo.toml")), '(?
 $target = if ([Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -eq "Arm64") { "windows-arm64" } else { "windows-x64" }
 $helperSource = Join-Path $source "updater\bmz-updater.exe"
 if (!(Test-Path -LiteralPath $helperSource)) { $helperSource = Join-Path $source "bmz-updater.exe" }
+$sxs = Test-Path -LiteralPath (Join-Path $source 'dll\dll.manifest')
+$dllLayout = if ($sxs) { 'sxs' } else { 'flat' }
 $metadataScript = Join-Path $repo "scripts\generate-update-metadata.mjs"
 $saved = @{}
 $names = @("APPDATA", "LOCALAPPDATA", "BMZ_DATA_DIR", "BMZ_CACHE_DIR", "BMZ_LOGS_DIR", "BMZ_RESOURCE_DIR")
@@ -47,7 +49,8 @@ function Run-Player([string]$Root, [string[]]$PlayerArgs, [bool]$ExpectSuccess =
 }
 
 try {
-    foreach ($layout in @("legacy", "grouped")) {
+    $layouts = if ($sxs) { @('grouped') } else { @('legacy', 'grouped') }
+    foreach ($layout in $layouts) {
         foreach ($mode in @("portable", "portable-version-mismatch", "installer", "installer-adjacent", "override", "blocked")) {
             $case = Join-Path $testRoot "$layout-$mode"
             $package = Join-Path $case "日本語 BMZ Player"
@@ -57,12 +60,18 @@ try {
             $env:LOCALAPPDATA = Join-Path $case "local"
             New-Item -ItemType Directory -Force $package | Out-Null
             Copy-TestBinary (Join-Path $source "bmz-player.exe") (Join-Path $package "bmz-player.exe")
-            Get-ChildItem -LiteralPath $source -Filter *.dll | ForEach-Object { Copy-TestBinary $_.FullName (Join-Path $package $_.Name) }
+            if ($sxs) {
+                $dllDirectory = (New-Item -ItemType Directory -Path (Join-Path $package 'dll')).FullName
+                Get-ChildItem -LiteralPath (Join-Path $source 'dll') -File |
+                    ForEach-Object { Copy-TestBinary $_.FullName (Join-Path $dllDirectory $_.Name) }
+            } else {
+                Get-ChildItem -LiteralPath $source -Filter *.dll | ForEach-Object { Copy-TestBinary $_.FullName (Join-Path $package $_.Name) }
+            }
             $helper = if ($layout -eq "legacy") { "bmz-updater.exe" } else { "updater\bmz-updater.exe" }
             New-Item -ItemType Directory -Force (Split-Path -Parent (Join-Path $package $helper)) | Out-Null
             Copy-TestBinary $helperSource (Join-Path $package $helper)
             $metadataVersion = if ($mode -eq "portable-version-mismatch") { "0.0.0" } else { $version }
-            & node $metadataScript package $package $kind $target $metadataVersion $layout
+            & node $metadataScript package $package $kind $target $metadataVersion $layout $dllLayout
             if ($LASTEXITCODE -ne 0) { throw "Package metadata generation failed" }
 
             $data = Join-Path $package "data"
