@@ -385,6 +385,7 @@ settings-logging-level = 레벨
 settings-logging-file = 파일에 저장
 settings-logging-help = 변경은 다음에 실행할 때부터 반영됩니다.
 settings-obs-enabled = OBS WebSocket 연동
+settings-oraja-helper-enabled = oraja_helper 연동
 settings-obs-connection-status = 연결 상태
 settings-obs-next-retry = 다음 재시도: { $seconds }초
 settings-obs-host = 호스트

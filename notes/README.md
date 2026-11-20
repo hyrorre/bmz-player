@@ -57,6 +57,7 @@
 | 2026-11-19 | [高密度オートプレイの判定と中断](2026/2026-11-19-dense-autoplay-and-escape.md) |
 | 2026-11-18 | [7K→8K変換の試作](2026/2026-11-18-seven-to-eight-prototype.md) |
 | 2026-11-18 | [DX MODEのPOP判定を参照側の変更へ追従](2026/2026-11-18-dx-pop-judge.md) |
+| 2026-11-18 | [oraja_helper の named pipe 連携](2026/2026-11-18-oraja-helper-pipe.md) |
 | 2026-11-17 | [DOUBLE BATTLEの入力・リプレイ・IR送信（#119）](2026/2026-11-17-double-battle-review.md) |
 | 2026-11-17 | [BMS-IRのseed対戦とLR2譜面再現のレビュー（#120）](2026/2026-11-17-bms-ir-lr2-seed-review.md) |
 | 2026-11-17 | [選曲の検索欄への貼り付けとCtrlのスクロール（#117）](2026/2026-11-17-select-search-paste.md) |

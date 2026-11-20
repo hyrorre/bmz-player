@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn oraja_helper_defaults_off_for_existing_configs_and_persists() {
+    let mut config = AppConfig::default();
+    assert!(!config.oraja_helper_enabled);
+    let old = toml::to_string(&config).unwrap().replace("oraja_helper_enabled = false\n", "");
+    assert!(!toml::from_str::<AppConfig>(&old).unwrap().oraja_helper_enabled);
+    config.oraja_helper_enabled = true;
+    assert!(
+        toml::from_str::<AppConfig>(&toml::to_string(&config).unwrap())
+            .unwrap()
+            .oraja_helper_enabled
+    );
+}
+
+#[test]
 fn legacy_audio_schedule_ahead_is_ignored_and_removed_on_save() {
     let serialized = toml::to_string(&AppConfig::default()).unwrap();
     assert!(!serialized.contains("schedule_ahead"));

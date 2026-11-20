@@ -31,6 +31,8 @@ pub struct AppConfig {
     pub updates: UpdatesConfig,
     #[serde(default)]
     pub discord: DiscordConfig,
+    #[serde(default)]
+    pub oraja_helper_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -865,6 +867,7 @@ impl Default for AppConfig {
             downloads: ChartDownloadsConfig::default(),
             updates: UpdatesConfig::default(),
             discord: DiscordConfig::default(),
+            oraja_helper_enabled: false,
         }
     }
 }

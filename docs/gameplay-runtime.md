@@ -390,6 +390,9 @@ Practiceは設定の対象外で、Replay / Autoplay / Courseは通常終了時�
 
 ## Diagnostics と検証
 
+Windows の外部ツールへの送信は [oraja_helper 連携](oraja-helper.md) を参照してください。
+pipe I/O は専用 worker へ分離し、終了判定は gameplay の確定結果を使います。
+
 INFOにgameplay / inputの専用thread、audio schedulingの担当、play generationを記録します。
 rendererの既存初期化ログが バックエンド、実効present mode、maximum frame latencyを記録します。
 

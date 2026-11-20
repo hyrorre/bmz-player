@@ -277,6 +277,10 @@ pub struct FinishSessionSnapshot {
 }
 
 impl FinishSessionSnapshot {
+    pub(crate) fn helper_result(&self) -> &PlayResult {
+        &self.result
+    }
+
     pub(crate) fn from_session(
         session: &GameSession,
         source_ln_profile: ChartLnProfile,

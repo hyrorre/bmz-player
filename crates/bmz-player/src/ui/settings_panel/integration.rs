@@ -62,6 +62,16 @@ pub(super) fn build_integration_settings_sections(
             );
         });
 
+    #[cfg(windows)]
+    SettingsSection::new(SettingsPage::Integration, "oraja_helper")
+        .scope(tr!(text, "settings-scope-app"))
+        .show(ui, |ui| {
+            ui.checkbox(
+                &mut config.oraja_helper_enabled,
+                tr!(text, "settings-oraja-helper-enabled"),
+            );
+        });
+
     *obs_enabled_changed |= build_obs_settings_section(
         ui,
         config,

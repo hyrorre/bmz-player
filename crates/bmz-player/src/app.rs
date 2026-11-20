@@ -226,6 +226,9 @@ mod integration_support;
 mod integrations;
 mod maintenance;
 mod meta_image_animation;
+mod oraja_helper;
+#[cfg(test)]
+pub(crate) use oraja_helper::helper_result_payload;
 mod pending_state;
 mod play_control;
 #[path = "app/play_flow/audio.rs"]

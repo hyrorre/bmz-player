@@ -386,6 +386,7 @@ settings-logging-level = 等級
 settings-logging-file = 儲存至檔案
 settings-logging-help = 變更會在下次啟動時生效。
 settings-obs-enabled = OBS WebSocket 整合
+settings-oraja-helper-enabled = oraja_helper 整合
 settings-obs-connection-status = 連線狀態
 settings-obs-next-retry = 下次重試：{ $seconds } 秒
 settings-obs-host = 主機

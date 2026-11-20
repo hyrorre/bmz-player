@@ -35,6 +35,7 @@ Features
 - 圧縮ファイル(ZIP / RAR / 7z)内の譜面のロードに対応
 - Discord Rich Presence
 - OBS WebSocket control integration
+- [oraja_helper integration](docs/oraja-helper.md) via Windows named pipe
 
 > [!CAUTION]
 > Don't use this application to play non-permitted copyrighted contents.

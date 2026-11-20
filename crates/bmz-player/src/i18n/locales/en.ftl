@@ -385,6 +385,7 @@ settings-logging-level = Level
 settings-logging-file = Save to file
 settings-logging-help = Changes take effect the next time you start BMZ Player.
 settings-obs-enabled = OBS WebSocket integration
+settings-oraja-helper-enabled = oraja_helper integration
 settings-obs-connection-status = Connection status
 settings-obs-next-retry = Next retry: { $seconds } seconds
 settings-obs-host = Host
