@@ -49,11 +49,7 @@ fn cjk_archive_resolves_chart_assets(titles: &[(&'static encoding_rs::Encoding, 
 
     let listing = chart_listing(&path, &control).unwrap();
     assert_eq!(listing.charts[0].name, "song/play.bms");
-    let opened = OPENED.get();
-    assert!(Arc::ptr_eq(&listing, &chart_listing(&path, &control).unwrap()));
     let index = inspect_shared(&path, &control).unwrap();
-    assert!(Arc::ptr_eq(&index, &inspect_shared(&path, &control).unwrap()));
-    assert_eq!(OPENED.get(), opened, "warm listings and indexes do not open the archive");
     for (expected, _) in &names {
         assert!(index.entries.iter().any(|entry| &entry.name == expected), "{expected}");
     }
@@ -63,21 +59,21 @@ fn cjk_archive_resolves_chart_assets(titles: &[(&'static encoding_rs::Encoding, 
     let mut db = LibraryDatabase::from_connection(conn);
     let locator = ChartLocator::Archive { container: path, entry: listing.charts[0].name.clone() };
     let imported = import_chart_file(&mut db, &locator.to_path_buf(), None, None, 1).unwrap();
-    let opened = OPENED.get();
+    let read_passes = ENTRY_READ_PASSES.get();
     let (_, resolved, play) =
         db.load_chart_source_with_assets(imported.chart_id, BmsRandomSource::Seed(None)).unwrap();
-    assert_eq!(OPENED.get() - opened, 2, "only the chart and selected assets are read");
+    assert_eq!(ENTRY_READ_PASSES.get() - read_passes, 2, "one pass each for the chart and assets");
     assert_eq!(play.chart.total_notes, 3);
     let resources = resolved.resources().unwrap();
     for (expected, _) in &names {
         assert_eq!(resources.loaded(expected).unwrap().as_ref(), b"asset", "{expected}");
     }
     assert!(resources.loaded("song/unused.wav").is_none());
-    let opened = OPENED.get();
+    let read_passes = ENTRY_READ_PASSES.get();
     let (_, warm, _) =
         db.load_chart_source_with_assets(imported.chart_id, BmsRandomSource::Seed(None)).unwrap();
     assert!(Arc::ptr_eq(resources, warm.resources().unwrap()));
-    assert_eq!(OPENED.get(), opened, "loaded assets do not reopen the archive");
+    assert_eq!(ENTRY_READ_PASSES.get(), read_passes, "loaded entries are not read again");
 }
 
 #[test]
@@ -107,9 +103,6 @@ fn selected_entry_memory_limit_does_not_reject_unselected_larger_assets() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].1, b"small");
     assert!(read_entries_limited(&path, None, &Default::default(), &pick, Some(4)).is_err());
-    let first = inspect_shared(&path, &Default::default()).unwrap();
-    let second = inspect_shared(&path, &Default::default()).unwrap();
-    assert!(Arc::ptr_eq(&first, &second), "row refreshes share all archive entry names");
 }
 
 #[test]

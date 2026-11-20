@@ -484,6 +484,8 @@ pub(super) struct Opened {
 thread_local! {
     /// Archives opened on this thread, so a test can tell a cache hit from a re-read.
     static OPENED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Entry data reads on this thread, excluding opens that only rebuild the index.
+    static ENTRY_READ_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 impl Opened {
@@ -521,6 +523,8 @@ impl Opened {
         selected: Selection<'_>,
         open: &mut dyn FnMut(&ArchiveEntry) -> Result<Box<dyn Write>>,
     ) -> Result<()> {
+        #[cfg(test)]
+        ENTRY_READ_PASSES.set(ENTRY_READ_PASSES.get() + 1);
         let meters = Arc::new(Mutex::new(safety::Meters::default()));
         self.backend.extract(&self.index.entries, control, selected, &mut |entry| {
             let writer =
