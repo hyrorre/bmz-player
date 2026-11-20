@@ -469,6 +469,73 @@ mod tests {
     }
 
     #[test]
+    fn dense_mixed_chords_can_leave_an_interior_lane_open() {
+        let chords = [[1, 3, 6], [2, 4, 7], [1, 5, 7], [2, 4, 6]];
+        for interval in [80_000, 240_000] {
+            let mut chart = chart();
+            for row in 0..48u32 {
+                put_keys(
+                    &mut chart,
+                    row * 3,
+                    &chords[row as usize % 4],
+                    i64::from(row) * interval,
+                    0,
+                );
+            }
+            apply_seven_to_eight(&mut chart, 1, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
+            let mut gaps = Vec::new();
+            for phrase in 0..12 {
+                let mut used = HashSet::new();
+                for (row, source) in chords.iter().enumerate() {
+                    let output = output_keys(&chart, phrase * 12 + row as u32 * 3, 3);
+                    assert!(
+                        output
+                            .windows(2)
+                            .zip(source.windows(2))
+                            .all(|(a, b)| a[1] >= a[0] + b[1] - b[0])
+                    );
+                    assert!(output[2] - output[0] <= source[2] - source[0] + 1);
+                    used.extend(output);
+                }
+                assert_eq!(used.len(), 7);
+                gaps.push((1..=8).find(|k| !used.contains(k)).unwrap());
+            }
+            if interval == 80_000 {
+                assert!(gaps.iter().any(|g| (2..=7).contains(g)), "{gaps:?}");
+                assert!(gaps.windows(4).all(|w| w.iter().any(|g| g != &w[0])), "{gaps:?}");
+            } else {
+                assert!(gaps.iter().all(|g| matches!(g, 1 | 8)), "{gaps:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn sustained_full_chords_move_between_cycles_without_new_jacks() {
+        let mut chart = chart();
+        for row in 0..32 {
+            put_keys(&mut chart, row * 7, &[1, 2, 3, 4, 5, 6, 7], i64::from(row) * 100_000, 0);
+        }
+        apply_seven_to_eight(&mut chart, 1, false, DEFAULT_H_RANDOM_THRESHOLD_MS);
+        let mut previous = Vec::new();
+        let mut gaps = HashSet::new();
+        for row in 0..32 {
+            let current = output_keys(&chart, row * 7, 7);
+            if row % 8 != 0 {
+                assert_eq!(current, previous);
+            } else {
+                for (key, lane) in current.iter().enumerate() {
+                    if let Some(other) = previous.iter().position(|p| p == lane) {
+                        assert_eq!(other, key);
+                    }
+                }
+                gaps.insert((1..=8).find(|k| !current.contains(k)).unwrap());
+            }
+            previous = current;
+        }
+        assert!(gaps.len() >= 3, "{gaps:?}");
+    }
+
+    #[test]
     fn a_stair_ending_in_a_jack_keeps_the_shared_key() {
         let mut chart = chart();
         chart.bar_lines.clear();

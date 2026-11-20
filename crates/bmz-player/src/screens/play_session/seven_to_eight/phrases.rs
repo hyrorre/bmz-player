@@ -5,6 +5,7 @@ use crate::screens::play_session::seven_to_six::jack_relevant;
 pub(super) type Layout = [usize; 8];
 const INITIAL: Layout = [8, 1, 2, 3, 4, 5, 6, 7];
 const PHRASE_GAP_US: u64 = 250_000;
+const DENSE_REPEAT_ONSETS: usize = 8;
 
 pub(super) fn layout_at(layouts: &[(TimeUs, Layout)], time: TimeUs) -> Layout {
     layouts
@@ -34,7 +35,26 @@ fn connected(a: Onset, b: Onset) -> bool {
     b.time.0.abs_diff(a.time.0) <= PHRASE_GAP_US
 }
 
-fn phrase_boundaries(rows: &[Onset]) -> Vec<(TimeUs, bool)> {
+struct PhraseBoundary {
+    start: TimeUs,
+    keep_fingers: bool,
+    allow_stretch: bool,
+}
+
+fn dense_chords(rows: &[Onset]) -> bool {
+    let first = rows[0];
+    let last = rows[rows.len() - 1];
+    let keys = rows.iter().fold(0, |mask, row| mask | row.keys);
+    let presses: u64 = rows.iter().map(|r| u64::from(r.keys.count_ones())).sum();
+    // Count the presses arriving after the first onset when measuring the interval.
+    rows.len() >= 2
+        && keys.count_ones() >= 6
+        && presses >= 8
+        && last.time.0.abs_diff(first.time.0)
+            <= (presses - u64::from(first.keys.count_ones())) * 62_500
+}
+
+fn phrase_boundaries(rows: &[Onset]) -> Vec<PhraseBoundary> {
     // Mark both transitions of each motif so a note shared by two runs keeps its finger.
     let mut linked = vec![false; rows.len()];
     for (i, pair) in rows.windows(2).enumerate() {
@@ -52,6 +72,7 @@ fn phrase_boundaries(rows: &[Onset]) -> Vec<(TimeUs, bool)> {
     }
     let mut result = Vec::new();
     let mut previous: &[Onset] = &[];
+    let mut onsets_in_layout = 0;
     let mut start = 0;
     while start < rows.len() {
         let mut end = start + 1;
@@ -69,14 +90,32 @@ fn phrase_boundaries(rows: &[Onset]) -> Vec<(TimeUs, bool)> {
                 end += 1;
             }
         }
-        let phrase = &rows[start..end];
-        let repeated = phrase.len() >= 2
-            && previous.len() == phrase.len()
-            && rows[start].time.0.abs_diff(previous[previous.len() - 1].time.0)
-                <= PHRASE_GAP_US * 2
-            && phrase.iter().zip(previous).all(|(a, b)| a.keys == b.keys);
-        result.push((rows[start].time, repeated));
-        previous = phrase;
+        let mut run = &rows[start..end];
+        // Long repetitions of broad chords can move at a complete two-onset cycle.
+        // Keep stairs and overlapping motifs intact, as well as short chord riffs.
+        let cycling_chords = linked[start]
+            && run.len() >= 2 * DENSE_REPEAT_ONSETS
+            && run[2..].iter().zip(run).all(|(a, b)| a.keys == b.keys)
+            && dense_chords(run);
+        while !run.is_empty() {
+            let take = if cycling_chords && run.len() >= 2 * DENSE_REPEAT_ONSETS {
+                DENSE_REPEAT_ONSETS
+            } else {
+                run.len()
+            };
+            let (phrase, rest) = run.split_at(take);
+            let allow_stretch = (!linked[start] || cycling_chords) && dense_chords(phrase);
+            let keep_fingers = phrase.len() >= 2
+                && previous.len() == phrase.len()
+                && (!allow_stretch || onsets_in_layout < DENSE_REPEAT_ONSETS)
+                && phrase[0].time.0.abs_diff(previous[previous.len() - 1].time.0)
+                    <= PHRASE_GAP_US * 2
+                && phrase.iter().zip(previous).all(|(a, b)| a.keys == b.keys);
+            result.push(PhraseBoundary { start: phrase[0].time, keep_fingers, allow_stretch });
+            onsets_in_layout = if keep_fingers { onsets_in_layout + take } else { take };
+            previous = phrase;
+            run = rest;
+        }
         start = end;
     }
     result
@@ -100,7 +139,11 @@ pub(super) fn plan(chart: &PlayableChart, guard: u64) -> Vec<(TimeUs, Layout)> {
         .collect();
     let mut boundaries = Vec::new();
     if rows.first().is_none_or(|row| first.time < row.time) {
-        boundaries.push((first.time, false));
+        boundaries.push(PhraseBoundary {
+            start: first.time,
+            keep_fingers: false,
+            allow_stretch: false,
+        });
     }
     boundaries.extend(phrase_boundaries(&rows));
 
@@ -118,19 +161,20 @@ pub(super) fn plan(chart: &PlayableChart, guard: u64) -> Vec<(TimeUs, Layout)> {
     let mut state = Placement::default();
     let mut remaining = events.as_slice();
     let mut layouts = Vec::with_capacity(boundaries.len());
-    for (i, &(start, repeated)) in boundaries.iter().enumerate() {
+    for (i, phrase) in boundaries.iter().enumerate() {
+        let start = phrase.start;
         while let Some((_, end, key)) = holds.next_if(|(begin, _, _)| *begin < start) {
             held_until[key] = held_until[key].max(Some(end));
         }
         let pinned = held_until.map(|end| end.is_some_and(|end| end >= start));
         let end = boundaries
             .get(i + 1)
-            .map_or(remaining.len(), |(next, _)| remaining.partition_point(|n| n.time < *next));
-        let (phrase, rest) = remaining.split_at(end);
-        state.decay(blocks.block_of(phrase[0]));
-        state.layout = state.choose(phrase, &pinned, repeated, guard);
+            .map_or(remaining.len(), |next| remaining.partition_point(|n| n.time < next.start));
+        let (notes, rest) = remaining.split_at(end);
+        state.decay(blocks.block_of(notes[0]));
+        state.layout = state.choose(notes, &pinned, phrase, guard);
         layouts.push((start, state.layout));
-        for n in phrase {
+        for n in notes {
             state.decay(blocks.block_of(n));
             let source = n.lane.index();
             let lane = state.layout[source] - 1;
@@ -174,7 +218,7 @@ impl Placement {
         &self,
         notes: &[&NoteEvent],
         pinned: &[bool; 8],
-        repeated: bool,
+        phrase: &PhraseBoundary,
         guard: u64,
     ) -> Layout {
         let mut counts = [0u32; 8];
@@ -223,7 +267,21 @@ impl Placement {
                     expected.abs_diff(actual)
                 })
                 .sum();
-            (distortion, jacks, if repeated { changed } else { 0 }, load, travel)
+            // All seven keys translated rigidly can leave only lane 1 or 8 empty.
+            // Admit one widened interval in dense chords, keeping every key in order.
+            let one_stretch = phrase.allow_stretch
+                && distortion == 1
+                && keys.first().zip(keys.last()).is_some_and(|(&lo, &hi)| {
+                    layout[hi].checked_sub(layout[lo]) == Some(hi - lo + 1)
+                });
+            (
+                distortion - usize::from(one_stretch),
+                jacks,
+                if phrase.keep_fingers { changed } else { 0 },
+                load,
+                distortion,
+                travel,
+            )
         };
         // The preceding bijection is always a collision-free fallback for held keys.
         let mut best = self.layout;
