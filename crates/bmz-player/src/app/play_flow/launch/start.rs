@@ -327,6 +327,7 @@ impl WinitApp {
                 &mut snapshot,
                 &prepared.chart,
                 &prepared.render_snapshot_cache,
+                prepared.score_key.rule_mode,
                 battle_presentation,
             );
             snapshot.skin_attempt.merge_known(prepared.skin_attempt);
@@ -372,6 +373,7 @@ impl WinitApp {
                 &mut snapshot,
                 &prepared.chart,
                 &prepared.render_snapshot_cache,
+                prepared.score_key.rule_mode,
                 battle_presentation,
             );
             snapshot.skin_attempt.merge_known(prepared.skin_attempt);
@@ -390,8 +392,19 @@ impl WinitApp {
             key_mode,
             session_options.gamepad_slots,
         );
-        pending_play_start.prepared_chart_applied = prepared_chart.is_some();
-        pending_play_start.lane.apply_to_snapshot(&mut snapshot);
+        if let Some(prepared) = &prepared_chart {
+            // Decide中に譜面の準備が済んだ場合も、Play入場後に済んだ場合と同じく
+            // placeholderの初期HSを実sessionの値へ揃える。
+            pending_play_start.rebase_lane_to_prepared_chart(
+                &prepared.chart,
+                &mut snapshot,
+                &self.boot.profile_config,
+                &self.play_session_app_config(),
+                active_course_speed_locked(self.play.active_course.as_ref()),
+            );
+        } else {
+            pending_play_start.lane.apply_to_snapshot(&mut snapshot);
+        }
         self.play.play_option_input = Some(PlayOptionInput::new(
             key_mode,
             pending_play_start.visual_input.binding.clone(),

@@ -1716,7 +1716,7 @@ fn session() -> GameSession {
         recent_inputs: Vec::new(),
         lane_keyon_started_at: Default::default(),
         lane_keyoff_started_at: Default::default(),
-        lane_scratch_direction: Default::default(),
+        lane_key_hold: Default::default(),
         lane_scratch_angle_delta_ms: Default::default(),
         scratch_angle_last_render_at: None,
         lane_auto_release_at: Default::default(),
@@ -1747,6 +1747,7 @@ fn session() -> GameSession {
             auto_keysound_mine: true,
         },
         hispeed: 2.0,
+        hispeed_change_base: 2.0,
         hispeed_mode: bmz_gameplay::session::HispeedMode::Classic,
         base_hispeed_mode: bmz_gameplay::session::HispeedMode::Classic,
         floating_policy: bmz_gameplay::session::FloatingPolicy::Toggle,
@@ -1995,6 +1996,7 @@ fn assist_easy_session(gauge: bmz_gameplay::gauge::GaugeState) -> GameSession {
             delta: TimeUs(0),
             time: TimeUs(0),
             affects_score: true,
+            advances_score: true,
         });
     }
     session

@@ -131,6 +131,15 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
             }
         };
 
+        if matches!(
+            &event,
+            WindowEvent::Moved(_)
+                | WindowEvent::Resized(_)
+                | WindowEvent::Focused(_)
+                | WindowEvent::ScaleFactorChanged { .. }
+        ) {
+            self.frame.display_timing.invalidate();
+        }
         match event {
             WindowEvent::CloseRequested => {
                 self.save_configs_for_exit(self.active_hispeed(), "game exit");

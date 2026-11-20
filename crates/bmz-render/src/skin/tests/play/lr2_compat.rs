@@ -1,6 +1,54 @@
 use super::*;
 
 #[test]
+fn lr2_judge_and_combo_skip_outside_cells_on_each_blink() {
+    let sources = mock_source("src", 500.0, 140.0);
+    for lr2 in [true, false] {
+        let destination = |id: &str| {
+            serde_json::json!({ "id":id, "lr2Timing":lr2, "timer":46, "loop":-1,
+                "dst":[{"time":0,"w":77,"h":35},{"time":498}] })
+        };
+        let doc: SkinDocument = serde_json::from_value(serde_json::json!({
+            "w":500,"h":140,
+            "image":[
+                {"id":"great","src":"src","y":105,"w":77,"h":70,
+                    "divy":2,"cycle":75,"timer":46,"lr2Clip":lr2},
+                {"id":"good","src":"src","x":247,"w":77,"h":70,
+                    "divy":2,"cycle":75,"timer":46,"lr2Clip":lr2},
+            ],
+            "value":[{"id":"combo","src":"src","x":77,"y":105,"w":170,"h":70,
+                "divx":10,"divy":2,"digit":1,"cycle":75,"timer":46,"lr2Number":lr2}],
+            "judge":[{"id":"judge","images":[{},destination("great"),destination("good")],
+                "numbers":[{},destination("combo"),destination("combo")]}],
+        }))
+        .unwrap();
+
+        for (judge, label_y) in [("GREAT", 0.75), ("GOOD", 0.0)] {
+            let render = |time| doc.judge_render_items(judge, 1, time, &sources).unwrap();
+            let on = render(0);
+            assert!(matches!(on.as_slice(), [
+                SkinRenderItem::Image { uv: label, .. }, SkinRenderItem::Image { uv: number, .. },
+            ] if label.y == label_y && label.height == 0.25 && number.y == 0.75 && number.height == 0.25));
+            assert_eq!(render(37), on);
+            let off = render(38);
+            if lr2 && judge == "GREAT" {
+                assert!(off.is_empty());
+            } else if lr2 {
+                // The GOOD label's second cell is a transparent region inside the image.
+                assert!(matches!(off.as_slice(), [SkinRenderItem::Image { uv, .. }]
+                    if uv.y == 0.25 && uv.height == 0.25));
+            } else {
+                assert!(matches!(off.as_slice(), [
+                    SkinRenderItem::Image { uv: label, .. }, SkinRenderItem::Image { uv: number, .. },
+                ] if label.y == label_y + 0.25 && label.height == 0.25 && number.y == 1.0 && number.height == 0.25));
+            }
+            assert_eq!(render(74), off);
+            assert_eq!(render(75), on);
+        }
+    }
+}
+
+#[test]
 fn lr2_signed_digits_use_twelve_cell_halves_on_every_grid() {
     for (divx, divy) in [(12, 2), (6, 4), (4, 6), (24, 1)] {
         let doc: SkinDocument = serde_json::from_value(serde_json::json!({

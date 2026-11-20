@@ -249,19 +249,14 @@ fn judge_area_edges(
     now: TimeUs,
     window: bmz_gameplay::judge::model::JudgeWindow,
 ) -> [f32; 5] {
-    [
-        window.pgreat_us,
-        window.great_us,
-        window.good_us,
-        window.bad_fast_us,
-        window.empty_poor_fast_us.max(window.bad_fast_us),
-    ]
-    .map(|offset| {
-        scroll
-            .note_y(TimeUs(now.0.saturating_add(offset)), cursor_tick)
-            .unwrap_or_default()
-            .clamp(0.0, 1.0)
-    })
+    let [pgreat, great, good] = window.bands(true);
+    [pgreat, great, good, window.bad_fast_us, window.empty_poor_fast_us.max(window.bad_fast_us)]
+        .map(|offset| {
+            scroll
+                .note_y(TimeUs(now.0.saturating_add(offset)), cursor_tick)
+                .unwrap_or_default()
+                .clamp(0.0, 1.0)
+        })
 }
 
 fn populate_visible_long_notes(

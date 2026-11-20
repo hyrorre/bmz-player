@@ -32,6 +32,7 @@ fn keylogger_judgement(
             delta: TimeUs(0),
             time: TimeUs(time_us),
             affects_score,
+            advances_score: affects_score,
         }),
     }
 }

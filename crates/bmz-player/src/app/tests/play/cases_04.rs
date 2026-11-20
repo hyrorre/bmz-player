@@ -17,7 +17,7 @@ fn active_lane_state_keeps_green_number_captured_when_switching_to_fhs() {
         &mut session,
         PlayOptionControl::ToggleHispeedMode,
         false,
-        0.25,
+        PlayHispeedSteps::uniform(0.25),
     ));
     assert_eq!(session.hispeed_mode, HispeedMode::Floating);
     assert_eq!(session.target_green_number, expected_target);
@@ -28,7 +28,7 @@ fn active_lane_state_keeps_green_number_captured_when_switching_to_fhs() {
         &mut session,
         PlayOptionControl::ToggleHispeedMode,
         false,
-        0.25,
+        PlayHispeedSteps::uniform(0.25),
     ));
     let state = active_lane_state_for_session(&session);
 
@@ -596,7 +596,7 @@ fn lr2_hsfix_hispeed_change_steps_bpm150_value() {
         &mut session,
         PlayOptionControl::Hispeed(HispeedChange::Up),
         false,
-        0.25,
+        PlayHispeedSteps::uniform(0.25),
     ));
 
     assert!((session.hispeed - 1.625).abs() < 0.000_01, "hispeed={}", session.hispeed);
@@ -635,6 +635,7 @@ fn lr2_hsfix_profile_hispeed_edit_and_save_use_bpm150_value() {
 fn pending_lr2_hsfix_hispeed_tracks_chart_base_bpm() {
     let profile = ProfileConfig::new_default("default", "Default", 1);
     let mut lane = PendingPlayLaneState {
+        hispeed_change_base: 1.5,
         hispeed: 1.5,
         hispeed_mode: HispeedMode::Classic,
         base_hispeed_mode: HispeedMode::Classic,
@@ -667,8 +668,32 @@ fn pending_lr2_hsfix_hispeed_tracks_chart_base_bpm() {
     assert!((lane.hispeed - 1.625).abs() < 0.000_01, "hispeed={}", lane.hispeed);
     assert_eq!(lane.display_hispeed(), 3.25);
 
+    // 実譜面の基準BPMが150と分かったら、表示上のHSを保ったまま実効倍率を求め直す。
     let snapshot = bmz_render::snapshot::RenderSnapshot { max_bpm: 150.0, ..Default::default() };
-    lane.sync_chart_bpm(&snapshot, HsFixOption::MaxBpm);
+    let mode_config = PlayModeConfig {
+        hispeed: 3.0,
+        base_hispeed: BaseHispeedConfig::Lr2,
+        floating_policy: FloatingPolicyConfig::Disabled,
+        ..PlayModeConfig::default()
+    };
+    let initial = crate::screens::play_session::InitialSessionHispeed {
+        hispeed: 3.0,
+        hispeed_mode: HispeedMode::Classic,
+        display_hispeed: 3.0,
+        lift: 0.0,
+        lane_cover: 0.0,
+        hsfix_base_bpm: 150.0,
+        classic_hsfix_scale: 1.0,
+    };
+    lane.rebase_to_prepared_chart(&snapshot, &mode_config, HsFixOption::MaxBpm, initial, |lane| {
+        assert!(apply_pending_play_lane_action_to_state(
+            lane,
+            PlayLaneAction::Hispeed(HispeedChange::Up),
+            &profile,
+            150.0,
+            false,
+        ));
+    });
     assert!((lane.hispeed - 3.25).abs() < 0.000_01, "hispeed={}", lane.hispeed);
     assert_eq!(lane.display_hispeed(), 3.25);
 }
@@ -682,7 +707,7 @@ fn classic_hispeed_ignores_hsfix_for_change_and_save() {
         &mut session,
         PlayOptionControl::Hispeed(HispeedChange::Up),
         false,
-        0.25,
+        PlayHispeedSteps::uniform(0.25),
     ));
     assert_eq!(session.hispeed, 3.25);
 

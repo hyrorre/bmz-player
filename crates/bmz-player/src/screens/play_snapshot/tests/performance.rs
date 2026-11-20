@@ -152,6 +152,7 @@ fn indexed_bga_channels_keep_clears_duplicate_order_and_poor_origin() {
         delta: TimeUs(0),
         time: TimeUs(150),
         affects_score: true,
+        advances_score: true,
     });
     let observed = crate::gameplay_runtime::PlaySessionObservation::from_session(&session);
     let cache = PlayRenderSnapshotCache::from_chart(&session.chart);

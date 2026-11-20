@@ -108,7 +108,7 @@ fn viewer_seek_prefills_display_only_battle_score_and_gauge() {
 #[test]
 fn viewer_seek_prefills_independent_battle_opponent() {
     let opponent_chart = Arc::new(chart_with_keysound());
-    let window = JudgeWindow::symmetric(16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000);
+    let window = JudgeWindow::symmetric(16_000, 40_000, 80_000, 120_000, 500_000, 200_000);
     let mut session = session_with_autoplay(chart_with_keysound());
     session.opponent.independent = Some(BattleOpponentSession {
         conditional: Default::default(),
@@ -129,6 +129,7 @@ fn viewer_seek_prefills_independent_battle_opponent() {
         gauge_max_started_at: None,
         full_combo_started_at: None,
         lane_keyon_started_at: Default::default(),
+        lane_key_hold: Default::default(),
         lane_hcn_timer: Default::default(),
         last_hcn_gauge_at: None,
     });
@@ -597,6 +598,7 @@ fn update_recent_judgements_expires_old_events() {
         delta: TimeUs(0),
         time: TimeUs(0),
         affects_score: true,
+        advances_score: true,
     };
 
     update_recent_judgements(&mut session, &[event], TimeUs(0));
@@ -750,7 +752,7 @@ fn update_lane_key_states_tracks_scratch_direction_until_release() {
 
     update_lane_key_states(&mut session, &press);
 
-    assert_eq!(session.lane_scratch_direction[Lane::Scratch.index()], Some(ScratchDirection::Up));
+    assert_eq!(session.lane_key_hold[Lane::Scratch.index()].direction, Some(ScratchDirection::Up));
 
     let release = [InputEvent {
         lane: Lane::Scratch,
@@ -762,7 +764,7 @@ fn update_lane_key_states_tracks_scratch_direction_until_release() {
     }];
     update_lane_key_states(&mut session, &release);
 
-    assert_eq!(session.lane_scratch_direction[Lane::Scratch.index()], None);
+    assert_eq!(session.lane_key_hold[Lane::Scratch.index()].direction, None);
 }
 
 #[test]

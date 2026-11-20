@@ -72,11 +72,12 @@ use crate::config::play::{
 use crate::config::profile_config::{
     BaseHispeedConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, FloatingPolicyConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
-    HispeedConfigPreset, HispeedDirectionConfig, HsFixConfig, InputActionConfig,
-    JudgeAlgorithmConfig, KeyModeConversionConfig, LaneEffectConfig, LaneViewConfig,
-    PlayDefaultsConfig, PlayModeConfig, ProfileConfig, ProfileInputConfig, RandomOptionConfig,
-    SkinConfig, SkinOffsetConfig, TargetOptionConfig, normalize_classic_hispeed_step,
-    normalize_floating_hispeed_step, replay_slot_rule_indices,
+    HispeedChangeTypeConfig, HispeedConfigPreset, HispeedDirectionConfig, HsFixConfig,
+    InputActionConfig, JudgeAlgorithmConfig, KeyModeConversionConfig, LaneEffectConfig,
+    LaneViewConfig, PlayDefaultsConfig, PlayModeConfig, ProfileConfig, ProfileInputConfig,
+    RandomOptionConfig, SkinConfig, SkinOffsetConfig, TargetOptionConfig,
+    normalize_classic_hispeed_step, normalize_floating_hispeed_step,
+    normalize_hispeed_change_ratio, replay_slot_rule_indices,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;

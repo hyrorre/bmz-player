@@ -11,6 +11,32 @@ deadline列を維持します。遅れを取り戻すため次の間隔が周期
 現在時刻から再開して長短フレームの連発を防ぎます。スキン更新の即時描画は周期を変更せず、
 FPS・focus・実効present mode・window modeが変わった場合は周期をリセットします。
 
+focusedかつsurfaceが正常な場合、実効present modeがFifo / FifoRelaxedで、設定されたFPS上限が
+現在の表示リフレッシュレート以上なら、アプリ側の周期待機を省きます。保存する`target_fps`は変更せず、
+内部の待機だけをUnlimitedと同じ経路へ切り替えます。Mailbox / Immediate、Hz未満の上限、
+background、0サイズ・surface復旧中は従来の制限を維持します。設定値0の経路も維持します。
+
+Hzは分子・分母を保持して比較し、整数Hzへの丸めや許容幅は設けません。59.94Hzなら60FPSが対象、
+240.084Hzなら240FPSは制限を維持し、241FPS以上が対象です。Windowsでは既存のQueryDisplayConfig経路を使い、
+winitの整数Hz由来の値で代用しません。macOSではウィンドウ表示・排他全画面とも現在の表示modeをCoreGraphicsで読みます。
+取得できた正のHzはFPS上限を誤って解除しないようmHzへ切り上げ、modeにHzがない場合はCoreVideoの公称周期を反転して
+分子・分母を保持します。ほかのOSはwinitのmHzを使い、排他全画面ではそのVideoModeを参照します。
+X11（Xlib / Xcb）では、既存ウィンドウのmonitor情報がxrandrによるHz変更に追従しないため、取得不能として上限を維持します。
+取得不能・無効値・異なるHzの複製出力は上限を維持します。このHzはVRRの作動状態を示す値ではありません。
+
+表示情報の取得は専用workerで行い、描画・イベント配送の経路では完了結果の非同期な読み取りと要求だけを行います。
+対象条件で現在のmonitorを照合し、問い合わせ開始は最短1秒間隔、同時実行は1件までに制限します。
+移動・resize・scale・focus・window mode／表示先の設定変更は、実行中の古い結果を適用しないための再取得要求です。
+連続するイベントでも問い合わせ頻度は増やしません。イベントのない外部mode変更も定期的に再確認しますが、
+取得にかかる時間や起床・描画の間隔が加わるため、反映時間の上限は保証しません。
+初回やmonitor変更後の取得待ち・取得不能時は設定上限を維持します。同じmonitorの再取得中は直前の有効値を使います。
+表示世代はmonitorまたは取得Hzが実際に変化した場合だけ進めます。次の待機を予約する前に
+古いdeadline・wake情報とFPS sampleをリセットします。実効present modeの変更も同じ状態同期を通します。
+workerの起動・通信に失敗した場合は設定上限を維持し、同期問い合わせへ戻しません。
+Windowsで取得予約後にmonitorが切断されても、`GetMonitorInfoW`の失敗はHz不明として扱い、workerは次の取得を継続します。
+`bmz_player::app::frame_runtime::display=debug`で問い合わせ時間`query_us`と結果を記録できます。
+Waylandのframe callback待ちと、Windows Immediateの既存の短時間待機は維持します。
+
 Windowsのfocused Immediate・FPS制限ありの場合だけ、期限の
 `min(600us, frame_budget / 8)`前にwinitの`WaitUntil`で起床します。
 RedrawRequested到着後、残りがこの範囲に収まる場合のみrender threadで短く待ちます。

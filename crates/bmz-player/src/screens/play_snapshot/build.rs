@@ -13,6 +13,7 @@ pub fn apply_prepared_chart_to_render_snapshot(
     snapshot: &mut RenderSnapshot,
     chart: &PlayableChart,
     cache: &PlayRenderSnapshotCache,
+    rule_mode: bmz_gameplay::rule::RuleMode,
     battle: bool,
 ) {
     let total_notes = if battle {
@@ -36,7 +37,8 @@ pub fn apply_prepared_chart_to_render_snapshot(
     snapshot.judge_rank = chart.metadata.judge_rank;
     snapshot.play_level.clone_from(&chart.metadata.play_level);
     snapshot.total_notes = total_notes;
-    snapshot.chart_total_gauge = gauge_total_for_chart(chart.metadata.total, total_notes) as f32;
+    snapshot.chart_total_gauge =
+        bmz_gameplay::gauge::gauge_total_for_play(&chart.metadata, total_notes, rule_mode) as f32;
     snapshot.now_bpm = chart.metadata.initial_bpm as f32;
     snapshot.main_bpm = chart.metadata.initial_bpm as f32;
     snapshot.min_bpm = cache.min_bpm;
@@ -331,9 +333,10 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         max_combo: session.display_max_combo(),
         ex_score: session.score.ex_score(),
         total_notes: session.scored_total_notes,
-        chart_total_gauge: gauge_total_for_chart(
-            session.chart.metadata.total,
+        chart_total_gauge: bmz_gameplay::gauge::gauge_total_for_play(
+            &session.chart.metadata,
             session.scored_total_notes,
+            session.rule_mode,
         ) as f32,
         past_notes: session.score.past_notes,
         judge_counts: display_judge_counts(session),

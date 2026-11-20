@@ -4,8 +4,11 @@ use bmz_core::input::InputSource;
 
 use super::*;
 
+#[path = "tests/upstream_compatibility.rs"]
+mod upstream_compatibility;
+
 fn windows() -> JudgeWindow {
-    JudgeWindow::symmetric(16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000)
+    JudgeWindow::symmetric(16_000, 40_000, 80_000, 120_000, 500_000, 200_000)
 }
 
 fn chart_with_tap(time: TimeUs) -> PlayableChart {

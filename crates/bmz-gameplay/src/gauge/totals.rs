@@ -32,3 +32,15 @@ pub fn gauge_total_for_chart_and_rule_mode(
         RuleMode::Lr2Oraja => lr2oraja_default_gauge_total(total_notes),
     })
 }
+
+pub fn gauge_total_for_play(
+    metadata: &bmz_chart::model::ChartMetadata,
+    total_notes: u32,
+    rule_mode: RuleMode,
+) -> f64 {
+    if let Some(percent) = metadata.bmson_total_percent {
+        let base = gauge_total_for_chart_and_rule_mode(None, total_notes, rule_mode);
+        return if percent > 0.0 { base * (percent / 100.0) } else { base };
+    }
+    gauge_total_for_chart_and_rule_mode(metadata.total, total_notes, rule_mode)
+}

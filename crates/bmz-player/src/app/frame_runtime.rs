@@ -4,7 +4,10 @@ use bmz_render::renderer::{RenderFrameTimings, RenderSurfaceStatus, WgpuPresentM
 
 use crate::i18n::{FluentArgs, Localizer};
 
+pub(super) mod display;
+
 pub(super) struct FrameRuntime {
+    pub(super) display_timing: display::DisplayTimingCache,
     pub(super) last_frame_rendered: bool,
     last_present: Option<Instant>,
     present_window: Instant,
@@ -31,6 +34,7 @@ pub(super) enum FrameSchedule {
 impl FrameRuntime {
     pub(super) fn new(now: Instant) -> Self {
         Self {
+            display_timing: Default::default(),
             last_frame_rendered: false,
             last_present: None,
             present_window: now,
@@ -77,7 +81,7 @@ impl FrameRuntime {
         FrameSchedule::Start
     }
 
-    fn sync_pacing_state(&mut self, now: Instant, pacing_state: FramePacingState) {
+    pub(super) fn sync_pacing_state(&mut self, now: Instant, pacing_state: FramePacingState) {
         if self.pacing_state == Some(pacing_state) {
             return;
         }
@@ -101,6 +105,8 @@ impl FrameRuntime {
                 present_mode = ?pacing_state.present_mode,
                 previous_window_mode = ?previous.window_mode,
                 window_mode = ?pacing_state.window_mode,
+                previous_display_revision = previous.display_revision,
+                display_revision = pacing_state.display_revision,
                 "frame pacing state changed; FPS sample reset"
             );
         }
@@ -192,6 +198,7 @@ impl FrameRuntime {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct FramePacingState {
+    pub(super) display_revision: u64,
     pub(super) focused: bool,
     pub(super) effective_frame_limit: u32,
     pub(super) present_mode: WgpuPresentMode,
@@ -974,6 +981,7 @@ mod tests {
                 effective_frame_limit: 60,
                 present_mode: WgpuPresentMode::Immediate,
                 window_mode: FrameWindowMode::ExclusiveFullscreen,
+                ..initial
             },
         ];
         for state in changed_states {
@@ -1114,6 +1122,28 @@ mod tests {
     }
 
     #[test]
+    fn display_policy_transitions_discard_old_deadlines_and_wakes() {
+        let now = Instant::now();
+        let mut runtime = FrameRuntime::new(now);
+        let mut state = test_pacing_state(240);
+        for (index, (revision, limit)) in
+            [(1, 240), (2, 240), (3, 0), (4, 0), (5, 239), (0, 30), (6, 0)].into_iter().enumerate()
+        {
+            state.display_revision = revision;
+            state.effective_frame_limit = limit;
+            let next = now + Duration::from_millis(index as u64);
+            runtime.record_wait_wake(now, now + Duration::from_secs(1), next, limit);
+            runtime.fps.current = 240;
+            runtime.sync_pacing_state(next, state);
+            assert_eq!(runtime.next_deadline(next, limit), None);
+            assert!(runtime.pending_wake.is_none());
+            assert_eq!(runtime.current_fps(), 0);
+            assert!(matches!(runtime.begin_scheduled_frame(next, state), FrameSchedule::Start));
+            assert!(!runtime.current_pacing_timings().wait_wake_sampled);
+        }
+    }
+
+    #[test]
     fn frame_runtime_waits_until_deadline_and_honors_immediate_request() {
         let started_at = Instant::now();
         let work = Duration::from_micros(500);
@@ -1136,6 +1166,7 @@ mod tests {
 
     fn test_pacing_state(effective_frame_limit: u32) -> FramePacingState {
         FramePacingState {
+            display_revision: 0,
             focused: true,
             effective_frame_limit,
             present_mode: WgpuPresentMode::Fifo,

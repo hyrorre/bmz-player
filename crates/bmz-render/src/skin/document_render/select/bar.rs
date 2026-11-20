@@ -22,7 +22,7 @@ macro_rules! skin_document_render_select_bar_methods {
             let (rect, uv) = stretch_skin_image_geometry(
                 destination.stretch,
                 normalize_skin_frame_rect(frame, self.w, self.h),
-                skin_image_texture_region(image, source.source_size, elapsed),
+                skin_image_texture_region(image, source.source_size, elapsed)?,
                 source.source_size,
                 self.w,
                 self.h,

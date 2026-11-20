@@ -180,6 +180,7 @@ fn result_graph_collector_carries_frame_graph_data() {
             delta: TimeUs(-12_000),
             time: TimeUs(1_200_000),
             affects_score: true,
+            advances_score: true,
         }],
         mine_hits: Vec::new(),
         keysound_volumes: Vec::new(),
@@ -348,6 +349,7 @@ fn judged(id: u32) -> JudgementEvent {
         delta: TimeUs(0),
         time: TimeUs(0),
         affects_score: true,
+        advances_score: true,
     }
 }
 

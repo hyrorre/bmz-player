@@ -68,6 +68,8 @@ settings-entry-description-hispeed-mode = 决定流速的方式。FLOATING 会�
 settings-entry-description-normal-hispeed-level = NORMAL 使用的速度档位。1～20 的每个档位都对应固定的绿色数字。
 settings-entry-description-classic-hispeed-step = CLASSIC 中每次调整流速时增减的量。
 settings-entry-description-floating-hispeed-step = FLOATING 中每次调整流速时增减的量。
+settings-entry-description-hispeed-change-type = 游玩中用 E1+按键或 ← / → 调整流速时增减量的计算方式。FIXED 使用上方的调整步长，RATIO 使用开始游玩时的 HS 乘以 HS RATIO 的量。选曲画面的 HS 调整始终使用调整步长。
+settings-entry-description-hispeed-change-ratio = HS CHANGE 为 RATIO 时，与开始游玩时的 HS 相乘的比率。设为 1.00 时，HS 3.00 会按 3.00→6.00→9.00 变化。
 settings-entry-description-sudden-enabled = 启用遮挡轨道上方的遮罩（SUDDEN+）。
 settings-entry-description-sudden = SUDDEN+ 遮挡轨道上方的量。
 settings-entry-description-lift = LIFT 抬高判定线的量。
@@ -539,6 +541,11 @@ profile-display-normal-hispeed = Normal HS
 profile-display-classic-hispeed-step = Classic HS 调整步长
 profile-display-floating-hispeed-step = Floating HS 调整步长
 profile-display-step-range = HS 调整步长范围：Classic 0.01..=1.00 / Floating 0.05..=1.00
+profile-display-hispeed-change-type = HS 调整方式
+profile-display-hispeed-change-type-fixed = 固定
+profile-display-hispeed-change-type-ratio = 比率
+profile-display-hispeed-change-ratio = HS 调整比率
+profile-display-hispeed-change-ratio-help = 选择比率时，游玩中 E1+按键或 ← / → 每次的调整量为“开始游玩时的 HS × 比率”。范围为 0.01..=10.00。选曲画面的 HS 调整和通过遮挡板操作进行的 HS 调整使用调整步长。
 profile-display-sudden-enabled = 启用 SUDDEN+
 profile-display-lift-enabled = 启用 LIFT
 profile-display-auto-adjust-hispeed = 轨道遮罩变化时按当前 BPM 自动调整 HS

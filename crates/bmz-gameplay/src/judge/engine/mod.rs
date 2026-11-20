@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use bmz_chart::model::{LongNoteMode, NoteEvent, NoteKind, PlayableChart};
 use bmz_core::ids::NoteId;
@@ -47,11 +47,13 @@ pub struct JudgeEngine {
     pub window_set: JudgeWindows,
     pub rule_mode: RuleMode,
     pub algorithm: JudgeAlgorithm,
+    pub window_rates: super::window::JudgeWindowRates,
     pub lanes: [LaneJudgeState; LANE_COUNT],
     pub judged_notes: HashMap<NoteId, Judge>,
     scratch_lane_mask: [bool; LANE_COUNT],
-    bad_attempted_notes: HashSet<NoteId>,
+    attempted_notes: HashSet<NoteId>,
     bad_judge_vanish: bool,
+    orphan_charge_ends: [BTreeSet<(TimeUs, NoteId)>; LANE_COUNT],
     hln: hln::HlnState,
     free_zone_scratched: HashSet<NoteId>,
     pub free_zone_autoplay: [bool; LANE_COUNT],
@@ -76,7 +78,7 @@ impl JudgeEngine {
 
     pub fn is_note_started(&self, id: NoteId) -> bool {
         self.judged_notes.contains_key(&id)
-            || self.bad_attempted_notes.contains(&id)
+            || self.attempted_notes.contains(&id)
             || self
                 .lanes
                 .iter()
@@ -121,11 +123,13 @@ impl JudgeEngine {
             window_set,
             rule_mode,
             algorithm,
+            window_rates: Default::default(),
             lanes: [LaneJudgeState::default(); LANE_COUNT],
             judged_notes: HashMap::new(),
             scratch_lane_mask,
-            bad_attempted_notes: HashSet::new(),
+            attempted_notes: HashSet::new(),
             bad_judge_vanish: bad_judge_vanish_for_keymode_and_rule_mode(key_mode, rule_mode),
+            orphan_charge_ends: Default::default(),
             hln: Default::default(),
             free_zone_scratched: HashSet::new(),
             free_zone_autoplay: [false; LANE_COUNT],
@@ -149,7 +153,8 @@ impl JudgeEngine {
     /// 通常どおり処理できる状態にする。
     pub fn skip_before(&mut self, chart: &PlayableChart, start_time: TimeUs) {
         self.judged_notes.clear();
-        self.bad_attempted_notes.clear();
+        self.attempted_notes.clear();
+        self.orphan_charge_ends = Default::default();
         self.hln = Default::default();
         self.free_zone_scratched.clear();
         for lane in Lane::ALL {
@@ -254,27 +259,26 @@ impl JudgeEngine {
                 }
 
                 lane_state.next_note_index = idx + 1;
-                let bad_was_already_scored = self.bad_attempted_notes.remove(&note.id);
+                let miss_was_already_scored = self.attempted_notes.remove(&note.id);
                 self.judged_notes.insert(note.id, Judge::Poor);
                 let miss_delta = TimeUs(judge_time.0 - note.time.0);
-                if !bad_was_already_scored {
-                    if play_keysound {
-                        outcome.keysounds.push(KeySoundEvent {
-                            note_id: note.id,
-                            time: now,
-                            trigger: KeySoundTrigger::Miss,
-                        });
-                    }
-                    outcome.events.push(JudgementEvent {
-                        note_id: Some(note.id),
-                        lane,
-                        judge: Judge::Poor,
-                        side: TimingSide::Slow,
-                        delta: miss_delta,
+                if !miss_was_already_scored && play_keysound {
+                    outcome.keysounds.push(KeySoundEvent {
+                        note_id: note.id,
                         time: now,
-                        affects_score: true,
+                        trigger: KeySoundTrigger::Miss,
                     });
                 }
+                outcome.events.push(JudgementEvent {
+                    note_id: Some(note.id),
+                    lane,
+                    judge: Judge::Poor,
+                    side: TimingSide::Slow,
+                    delta: miss_delta,
+                    time: now,
+                    affects_score: !miss_was_already_scored,
+                    advances_score: true,
+                });
                 // beatoraja treats a missed CN/HCN head as two misses: both the
                 // head and its paired tail become POOR immediately. If the head
                 // had already produced a non-vanishing BAD, only the tail adds
@@ -289,16 +293,45 @@ impl JudgeEngine {
                         delta: miss_delta,
                         time: now,
                         affects_score: true,
+                        advances_score: true,
                     });
                 }
             }
             advance_press_cursor(chart, lane, &mut lane_state.next_note_index, &self.judged_notes);
 
+            let windows = press_window(self.window_set, self.scratch_lane_mask[lane.index()]);
+            let orphan_ends = &mut self.orphan_charge_ends[lane.index()];
+            while let Some(&(time, id)) = orphan_ends.first() {
+                if judge_time.0 <= time.0 + windows.bad_slow_us {
+                    break;
+                }
+                orphan_ends.pop_first();
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    self.judged_notes.entry(id)
+                {
+                    entry.insert(Judge::Poor);
+                    outcome.events.push(JudgementEvent {
+                        note_id: Some(id),
+                        lane,
+                        judge: Judge::Poor,
+                        side: TimingSide::Slow,
+                        delta: TimeUs(judge_time.0 - time.0),
+                        time: now,
+                        affects_score: true,
+                        advances_score: true,
+                    });
+                }
+            }
+
             if let Some(active) = lane_state.active_long {
                 let release_margin_us =
                     long_release_margin_us(self.window_set, self.scratch_lane_mask[lane.index()]);
                 if let Some(pending) = active.pending_release
-                    && now.0 >= pending.released_at.0 + release_margin_us
+                    && ((matches!(pending.judge, Judge::Bad | Judge::Poor)
+                        && now.0 >= pending.released_at.0 + release_margin_us)
+                        || (self.rule_mode == RuleMode::Beatoraja
+                            && active.mode == LongNoteMode::Ln
+                            && judge_time > active.end.end_time))
                 {
                     lane_state.active_long = None;
                     let judged_note_id = active_scored_note_id(active);
@@ -360,6 +393,7 @@ impl JudgeEngine {
                                 delta: TimeUs(judge_time.0 - active.end.end_time.0),
                                 time: now,
                                 affects_score: true,
+                                advances_score: true,
                             });
                         }
                     }
@@ -415,12 +449,12 @@ impl JudgeEngine {
                 }
                 if note.kind != NoteKind::Mine
                     || keyon_started_at > if mine_time.is_some() { now } else { note.time }
-                    || Some(note.time) == lane_state.last_mine_hit_time
+                    || (lane_state.scratch_press_absorbed_at == Some(keyon_started_at)
+                        && keyon_started_at == if mine_time.is_some() { now } else { note.time })
                 {
                     continue;
                 }
 
-                lane_state.last_mine_hit_time = Some(note.time);
                 outcome.mine_hits.push(MineHitEvent {
                     note_id: note.id,
                     lane,
@@ -436,6 +470,7 @@ impl JudgeEngine {
 
     pub fn is_exhausted(&self, chart: &PlayableChart) -> bool {
         self.hln.is_exhausted()
+            && self.orphan_charge_ends.iter().all(BTreeSet::is_empty)
             && chart.metadata.free_zones.iter().all(|z| self.judged_notes.contains_key(&z.note_id))
             && Lane::ALL.iter().copied().all(|lane| {
                 let state = &self.lanes[lane.index()];
@@ -472,24 +507,10 @@ impl JudgeEngine {
     ) -> JudgeOutcome {
         // Consume the BSS reverse edge before it can reach a note or Mine.
         if self.consume_scratch_press_suppression(InputEvent { time: event_time, ..input }) {
+            self.lanes[input.lane.index()].scratch_press_absorbed_at = Some(event_time);
             return JudgeOutcome { consumed_input: true, ..Default::default() };
         }
-
-        // Mine ヒット判定は通常ノーツの判定に先んじて、もしくは並走して行う。
-        // 入力は通常ノーツの判定を妨げないので、ここでは別ベクタに積むだけ。
-        let mut mine_hits = Vec::new();
-        let lane_state = &mut self.lanes[input.lane.index()];
-        if let Some(hit) = detect_mine_hit(
-            chart,
-            input.lane,
-            input.time,
-            press_window(self.window_set, self.scratch_lane_mask[input.lane.index()]).mine_hit_us,
-            lane_state,
-            (input.time != event_time).then_some(lane_state.next_mine_index),
-        ) {
-            lane_state.last_mine_hit_time = Some(hit.time);
-            mine_hits.push(hit);
-        }
+        self.lanes[input.lane.index()].scratch_press_absorbed_at = None;
 
         if let Some(mut active) = self.lanes[input.lane.index()].active_long {
             if matches!(input.lane, Lane::Scratch | Lane::Scratch2)
@@ -515,136 +536,140 @@ impl JudgeEngine {
                     TimeUs(delta),
                     input.time,
                 );
-                outcome.mine_hits = mine_hits;
                 outcome.consumed_input = true;
                 return outcome;
             }
             if active.pending_release.take().is_some() {
                 self.lanes[input.lane.index()].active_long = Some(active);
-                return JudgeOutcome { mine_hits, consumed_input: true, ..Default::default() };
+                return JudgeOutcome { consumed_input: true, ..Default::default() };
             }
-            return JudgeOutcome { mine_hits, ..Default::default() };
+            return JudgeOutcome::default();
         }
 
         let rule_mode = self.rule_mode;
         let windows = press_window(self.window_set, self.scratch_lane_mask[input.lane.index()]);
-        let candidate = select_press_candidate(
-            chart,
-            input.lane,
-            input.time,
-            windows,
-            rule_mode,
-            self.algorithm,
-            &self.judged_notes,
-            &self.bad_attempted_notes,
-        );
+        let candidate = select_press_candidate(self, chart, input.lane, input.time, windows);
         let Some(candidate) = candidate else {
-            return JudgeOutcome { mine_hits, ..Default::default() };
+            return JudgeOutcome::default();
         };
 
-        if candidate.consumes_note {
-            // candidate 生成側の不変条件が崩れてもプレイ中に panic せず、
-            // その入力の判定だけを捨てる (debug build では検知する)。
-            let Some(note_id) = candidate.note_id else {
-                debug_assert!(false, "normal candidate must have note id");
-                return JudgeOutcome { mine_hits, ..Default::default() };
-            };
-            let Some(note) = self.note_by_id(chart, note_id) else {
-                debug_assert!(false, "candidate note {note_id:?} must exist in chart");
-                return JudgeOutcome { mine_hits, ..Default::default() };
-            };
-            let note_vanishes = candidate.judge != Judge::Bad
-                || self.bad_judge_vanish
-                || hln::is_hln_head(chart, note.id);
-            let multi_bad_candidates = if matches!(rule_mode, RuleMode::Lr2Oraja | RuleMode::Dx) {
-                lr2oraja_multi_bad_candidates(
-                    chart,
-                    input.lane,
-                    input.time,
-                    windows,
-                    note,
-                    candidate,
-                    &self.judged_notes,
-                )
-            } else {
-                Vec::new()
-            };
-
-            let lane_state = &mut self.lanes[input.lane.index()];
-            lane_state.last_press_time = Some(note.time);
-            for multi_bad in &multi_bad_candidates {
-                if self.bad_judge_vanish || hln::is_hln_head(chart, multi_bad.note_id) {
-                    self.judged_notes.insert(multi_bad.note_id, Judge::Bad);
-                } else {
-                    self.bad_attempted_notes.insert(multi_bad.note_id);
-                }
-            }
-            if note_vanishes {
-                self.bad_attempted_notes.remove(&note.id);
-                self.judged_notes.insert(note.id, candidate.judge);
-            } else {
-                self.bad_attempted_notes.insert(note.id);
-            }
-
-            if note_vanishes
-                && note.kind == NoteKind::LongStart
-                && let Some(mut active) =
-                    make_active_long(chart, note.id, candidate.judge, candidate.delta, event_time)
-            {
-                if matches!(input.lane, Lane::Scratch | Lane::Scratch2) {
-                    active.scratch_direction = input.scratch_direction;
-                }
-                lane_state.active_long = Some(active);
-            }
-            advance_press_cursor(
+        let note_id = candidate.note_id;
+        let side = side_from_delta(candidate.delta.0);
+        // A regrab can restore the HCN body after its tail has already failed.
+        if candidate.judge == Judge::EmptyPoor
+            && self.hcn_pairs_at(chart, input.time).any(|pair| {
+                pair.lane == input.lane
+                    && pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hcn
+                    && pair.start_time <= input.time
+                    && input.time < pair.end_time
+                    && !chart.is_dummy_long(pair)
+            })
+        {
+            return JudgeOutcome { consumed_input: true, ..Default::default() };
+        }
+        let Some(note) = self.note_by_id(chart, note_id) else {
+            debug_assert!(false, "candidate note {note_id:?} must exist in chart");
+            return JudgeOutcome::default();
+        };
+        let mut events = Vec::new();
+        if matches!(rule_mode, RuleMode::Lr2Oraja | RuleMode::Dx) {
+            for extra in lr2oraja_multi_bad_candidates(
                 chart,
                 input.lane,
-                &mut lane_state.next_note_index,
+                input.time,
+                windows,
+                note,
+                candidate,
                 &self.judged_notes,
-            );
-
-            let mut events = Vec::with_capacity(multi_bad_candidates.len() + 1);
-            events.extend(multi_bad_candidates.into_iter().map(|multi_bad| JudgementEvent {
-                note_id: Some(multi_bad.note_id),
-                lane: input.lane,
-                judge: Judge::Bad,
-                side: side_from_delta(multi_bad.delta.0),
-                delta: multi_bad.delta,
-                time: input.time,
-                affects_score: !hln::is_hln_head(chart, multi_bad.note_id),
-            }));
-            events.push(JudgementEvent {
-                note_id: Some(note_id),
-                lane: input.lane,
-                judge: candidate.judge,
-                side: candidate.side,
-                delta: candidate.delta,
-                time: input.time,
-                affects_score: note.kind != NoteKind::LongStart
-                    || active_long_scores_on_start(chart, note.id),
-            });
-
-            return JudgeOutcome {
-                events,
-                keysounds: vec![KeySoundEvent {
-                    note_id,
+            ) {
+                let hln = hln::is_hln_head(chart, extra.note_id);
+                if hln
+                    && !chart.long_notes.iter().any(|pair| {
+                        pair.start_note_id == extra.note_id && input.time >= pair.end_time
+                    })
+                {
+                    continue;
+                }
+                if self.bad_judge_vanish || hln {
+                    self.judged_notes.insert(extra.note_id, Judge::Bad);
+                    if let Some(pair) = charge_pair_for_start(chart, extra.note_id) {
+                        self.orphan_charge_ends[input.lane.index()]
+                            .insert((pair.end_time, pair.end_note_id));
+                    }
+                } else {
+                    self.attempted_notes.insert(extra.note_id);
+                }
+                events.push(JudgementEvent {
+                    note_id: Some(extra.note_id),
+                    lane: input.lane,
+                    judge: Judge::Bad,
+                    side: side_from_delta(extra.delta.0),
+                    delta: extra.delta,
                     time: input.time,
-                    trigger: KeySoundTrigger::NoteJudged,
-                }],
-                mine_hits,
-                consumed_input: true,
-                ..Default::default()
-            };
+                    affects_score: !hln,
+                    advances_score: self.bad_judge_vanish && !hln,
+                });
+            }
+        }
+        if candidate.judge == Judge::EmptyPoor {
+            if !self.bad_judge_vanish && candidate.delta.0 != 0 {
+                self.attempted_notes.insert(note_id);
+            }
+            return empty_poor(input.lane, side, candidate.delta, input.time, note_id, events);
+        }
+        let note_vanishes = candidate.judge != Judge::Bad
+            || self.bad_judge_vanish
+            || hln::is_hln_head(chart, note.id);
+        let lane_state = &mut self.lanes[input.lane.index()];
+        lane_state.last_press_time = Some(note.time);
+        if note_vanishes {
+            self.attempted_notes.remove(&note.id);
+            self.judged_notes.insert(note.id, candidate.judge);
+        } else {
+            self.attempted_notes.insert(note.id);
         }
 
-        let Some(keysound_note_id) = candidate.keysound_note_id else {
-            debug_assert!(false, "empty poor candidate must have key sound note id");
-            return JudgeOutcome { mine_hits, ..Default::default() };
-        };
-        let mut outcome =
-            empty_poor(input.lane, candidate.side, candidate.delta, input.time, keysound_note_id);
-        outcome.mine_hits = mine_hits;
-        outcome
+        if note_vanishes
+            && note.kind == NoteKind::LongStart
+            && let Some(mut active) =
+                make_active_long(chart, note.id, candidate.judge, candidate.delta, event_time)
+        {
+            if matches!(input.lane, Lane::Scratch | Lane::Scratch2) {
+                active.scratch_direction = input.scratch_direction;
+            }
+            lane_state.active_long = Some(active);
+        }
+        advance_press_cursor(
+            chart,
+            input.lane,
+            &mut lane_state.next_note_index,
+            &self.judged_notes,
+        );
+        events.push(JudgementEvent {
+            note_id: Some(note_id),
+            lane: input.lane,
+            judge: candidate.judge,
+            side,
+            delta: candidate.delta,
+            time: input.time,
+            affects_score: !note_vanishes
+                || note.kind != NoteKind::LongStart
+                || active_long_scores_on_start(chart, note.id),
+            advances_score: note_vanishes
+                && (note.kind != NoteKind::LongStart
+                    || active_long_scores_on_start(chart, note.id)),
+        });
+
+        JudgeOutcome {
+            events,
+            keysounds: vec![KeySoundEvent {
+                note_id,
+                time: input.time,
+                trigger: KeySoundTrigger::NoteJudged,
+            }],
+            consumed_input: true,
+            ..Default::default()
+        }
     }
 
     fn process_release(
@@ -720,6 +745,22 @@ impl JudgeEngine {
                         classify_normal_delta(end_delta.0, windows).unwrap_or(Judge::Poor);
                     combine_ln_judgement(active, end_judge, end_delta)
                 };
+                // beatoraja defers an early LN release until the tail, so a regrab
+                // before the tail restores the start judgement.
+                let beatoraja_defer = self.rule_mode == RuleMode::Beatoraja
+                    && active.mode == LongNoteMode::Ln
+                    && end_delta.0 < 0
+                    && delta.0 < 0
+                    && !matches!(judge, Judge::Bad | Judge::Poor);
+                if beatoraja_defer {
+                    active.pending_release = Some(PendingLongRelease {
+                        released_at: event_time,
+                        judge,
+                        delta: end_delta,
+                    });
+                    lane_state.active_long = Some(active);
+                    return JudgeOutcome { consumed_input: true, ..Default::default() };
+                }
                 if release_margin_us > 0
                     && end_delta.0 < 0
                     && matches!(judge, Judge::Bad | Judge::Poor)

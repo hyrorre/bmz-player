@@ -123,29 +123,28 @@ pub fn build_practice_panel(
             if practice.rules.field_is_fixed(3) {
                 ui.label(RichText::new(dx_rule_label(practice.rules)).weak());
             } else {
-                let mut category = practice
-                    .property
-                    .gauge_category
-                    .unwrap_or_else(|| GaugeProperty::from_keymode(practice.rules.key_mode));
-                let previous_category = category;
+                let category = practice.rules.gauge_category(practice.property);
                 egui::ComboBox::from_id_salt("practice_gauge_category")
                     .selected_text(gauge_category_label(category))
                     .show_ui(ui, |ui| {
                         for value in practice_gauge_categories() {
-                            ui.selectable_value(&mut category, value, gauge_category_label(value));
+                            if ui
+                                .selectable_label(value == category, gauge_category_label(value))
+                                .clicked()
+                            {
+                                practice.rules.set_gauge_category(practice.property, value);
+                            }
                         }
                     });
-                if category != previous_category {
-                    practice.rules.set_gauge_category(practice.property, category);
-                }
             }
         });
         practice_field_label(ui, practice.cursor, 4, text.text("practice-gauge-percent"));
         ui.horizontal(|ui| {
-            let max = practice.rules.gauge_bounds(practice.property).max;
-            ui.add(
-                egui::DragValue::new(&mut practice.property.start_gauge).range(1..=max).speed(0.2),
-            );
+            let bounds = practice.rules.gauge_bounds(practice.property);
+            let mut start = bounds.start(practice.property);
+            if ui.add(egui::DragValue::new(&mut start).range(1..=bounds.max).speed(0.2)).changed() {
+                practice.property.start_gauge = start;
+            }
         });
         practice_field_label(ui, practice.cursor, 5, text.text("practice-judge-rank"));
         ui.horizontal(|ui| {
@@ -487,6 +486,103 @@ mod tests {
             for arrange in ArrangeOption::VALUES {
                 assert!(!arrange_label(text, arrange).starts_with("practice-"));
             }
+        }
+    }
+
+    #[test]
+    fn practice_panel_pins_the_displayed_category_only_when_clicked() {
+        use bmz_core::lane::KeyMode;
+        use bmz_gameplay::rule::RuleMode;
+        for (rule_mode, key_mode, version, saved, effective) in [
+            (RuleMode::Lr2Oraja, KeyMode::K9, 1, Some(GaugeProperty::Pms), GaugeProperty::Lr2),
+            (RuleMode::Beatoraja, KeyMode::K7, 2, None, GaugeProperty::SevenKeys),
+        ] {
+            let rules = PracticeRuleContext { rule_mode, key_mode };
+            let ctx = egui::Context::default();
+            let mut property = PracticeProperty {
+                format_version: version,
+                gauge_category: saved,
+                start_gauge: 117,
+                ..Default::default()
+            };
+            let before = property.clone();
+            let graph = ResultGraphSnapshot::default();
+            let mut cursor = 3;
+            let mut draw = |events, property: &mut PracticeProperty| {
+                let mut panel = PracticePanelContext {
+                    property,
+                    rules,
+                    graph: &graph,
+                    graph_start_time_ms: 0,
+                    is_double: false,
+                    cursor: &mut cursor,
+                    chart_title: "Practice",
+                    media_ready: true,
+                    input_enabled: true,
+                    max_end_time_ms: 120_000,
+                    default_position: None,
+                };
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1280.0, 1024.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        build_practice_panel(ui.ctx(), &mut panel, Localizer::new(AppLocale::En));
+                    },
+                )
+            };
+            let label_positions = |output: &egui::FullOutput, text: &str| {
+                output
+                    .shapes
+                    .iter()
+                    .filter_map(|clipped| match &clipped.shape {
+                        egui::Shape::Text(label) if label.galley.job.text == text => {
+                            Some(label.pos + label.galley.size() * 0.5)
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let _ = draw(vec![], &mut property);
+            let output = draw(vec![], &mut property);
+            assert_eq!(property, before);
+            assert!(!label_positions(&output, "100").is_empty());
+            assert!(label_positions(&output, "117").is_empty());
+            let category = gauge_category_label(effective);
+            let button = label_positions(&output, category)[0];
+            let mut click = |pos, property: &mut PracticeProperty| {
+                let _ = draw(vec![egui::Event::PointerMoved(pos)], property);
+                for pressed in [true, false] {
+                    let _ = draw(
+                        vec![egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                        property,
+                    );
+                }
+                draw(vec![], property)
+            };
+            let popup = click(button, &mut property);
+            assert_eq!(property, before);
+            let options = label_positions(&popup, category);
+            let option = options
+                .iter()
+                .find(|pos| pos.distance(button) > 2.0)
+                .expect("category option in open popup");
+            let _ = click(*option, &mut property);
+            assert_eq!(property.gauge_category, Some(effective));
+            assert_eq!(property.format_version, 2);
+            assert_eq!(property.start_gauge, before.start_gauge);
+            let lr2 = PracticeRuleContext { rule_mode: RuleMode::Lr2Oraja, ..rules };
+            assert_eq!(lr2.gauge_category(&property), effective);
         }
     }
 

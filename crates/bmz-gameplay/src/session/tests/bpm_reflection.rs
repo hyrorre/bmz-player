@@ -96,9 +96,14 @@ fn reflection_applies_to_long_release_and_mine_passes() {
     process_session_input(&mut session, human_press(TimeUs(0)));
     assert!(process_misses(&mut session, TimeUs(1_025_000)).is_empty());
     let release = process_session_input(&mut session, human_release(TimeUs(1_025_000)));
-    assert_eq!(release[0].judge, Judge::Great);
-    assert_eq!(release[0].delta, TimeUs(-30_000));
-    assert_eq!(release[0].time, TimeUs(1_025_000));
+    // beatoraja keeps an early LN release within GOOD pending until the tail.
+    assert!(release.is_empty());
+    let pending = session.judge.lanes[Lane::Key1.index()]
+        .active_long
+        .and_then(|active| active.pending_release)
+        .expect("pending LN release");
+    assert_eq!((pending.judge, pending.delta), (Judge::Great, TimeUs(-30_000)));
+    assert_eq!(pending.released_at, TimeUs(1_025_000));
 
     let mut chart = chart_with_mine(TimeUs(1_100_000), 10.0);
     reflect_at(&mut chart, 1_000_000);

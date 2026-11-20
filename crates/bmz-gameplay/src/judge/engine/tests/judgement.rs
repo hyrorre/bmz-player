@@ -216,12 +216,12 @@ fn beatoraja_pms_bad_does_not_consume_and_can_be_rejudged() {
     assert!(bad.consumed_input);
     assert_eq!(bad.events[0].judge, Judge::Bad);
     assert_eq!(bad.events[0].note_id, Some(NoteId(1)));
-    assert!(engine.bad_attempted_notes.contains(&NoteId(1)));
+    assert!(engine.attempted_notes.contains(&NoteId(1)));
     assert_eq!(engine.judged_notes.get(&NoteId(1)), None);
 
     let great = engine.process_input(&chart, press_at(TimeUs(1_050_000)));
 
-    assert!(!engine.bad_attempted_notes.contains(&NoteId(1)));
+    assert!(!engine.attempted_notes.contains(&NoteId(1)));
     assert_eq!(engine.judged_notes.get(&NoteId(1)), Some(&Judge::Great));
 
     assert!(great.consumed_input);
@@ -231,7 +231,7 @@ fn beatoraja_pms_bad_does_not_consume_and_can_be_rejudged() {
 }
 
 #[test]
-fn beatoraja_pms_bad_attempt_miss_consumes_without_extra_poor_event() {
+fn beatoraja_pms_bad_attempt_miss_consumes_without_scoring_another_poor() {
     let chart = chart_with_tap(TimeUs(1_000_000));
     let mut engine = JudgeEngine::new_with_window_set_algorithm_and_keymode(
         crate::judge::window::beatoraja_judge_windows_for_keymode(KeyMode::K9),
@@ -242,12 +242,13 @@ fn beatoraja_pms_bad_attempt_miss_consumes_without_extra_poor_event() {
 
     let bad = engine.process_input(&chart, press_at(TimeUs(820_000)));
     assert_eq!(bad.events[0].judge, Judge::Bad);
-    assert!(engine.bad_attempted_notes.contains(&NoteId(1)));
+    assert!(engine.attempted_notes.contains(&NoteId(1)));
 
     let missed = engine.process_misses(&chart, TimeUs(1_184_000));
 
-    assert!(missed.events.is_empty());
-    assert!(!engine.bad_attempted_notes.contains(&NoteId(1)));
+    assert!(!missed.events[0].affects_score);
+    assert!(missed.events[0].advances_score);
+    assert!(!engine.attempted_notes.contains(&NoteId(1)));
     assert_eq!(engine.judged_notes.get(&NoteId(1)), Some(&Judge::Poor));
     assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 1);
 }
@@ -264,12 +265,12 @@ fn dx_9key_bad_does_not_consume_and_can_be_rejudged() {
 
     let bad = engine.process_input(&chart, press_at(TimeUs(850_000)));
     assert_eq!(bad.events[0].judge, Judge::Bad);
-    assert!(engine.bad_attempted_notes.contains(&NoteId(1)));
+    assert!(engine.attempted_notes.contains(&NoteId(1)));
     assert_eq!(engine.judged_notes.get(&NoteId(1)), None);
 
     let pgreat = engine.process_input(&chart, press_at(TimeUs(1_000_000)));
     assert_eq!(pgreat.events[0].judge, Judge::PGreat);
-    assert!(!engine.bad_attempted_notes.contains(&NoteId(1)));
+    assert!(!engine.attempted_notes.contains(&NoteId(1)));
     assert_eq!(engine.judged_notes.get(&NoteId(1)), Some(&Judge::PGreat));
 }
 
@@ -314,7 +315,7 @@ fn duration_exact_hit_keeps_tie_order_and_falls_back_after_exact_notes() {
         RuleMode::Beatoraja,
         JudgeAlgorithm::Duration,
     );
-    engine.bad_attempted_notes.insert(NoteId(1));
+    engine.attempted_notes.insert(NoteId(1));
 
     for (id, delta, judge) in [
         (NoteId(1), 0, Judge::PGreat),
@@ -414,7 +415,7 @@ fn dx_mode_fast_empty_poor_window_ends_at_500ms() {
             crate::judge::window::dx_judge_windows(),
             RuleMode::Dx,
         );
-        let outcome = inside.process_input(&chart, press_lane_at(lane, TimeUs(500_000)));
+        let outcome = inside.process_input(&chart, press_lane_at(lane, TimeUs(500_001)));
         assert_eq!(outcome.events.len(), 1, "{lane:?}");
         assert_eq!(outcome.events[0].judge, Judge::EmptyPoor);
         assert_eq!(outcome.events[0].side, TimingSide::Fast);
@@ -424,7 +425,7 @@ fn dx_mode_fast_empty_poor_window_ends_at_500ms() {
             crate::judge::window::dx_judge_windows(),
             RuleMode::Dx,
         );
-        let outcome = outside.process_input(&chart, press_lane_at(lane, TimeUs(499_999)));
+        let outcome = outside.process_input(&chart, press_lane_at(lane, TimeUs(500_000)));
         assert!(outcome.events.is_empty(), "{lane:?}");
         assert!(!outcome.consumed_input);
     }
@@ -445,12 +446,13 @@ fn dx_9key_multi_bad_does_not_consume_the_bad_note() {
     assert_eq!(outcome.events.len(), 2);
     assert_eq!(outcome.events[0].note_id, Some(NoteId(1)));
     assert_eq!(outcome.events[0].judge, Judge::Bad);
-    assert!(engine.bad_attempted_notes.contains(&NoteId(1)));
+    assert!(engine.attempted_notes.contains(&NoteId(1)));
     assert_eq!(engine.judged_notes.get(&NoteId(1)), None);
     assert_eq!(engine.judged_notes.get(&NoteId(2)), Some(&Judge::Great));
 
     let missed = engine.process_misses(&chart, TimeUs(1_183_334));
-    assert!(missed.events.is_empty());
+    assert!(!missed.events[0].affects_score);
+    assert!(missed.events[0].advances_score);
     assert_eq!(engine.judged_notes.get(&NoteId(1)), Some(&Judge::Poor));
 }
 
@@ -516,8 +518,7 @@ fn scratch_press_uses_scratch_window() {
 #[test]
 fn cn_release_uses_long_note_end_window() {
     let mut window_set = JudgeWindows::uniform(windows());
-    window_set.long_note_end =
-        JudgeWindow::symmetric(120_000, 160_000, 200_000, 220_000, 0, 0, 16_000);
+    window_set.long_note_end = JudgeWindow::symmetric(120_000, 160_000, 200_000, 220_000, 0, 0);
     let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
     chart.long_notes[0].mode = Some(LongNoteMode::Cn);
     let mut engine = JudgeEngine::new_with_window_set(window_set, RuleMode::Beatoraja);
@@ -636,6 +637,11 @@ fn bss_reverse_press_suppression_expires_after_thirty_milliseconds() {
         assert!(reverse_outcome.consumed_input);
         assert_eq!(reverse_outcome.events.is_empty(), suppressed);
         assert_eq!(!engine.judged_notes.contains_key(&NoteId(3)), suppressed);
+        if suppressed {
+            let after = engine
+                .process_input(&chart, InputEvent { time: TimeUs(reverse_time.0 + 1), ..reverse });
+            assert_eq!(after.events[0].note_id, Some(NoteId(3)));
+        }
     }
 }
 
@@ -703,9 +709,9 @@ fn dx_9key_ln_early_bad_release_can_be_cancelled_during_margin() {
             .is_some_and(|active| active.pending_release.is_some())
     );
 
-    let before_margin = engine.process_misses(&chart, TimeUs(1_850_000));
+    let before_margin = engine.process_misses(&chart, TimeUs(1_866_666));
     assert!(before_margin.events.is_empty());
-    let repress = engine.process_input(&chart, press_at(TimeUs(1_866_666)));
+    let repress = engine.process_input(&chart, press_at(TimeUs(1_866_667)));
     assert!(repress.events.is_empty());
     assert!(repress.consumed_input);
 
@@ -824,8 +830,7 @@ fn missed_cn_head_marks_both_head_and_tail_poor() {
 #[test]
 fn held_cn_tail_miss_uses_normal_note_bad_window() {
     let mut window_set = JudgeWindows::uniform(windows());
-    window_set.long_note_end =
-        JudgeWindow::symmetric(120_000, 160_000, 200_000, 220_000, 0, 0, 16_000);
+    window_set.long_note_end = JudgeWindow::symmetric(120_000, 160_000, 200_000, 220_000, 0, 0);
     let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
     chart.long_notes[0].mode = Some(LongNoteMode::Cn);
     let mut engine = JudgeEngine::new_with_window_set(window_set, RuleMode::Beatoraja);

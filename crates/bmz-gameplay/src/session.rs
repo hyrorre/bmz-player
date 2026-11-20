@@ -22,8 +22,7 @@ use crate::judge::model::{
     MineHitEvent,
 };
 use crate::judge::window::{
-    judge_percent_at_time_for_keymode, judge_windows_for_rule_mode_and_keymode,
-    scale_judge_windows_for_playback_rate,
+    judge_percent_at_time_for_keymode, scale_judge_windows_for_playback_rate,
 };
 use crate::replay::{ReplayPlayer, ReplayRecorder};
 use crate::rule::RuleMode;

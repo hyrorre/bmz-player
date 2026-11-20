@@ -5,13 +5,29 @@ pub fn compile_gauge_definition(
     total: f64,
     total_notes: u32,
 ) -> GaugeRuntimeDefinition {
+    compile_gauge_definition_for_rule(base, total, total_notes, RuleMode::Beatoraja)
+}
+
+pub(super) fn compile_gauge_definition_for_rule(
+    base: &GaugeDefinition,
+    total: f64,
+    total_notes: u32,
+    rule_mode: RuleMode,
+) -> GaugeRuntimeDefinition {
     let mut values = base.values;
     if base.modifier == GaugeModifier::Pop && total_notes >= 1537 {
         // Endless Dream DX 9KEY: 辛ゲージ帯では GOOD の基礎回復量を2倍にする。
         values[GaugeJudgeIndex::Gd as usize] *= 2.0;
     }
     for value in &mut values {
-        *value = apply_modifier(*value, base.modifier, total, total_notes);
+        *value = if base.modifier == GaugeModifier::ModifyDamage
+            && rule_mode == RuleMode::Beatoraja
+            && *value < 0.0
+        {
+            *value * beatoraja_damage_scale(total, total_notes)
+        } else {
+            apply_modifier(*value, base.modifier, total, total_notes)
+        };
     }
 
     GaugeRuntimeDefinition {
@@ -76,6 +92,22 @@ pub(super) fn apply_modifier(
             }
         }
     }
+}
+
+fn beatoraja_damage_scale(total: f64, total_notes: u32) -> f32 {
+    let thresholds = [240.0, 230.0, 210.0, 200.0, 180.0, 160.0, 150.0, 130.0, 120.0];
+    let scales: [f32; 10] = [1.0, 1.11, 1.25, 1.5, 1.666, 2.0, 2.5, 3.333, 5.0, 10.0];
+    let total_scale = scales[thresholds.iter().take_while(|&&threshold| total < threshold).count()];
+    let mut note_scale = 1.0_f32;
+    let mut note = 1000_u32;
+    let mut multiplier = 0.002_f32;
+    // Preserve the upstream OR and signed subtraction, including negative terms.
+    while note > total_notes || note > 1 {
+        note_scale += multiplier * (i64::from(note) - i64::from(total_notes.max(note / 2))) as f32;
+        note /= 2;
+        multiplier *= 2.0;
+    }
+    total_scale.max(note_scale)
 }
 
 pub(super) fn modify_damage_scale(total: f64, total_notes: u32) -> f32 {

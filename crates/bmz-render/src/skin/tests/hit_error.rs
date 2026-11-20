@@ -15,7 +15,7 @@ fn document(definition: serde_json::Value) -> SkinDocument {
 fn state() -> SkinDrawState {
     SkinDrawState {
         note_judge_window: Some(JudgeWindow::symmetric(
-            20_000, 40_000, 60_000, 100_000, 150_000, 150_000, 0,
+            20_000, 40_000, 60_000, 100_000, 150_000, 150_000,
         )),
         ..Default::default()
     }

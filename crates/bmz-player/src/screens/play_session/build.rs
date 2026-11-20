@@ -61,7 +61,7 @@ pub fn apply_placeholder_session_visuals(
         bottom_shiftable_gauge_from_config(profile.play.bottom_shiftable_gauge)
     };
     let gauge_property =
-        options.gauge_property.unwrap_or_else(|| GaugeProperty::from_keymode(rule_key_mode));
+        GaugeProperty::for_rule_mode(rule_key_mode, profile.play.rule_mode, options.gauge_property);
     // TOTAL は譜面パース前で不明だが、init/max/border は TOTAL 非依存なので
     // ノーツ数由来のデフォルト TOTAL で代用して問題ない。
     let rule_mode = profile.play.rule_mode;
@@ -379,52 +379,36 @@ pub fn build_game_session_with_input_backend(
         chart.metadata.initial_bpm,
         &chart.timing_events,
     );
-    let speed_locked = options.speed_constraint == bmz_core::course::CourseSpeedConstraint::NoSpeed;
-    let hispeed_mode = initial_hispeed_mode(&mode_config, hs_fix, speed_locked);
-    let target_green_number = mode_config.target_green_number.max(1);
-    let lift = if speed_locked { 0.0 } else { lift_from_mode_config(&mode_config) };
-    let lane_cover = if speed_locked {
-        0.0
-    } else {
-        crate::config::play::clamp_lane_cover_for_lift(lane_unit_to_f32(mode_config.sudden), lift)
-    };
-    // Practice では CONSTANT を無効にする。初期 HS も実際に使う状態で求める。
-    let constant_enabled = mode_config.constant_enabled
-        && session_mode != crate::select_options::SessionMode::Practice;
-    let hsfix_base_bpm = hsfix_base_bpm_for_chart(&chart, &timing_map, hs_fix, constant_enabled);
-    let hispeed = if speed_locked {
-        1.0
-    } else {
-        initial_hispeed_for_mode(
-            &mode_config,
-            hispeed_mode,
-            target_green_number,
-            // SUDDEN+無効時の保存値はFloatingの可視範囲に含めない。
-            if lanecover_enabled_from_mode_config(&mode_config) { lane_cover } else { 0.0 },
-            lift,
-            &chart,
-            &timing_map,
+    let InitialLaneSpeed {
+        speed_locked,
+        hispeed_mode,
+        target_green_number,
+        lift,
+        lane_cover,
+        constant_enabled,
+        hsfix_base_bpm,
+        hispeed,
+    } = initial_lane_speed(
+        &chart,
+        &timing_map,
+        &mode_config,
+        &InitialLaneSpeedOptions {
             hs_fix,
-            options.playback_rate_percent,
-            constant_enabled,
-        )
-    };
-
-    // Course judge constraints narrow the judge window so the corresponding
-    // judge band is unreachable: NoGood zeroes good_us, NoGreat zeroes both
-    // great_us and good_us.  Mirrors beatoraja JudgeManager's *JudgeWindowRate
-    // = 0 path.
-    let base_judge_windows = apply_judge_constraint_to_windows(
-        crate::assist::apply_custom_judge_windows(
-            replay_judge_windows_for_keymode_and_rule_mode(
-                primary_key_mode,
-                rule_mode,
-                replay_player.as_ref().is_some_and(|player| player.legacy_dx_pop_judge),
-            ),
-            options.assist,
-        ),
-        options.judge_constraint,
+            speed_constraint: options.speed_constraint,
+            session_mode,
+            playback_rate_percent: options.playback_rate_percent,
+        },
     );
+
+    let base_judge_windows = replay_judge_windows_for_keymode_and_rule_mode(
+        primary_key_mode,
+        rule_mode,
+        replay_player.as_ref().is_some_and(|player| player.legacy_dx_pop_judge),
+    );
+    let window_rates =
+        replay_player.as_ref().and_then(|player| player.judge_window_rates).unwrap_or_else(|| {
+            crate::assist::judge_window_rates(options.assist, rule_mode, options.judge_constraint)
+        });
     let base_judge_windows = replay_player
         .as_ref()
         .and_then(|player| player.kaleid.as_ref())
@@ -434,11 +418,11 @@ pub fn build_game_session_with_input_backend(
     let base_judge_window = base_judge_windows.note;
 
     let gauge_total =
-        gauge_total_for_chart_and_rule_mode(chart.metadata.total, scored_total_notes, rule_mode);
+        bmz_gameplay::gauge::gauge_total_for_play(&chart.metadata, scored_total_notes, rule_mode);
     // 単曲時はチャートのキーモードから GaugeProperty を導出、コース時は
     // `apply_course_constraints` が CourseGaugeConstraint から決めた値を使う。
     let gauge_property =
-        options.gauge_property.unwrap_or_else(|| GaugeProperty::from_keymode(primary_key_mode));
+        GaugeProperty::for_rule_mode(primary_key_mode, rule_mode, options.gauge_property);
     let mut gauge = {
         if gauge_auto_shift != GaugeAutoShiftMode::Off {
             let mut gauge = GaugeState::new_with_auto_shift_property_and_rule_mode_and_keymode(
@@ -515,9 +499,20 @@ pub fn build_game_session_with_input_backend(
             } else {
                 options.playback_rate_percent
             };
+            let opponent_rates = opponent
+                .replay_player
+                .as_ref()
+                .and_then(|player| player.judge_window_rates)
+                .unwrap_or_else(|| {
+                    crate::assist::judge_window_rates(
+                        options.assist,
+                        rule_mode,
+                        options.judge_constraint,
+                    )
+                });
             let gauge_type = opponent.gauge.unwrap_or(gauge_type);
-            let gauge_total = gauge_total_for_chart_and_rule_mode(
-                chart.metadata.total,
+            let gauge_total = bmz_gameplay::gauge::gauge_total_for_play(
+                &chart.metadata,
                 scored_total_notes,
                 rule_mode,
             );
@@ -525,32 +520,36 @@ pub fn build_game_session_with_input_backend(
                 conditional: bmz_gameplay::session::conditional::ConditionalRuntime::from_player(
                     opponent.replay_player.as_ref(),
                 ),
-                judge: JudgeEngine::new_with_window_set_algorithm_and_keymode(
-                    scale_judge_windows_for_playback_rate(
-                        judge_windows_for_rule_mode_and_keymode(
-                            base_judge_windows,
-                            judge_percent_at_time_for_keymode(
-                                chart.metadata.judge_rank_spec,
-                                &chart.judge_rank_events,
-                                TimeUs(0),
-                                key_mode,
+                judge: {
+                    let mut judge = JudgeEngine::new_with_window_set_algorithm_and_keymode(
+                        scale_judge_windows_for_playback_rate(
+                            opponent_rates.for_rank(
+                                base_judge_windows,
+                                judge_percent_at_time_for_keymode(
+                                    chart.metadata.judge_rank_spec,
+                                    &chart.judge_rank_events,
+                                    TimeUs(0),
+                                    key_mode,
+                                    rule_mode,
+                                ),
                                 rule_mode,
+                                key_mode,
                             ),
-                            rule_mode,
-                            key_mode,
+                            judge_rate,
                         ),
-                        judge_rate,
-                    ),
-                    rule_mode,
-                    judge_algorithm,
-                    key_mode,
-                )
-                .with_chart_index(chart.clone()),
+                        rule_mode,
+                        judge_algorithm,
+                        key_mode,
+                    )
+                    .with_chart_index(chart.clone());
+                    judge.window_rates = opponent_rates;
+                    judge
+                },
                 gauge: GaugeState::new_with_property_and_rule_mode_and_keymode(
                     gauge_type,
                     gauge_total,
                     scored_total_notes,
-                    GaugeProperty::from_keymode(key_mode),
+                    GaugeProperty::for_rule_mode(key_mode, rule_mode, options.gauge_property),
                     rule_mode,
                     key_mode,
                 ),
@@ -569,6 +568,7 @@ pub fn build_game_session_with_input_backend(
                 gauge_max_started_at: None,
                 full_combo_started_at: None,
                 lane_keyon_started_at: Default::default(),
+                lane_key_hold: Default::default(),
                 lane_hcn_timer: Default::default(),
                 last_hcn_gauge_at: None,
             }
@@ -579,7 +579,7 @@ pub fn build_game_session_with_input_backend(
 
     let mut judge = JudgeEngine::new_with_window_set_algorithm_and_keymode(
         scale_judge_windows_for_playback_rate(
-            judge_windows_for_rule_mode_and_keymode(
+            window_rates.for_rank(
                 base_judge_windows,
                 judge_percent_at_time_for_keymode(
                     chart.metadata.judge_rank_spec,
@@ -598,13 +598,14 @@ pub fn build_game_session_with_input_backend(
         primary_key_mode,
     )
     .with_chart_index(chart.clone());
+    judge.window_rates = window_rates;
     if let Some(projection) = &replay_lane_projection {
         judge.set_scratch_lane_mask(projection.playback_scratch_lane_mask);
     }
 
     let result_wait_end_time = (profile.play.wait_all_notes_result && !session_mode.is_practice())
         .then(|| result_wait_end_time(&chart));
-    GameSession {
+    let mut session = GameSession {
         play_end: Arc::default(),
         conditional: bmz_gameplay::session::conditional::ConditionalRuntime::from_player(
             replay_player.as_ref(),
@@ -642,7 +643,7 @@ pub fn build_game_session_with_input_backend(
         recent_inputs: Vec::new(),
         lane_keyon_started_at: Default::default(),
         lane_keyoff_started_at: Default::default(),
-        lane_scratch_direction: Default::default(),
+        lane_key_hold: Default::default(),
         lane_scratch_angle_delta_ms: Default::default(),
         scratch_angle_last_render_at: None,
         lane_auto_release_at: Default::default(),
@@ -664,6 +665,8 @@ pub fn build_game_session_with_input_backend(
         offsets: play_offsets_from_profile_for_mode(profile, play_config_key_mode),
         audio_mix: audio_mix_from_profile(profile),
         hispeed,
+        // 表示上のHS値は他のフィールドが揃ってから求める。
+        hispeed_change_base: hispeed,
         hispeed_mode,
         base_hispeed_mode: base_hispeed_mode(mode_config.base_hispeed),
         floating_policy: floating_policy(mode_config.floating_policy),
@@ -709,6 +712,145 @@ pub fn build_game_session_with_input_backend(
         scoring_closed_at: None,
         natural_result_settled_at: None,
         last_hcn_gauge_at: None,
+    };
+    session.hispeed_change_base =
+        crate::screens::play_snapshot::display_hispeed_for_session(&session);
+    session
+}
+
+/// プレイ開始時のレーン速度。`build_game_session`と、ロード中の表示を実譜面に合わせる
+/// 処理で同じ規則を使う。
+struct InitialLaneSpeed {
+    speed_locked: bool,
+    hispeed_mode: HispeedMode,
+    target_green_number: u32,
+    lift: f32,
+    lane_cover: f32,
+    constant_enabled: bool,
+    hsfix_base_bpm: f64,
+    hispeed: f32,
+}
+
+struct InitialLaneSpeedOptions {
+    hs_fix: HsFixOption,
+    speed_constraint: bmz_core::course::CourseSpeedConstraint,
+    session_mode: crate::select_options::SessionMode,
+    playback_rate_percent: u16,
+}
+
+impl InitialLaneSpeedOptions {
+    fn from_session_options(options: &PlaySessionOptions) -> Self {
+        Self {
+            hs_fix: options.hs_fix,
+            speed_constraint: options.speed_constraint,
+            session_mode: options.session_mode,
+            playback_rate_percent: options.playback_rate_percent,
+        }
+    }
+}
+
+fn initial_lane_speed(
+    chart: &PlayableChart,
+    timing_map: &bmz_chart::timing::TimingMap,
+    mode_config: &PlayModeConfig,
+    options: &InitialLaneSpeedOptions,
+) -> InitialLaneSpeed {
+    let hs_fix = options.hs_fix;
+    let speed_locked = options.speed_constraint == bmz_core::course::CourseSpeedConstraint::NoSpeed;
+    let hispeed_mode = initial_hispeed_mode(mode_config, hs_fix, speed_locked);
+    let target_green_number = mode_config.target_green_number.max(1);
+    let lift = if speed_locked { 0.0 } else { lift_from_mode_config(mode_config) };
+    let lane_cover = if speed_locked {
+        0.0
+    } else {
+        crate::config::play::clamp_lane_cover_for_lift(lane_unit_to_f32(mode_config.sudden), lift)
+    };
+    // Practice では CONSTANT を無効にする。初期 HS も実際に使う状態で求める。
+    let constant_enabled = mode_config.constant_enabled
+        && options.session_mode != crate::select_options::SessionMode::Practice;
+    let hsfix_base_bpm = hsfix_base_bpm_for_chart(chart, timing_map, hs_fix, constant_enabled);
+    let hispeed = if speed_locked {
+        1.0
+    } else {
+        initial_hispeed_for_mode(
+            mode_config,
+            hispeed_mode,
+            target_green_number,
+            // SUDDEN+無効時の保存値はFloatingの可視範囲に含めない。
+            if lanecover_enabled_from_mode_config(mode_config) { lane_cover } else { 0.0 },
+            lift,
+            chart,
+            timing_map,
+            hs_fix,
+            options.playback_rate_percent,
+            constant_enabled,
+        )
+    };
+    InitialLaneSpeed {
+        speed_locked,
+        hispeed_mode,
+        target_green_number,
+        lift,
+        lane_cover,
+        constant_enabled,
+        hsfix_base_bpm,
+        hispeed,
+    }
+}
+
+/// 実譜面から求めたプレイ開始時のHSとレーンカバー。`hispeed`は実効倍率、
+/// `display_hispeed`はskin表示・保存と比率方式のHS変更の基準に使う表示上の値。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InitialSessionHispeed {
+    pub hispeed: f32,
+    pub hispeed_mode: HispeedMode,
+    pub display_hispeed: f32,
+    pub lift: f32,
+    pub lane_cover: f32,
+    /// HS-FIXの基準BPM。LR2の表示変換係数とFloatingの再計算に使う。
+    pub hsfix_base_bpm: f32,
+    /// LR2 + HS-FIXで表示HSと実効倍率を変換する係数。それ以外は1.0。
+    pub classic_hsfix_scale: f32,
+}
+
+/// `build_game_session`が作るsessionの初期HSを、sessionを作らずに求める。
+pub fn initial_session_hispeed(
+    chart: &PlayableChart,
+    profile: &ProfileConfig,
+    options: &PlaySessionOptions,
+) -> InitialSessionHispeed {
+    let play_config_key_mode = play_config_key_mode(chart.metadata.key_mode, options);
+    let mode_config = profile.play_mode_config(play_config_key_mode);
+    let timing_map = bmz_chart::timing::TimingMap::from_chart_timing_events(
+        chart.metadata.initial_bpm,
+        &chart.timing_events,
+    );
+    let speed = initial_lane_speed(
+        chart,
+        &timing_map,
+        &mode_config,
+        &InitialLaneSpeedOptions::from_session_options(options),
+    );
+    let lr2_hispeed = !speed.speed_locked && mode_config.base_hispeed == BaseHispeedConfig::Lr2;
+    let classic_hsfix_scale = crate::screens::play_snapshot::classic_hsfix_scale_for_option(
+        lr2_hispeed,
+        options.hs_fix,
+        speed.hsfix_base_bpm,
+        options.playback_rate_percent,
+    );
+    let display_hispeed = if speed.hispeed_mode == HispeedMode::Classic {
+        crate::config::play::classic_display_hispeed(speed.hispeed, classic_hsfix_scale)
+    } else {
+        speed.hispeed
+    };
+    InitialSessionHispeed {
+        hispeed: speed.hispeed,
+        hispeed_mode: speed.hispeed_mode,
+        display_hispeed,
+        lift: speed.lift,
+        lane_cover: speed.lane_cover,
+        hsfix_base_bpm: speed.hsfix_base_bpm as f32,
+        classic_hsfix_scale,
     }
 }
 
@@ -752,43 +894,6 @@ pub(super) fn play_config_key_mode(
         return DoubleOption::battle_key_mode(chart_key_mode);
     }
     options.play_config_key_mode.unwrap_or(chart_key_mode)
-}
-
-pub(super) fn apply_judge_constraint_to_windows(
-    windows: JudgeWindows,
-    constraint: bmz_core::course::CourseJudgeConstraint,
-) -> JudgeWindows {
-    JudgeWindows {
-        note: apply_judge_constraint_to_window(windows.note, constraint),
-        scratch: apply_judge_constraint_to_window(windows.scratch, constraint),
-        long_note_end: apply_judge_constraint_to_window(windows.long_note_end, constraint),
-        long_scratch_end: apply_judge_constraint_to_window(windows.long_scratch_end, constraint),
-        long_note_end_fast: windows
-            .long_note_end_fast
-            .map(|window| apply_judge_constraint_to_window(window, constraint)),
-        long_scratch_end_fast: windows
-            .long_scratch_end_fast
-            .map(|window| apply_judge_constraint_to_window(window, constraint)),
-        long_note_release_margin_us: windows.long_note_release_margin_us,
-        long_scratch_release_margin_us: windows.long_scratch_release_margin_us,
-    }
-}
-
-pub(super) fn apply_judge_constraint_to_window(
-    mut window: JudgeWindow,
-    constraint: bmz_core::course::CourseJudgeConstraint,
-) -> JudgeWindow {
-    match constraint {
-        bmz_core::course::CourseJudgeConstraint::Normal => {}
-        bmz_core::course::CourseJudgeConstraint::NoGood => {
-            window.good_us = 0;
-        }
-        bmz_core::course::CourseJudgeConstraint::NoGreat => {
-            window.great_us = 0;
-            window.good_us = 0;
-        }
-    }
-    window
 }
 
 pub(super) const fn base_hispeed_mode(base: BaseHispeedConfig) -> HispeedMode {

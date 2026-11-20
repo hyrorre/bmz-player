@@ -363,10 +363,10 @@ fn load_select_items_uses_profile_ln_policy_for_score_lookup() {
     library_db.upsert_chart_import(&record_for_chart("/songs/alpha.bms", &alpha)).unwrap();
     let mut force_ln_score = score_for_chart(alpha.identity.file_sha256);
     force_ln_score.ln_policy = LnScorePolicy::ForceLn;
-    force_ln_score.score.judges.slow_pgreat = 50;
+    force_ln_score.score.judges.fast_pgreat = 50;
     let mut force_cn_score = score_for_chart(alpha.identity.file_sha256);
     force_cn_score.ln_policy = LnScorePolicy::ForceCn;
-    force_cn_score.score.judges.slow_pgreat = 100;
+    force_cn_score.score.judges.fast_pgreat = 100;
     score_db.insert_score(&force_ln_score).unwrap();
     score_db.insert_score(&force_cn_score).unwrap();
 

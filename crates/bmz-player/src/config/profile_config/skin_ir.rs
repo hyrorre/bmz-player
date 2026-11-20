@@ -631,6 +631,8 @@ impl ProfileConfig {
                 normal_hispeed_level: default_normal_hispeed_level(),
                 classic_hispeed_step: default_classic_hispeed_step(),
                 floating_hispeed_step: default_floating_hispeed_step(),
+                hispeed_change_type: HispeedChangeTypeConfig::Fixed,
+                hispeed_change_ratio: default_hispeed_change_ratio(),
                 sudden: DEFAULT_LANE_COVER_AMOUNT,
                 lift: DEFAULT_LANE_COVER_AMOUNT,
                 lift_enabled: false,
