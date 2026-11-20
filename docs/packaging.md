@@ -39,6 +39,13 @@ binaryに埋め込みます。Windows buildでは`bmz-player-window-windows.png`
 Windowsのstaging directoryとInno Setup installerは`scripts/package-windows.ps1`
 で作ります。
 
+GitHub ReleaseのWindows x64はWindows 8.1互換を目標に、固定したnightlyと
+`x86_64-win7-windows-msvc`でビルドします。PowerShell 7で先に`build-windows-compat.ps1`を実行し、
+package scriptへ`-Target x86_64-win7-windows-msvc -SkipBuild`を渡します。
+VC/UCRTの同梱、CRTを静的リンクしたupdater、CI起動試験の範囲は
+[Windows互換ビルド](windows-compat.md#リリースとci)を参照してください。
+installerはWindows 8.1以降を対象にします。8.1自体での動作確認は未実施です。
+
 PowerShell 5.1以降で実行する:
 
 ```powershell
@@ -51,11 +58,14 @@ PowerShell 5.1以降で実行する:
 dist/windows/BMZ Player/
 ```
 
-staging layout:
+SxS を選んだ場合の staging 構成です。
 
 ```text
 BMZ Player/
   bmz-player.exe
+  dll/
+    dll.manifest
+    *.dll
   updater/
     bmz-updater.exe
     bmz-package.json
@@ -75,6 +85,11 @@ BMZ Player/
       third-party-notices.txt
       rust-dependency-licenses.txt
 ```
+
+SxS の公開設定と橋渡し版の順序は [protocol 4 の配布順](auto-update.md#protocol-4-の配布順)を参照してください。
+既定の flat 配置と橋渡し版では同梱 DLL を `bmz-player.exe` の横に置きます。
+SxS 版の Setup は上書き完了後、以前の installer の manifest と SHA-256 が一致する直下 DLL を
+`updater/installer-dll-backup/` へ退避します。追加 DLL と編集済み DLL は元の場所に残ります。
 
 `bmz-player.exe`の隣の`resources`がruntimeの`resource_dir`になります。
 `config.toml`, `library.db`, `profiles`, `score.db`, `replay`などのユーザー状態は

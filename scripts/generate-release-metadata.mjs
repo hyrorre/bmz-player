@@ -2,7 +2,13 @@ import { lstat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { combineClientHashManifests } from './combine-client-hash-manifests.mjs'
-import { hashFile, signBytes, signManifest, validateVersion } from './generate-update-metadata.mjs'
+import {
+  hashFile,
+  signBytes,
+  signManifest,
+  validateVersion,
+  windowsPackageProtocol,
+} from './generate-update-metadata.mjs'
 
 // These identities also define the complete official release inventory.
 export const builds = [
@@ -57,15 +63,12 @@ export async function generateRelease(
   directory,
   version,
   commit,
-  { minProtocol = 2, bridge = null, layout = 'grouped', unsigned = false } = {},
+  { minProtocol, bridge = null, layout = 'grouped', dllLayout = 'flat', unsigned = false } = {},
 ) {
   validateVersion(version)
-  if (!['grouped', 'legacy'].includes(layout)) throw new Error('Invalid updater layout')
-  if (
-    !Number.isSafeInteger(minProtocol) ||
-    minProtocol < (layout === 'grouped' ? 2 : 1) ||
-    minProtocol > 3
-  )
+  const packageProtocol = windowsPackageProtocol(layout, dllLayout)
+  minProtocol ??= packageProtocol
+  if (!Number.isSafeInteger(minProtocol) || minProtocol < packageProtocol || minProtocol > 4)
     throw new Error('Invalid updater protocol for this release')
   if (bridge !== null) {
     validateVersion(bridge.replace(/^v/, ''))
@@ -191,10 +194,14 @@ async function main() {
     throw new Error('Usage: generate-release-metadata.mjs DIRECTORY VERSION COMMIT [--unsigned]')
   const unsigned = flag === '--unsigned'
   const layout = process.env.BMZ_WINDOWS_UPDATER_LAYOUT || 'grouped'
+  const dllLayout = process.env.BMZ_WINDOWS_DLL_LAYOUT || 'flat'
   const manifest = await generateRelease(directory, version, commit, {
     layout,
+    dllLayout,
     unsigned,
-    minProtocol: Number(process.env.BMZ_MIN_UPDATER_PROTOCOL || (layout === 'grouped' ? 2 : 1)),
+    minProtocol: Number(
+      process.env.BMZ_MIN_UPDATER_PROTOCOL || windowsPackageProtocol(layout, dllLayout),
+    ),
     bridge: process.env.BMZ_UPDATE_BRIDGE_TAG || null,
   })
   await writeReleaseMetadata(directory, manifest, {

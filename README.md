@@ -100,7 +100,7 @@ Currently bundled submodules:
 
 ## System Requirements
 
-- Windows: Windows 10 or higher is natively supported via DirectX 12. Older versions of Windows may require Vulkan drivers.
+- Windows: release binaries target Windows 8.1 compatibility, but execution on 8.1 is not yet verified. Rendering tries DirectX 12, Vulkan, then OpenGL; compatible GPU drivers are required. See [Windows compatibility](docs/windows-compat.md).
 - macOS: macOS 10.13 High Sierra or newer is required to utilize Apple's Metal API.
 - Linux: Vulkan support is required. You must ensure you have the correct Vulkan drivers installed (e.g., the proprietary drivers for your dedicated GPU or mesa-vulkan-drivers for Intel/AMD graphics).
 

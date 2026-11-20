@@ -5,6 +5,12 @@ fn main() {
     let result = match args.as_slice() {
         [option, path] if option == "--apply" => bmz_updater::process::run_request(Path::new(path)),
         [option, path] if option == "--recover" => bmz_updater::process::recover(Path::new(path)),
+        [option, root] if option == "--prepare-installer-dll-cleanup" => {
+            bmz_updater::installer::prepare_dll_cleanup(Path::new(root))
+        }
+        [option, root, version] if option == "--retire-installer-dlls" => {
+            bmz_updater::installer::retire_dlls(Path::new(root), &version.to_string_lossy())
+        }
         [option] if option == "--help" => {
             println!("bmz-updater --recover INSTALL_DIR\nInternal: --apply REQUEST.json");
             return;
@@ -13,6 +19,11 @@ fn main() {
     };
     if let Err(error) = result {
         eprintln!("{error:#}");
+        if args.first().is_some_and(|arg| {
+            arg == "--prepare-installer-dll-cleanup" || arg == "--retire-installer-dlls"
+        }) {
+            std::process::exit(1);
+        }
         if args.first().is_some_and(|arg| arg == "--apply") && !bmz_updater::process::committed() {
             println!("ERROR {}", format!("{error:#}").replace(['\n', '\r'], " "));
             std::process::exit(1);

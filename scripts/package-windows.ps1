@@ -14,11 +14,17 @@ param(
     [switch]$SkipRustLicenseReport,
     [ValidateSet("grouped", "legacy")]
     [string]$UpdaterLayout = "grouped",
+    [ValidateSet("flat", "sxs")]
+    [string]$DllLayout = "flat",
     [switch]$Smoke
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+if ($DllLayout -eq 'sxs' -and ($UpdaterLayout -ne 'grouped' -or $Target -ne 'x86_64-win7-windows-msvc')) {
+    throw 'SxS packaging requires the grouped Windows x64 compatibility build'
+}
+. (Join-Path $PSScriptRoot 'windows-sxs-assembly.ps1')
 
 function Resolve-RepoRoot {
     return (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -173,6 +179,9 @@ function Copy-DllDirectory {
     Require-Directory $Source
     $dlls = Get-ChildItem -LiteralPath $Source -Filter "*.dll" -File
     foreach ($dll in $dlls) {
+        if ($DllLayout -eq 'sxs' -and (Test-Path -LiteralPath (Join-Path $Destination $dll.Name))) {
+            throw "Duplicate DLL in SxS input: $($dll.Name)"
+        }
         Copy-Item -LiteralPath $dll.FullName -Destination (Join-Path $Destination $dll.Name) -Force
     }
 }
@@ -473,8 +482,15 @@ foreach ($dir in $dllDirs) {
 }
 
 $arch = Resolve-InstallerArch $Target
+if ($Target -eq "x86_64-win7-windows-msvc") {
+    & (Join-Path $PSScriptRoot "copy-windows-compat-runtime.ps1") -Destination $stageDir -RejectDuplicates:($DllLayout -eq 'sxs')
+}
+if ($DllLayout -eq 'sxs') {
+    Install-WindowsPrivateAssembly $stageDir
+    & (Join-Path $PSScriptRoot 'verify-windows-compat-imports.ps1') -PackageDirectory $stageDir
+}
 $updateMetadataScript = Join-Path $repoRoot "scripts\generate-update-metadata.mjs"
-Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "portable", "windows-$arch", $version, $UpdaterLayout)
+Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "portable", "windows-$arch", $version, $UpdaterLayout, $DllLayout)
 
 if ($Smoke) {
     Write-Host "==> Running packaged smoke test"
@@ -506,17 +522,18 @@ if ($Installer) {
     $arch = Resolve-InstallerArch $Target
 
     Write-Host "==> Building Inno Setup installer"
-    Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "installer", "windows-$arch", $version, $UpdaterLayout)
-    Invoke-Native $iscc @(
+    Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "installer", "windows-$arch", $version, $UpdaterLayout, $DllLayout)
+    $installerArguments = @(
         "/DAppVersion=$version",
         "/DSourceDir=$stageDir",
         "/DOutputDir=$installerOutDir",
         "/DIconFile=$appIcon",
-        "/DAppArch=$arch",
-        $issPath
+        "/DAppArch=$arch"
     )
+    if ($DllLayout -eq 'sxs') { $installerArguments += '/DSxsDllLayout=1' }
+    Invoke-Native $iscc ($installerArguments + $issPath)
     # Keep staging ready for the portable ZIP after building the installer.
-    Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "portable", "windows-$arch", $version, $UpdaterLayout)
+    Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "portable", "windows-$arch", $version, $UpdaterLayout, $DllLayout)
 }
 
 Write-Host "==> Done"

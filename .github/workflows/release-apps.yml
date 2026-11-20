@@ -6,7 +6,7 @@ name: Release Apps
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to build, for example v0.1.0
+        description: Release tag, or Git ref for a Windows-only test
         required: true
         type: string
       upload_to_release:
@@ -16,6 +16,16 @@ name: Release Apps
         type: boolean
       clobber_assets:
         description: Replace existing release assets with the same names
+        required: true
+        default: false
+        type: boolean
+      windows_only:
+        description: Build and smoke-test Windows only, without publishing a release
+        required: true
+        default: false
+        type: boolean
+      windows_sxs:
+        description: Build the dll/ layout in a Windows-only test
         required: true
         default: false
         type: boolean
@@ -31,9 +41,10 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   BMZ_UPDATE_PUBLIC_KEY: ${{ vars.BMZ_UPDATE_PUBLIC_KEY }}
-  BMZ_WINDOWS_UPDATER_LAYOUT: ${{ vars.BMZ_WINDOWS_UPDATER_LAYOUT || 'grouped' }}
+  BMZ_WINDOWS_DLL_LAYOUT: ${{ inputs.windows_only && (inputs.windows_sxs && 'sxs' || 'flat') || vars.BMZ_WINDOWS_DLL_LAYOUT || 'flat' }}
+  BMZ_WINDOWS_UPDATER_LAYOUT: ${{ (inputs.windows_only && inputs.windows_sxs) && 'grouped' || vars.BMZ_WINDOWS_UPDATER_LAYOUT || 'grouped' }}
   BMZ_UPDATE_BRIDGE_TAG: ${{ vars.BMZ_UPDATE_BRIDGE_TAG }}
-  BMZ_MIN_UPDATER_PROTOCOL: ${{ vars.BMZ_MIN_UPDATER_PROTOCOL }}
+  BMZ_MIN_UPDATER_PROTOCOL: ${{ (inputs.windows_only && inputs.windows_sxs) && '4' || vars.BMZ_MIN_UPDATER_PROTOCOL }}
 
 jobs:
   metadata:
@@ -59,6 +70,7 @@ jobs:
           EVENT_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ inputs.tag }}
           INPUT_UPLOAD: ${{ inputs.upload_to_release }}
+          WINDOWS_ONLY: ${{ inputs.windows_only }}
         run: |
           set -euo pipefail
 
@@ -74,6 +86,10 @@ jobs:
             echo "failed to read workspace version from Cargo.toml" >&2
             exit 1
           fi
+          if [[ "${WINDOWS_ONLY}" == "true" ]]; then
+            tag="v${cargo_version}"
+            version="${cargo_version}"
+          fi
           if [[ "${version}" != "${cargo_version}" ]]; then
             echo "tag ${tag} does not match workspace version ${cargo_version}" >&2
             exit 1
@@ -83,6 +99,7 @@ jobs:
           if [[ "${EVENT_NAME}" == "release" || "${INPUT_UPLOAD}" == "true" ]]; then
             should_upload=true
           fi
+          if [[ "${WINDOWS_ONLY}" == "true" ]]; then should_upload=false; fi
 
           {
             echo "tag=${tag}"
@@ -100,11 +117,14 @@ jobs:
           node --test scripts/generate-release-metadata.test.mjs
 
   build-windows:
-    name: Build Windows x64
-    runs-on: windows-2025
+    name: Build Windows x64 (8.1 compatibility)
+    runs-on: windows-2022
     needs: metadata
+    timeout-minutes: 120
     env:
       BMZ_VERSION: ${{ needs.metadata.outputs.version }}
+      RUSTUP_TOOLCHAIN: nightly-2026-11-19
+      BMZ_WINDOWS_TARGET: x86_64-win7-windows-msvc
       VCPKG_DEFAULT_TRIPLET: x64-windows-release
       VCPKGRS_TRIPLET: x64-windows-release
       VCPKG_ROOT: C:\vcpkg
@@ -118,9 +138,11 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Show Rust toolchain
+      - name: Install compatibility Rust toolchain
         shell: pwsh
         run: |
+          rustup toolchain install $env:RUSTUP_TOOLCHAIN --profile minimal --component rust-src
+          if ($LASTEXITCODE -ne 0) { throw "Rust toolchain installation failed" }
           rustup show
           rustc -Vv
           cargo -V
@@ -132,18 +154,35 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: release-windows-x64-${{ hashFiles('Cargo.lock', 'triplets/x64-windows-release.cmake') }}
+          key: release-windows-win7-${{ env.RUSTUP_TOOLCHAIN }}-${{ hashFiles('Cargo.lock', 'triplets/x64-windows-release.cmake') }}
           restore-keys: |
-            release-windows-x64-
+            release-windows-win7-${{ env.RUSTUP_TOOLCHAIN }}-
 
       - name: Install cargo-about
         shell: pwsh
         run: cargo install --locked --features cli cargo-about
 
+      - name: Prepare ASIO SDK
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "asio-sdk.zip"
+          Invoke-WebRequest -Uri "https://download.steinberg.net/sdk_downloads/ASIO-SDK_2.3.4_2025-10-15.zip" -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne "D5EBF0C20DD2C5F43771FD0C1418F4B361BF52434EE670097CFA6B3A335E2ECA") {
+            throw "ASIO SDK checksum mismatch"
+          }
+          $destination = Join-Path $env:RUNNER_TEMP "bmz-asio-sdk"
+          [IO.Compression.ZipFile]::ExtractToDirectory($archive, $destination)
+          $sdk = Join-Path $destination "ASIOSDK"
+          foreach ($header in @("common/asio.h", "host/asiodrivers.h")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $sdk $header))) { throw "Missing ASIO SDK header: $header" }
+          }
+          "CPAL_ASIO_DIR=$sdk" >> $env:GITHUB_ENV
+
       - name: Install Windows packaging dependencies
         shell: pwsh
         run: |
-          choco install innosetup --no-progress --yes
+          .\scripts\test-windows-compat-build.ps1
+          choco upgrade innosetup --version=6.7.1 --allow-downgrade --no-progress --yes
 
           if (-not (Test-Path -LiteralPath (Join-Path $env:VCPKG_ROOT "vcpkg.exe"))) {
             git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
@@ -186,6 +225,36 @@ jobs:
             throw "BMZ_RIANIR_DEV_CLIENT_HASH must not be set for official releases"
           }
 
+      - name: Verify the published Windows SxS bridge
+        if: needs.metadata.outputs.should_upload == 'true' && env.BMZ_WINDOWS_DLL_LAYOUT == 'sxs'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:BMZ_UPDATE_BRIDGE_TAG
+          if ($tag -notmatch '^v\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?$') {
+            throw "Set BMZ_UPDATE_BRIDGE_TAG to the published protocol-4 bridge tag"
+          }
+          $bridge = gh release view $tag --json isDraft,isPrerelease,assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $bridge.isDraft -or ($env:BMZ_VERSION -notlike '*-*' -and $bridge.isPrerelease) -or
+              "bmz-player-$tag-windows-x64-portable.zip" -notin $bridge.assets.name -or
+              "bmz-player-$tag-windows-x64-setup.exe" -notin $bridge.assets.name -or 'updates.json' -notin $bridge.assets.name) {
+            throw "Publish the bridge portable ZIP, Setup, and updates.json for this release channel before publishing dll/ packages"
+          }
+          $source = git show "refs/tags/${tag}:crates/bmz-updater/src/lib.rs"
+          if ($LASTEXITCODE -ne 0 -or ($source -join "`n") -notmatch '(?m)^pub const PROTOCOL: u32 = 4;$') {
+            throw "The bridge tag must ship a protocol-4 updater"
+          }
+          $envelope = gh release download $tag --pattern updates.json --output - | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $envelope.signature) { throw "The bridge must publish signed updates.json" }
+          $legacy = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($envelope.payload)) | ConvertFrom-Json
+          foreach ($kind in @('portable', 'installer')) {
+            $package = @($legacy.packages | Where-Object { $_.target -eq 'windows-x64' -and $_.kind -eq $kind })
+            if ($legacy.schema -ne 1 -or $package.Count -ne 1 -or $package[0].min_updater_protocol -ne 1) {
+              throw "The $kind bridge must be readable by protocol-1 clients"
+            }
+          }
+
       - name: Package Windows app
         shell: pwsh
         run: |
@@ -195,10 +264,17 @@ jobs:
           if ("${{ needs.metadata.outputs.should_upload }}" -eq "true" -and $env:BMZ_WINDOWS_UPDATER_LAYOUT -eq "grouped" -and -not $env:BMZ_UPDATE_BRIDGE_TAG) {
             throw "Publish a legacy-layout protocol-2 bridge first, then set BMZ_UPDATE_BRIDGE_TAG"
           }
+          .\scripts\build-windows-compat.ps1 -Toolchain $env:RUSTUP_TOOLCHAIN -Target $env:BMZ_WINDOWS_TARGET
           .\scripts\package-windows.ps1 `
+            -SkipBuild `
+            -Target $env:BMZ_WINDOWS_TARGET `
             -Installer `
+            -DllLayout $env:BMZ_WINDOWS_DLL_LAYOUT `
             -UpdaterLayout $env:BMZ_WINDOWS_UPDATER_LAYOUT `
             -DllDir (Join-Path $env:VCPKG_ROOT "installed\$env:VCPKG_DEFAULT_TRIPLET\bin")
+          $provenance = "dist\release\bmz-player-v$env:BMZ_VERSION-windows-x64-provenance.txt"
+          "Rust target: $env:BMZ_WINDOWS_TARGET, toolchain: $env:RUSTUP_TOOLCHAIN" | Out-File -LiteralPath $provenance -Encoding utf8 -Append
+          Get-Content "dist\windows\BMZ Player\resources\licenses\windows-runtime.json" | Out-File -LiteralPath $provenance -Encoding utf8 -Append
 
       - name: Test portable update recovery
         shell: pwsh
@@ -206,16 +282,32 @@ jobs:
 
       - name: Test installer file preservation
         shell: pwsh
-        run: .\scripts\test-windows-installer.ps1
+        run: |
+          $package = "dist\windows\BMZ Player"
+          $helper = Join-Path $package "updater\bmz-updater.exe"
+          if (-not (Test-Path -LiteralPath $helper)) { $helper = Join-Path $package "bmz-updater.exe" }
+          .\scripts\test-windows-installer.ps1 -UpdaterPath $helper
 
       - name: Test packaged data isolation
         shell: pwsh
         run: .\scripts\test-windows-package-paths.ps1 -BinaryDirectory "dist\windows\BMZ Player"
 
-      - name: Verify packaged executable
+      - name: Test packaged Windows startup
         shell: pwsh
-        run: |
-          & "dist\windows\BMZ Player\bmz-player.exe" --help
+        run: .\scripts\test-windows-compat.ps1 -PackageDirectory "dist\windows\BMZ Player" -OutputDirectory ".local\windows-compat-ci"
+
+      - name: Upload Windows startup diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-compat-startup
+          path: |
+            .local/windows-compat-ci/*.txt
+            .local/windows-compat-ci/*.csv
+            .local/windows-compat-ci/*.log
+            .local/windows-compat-ci/package/data/logs/*.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Create Windows release files
         shell: pwsh
@@ -249,6 +341,7 @@ jobs:
           retention-days: 14
 
   build-macos:
+    if: ${{ !inputs.windows_only }}
     name: Build macOS ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     needs: metadata
@@ -490,6 +583,7 @@ jobs:
           fi
 
   build-flatpak:
+    if: ${{ !inputs.windows_only }}
     name: Build Linux Flatpak x64
     runs-on: ubuntu-latest
     container:
@@ -662,6 +756,7 @@ jobs:
           retention-days: 14
 
   build-linux-tar:
+    if: ${{ !inputs.windows_only }}
     name: Build Linux tar x64
     runs-on: ubuntu-26.04
     needs: metadata
@@ -700,6 +795,7 @@ jobs:
           retention-days: 14
 
   attach-release-assets:
+    if: ${{ !inputs.windows_only }}
     name: Attach release assets
     runs-on: ubuntu-latest
     needs:
