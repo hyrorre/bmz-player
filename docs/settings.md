@@ -406,6 +406,7 @@ Windowsでの高速なファイル探索は[Everything連携](everything.md)を�
 ## 難易度表
 
 難易度表は表名を表示し、URLはマウスを重ねたときのツールチップに表示します。
+登録するURLには、難易度表のHTMLページまたはヘッダーJSON（`header.json`など）を指定できます。
 フォルダ構成は[仮想フォルダ](select-folders.md)、一括取得は[譜面ダウンロード](chart-downloads.md)を参照してください。
 
 ## IR

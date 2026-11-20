@@ -414,18 +414,23 @@ fn strip_bom(s: &str) -> &str {
 }
 
 fn find_bmstable_meta(html: &str) -> Option<String> {
-    for line in html.lines() {
-        let lower = line.to_lowercase();
-        if lower.contains("<meta") && lower.contains("name=\"bmstable\"") {
-            return extract_attr(line, "content");
+    html.split('<').skip(1).find_map(|fragment| {
+        let (tag, _) = fragment.split_once('>')?;
+        let (tag_name, attrs) = tag.split_once(|ch: char| ch.is_ascii_whitespace())?;
+        if !tag_name.eq_ignore_ascii_case("meta") {
+            return None;
         }
-    }
-    None
+        let name = extract_attr(attrs, "name")?;
+        if !name.eq_ignore_ascii_case("bmstable") {
+            return None;
+        }
+        extract_attr(attrs, "content")
+    })
 }
 
 fn extract_attr(tag: &str, attr: &str) -> Option<String> {
     let search = format!("{attr}=\"");
-    let lower = tag.to_lowercase();
+    let lower = tag.to_ascii_lowercase();
     let start = lower.find(&search)? + search.len();
     let rest = &tag[start..];
     Some(rest[..rest.find('"')?].to_string())
@@ -479,6 +484,12 @@ mod tests {
     #[test]
     fn find_bmstable_meta_handles_content_before_name() {
         let html = r#"<meta content="header.json" name="bmstable">"#;
+        assert_eq!(find_bmstable_meta(html), Some("header.json".to_string()));
+    }
+
+    #[test]
+    fn find_bmstable_meta_ignores_other_meta_tags_on_same_line() {
+        let html = r#"<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><meta name="bmstable" content="header.json"/></head></html>"#;
         assert_eq!(find_bmstable_meta(html), Some("header.json".to_string()));
     }
 
