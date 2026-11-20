@@ -393,7 +393,6 @@ impl WinitApp {
             self.viewer_mode,
             self.play.practice_session.is_some(),
             score_save_disabled,
-            self.play.active_course.is_some(),
         ) {
             self.integrations.oraja_helper.send(payload);
         }
@@ -410,12 +409,11 @@ fn helper_play_allowed(
     !(viewer || practice || score_save_disabled || autoplay || replay)
 }
 
-fn helper_result_payload(
+pub(crate) fn helper_result_payload(
     finished: &FinishedPlaySession,
     viewer: bool,
     practice: bool,
     score_save_disabled: bool,
-    course_stage: bool,
 ) -> Option<Value> {
     if !helper_play_allowed(
         viewer,
@@ -434,12 +432,8 @@ fn helper_result_payload(
             "md5": s.chart_md5.map(|hash| crate::storage::common::hash_to_hex(&hash)).unwrap_or_default()});
     add_options(&mut payload, &finished.applied_arrange, s.key_mode);
     add_result(&mut payload, &finished.result);
-    if course_stage {
-        let clear =
-            crate::storage::play_result::course_stage_clear_type(finished.result.clear_type);
-        payload["clearLamp"] = json!(clear.as_str());
-        payload["clearLampId"] = json!(clear as u8);
-    }
+    payload["clearLamp"] = json!(s.clear_type.as_str());
+    payload["clearLampId"] = json!(s.clear_type as u8);
     Some(payload)
 }
 
@@ -492,7 +486,7 @@ mod tests {
             let finished = debug_boot_finished_play_session();
             assert_eq!(allowed, expected, "song_play and song_play_end at FREQ {freq}");
             assert_eq!(
-                helper_result_payload(&finished, false, false, options.score_save_disabled, false)
+                helper_result_payload(&finished, false, false, options.score_save_disabled)
                     .is_some(),
                 expected,
                 "song_result at FREQ {freq}"
@@ -508,15 +502,15 @@ mod tests {
         finished.result.total_notes = 10;
         finished.result.score = Default::default();
         finished.result.score.judges.fast_pgreat = 3;
-        let payload = helper_result_payload(&finished, false, false, false, true).unwrap();
+        let payload = helper_result_payload(&finished, false, false, false).unwrap();
         assert_eq!(payload["event"], "song_result");
         assert_eq!(payload["sha256"], "ab".repeat(32));
         assert_eq!(payload["randomSeed"], 42);
         assert_eq!(payload["score"], 6);
         assert_eq!(payload["judges"]["epg"], 3);
-        assert!(helper_result_payload(&finished, false, false, true, true).is_none());
+        assert!(helper_result_payload(&finished, false, false, true).is_none());
         finished.result.autoplay = true;
-        assert!(helper_result_payload(&finished, false, false, false, true).is_none());
+        assert!(helper_result_payload(&finished, false, false, false).is_none());
     }
 
     #[test]
@@ -537,8 +531,10 @@ mod tests {
             (ClearType::Max, ClearType::Max),
         ] {
             finished.result.clear_type = clear;
-            let stage = helper_result_payload(&finished, false, false, false, true).unwrap();
-            let single = helper_result_payload(&finished, false, false, false, false).unwrap();
+            finished.summary.clear_type = expected;
+            let stage = helper_result_payload(&finished, false, false, false).unwrap();
+            finished.summary.clear_type = clear;
+            let single = helper_result_payload(&finished, false, false, false).unwrap();
             assert_eq!(stage["clearLamp"], expected.as_str());
             assert_eq!(stage["clearLampId"], expected as u8);
             assert_eq!(single["clearLamp"], clear.as_str());

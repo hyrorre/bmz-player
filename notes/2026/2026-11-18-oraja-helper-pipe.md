@@ -116,3 +116,10 @@ WSL 経由で実行し、送信元の振り分けと Play→Play の試行リセ
 
 実際の helper GUI と OBS 表示、物理入力による完走・quick retry、
 macOS / Linux ビルドは未確認。
+
+## 2026-11-21 コース各曲のランプ送信
+
+`song_result` のランプはコース結果生成時の `summary.clear_type` を使用する。
+スコア・判定・BPは元の結果から作成し、途中FAILED時の未処理ノーツをBPに含める。
+実際の `FinishResultMode::CourseStage` の結果を使って完走、途中FAILED、
+FC、Perfect、Maxの送信値を検証する。Windowsの実機とhelper GUIの結合確認は未実施。

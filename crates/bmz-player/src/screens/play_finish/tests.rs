@@ -866,6 +866,84 @@ fn finish_session_result_course_stage_rounds_summary_clear_type() {
 }
 
 #[test]
+fn helper_course_stage_payload_uses_finished_lamp_and_original_bp() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = profile_paths(root.path());
+    let mut scores = open_score_db();
+    let mut network = open_network_db();
+    for expected in [
+        ClearType::Hard,
+        ClearType::Failed,
+        ClearType::FullCombo,
+        ClearType::Perfect,
+        ClearType::Max,
+    ] {
+        let mut s = session();
+        s.gauge = bmz_gameplay::gauge::GaugeState::new(
+            bmz_core::clear::GaugeType::Hard,
+            160.0,
+            s.chart.total_notes,
+        );
+        s.gauge.set_initial_value(100.0);
+        s.score.past_notes = 1;
+        s.score.combo = 1;
+        s.score.judges.fast_pgreat = 1;
+        match expected {
+            ClearType::Hard => {
+                s.score.combo = 0;
+                s.score.judges.fast_bad = 1;
+            }
+            ClearType::Failed => {
+                s.state = PlayState::Failed;
+                s.score.past_notes = 0;
+                s.score.combo = 0;
+                s.score.judges.fast_bad = 1;
+            }
+            ClearType::FullCombo => s.score.judges.fast_good = 1,
+            ClearType::Perfect => s.score.judges.fast_great = 1,
+            ClearType::Max => {}
+            _ => unreachable!(),
+        }
+        let finished = finish_session_result(
+            &mut scores,
+            &mut network,
+            FinishSessionResultRequest {
+                profile_paths: &paths,
+                replay_config: &ReplayConfig {
+                    auto_save: false,
+                    slot_rules: crate::config::profile_config::default_slot_rules(),
+                },
+                ir_config: &IrConfig::default(),
+                session: &s,
+                played_at: 100,
+                applied_arrange: &AppliedArrange::default(),
+                source_ln_profile: ChartLnProfile::from_chart(&s.chart),
+                chart_length_ms: None,
+                play_duration_ms: None,
+                target_ex_score: None,
+                score_key: score_key(&s),
+                practice_mode: false,
+                finish_mode: FinishResultMode::CourseStage,
+            },
+        )
+        .unwrap();
+        assert_eq!(finished.result.clear_type, expected);
+        let lamp = if matches!(expected, ClearType::Hard | ClearType::Failed) {
+            ClearType::NoPlay
+        } else {
+            expected
+        };
+        let payload = crate::app::helper_result_payload(&finished, false, false, false).unwrap();
+        assert_eq!(payload["clearLamp"], lamp.as_str());
+        assert_eq!(payload["clearLampId"], lamp as u8);
+        assert_eq!(payload["missCount"], finished.result.record_bp());
+        if expected == ClearType::Failed {
+            assert!(finished.result.record_bp() > finished.result.score.bp());
+        }
+    }
+}
+
+#[test]
 fn finish_session_result_course_stage_enqueues_ir_with_rounded_clear_type() {
     let root = make_temp_dir("finish-course-stage-ir");
     let paths = ProfilePaths {
