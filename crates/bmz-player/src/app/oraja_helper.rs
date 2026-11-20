@@ -59,9 +59,30 @@ impl HelperClient {
             }
             sender
         });
-        if sender.try_send((Instant::now(), payload)).is_err() {
-            tracing::warn!("oraja_helper queue unavailable; event discarded");
+        if let Err(error) = sender.try_send((Instant::now(), payload)) {
+            let level = queue_failure_level(&error);
+            let (reason, (_, payload)) = match error {
+                std::sync::mpsc::TrySendError::Full(item) => ("full", item),
+                std::sync::mpsc::TrySendError::Disconnected(item) => ("disconnected", item),
+            };
+            let event = payload.get("event").and_then(Value::as_str).unwrap_or("unknown");
+            if level == tracing::Level::DEBUG {
+                tracing::debug!(event, reason, "oraja_helper queue unavailable; event discarded");
+            } else {
+                tracing::warn!(event, reason, "oraja_helper queue unavailable; event discarded");
+            }
         }
+    }
+}
+
+fn queue_failure_level(error: &std::sync::mpsc::TrySendError<(Instant, Value)>) -> tracing::Level {
+    match error {
+        std::sync::mpsc::TrySendError::Full((_, payload))
+            if payload.get("event").and_then(Value::as_str) == Some("song_select") =>
+        {
+            tracing::Level::DEBUG
+        }
+        _ => tracing::Level::WARN,
     }
 }
 
@@ -418,6 +439,23 @@ fn helper_result_payload(
 mod tests {
     use super::*;
     use crate::select_options::ArrangeOption;
+
+    #[test]
+    fn full_selection_queue_is_debug_but_result_and_disconnection_warn() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        sender.try_send((Instant::now(), json!({"event": "song_play"}))).unwrap();
+        for (event, expected) in [
+            ("song_select", tracing::Level::DEBUG),
+            ("song_play_end", tracing::Level::WARN),
+            ("song_result", tracing::Level::WARN),
+        ] {
+            let error = sender.try_send((Instant::now(), json!({"event": event}))).unwrap_err();
+            assert_eq!(queue_failure_level(&error), expected);
+        }
+        drop(receiver);
+        let error = sender.try_send((Instant::now(), json!({"event": "song_select"}))).unwrap_err();
+        assert_eq!(queue_failure_level(&error), tracing::Level::WARN);
+    }
 
     #[test]
     fn selection_waits_for_stability_and_cancels_on_change_or_exit() {
