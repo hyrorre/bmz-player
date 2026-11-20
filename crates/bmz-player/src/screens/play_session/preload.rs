@@ -1280,7 +1280,7 @@ pub fn build_practice_prepared_from_preloaded(
     let (practice_gauge, gauge_auto_shift, bottom_shiftable_gauge) =
         practice_gauge_runtime_options(profile, property.gauge, &options);
     options.gauge_override = Some(practice_gauge);
-    options.gauge_property = property.gauge_category;
+    options.gauge_property = property.gauge_category_override(profile.play.rule_mode);
     options.gauge_auto_shift = gauge_auto_shift;
     options.bottom_shiftable_gauge = bottom_shiftable_gauge;
     options.arrange = property.arrange;
@@ -1295,7 +1295,16 @@ pub fn build_practice_prepared_from_preloaded(
     let mut session =
         build_game_session_with_input_backend(Arc::new(chart), profile, options, input_backend);
     session.audio_mix.chart_normalization_gain = preloaded.chart_normalization_gain;
-    apply_practice_start_gauge(&mut session.gauge, property.start_gauge);
+    let start_gauge = if property.uses_legacy_gauge() {
+        let rules = crate::screens::practice::PracticeRuleContext {
+            rule_mode: session.rule_mode,
+            key_mode: session.primary_key_mode,
+        };
+        rules.gauge_bounds(property).start(property)
+    } else {
+        property.start_gauge
+    };
+    apply_practice_start_gauge(&mut session.gauge, start_gauge);
     let mut render_snapshot_cache =
         crate::screens::play_snapshot::PlayRenderSnapshotCache::from_chart(&session.chart);
     render_snapshot_cache.skin_chart = Arc::clone(&preloaded.render_snapshot_cache.skin_chart);

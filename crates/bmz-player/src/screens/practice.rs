@@ -22,7 +22,8 @@ use crate::select_options::ArrangeOption;
 mod persistence;
 
 /// 1: the judge rank is saved as a percentage.
-/// 2: the gauge category also applies in LR2oraja mode.
+/// 2: the saved category applies in LR2oraja too. Older files keep their gauge semantics
+/// until the player selects a category in LR2oraja.
 const PRACTICE_PROPERTY_FORMAT_VERSION: u32 = 2;
 const PRACTICE_PLAYBACK_RATE_MIN: u16 = 50;
 const PRACTICE_PLAYBACK_RATE_MAX: u16 = 200;
@@ -124,6 +125,20 @@ pub struct PracticeProperty {
     pub graph_type: PracticeGraphType,
 }
 
+impl PracticeProperty {
+    pub(super) fn uses_legacy_gauge(&self) -> bool {
+        self.format_version < 2
+    }
+
+    pub(super) fn gauge_category_override(&self, rule_mode: RuleMode) -> Option<GaugeProperty> {
+        if self.uses_legacy_gauge() && rule_mode == RuleMode::Lr2Oraja {
+            None
+        } else {
+            self.gauge_category
+        }
+    }
+}
+
 impl Default for PracticeProperty {
     fn default() -> Self {
         Self {
@@ -156,6 +171,12 @@ pub struct PracticeGaugeBounds {
     pub max: u32,
 }
 
+impl PracticeGaugeBounds {
+    pub fn start(self, property: &PracticeProperty) -> u32 {
+        property.start_gauge.clamp(1, self.max)
+    }
+}
+
 impl PracticeRuleContext {
     pub fn for_play_session(
         rule_mode: RuleMode,
@@ -175,9 +196,16 @@ impl PracticeRuleContext {
         self.rule_mode == RuleMode::Dx
     }
 
+    pub fn gauge_category(self, property: &PracticeProperty) -> GaugeProperty {
+        GaugeProperty::for_rule_mode(
+            self.key_mode,
+            self.rule_mode,
+            property.gauge_category_override(self.rule_mode),
+        )
+    }
+
     pub fn gauge_bounds(self, property: &PracticeProperty) -> PracticeGaugeBounds {
-        let category =
-            GaugeProperty::for_rule_mode(self.key_mode, self.rule_mode, property.gauge_category);
+        let category = self.gauge_category(property);
         let definition = bmz_gameplay::gauge::gauge_definitions_for_rule_mode_and_keymode(
             category,
             self.rule_mode,
@@ -191,7 +219,10 @@ impl PracticeRuleContext {
     }
 
     pub fn clamp_start_gauge(self, property: &mut PracticeProperty) {
-        property.start_gauge = property.start_gauge.clamp(1, self.gauge_bounds(property).max);
+        // A legacy start value can be valid in another rule using the same file.
+        if !property.uses_legacy_gauge() {
+            property.start_gauge = self.gauge_bounds(property).start(property);
+        }
     }
 
     pub fn set_gauge(self, property: &mut PracticeProperty, gauge: PracticeGaugeType) {
@@ -207,8 +238,11 @@ impl PracticeRuleContext {
     }
 
     pub fn set_gauge_category(self, property: &mut PracticeProperty, category: GaugeProperty) {
-        if self.is_dx() || property.gauge_category == Some(category) {
+        if self.is_dx() || self.gauge_category(property) == category {
             return;
+        }
+        if self.rule_mode == RuleMode::Lr2Oraja && property.uses_legacy_gauge() {
+            property.format_version = 2;
         }
         property.gauge_category = Some(category);
         property.start_gauge = self.gauge_bounds(property).initial;
@@ -280,9 +314,11 @@ pub fn load_practice_property(
     } else {
         migrate_legacy_practice_property(&mut property, chart, rules.rule_mode);
     }
-    property
-        .gauge_category
-        .get_or_insert_with(|| GaugeProperty::for_rule_mode(rules.key_mode, rules.rule_mode, None));
+    if !property.uses_legacy_gauge() {
+        property.gauge_category.get_or_insert_with(|| {
+            GaugeProperty::for_rule_mode(rules.key_mode, rules.rule_mode, None)
+        });
+    }
     if !loaded_from_file && rules.is_dx() {
         property.start_gauge = rules.gauge_bounds(&property).initial;
     }
@@ -320,27 +356,20 @@ fn migrate_legacy_practice_property(
     chart: &PlayableChart,
     rule_mode: RuleMode,
 ) {
-    if property.format_version >= PRACTICE_PROPERTY_FORMAT_VERSION {
+    if property.format_version >= 1 {
         return;
     }
 
     // BMZ の旧形式は初回値に BMS の生 #RANK / #DEFEXRANK を保存し、
     // 次回開始時に BMSON の倍率 (%) として再解釈していた。譜面由来の
     // 旧初期値と一致する場合だけ移行し、ユーザーが変更した値は保持する。
-    if property.format_version < 1
-        && let Some(spec) = chart.metadata.judge_rank_spec
+    if let Some(spec) = chart.metadata.judge_rank_spec
         && matches!(spec.kind, JudgeRankKind::BmsRank | JudgeRankKind::DefExRank)
         && property.judgerank == spec.value.clamp(1, 400)
     {
         property.judgerank = practice_judgerank_percent(chart, rule_mode);
     }
-    // 形式1までは LR2oraja でもキーモード別の区分を補完して保存していたが、
-    // 実際のゲージは常に LR2 だった。保存値が効くようになっても、旧ファイルは
-    // それまでと同じ LR2 のまま遊べるようにする。
-    if property.format_version < 2 && rule_mode == RuleMode::Lr2Oraja {
-        property.gauge_category = Some(GaugeProperty::Lr2);
-    }
-    property.format_version = PRACTICE_PROPERTY_FORMAT_VERSION;
+    property.format_version = 1;
 }
 
 pub fn save_practice_property(
@@ -518,13 +547,16 @@ pub fn adjust_practice_selected_field(
             rules.set_gauge(property, gauge);
         }
         3 => {
-            let mut category = property.gauge_category;
-            cycle_gauge_category(&mut category, increment);
-            rules.set_gauge_category(property, category.unwrap_or_default());
+            let category = cycle_gauge_category(rules.gauge_category(property), increment);
+            rules.set_gauge_category(property, category);
         }
         4 => {
-            let max = rules.gauge_bounds(property).max;
-            adjust_u32(&mut property.start_gauge, direction, 1, max);
+            let bounds = rules.gauge_bounds(property);
+            let start = bounds.start(property);
+            let adjusted = start.saturating_add_signed(direction).clamp(1, bounds.max);
+            if adjusted != start {
+                property.start_gauge = adjusted;
+            }
         }
         5 => property.judgerank = (property.judgerank + direction).clamp(1, 400),
         6 => {
@@ -556,12 +588,11 @@ fn cycle_gauge(value: &mut PracticeGaugeType, increment: bool) {
     *value = PracticeGaugeType::VALUES[(index + if increment { 1 } else { len - 1 }) % len];
 }
 
-fn cycle_gauge_category(value: &mut Option<GaugeProperty>, increment: bool) {
+fn cycle_gauge_category(current: GaugeProperty, increment: bool) -> GaugeProperty {
     let values =
         [GaugeProperty::FiveKeys, GaugeProperty::SevenKeys, GaugeProperty::Pms, GaugeProperty::Lr2];
-    let current = value.unwrap_or(GaugeProperty::SevenKeys);
     let index = values.iter().position(|item| *item == current).unwrap_or(0);
-    *value = Some(values[(index + if increment { 1 } else { values.len() - 1 }) % values.len()]);
+    values[(index + if increment { 1 } else { values.len() - 1 }) % values.len()]
 }
 
 fn cycle_graph_type(value: &mut PracticeGraphType, increment: bool) {
@@ -834,52 +865,60 @@ mod tests {
             PracticeProperty { format_version: 0, judgerank: 3, ..Default::default() };
         migrate_legacy_practice_property(&mut legacy_default, &chart, RuleMode::Beatoraja);
         assert_eq!(legacy_default.judgerank, 100);
-        assert_eq!(legacy_default.format_version, PRACTICE_PROPERTY_FORMAT_VERSION);
+        assert_eq!(legacy_default.format_version, 1);
 
         let mut customized =
             PracticeProperty { format_version: 0, judgerank: 2, ..Default::default() };
         migrate_legacy_practice_property(&mut customized, &chart, RuleMode::Beatoraja);
         assert_eq!(customized.judgerank, 2);
-        assert_eq!(customized.format_version, PRACTICE_PROPERTY_FORMAT_VERSION);
+        assert_eq!(customized.format_version, 1);
     }
 
     #[test]
-    fn format_1_practice_keeps_the_lr2_gauge_in_lr2oraja_mode() {
+    fn editing_a_legacy_gauge_uses_the_displayed_value_and_persists_the_selection() {
         let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
         let paths = crate::paths::resolve_profile_paths(&data.paths, "default").unwrap();
         let mut chart = empty_chart(120_000);
         chart.metadata.key_mode = KeyMode::K9;
-        for (format_version, rule_mode, expected) in [
-            (1, RuleMode::Lr2Oraja, GaugeProperty::Lr2),
-            (1, RuleMode::Beatoraja, GaugeProperty::Pms),
-            (2, RuleMode::Lr2Oraja, GaugeProperty::Pms),
-        ] {
-            // Format 1 filled in the key-mode category even in LR2oraja mode.
-            let saved = PracticeProperty {
-                format_version,
-                gauge_category: Some(GaugeProperty::Pms),
-                start_gauge: 20,
-                ..Default::default()
-            };
-            save_practice_property(&paths, &chart.identity.file_sha256, &saved).unwrap();
-            let rules = PracticeRuleContext { rule_mode, key_mode: KeyMode::K9 };
-            let loaded = load_practice_property(
-                &paths,
-                &chart.identity.file_sha256,
-                &chart,
-                GaugeTypeConfig::Normal,
-                rules,
-                &Default::default(),
-            )
-            .unwrap();
-            assert_eq!(loaded.gauge_category, Some(expected), "{format_version} {rule_mode:?}");
-            assert_eq!(loaded.format_version, PRACTICE_PROPERTY_FORMAT_VERSION);
-            assert_eq!(loaded.start_gauge, 20);
-        }
+        let hash = &chart.identity.file_sha256;
         let lr2 = PracticeRuleContext { rule_mode: RuleMode::Lr2Oraja, key_mode: KeyMode::K9 };
-        let migrated =
-            PracticeProperty { gauge_category: Some(GaugeProperty::Lr2), ..Default::default() };
-        assert_eq!(lr2.gauge_bounds(&migrated).max, 100);
+        let bea = PracticeRuleContext { rule_mode: RuleMode::Beatoraja, ..lr2 };
+        let mut property = PracticeProperty {
+            format_version: 1,
+            gauge_category: Some(GaugeProperty::Pms),
+            start_gauge: 117,
+            ..Default::default()
+        };
+
+        // An increment at the LR2 limit leaves the shared start value alone. A decrement starts from 100.
+        adjust_practice_selected_field(&mut property, 4, false, true, 120_000, lr2);
+        assert_eq!(property.start_gauge, 117);
+        adjust_practice_selected_field(&mut property, 4, false, false, 120_000, lr2);
+        assert_eq!(property.start_gauge, 99);
+        assert_eq!(lr2.gauge_category(&property), GaugeProperty::Lr2);
+
+        bea.set_gauge_category(&mut property, GaugeProperty::SevenKeys);
+        assert_eq!(lr2.gauge_category(&property), GaugeProperty::Lr2);
+        bea.set_gauge_category(&mut property, GaugeProperty::Pms);
+        let mut from_panel = property.clone();
+        lr2.set_gauge_category(&mut from_panel, GaugeProperty::Pms);
+        // One step back from the displayed LR2 selects PMS, which is also the old saved value.
+        adjust_practice_selected_field(&mut property, 3, false, false, 120_000, lr2);
+        assert_eq!(property, from_panel);
+        save_practice_property(&paths, hash, &property).unwrap();
+        let loaded = load_practice_property(
+            &paths,
+            hash,
+            &chart,
+            GaugeTypeConfig::Normal,
+            lr2,
+            &Default::default(),
+        )
+        .unwrap();
+        assert_eq!(loaded.format_version, 2);
+        assert_eq!(lr2.gauge_category(&loaded), GaugeProperty::Pms);
+        assert_eq!(loaded.start_gauge, 30);
+        assert_eq!(lr2.gauge_bounds(&loaded).max, 120);
     }
 
     #[test]

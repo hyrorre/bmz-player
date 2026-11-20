@@ -505,6 +505,61 @@ fn build_practice_session_preserves_preloaded_hsfix_and_rule_mode() {
 }
 
 #[test]
+fn legacy_practice_autosave_preserves_gauges_across_rule_changes() {
+    use crate::config::profile_config::GaugeTypeConfig;
+    use crate::screens::practice::{
+        PracticeRuleContext, load_practice_property, save_practice_property,
+    };
+    use RuleMode::{Beatoraja, Dx, Lr2Oraja};
+
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    let paths = crate::paths::resolve_profile_paths(&data.paths, "default").unwrap();
+    let mut source = chart();
+    source.metadata.key_mode = KeyMode::K9;
+    let hash = &source.identity.file_sha256;
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+
+    for modes in [[Lr2Oraja, Beatoraja, Dx], [Beatoraja, Lr2Oraja, Dx], [Dx, Lr2Oraja, Beatoraja]] {
+        for (version, category) in [(0, None), (1, Some(GaugeProperty::Pms)), (1, None)] {
+            let saved = PracticeProperty {
+                format_version: version,
+                gauge_category: category,
+                start_gauge: 117,
+                ..Default::default()
+            };
+            save_practice_property(&paths, hash, &saved).unwrap();
+            for mode in modes {
+                profile.play.rule_mode = mode;
+                let rules = PracticeRuleContext { rule_mode: mode, key_mode: KeyMode::K9 };
+                let loaded = load_practice_property(
+                    &paths,
+                    hash,
+                    &source,
+                    GaugeTypeConfig::Normal,
+                    rules,
+                    &Default::default(),
+                )
+                .unwrap();
+                let prepared = build_practice_prepared_from_preloaded(
+                    preloaded_play_session(source.clone()),
+                    &profile,
+                    &loaded,
+                    PlaySessionOptions::default(),
+                    Box::new(NullInputBackend),
+                );
+                let gauge = prepared.session.gauge.current();
+                let expected = if mode == Lr2Oraja { (100.0, 100.0) } else { (117.0, 120.0) };
+                assert_eq!((gauge.value, gauge.definition.max), expected, "{modes:?} {mode:?}");
+                assert_eq!(loaded.gauge_category, category);
+                assert_eq!(loaded.start_gauge, 117);
+                assert_eq!(loaded.format_version, 1);
+                save_practice_property(&paths, hash, &loaded).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
 fn practice_dx_preloaded_gauges_match_effective_rules_and_keep_fixed_scoring() {
     use crate::screens::practice::{PracticeRuleContext, clamp_practice_property};
 

@@ -123,10 +123,7 @@ pub fn build_practice_panel(
             if practice.rules.field_is_fixed(3) {
                 ui.label(RichText::new(dx_rule_label(practice.rules)).weak());
             } else {
-                let mut category = practice
-                    .property
-                    .gauge_category
-                    .unwrap_or_else(|| GaugeProperty::from_keymode(practice.rules.key_mode));
+                let mut category = practice.rules.gauge_category(practice.property);
                 let previous_category = category;
                 egui::ComboBox::from_id_salt("practice_gauge_category")
                     .selected_text(gauge_category_label(category))
@@ -142,10 +139,11 @@ pub fn build_practice_panel(
         });
         practice_field_label(ui, practice.cursor, 4, text.text("practice-gauge-percent"));
         ui.horizontal(|ui| {
-            let max = practice.rules.gauge_bounds(practice.property).max;
-            ui.add(
-                egui::DragValue::new(&mut practice.property.start_gauge).range(1..=max).speed(0.2),
-            );
+            let bounds = practice.rules.gauge_bounds(practice.property);
+            let mut start = bounds.start(practice.property);
+            if ui.add(egui::DragValue::new(&mut start).range(1..=bounds.max).speed(0.2)).changed() {
+                practice.property.start_gauge = start;
+            }
         });
         practice_field_label(ui, practice.cursor, 5, text.text("practice-judge-rank"));
         ui.horizontal(|ui| {
@@ -488,6 +486,55 @@ mod tests {
                 assert!(!arrange_label(text, arrange).starts_with("practice-"));
             }
         }
+    }
+
+    #[test]
+    fn legacy_lr2_panel_displays_effective_gauge_without_changing_saved_values() {
+        let ctx = egui::Context::default();
+        let mut property = PracticeProperty {
+            format_version: 1,
+            gauge_category: Some(GaugeProperty::Pms),
+            start_gauge: 117,
+            ..Default::default()
+        };
+        let before = property.clone();
+        let graph = ResultGraphSnapshot::default();
+        let mut cursor = 4;
+        let mut panel = PracticePanelContext {
+            property: &mut property,
+            rules: PracticeRuleContext {
+                rule_mode: bmz_gameplay::rule::RuleMode::Lr2Oraja,
+                key_mode: bmz_core::lane::KeyMode::K9,
+            },
+            graph: &graph,
+            graph_start_time_ms: 0,
+            is_double: false,
+            cursor: &mut cursor,
+            chart_title: "Legacy Practice",
+            media_ready: true,
+            input_enabled: true,
+            max_end_time_ms: 120_000,
+            default_position: None,
+        };
+        let draw = |panel: &mut PracticePanelContext<'_>| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                build_practice_panel(ui.ctx(), panel, Localizer::new(AppLocale::En));
+            })
+        };
+        let _ = draw(&mut panel);
+        let output = draw(&mut panel);
+        let labels: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(label) => Some(label.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(labels.contains(&"LR2"));
+        assert!(labels.contains(&"100"));
+        assert!(!labels.contains(&"117"));
+        assert_eq!(property, before);
     }
 
     #[test]
