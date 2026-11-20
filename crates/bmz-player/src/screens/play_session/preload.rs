@@ -563,6 +563,7 @@ pub fn preload_play_session_for_chart_with_callbacks(
         source_key_mode: Some(imported.source_key_mode),
         effective_key_mode: Some(imported.chart.metadata.key_mode),
         seven_to_six: imported.applied_arrange.seven_to_six(),
+        seven_to_eight: imported.applied_arrange.seven_to_eight(),
         seven_to_nine_pattern: if imported.applied_arrange.key_mode_conversion
             == KeyModeConversionConfig::SevenToNine
         {
@@ -1050,7 +1051,7 @@ fn transform_chart_for_play(
         options.arrange_seed.unwrap_or(0),
     );
     let arrange = if seven_to_six || seven_to_eight {
-        normalize_arrange_for_seven_to_six(options.arrange)
+        normalize_arrange_for_scratchless_conversion(options.arrange)
     } else {
         options.arrange
     };

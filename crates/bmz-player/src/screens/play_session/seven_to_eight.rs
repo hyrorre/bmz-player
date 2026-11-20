@@ -27,6 +27,7 @@ const DESTINATION_LANES: [Lane; 8] = [
 
 /// Place keyboard phrases and scratches on eight keys, keeping the notes of
 /// each phrase together. Unplaceable scratch units retain their sounds as BGM.
+/// Invisible scratch notes are discarded, as in the 7K to 6K conversion.
 pub fn apply_seven_to_eight(
     chart: &mut PlayableChart,
     seed: i64,

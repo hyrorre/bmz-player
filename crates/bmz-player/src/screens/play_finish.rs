@@ -332,6 +332,7 @@ impl FinishSessionSnapshot {
                 source_key_mode: Some(source_key_mode),
                 effective_key_mode: Some(session.primary_key_mode),
                 seven_to_six: applied_arrange.seven_to_six(),
+                seven_to_eight: applied_arrange.seven_to_eight(),
                 seven_to_nine_pattern: if applied_arrange.key_mode_conversion
                     == KeyModeConversionConfig::SevenToNine
                 {

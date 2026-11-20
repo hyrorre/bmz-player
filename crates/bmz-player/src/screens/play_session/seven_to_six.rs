@@ -21,7 +21,7 @@ impl MovableUnit {
     }
 }
 
-pub fn normalize_arrange_for_seven_to_six(arrange: ArrangeOption) -> ArrangeOption {
+pub fn normalize_arrange_for_scratchless_conversion(arrange: ArrangeOption) -> ArrangeOption {
     match arrange {
         ArrangeOption::RandomEx => ArrangeOption::Random,
         ArrangeOption::SRandomEx => ArrangeOption::SRandom,
@@ -450,15 +450,15 @@ mod tests {
             assert_eq!(chart.metadata.key_mode, KeyMode::K6);
         }
         assert_eq!(
-            normalize_arrange_for_seven_to_six(ArrangeOption::SRandomEx),
+            normalize_arrange_for_scratchless_conversion(ArrangeOption::SRandomEx),
             ArrangeOption::SRandom
         );
         assert_eq!(
-            normalize_arrange_for_seven_to_six(ArrangeOption::RandomEx),
+            normalize_arrange_for_scratchless_conversion(ArrangeOption::RandomEx),
             ArrangeOption::Random
         );
         assert_eq!(
-            normalize_arrange_for_seven_to_six(ArrangeOption::AllScratch),
+            normalize_arrange_for_scratchless_conversion(ArrangeOption::AllScratch),
             ArrangeOption::Normal
         );
     }

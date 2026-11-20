@@ -173,6 +173,7 @@ impl WinitApp {
                 )
             }),
             seven_to_six: conversion == KeyModeConversionConfig::SevenToSix,
+            seven_to_eight: conversion == KeyModeConversionConfig::SevenToEight,
             seven_to_nine_pattern: if conversion == KeyModeConversionConfig::SevenToNine {
                 self.boot.profile_config.play.seven_to_nine_pattern.value()
             } else {

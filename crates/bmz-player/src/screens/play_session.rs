@@ -303,6 +303,10 @@ impl AppliedArrange {
     pub const fn seven_to_six(&self) -> bool {
         matches!(self.key_mode_conversion, KeyModeConversionConfig::SevenToSix)
     }
+
+    pub const fn seven_to_eight(&self) -> bool {
+        matches!(self.key_mode_conversion, KeyModeConversionConfig::SevenToEight)
+    }
 }
 
 impl AppliedArrange {
@@ -551,7 +555,7 @@ pub use preload::{
 };
 pub use seven_to_eight::apply_seven_to_eight;
 pub use seven_to_nine::{apply_seven_to_nine, seven_to_nine_replay_lane_projection};
-pub use seven_to_six::{apply_seven_to_six, normalize_arrange_for_seven_to_six};
+pub use seven_to_six::{apply_seven_to_six, normalize_arrange_for_scratchless_conversion};
 pub use sp_to_dp::apply_sp_to_dp;
 
 use arrange_algorithm::*;

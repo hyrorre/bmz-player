@@ -278,6 +278,10 @@ fn play_lua_runtime_state_exposes_play_mode_and_score_save_options() {
         extended.option_values.get(&bmz_render::skin::SKIN_OPTION_BMZ_SEVEN_TO_SIX),
         Some(&true)
     );
+    assert_eq!(
+        extended.option_values.get(&bmz_render::skin::SKIN_OPTION_BMZ_SEVEN_TO_EIGHT),
+        Some(&false)
+    );
     assert_eq!(extended.event_index_values.get(&360), Some(&5));
     assert_eq!(extended.option_values.get(&19200), Some(&true));
     assert_eq!(extended.number_values.get(&19201), Some(&2));

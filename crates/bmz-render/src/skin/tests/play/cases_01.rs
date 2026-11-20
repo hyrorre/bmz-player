@@ -329,6 +329,7 @@ fn play_attempt_refs_use_frozen_source_and_effective_state() {
             source_key_mode: Some(KeyMode::K7),
             effective_key_mode: Some(KeyMode::K6),
             seven_to_six: true,
+            seven_to_eight: false,
             seven_to_nine_pattern: 5,
             seven_to_nine_type: 2,
             source_ln_profile_bits: Some(source_ln_bits),
@@ -367,6 +368,18 @@ fn play_attempt_refs_use_frozen_source_and_effective_state() {
     assert!(test_skin_op(SKIN_OPTION_BMZ_KEY_MODE_BASE + 2, &[], &state));
     assert!(test_skin_op(SKIN_OPTION_BMZ_SOURCE_KEY_MODE_BASE + 3, &[], &state));
     assert!(test_skin_op(SKIN_OPTION_BMZ_SEVEN_TO_SIX, &[], &state));
+    assert!(!test_skin_op(SKIN_OPTION_BMZ_SEVEN_TO_EIGHT, &[], &state));
+    let seven_to_eight = SkinDrawState {
+        skin_attempt: SkinAttemptState {
+            effective_key_mode: Some(KeyMode::K8),
+            seven_to_six: false,
+            seven_to_eight: true,
+            ..state.skin_attempt
+        },
+        ..state.clone()
+    };
+    assert!(!test_skin_op(SKIN_OPTION_BMZ_SEVEN_TO_SIX, &[], &seven_to_eight));
+    assert!(test_skin_op(SKIN_OPTION_BMZ_SEVEN_TO_EIGHT, &[], &seven_to_eight));
     assert!(test_skin_op(SKIN_OPTION_BMZ_SOURCE_LN_UNDEFINED, &[], &state));
     assert!(test_skin_op(SKIN_OPTION_BMZ_SOURCE_LN_DEFINED_CN, &[], &state));
     assert!(test_skin_op(SKIN_OPTION_BMZ_SOURCE_LN_MIXED, &[], &state));

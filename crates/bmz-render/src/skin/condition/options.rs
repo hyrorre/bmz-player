@@ -178,6 +178,7 @@ pub(in crate::skin) fn test_skin_op(
             })
         }
         SKIN_OPTION_BMZ_SEVEN_TO_SIX => state.skin_attempt.seven_to_six,
+        SKIN_OPTION_BMZ_SEVEN_TO_EIGHT => state.skin_attempt.seven_to_eight,
         SKIN_OPTION_BMZ_SOURCE_LN_UNDEFINED => state
             .skin_attempt
             .source_ln_profile_bits
