@@ -190,10 +190,12 @@ impl WinitApp {
         if let Some(chart_id) = self.play.last_started_chart_id {
             self.capture_play_media_cache_from_running(chart_id, &mut started.running);
         }
+        let score_save_disabled = started.running.score_save_disabled;
         let mut audio = started.running.audio;
         audio.mark_draining();
         self.audio.draining_audio = Some(audio);
         self.refresh_player_stats_snapshot();
+        self.publish_helper_result(&finished, score_save_disabled);
         if self.play.active_course.is_some() {
             if let Some(chart_id) = self.play.last_started_chart_id {
                 self.prepare_terminal_course_finish(chart_id, &finished);
@@ -205,7 +207,6 @@ impl WinitApp {
             self.notify_obs_save_recording(crate::obs::ObsRecordingSaveReason::OnReplay);
         }
         self.result.finished_play = Some(finished);
-        self.publish_helper_result();
         self.result.result_gauge_graph_type = self
             .result
             .finished_play

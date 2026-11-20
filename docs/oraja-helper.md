@@ -13,7 +13,7 @@ BMZ モードで pipe を受信し、`source: "bmz-player"` を認識する help
 | `song_select` | 選曲画面の選択譜面が変わったとき、選曲へ戻ったとき | SHA-256、MD5、曲名、アーティスト |
 | `song_play` | ロード済みのプレイセッションを設置したとき | 譜面情報、オプション、seed、レーン配置 |
 | `song_play_end` | Play 退出時、クイックリトライで前のプレイを破棄する直前 | 譜面・配置、確定判定、処理済みノーツ数、総ノーツ数、経過秒数、`quickRetry` |
-| `song_result` | 通常の単曲 Result に入るとき | 譜面・配置、EX スコア、スコア率、ランプ、BP、確定判定 |
+| `song_result` | 単曲またはコース各曲の Result に入るとき | 譜面・配置、EX スコア、スコア率、ランプ、BP、確定判定 |
 
 全イベントに `source: "bmz-player"` を付けます。フィールド名は
 lr2oraja-endlessdream の `OrajaHelperClient` と共通です。
@@ -30,8 +30,9 @@ DP の2P元レーンは1Pの鍵盤とスクラッチの後から数えるため�
 S-RANDOM 等、ノートごとに配置が変わる側には単一の配置を送らず空文字列にします。
 BMZ 独自の F-RANDOM / MF-RANDOM は名前を送り、共通の `optionId` は `null` にします。
 
-プレイ・終了・リザルトは通常の単曲手動プレイが対象です。
-AUTOPLAY、REPLAY、PRACTICE、Viewer、コース、スコア保存を無効化するプレイは対象外です。
+プレイ・終了・リザルトは通常の手動プレイとコース各曲の手動プレイが対象です。
+コース全体のリザルトは送信しません。
+AUTOPLAY、REPLAY、PRACTICE、Viewer、スコア保存を無効化するプレイは対象外です。
 AUTO SCRATCH のような部分的な自動操作は通常のプレイとして扱います。
 選曲時のベストスコア送信は含みません。helper は従来の DB 監視と自分の履歴を併用します。
 

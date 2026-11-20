@@ -256,16 +256,14 @@ impl WinitApp {
         let Some(active) = &self.play.active_play else {
             return;
         };
-        if self.viewer_mode
-            || self.play.practice_session.is_some()
-            || self.play.active_course.is_some()
-            || active.running.score_save_disabled
-        {
-            return;
-        }
         let session = &active.running.session;
-        if session.autoplay.as_ref().is_some_and(|a| a.is_full()) || session.replay_player.is_some()
-        {
+        if !helper_play_allowed(
+            self.viewer_mode,
+            self.play.practice_session.is_some(),
+            active.running.score_save_disabled,
+            session.autoplay.as_ref().is_some_and(|a| a.is_full()),
+            session.replay_player.is_some(),
+        ) {
             return;
         }
         let chart = &session.chart;
@@ -287,16 +285,14 @@ impl WinitApp {
         let Some(active) = &self.play.active_play else {
             return;
         };
-        if self.viewer_mode
-            || self.play.practice_session.is_some()
-            || self.play.active_course.is_some()
-            || active.running.score_save_disabled
-        {
-            return;
-        }
         let session = &active.running.session;
-        if session.autoplay.as_ref().is_some_and(|a| a.is_full()) || session.replay_player.is_some()
-        {
+        if !helper_play_allowed(
+            self.viewer_mode,
+            self.play.practice_session.is_some(),
+            active.running.score_save_disabled,
+            session.autoplay.as_ref().is_some_and(|a| a.is_full()),
+            session.replay_player.is_some(),
+        ) {
             return;
         }
         let result = active
@@ -337,38 +333,102 @@ impl WinitApp {
         self.integrations.oraja_helper.send(payload);
     }
 
-    pub(super) fn publish_helper_result(&mut self) {
+    pub(super) fn publish_helper_result(
+        &mut self,
+        finished: &FinishedPlaySession,
+        score_save_disabled: bool,
+    ) {
         if !self.boot.app_config.oraja_helper_enabled {
             return;
         }
-        let Some(finished) = &self.result.finished_play else {
-            return;
-        };
-        if self.viewer_mode
-            || finished.replay_playback
-            || finished.result.autoplay
-            || finished.applied_arrange.score_persistence_disabled()
-            || self.play.practice_session.is_some()
-            || self.play.active_course.is_some()
-        {
-            return;
+        if let Some(payload) = helper_result_payload(
+            finished,
+            self.viewer_mode,
+            self.play.practice_session.is_some(),
+            score_save_disabled,
+        ) {
+            self.integrations.oraja_helper.send(payload);
         }
-        let s = &finished.summary;
-        let mut payload = json!({"event": "song_result", "scene": "result", "source": "bmz-player",
+    }
+}
+
+fn helper_play_allowed(
+    viewer: bool,
+    practice: bool,
+    score_save_disabled: bool,
+    autoplay: bool,
+    replay: bool,
+) -> bool {
+    !(viewer || practice || score_save_disabled || autoplay || replay)
+}
+
+fn helper_result_payload(
+    finished: &FinishedPlaySession,
+    viewer: bool,
+    practice: bool,
+    score_save_disabled: bool,
+) -> Option<Value> {
+    if !helper_play_allowed(
+        viewer,
+        practice,
+        score_save_disabled || finished.applied_arrange.score_persistence_disabled(),
+        finished.result.autoplay,
+        finished.replay_playback,
+    ) {
+        return None;
+    }
+    let s = &finished.summary;
+    let mut payload = json!({"event": "song_result", "scene": "result", "source": "bmz-player",
             "title": format!("{} {}", s.title, s.subtitle).trim(),
             "artist": format!("{} {}", s.artist, s.subartist).trim(),
             "sha256": s.chart_sha256.map(|hash| crate::storage::common::hash_to_hex(&hash)).unwrap_or_default(),
             "md5": s.chart_md5.map(|hash| crate::storage::common::hash_to_hex(&hash)).unwrap_or_default()});
-        add_options(&mut payload, &finished.applied_arrange, s.key_mode);
-        add_result(&mut payload, &finished.result);
-        self.integrations.oraja_helper.send(payload);
-    }
+    add_options(&mut payload, &finished.applied_arrange, s.key_mode);
+    add_result(&mut payload, &finished.result);
+    Some(payload)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::select_options::ArrangeOption;
+
+    #[test]
+    fn helper_freq_eligibility_is_shared_by_play_end_and_result() {
+        for (freq, expected) in [(-1, false), (0, true)] {
+            let mut options = PlayStartOptions::default();
+            crate::screens::play_start::apply_freq_option(&mut options, freq);
+            let allowed =
+                helper_play_allowed(false, false, options.score_save_disabled, false, false);
+            let finished = debug_boot_finished_play_session();
+            assert_eq!(allowed, expected, "song_play and song_play_end at FREQ {freq}");
+            assert_eq!(
+                helper_result_payload(&finished, false, false, options.score_save_disabled)
+                    .is_some(),
+                expected,
+                "song_result at FREQ {freq}"
+            );
+        }
+    }
+
+    #[test]
+    fn helper_course_stage_result_keeps_chart_and_attempt_data() {
+        let mut finished = debug_boot_finished_play_session();
+        finished.summary.chart_sha256 = Some([0xab; 32]);
+        finished.applied_arrange.seed = Some(42);
+        finished.result.total_notes = 10;
+        finished.result.score = Default::default();
+        finished.result.score.judges.fast_pgreat = 3;
+        let payload = helper_result_payload(&finished, false, false, false).unwrap();
+        assert_eq!(payload["event"], "song_result");
+        assert_eq!(payload["sha256"], "ab".repeat(32));
+        assert_eq!(payload["randomSeed"], 42);
+        assert_eq!(payload["score"], 6);
+        assert_eq!(payload["judges"]["epg"], 3);
+        assert!(helper_result_payload(&finished, false, false, true).is_none());
+        finished.result.autoplay = true;
+        assert!(helper_result_payload(&finished, false, false, false).is_none());
+    }
 
     #[test]
     fn disabling_clears_selection_and_stops_old_worker() {
