@@ -964,20 +964,17 @@ mod tests {
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::AnalogScratch2P, 1));
         assert!(!profile.input.gamepad2.analog_scratch);
 
-        assert!(adjust_settings_value(&mut profile, SettingsEntryId::KeyboardReleaseBounceMs, 5,));
-        assert_eq!(profile.input.keyboard_release_bounce_ms, 5);
-        assert_eq!(
-            format_settings_value(&profile, SettingsEntryId::KeyboardReleaseBounceMs),
-            "5 ms"
-        );
-
-        profile.input.controller_release_bounce_ms = RELEASE_BOUNCE_MS_MAX;
-        assert!(!adjust_settings_value(
-            &mut profile,
-            SettingsEntryId::ControllerReleaseBounceMs,
-            1,
-        ));
-        assert_eq!(profile.input.controller_release_bounce_ms, RELEASE_BOUNCE_MS_MAX);
+        for id in
+            [SettingsEntryId::KeyboardReleaseBounceMs, SettingsEntryId::ControllerReleaseBounceMs]
+        {
+            assert!(adjust_settings_value(&mut profile, id, 99));
+            assert_eq!(format_settings_value(&profile, id), "99 ms");
+            assert!(adjust_settings_value(&mut profile, id, 1));
+            assert!(!adjust_settings_value(&mut profile, id, 1));
+            assert_eq!(format_settings_value(&profile, id), "100 ms");
+        }
+        assert_eq!(profile.input.keyboard_release_bounce_ms, 100);
+        assert_eq!(profile.input.controller_release_bounce_ms, 100);
     }
 
     #[test]

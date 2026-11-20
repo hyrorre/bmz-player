@@ -88,7 +88,7 @@ pub struct ProfileInputConfig {
     pub invert_e2_key_green_number: bool,
 }
 
-pub const RELEASE_BOUNCE_MS_MAX: u32 = 20;
+pub const RELEASE_BOUNCE_MS_MAX: u32 = 100;
 
 fn default_analog_scratch_sensitivity() -> f32 {
     1.0

@@ -354,16 +354,16 @@ fn g_battle_off_autoplays_only_the_expanded_opponent_lanes() {
 #[test]
 fn build_game_session_uses_release_bounce_settings_from_profile() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
-    profile.input.keyboard_release_bounce_ms = 3;
-    profile.input.controller_release_bounce_ms = 8;
+    profile.input.keyboard_release_bounce_ms = 50;
+    profile.input.controller_release_bounce_ms = 100;
 
     let session = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
 
     assert_eq!(
         session.input_system.bounce_filter.config(),
         bmz_gameplay::input::bounce::InputBounceConfig {
-            keyboard_threshold_us: 3_000,
-            controller_threshold_us: 8_000,
+            keyboard_threshold_us: 50_000,
+            controller_threshold_us: 100_000,
         }
     );
 }

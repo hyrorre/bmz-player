@@ -39,6 +39,7 @@
 
 | 日付 | 記録 |
 |---|---|
+| 2026-11-20 | [リリース後バウンス除去の上限を100 msに拡張（#142）](2026/2026-11-20-release-bounce-limit.md) |
 | 2026-11-20 | [REMI-S の GREAT／GOOD 点滅と LR2 の画像分割](2026/2026-11-20-lr2-judge-blink.md) |
 | 2026-11-20 | [Windows SxS 配置の protocol 4 実装と更新・復旧試験](2026/2026-11-20-windows-sxs-update.md) |
 | 2026-11-19 | [Windows配布のDLLをプライベートSxSアセンブリへまとめる検証](2026/2026-11-19-windows-sxs-poc.md) |
