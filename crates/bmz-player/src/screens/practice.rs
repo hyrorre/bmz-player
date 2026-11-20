@@ -23,7 +23,8 @@ mod persistence;
 
 /// 1: the judge rank is saved as a percentage.
 /// 2: the saved category applies in LR2oraja too. Older files keep their gauge semantics
-/// until the player selects a category in LR2oraja.
+/// until the player selects a category in LR2oraja. A file with no category follows the
+/// rule mode that opens it.
 const PRACTICE_PROPERTY_FORMAT_VERSION: u32 = 2;
 const PRACTICE_PLAYBACK_RATE_MIN: u16 = 50;
 const PRACTICE_PLAYBACK_RATE_MAX: u16 = 200;
@@ -130,6 +131,12 @@ impl PracticeProperty {
         self.format_version < 2
     }
 
+    /// The file is shared by every rule mode. When its gauge depends on the rule mode that
+    /// opens it, the saved start value is limited only where it is shown or used.
+    pub(super) fn keeps_shared_start_gauge(&self) -> bool {
+        self.uses_legacy_gauge() || self.gauge_category.is_none()
+    }
+
     pub(super) fn gauge_category_override(&self, rule_mode: RuleMode) -> Option<GaugeProperty> {
         if self.uses_legacy_gauge() && rule_mode == RuleMode::Lr2Oraja {
             None
@@ -219,8 +226,8 @@ impl PracticeRuleContext {
     }
 
     pub fn clamp_start_gauge(self, property: &mut PracticeProperty) {
-        // A legacy start value can be valid in another rule using the same file.
-        if !property.uses_legacy_gauge() {
+        // A shared start value can be valid in another rule using the same file.
+        if !property.keeps_shared_start_gauge() {
             property.start_gauge = self.gauge_bounds(property).start(property);
         }
     }
@@ -242,7 +249,7 @@ impl PracticeRuleContext {
             return;
         }
         if self.rule_mode == RuleMode::Lr2Oraja && property.uses_legacy_gauge() {
-            property.format_version = 2;
+            property.format_version = PRACTICE_PROPERTY_FORMAT_VERSION;
         }
         property.gauge_category = Some(category);
         property.start_gauge = self.gauge_bounds(property).initial;
@@ -314,11 +321,8 @@ pub fn load_practice_property(
     } else {
         migrate_legacy_practice_property(&mut property, chart, rules.rule_mode);
     }
-    if !property.uses_legacy_gauge() {
-        property.gauge_category.get_or_insert_with(|| {
-            GaugeProperty::for_rule_mode(rules.key_mode, rules.rule_mode, None)
-        });
-    }
+    // Keep an unselected category empty. Saving the rule default would carry it into
+    // other rule modes that open the same file.
     if !loaded_from_file && rules.is_dx() {
         property.start_gauge = rules.gauge_bounds(&property).initial;
     }
@@ -730,7 +734,8 @@ mod tests {
                 assert_eq!(fresh.start_gauge, initial);
                 assert_eq!(fresh.gauge, gauge.into());
                 assert_eq!(fresh.total, Some(250.0));
-                assert_eq!(fresh.gauge_category, Some(GaugeProperty::from_keymode(key_mode)));
+                assert_eq!(fresh.gauge_category, None);
+                assert_eq!(rules.gauge_category(&fresh), GaugeProperty::from_keymode(key_mode));
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
                 let mut wrong_type = serde_json::to_value(&fresh).unwrap();
                 wrong_type["start_gauge"] = serde_json::json!("broken");
@@ -922,6 +927,43 @@ mod tests {
     }
 
     #[test]
+    fn unselected_category_follows_each_rule_after_autosave() {
+        use RuleMode::{Beatoraja, Dx, Lr2Oraja};
+        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+        let paths = crate::paths::resolve_profile_paths(&data.paths, "default").unwrap();
+        let chart = empty_chart(120_000);
+        let hash = &chart.identity.file_sha256;
+        let rules = |rule_mode| PracticeRuleContext { rule_mode, key_mode: KeyMode::K7 };
+        for modes in
+            [[Beatoraja, Lr2Oraja, Dx], [Lr2Oraja, Beatoraja, Dx], [Dx, Lr2Oraja, Beatoraja]]
+        {
+            let _ = std::fs::remove_file(practice_property_path(&paths, hash));
+            for mode in modes {
+                let loaded = load_practice_property(
+                    &paths,
+                    hash,
+                    &chart,
+                    GaugeTypeConfig::Normal,
+                    rules(mode),
+                    &Default::default(),
+                )
+                .unwrap();
+                let expected =
+                    if mode == Lr2Oraja { GaugeProperty::Lr2 } else { GaugeProperty::SevenKeys };
+                assert_eq!(rules(mode).gauge_category(&loaded), expected, "{modes:?} {mode:?}");
+                assert_eq!(loaded.gauge_category, None);
+                assert_eq!(loaded.format_version, PRACTICE_PROPERTY_FORMAT_VERSION);
+                save_practice_property(&paths, hash, &loaded).unwrap();
+            }
+        }
+
+        // A selected category is shared, as before.
+        let mut property = PracticeProperty::default();
+        rules(Beatoraja).set_gauge_category(&mut property, GaugeProperty::Pms);
+        assert_eq!(rules(Lr2Oraja).gauge_category(&property), GaugeProperty::Pms);
+    }
+
+    #[test]
     fn practice_cursor_includes_start_and_leave_actions() {
         assert_eq!(practice_cursor_count(false), 12);
         assert_eq!(practice_cursor_target(9, false), PracticeCursorTarget::Field(9));
@@ -1036,7 +1078,8 @@ mod tests {
             .unwrap();
             assert_eq!(property.start_gauge, expected, "{rule_mode:?} {key_mode:?} {gauge:?}");
             if rule_mode == RuleMode::Lr2Oraja {
-                assert_eq!(property.gauge_category, Some(GaugeProperty::Lr2));
+                assert_eq!(property.gauge_category, None);
+                assert_eq!(rules.gauge_category(&property), GaugeProperty::Lr2);
             }
         }
     }

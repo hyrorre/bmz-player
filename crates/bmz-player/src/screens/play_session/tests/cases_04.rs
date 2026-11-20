@@ -505,7 +505,7 @@ fn build_practice_session_preserves_preloaded_hsfix_and_rule_mode() {
 }
 
 #[test]
-fn legacy_practice_autosave_preserves_gauges_across_rule_changes() {
+fn practice_autosave_preserves_rule_dependent_gauges_across_rule_changes() {
     use crate::config::profile_config::GaugeTypeConfig;
     use crate::screens::practice::{
         PracticeRuleContext, load_practice_property, save_practice_property,
@@ -520,7 +520,9 @@ fn legacy_practice_autosave_preserves_gauges_across_rule_changes() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
 
     for modes in [[Lr2Oraja, Beatoraja, Dx], [Beatoraja, Lr2Oraja, Dx], [Dx, Lr2Oraja, Beatoraja]] {
-        for (version, category) in [(0, None), (1, Some(GaugeProperty::Pms)), (1, None)] {
+        // Format 2 without a category is a settings file that has never chosen one.
+        for (version, category) in [(0, None), (1, Some(GaugeProperty::Pms)), (1, None), (2, None)]
+        {
             let saved = PracticeProperty {
                 format_version: version,
                 gauge_category: category,
@@ -552,7 +554,7 @@ fn legacy_practice_autosave_preserves_gauges_across_rule_changes() {
                 assert_eq!((gauge.value, gauge.definition.max), expected, "{modes:?} {mode:?}");
                 assert_eq!(loaded.gauge_category, category);
                 assert_eq!(loaded.start_gauge, 117);
-                assert_eq!(loaded.format_version, 1);
+                assert_eq!(loaded.format_version, version.max(1));
                 save_practice_property(&paths, hash, &loaded).unwrap();
             }
         }
