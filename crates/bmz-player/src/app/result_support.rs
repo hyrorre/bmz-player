@@ -779,6 +779,7 @@ pub(super) fn apply_skin_attempt_lua_load_state(
         }
     }
     runtime_state.option_values.insert(SKIN_OPTION_BMZ_SEVEN_TO_SIX, attempt.seven_to_six);
+    runtime_state.option_values.insert(SKIN_OPTION_BMZ_SEVEN_TO_EIGHT, attempt.seven_to_eight);
     for (ref_id, value) in [
         (360, i32::from(attempt.seven_to_nine_pattern)),
         (361, i32::from(attempt.seven_to_nine_type)),

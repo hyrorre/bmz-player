@@ -806,7 +806,12 @@ mod tests {
     #[test]
     fn detail_battle_uses_launch_profile_slot_and_preserves_converted_mode_settings() {
         use crate::config::profile_config::KeyModeConversionConfig as Conversion;
-        for conversion in [Conversion::SevenToNine, Conversion::SpToDp, Conversion::SevenToSix] {
+        for conversion in [
+            Conversion::SevenToNine,
+            Conversion::SpToDp,
+            Conversion::SevenToSix,
+            Conversion::SevenToEight,
+        ] {
             for (session, double, target) in [
                 (SessionMode::AutoplayBattle, DoubleOption::Off, false),
                 (SessionMode::GBattle, DoubleOption::Off, false),

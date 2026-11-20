@@ -289,9 +289,9 @@ impl FinishSessionSnapshot {
                 KeyMode::K14 => KeyMode::K7,
                 mode => mode,
             },
-            KeyModeConversionConfig::SevenToNine | KeyModeConversionConfig::SevenToSix => {
-                KeyMode::K7
-            }
+            KeyModeConversionConfig::SevenToNine
+            | KeyModeConversionConfig::SevenToSix
+            | KeyModeConversionConfig::SevenToEight => KeyMode::K7,
             KeyModeConversionConfig::Off
                 if matches!(
                     applied_arrange.double_option,
@@ -332,6 +332,7 @@ impl FinishSessionSnapshot {
                 source_key_mode: Some(source_key_mode),
                 effective_key_mode: Some(session.primary_key_mode),
                 seven_to_six: applied_arrange.seven_to_six(),
+                seven_to_eight: applied_arrange.seven_to_eight(),
                 seven_to_nine_pattern: if applied_arrange.key_mode_conversion
                     == KeyModeConversionConfig::SevenToNine
                 {

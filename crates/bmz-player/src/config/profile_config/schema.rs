@@ -316,10 +316,13 @@ pub enum KeyModeConversionConfig {
     SpToDp,
     SevenToNine,
     SevenToSix,
+    /// Experimental 7K to 8K conversion that moves the scratch onto a free key lane.
+    SevenToEight,
 }
 
 impl KeyModeConversionConfig {
-    pub const VALUES: [Self; 4] = [Self::Off, Self::SpToDp, Self::SevenToNine, Self::SevenToSix];
+    pub const VALUES: [Self; 5] =
+        [Self::Off, Self::SpToDp, Self::SevenToNine, Self::SevenToSix, Self::SevenToEight];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -327,6 +330,7 @@ impl KeyModeConversionConfig {
             Self::SpToDp => "SP TO DP",
             Self::SevenToNine => "7K TO 9K",
             Self::SevenToSix => "7K TO 6K",
+            Self::SevenToEight => "7K TO 8K",
         }
     }
 
@@ -334,7 +338,9 @@ impl KeyModeConversionConfig {
         match self {
             Self::Off => false,
             Self::SpToDp => matches!(source, KeyMode::K5 | KeyMode::K7),
-            Self::SevenToNine | Self::SevenToSix => matches!(source, KeyMode::K7),
+            Self::SevenToNine | Self::SevenToSix | Self::SevenToEight => {
+                matches!(source, KeyMode::K7)
+            }
         }
     }
 
@@ -344,6 +350,7 @@ impl KeyModeConversionConfig {
             (Self::SpToDp, KeyMode::K7) => KeyMode::K14,
             (Self::SevenToNine, KeyMode::K7) => KeyMode::K9,
             (Self::SevenToSix, KeyMode::K7) => KeyMode::K6,
+            (Self::SevenToEight, KeyMode::K7) => KeyMode::K8,
             _ => source,
         }
     }
@@ -355,7 +362,7 @@ impl KeyModeConversionConfig {
         match self {
             Self::Off => false,
             Self::SevenToNine => matches!(seven_to_nine_rule_mode, SevenToNineRuleMode::Keys9),
-            Self::SpToDp | Self::SevenToSix => true,
+            Self::SpToDp | Self::SevenToSix | Self::SevenToEight => true,
         }
     }
 }

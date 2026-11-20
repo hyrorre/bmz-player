@@ -237,6 +237,8 @@ pub const SKIN_OPTION_BMZ_SOURCE_KEY_MODE_COUNT: usize = 8;
 pub const SKIN_OPTION_BMZ_SOURCE_KEY_MODE_LAST: i32 = 19_188;
 /// BMZ extension: the active chart was converted from source 7K to effective 6K.
 pub const SKIN_OPTION_BMZ_SEVEN_TO_SIX: i32 = 19_189;
+/// BMZ extension: the active chart was converted from source 7K to effective 8K.
+pub const SKIN_OPTION_BMZ_SEVEN_TO_EIGHT: i32 = 19_197;
 /// BMZ extension: source-chart LN profile bit mask.
 /// bit0=undefined LN, bit1=defined LN, bit2=defined CN, bit3=defined HCN, bit4=defined HLN.
 pub const SKIN_REF_BMZ_SOURCE_LN_PROFILE: i32 = 19_190;

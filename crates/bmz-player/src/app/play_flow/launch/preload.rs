@@ -414,6 +414,7 @@ impl WinitApp {
                 conversion,
             )),
             seven_to_six: conversion == KeyModeConversionConfig::SevenToSix,
+            seven_to_eight: conversion == KeyModeConversionConfig::SevenToEight,
             seven_to_nine_pattern: if conversion == KeyModeConversionConfig::SevenToNine {
                 options.seven_to_nine_pattern.value()
             } else {
@@ -648,13 +649,20 @@ impl WinitApp {
         }
         options.score_save_disabled |=
             options.key_mode_conversion.score_persistence_disabled(options.seven_to_nine_rule_mode);
-        if options.key_mode_conversion == KeyModeConversionConfig::SevenToSix {
+        if matches!(
+            options.key_mode_conversion,
+            KeyModeConversionConfig::SevenToSix | KeyModeConversionConfig::SevenToEight
+        ) {
             options.arrange =
-                crate::screens::play_session::normalize_arrange_for_seven_to_six(options.arrange);
+                crate::screens::play_session::normalize_arrange_for_scratchless_conversion(
+                    options.arrange,
+                );
         }
         if matches!(
             options.key_mode_conversion,
-            KeyModeConversionConfig::SevenToNine | KeyModeConversionConfig::SevenToSix
+            KeyModeConversionConfig::SevenToNine
+                | KeyModeConversionConfig::SevenToSix
+                | KeyModeConversionConfig::SevenToEight
         ) {
             options.arrange_2p = ArrangeOption::Normal;
         }
@@ -1046,6 +1054,7 @@ mod replay_key_mode_conversion_tests {
         for (conversion, rule_mode) in [
             (KeyModeConversionConfig::SpToDp, SevenToNineRuleMode::Keys7),
             (KeyModeConversionConfig::SevenToSix, SevenToNineRuleMode::Keys7),
+            (KeyModeConversionConfig::SevenToEight, SevenToNineRuleMode::Keys7),
             (KeyModeConversionConfig::SevenToNine, SevenToNineRuleMode::Keys9),
         ] {
             assert!(conversion.score_persistence_disabled(rule_mode));

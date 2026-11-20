@@ -78,6 +78,7 @@ pub struct SkinAttemptState {
     /// skinが描画する変換後のキーモード。Selectでは開始予定値。
     pub effective_key_mode: Option<KeyMode>,
     pub seven_to_six: bool,
+    pub seven_to_eight: bool,
     /// beatoraja ref 360互換。7K TO 9K無効時は0、有効時は1..=6。
     pub seven_to_nine_pattern: u8,
     /// beatoraja ref 361互換。0=FIXED, 1=NO MASHING, 2=ALTERNATION。
@@ -106,6 +107,7 @@ impl SkinAttemptState {
         self.source_key_mode = newer.source_key_mode.or(self.source_key_mode);
         self.effective_key_mode = newer.effective_key_mode.or(self.effective_key_mode);
         self.seven_to_six = newer.seven_to_six;
+        self.seven_to_eight = newer.seven_to_eight;
         self.seven_to_nine_pattern = newer.seven_to_nine_pattern;
         self.seven_to_nine_type = newer.seven_to_nine_type;
         self.source_ln_profile_bits = newer.source_ln_profile_bits.or(self.source_ln_profile_bits);
