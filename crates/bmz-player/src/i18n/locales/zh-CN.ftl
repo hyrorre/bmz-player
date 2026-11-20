@@ -382,6 +382,7 @@ settings-logging-level = 级别
 settings-logging-file = 保存到文件
 settings-logging-help = 更改会在下次启动时生效。
 settings-obs-enabled = OBS WebSocket 集成
+settings-oraja-helper-enabled = oraja_helper 集成
 settings-obs-connection-status = 连接状态
 settings-obs-next-retry = 下次重试：{ $seconds } 秒
 settings-obs-host = 主机

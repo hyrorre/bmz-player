@@ -1,5 +1,11 @@
 # oraja_helper の named pipe 連携
 
+## 2026-11-20: 連携の有効化設定
+
+BMZ メニューの連携・録画に本体共通の設定を追加し、既存設定を含めて既定 OFF とした。
+OFF ではイベント構築と worker 起動を行わない。無効化時は選曲状態を消去し、
+待機中の通知を破棄する。送信中の通知は完了する場合がある。
+
 - 作業日: 2026-11-18
 - BMZ ブランチ: `feat/oraja-helper-pipe`
 - helper ブランチ: `feat/bmz-player-pipe`（隣接する `../oraja_helper`）

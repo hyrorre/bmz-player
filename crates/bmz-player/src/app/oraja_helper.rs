@@ -6,19 +6,30 @@ use serde_json::{Value, json};
 #[derive(Default)]
 pub(super) struct HelperClient {
     sender: Option<std::sync::mpsc::SyncSender<(Instant, Value)>>,
+    enabled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     selection: Option<[u8; 32]>,
 }
 
 impl HelperClient {
+    fn disable(&mut self) {
+        if let Some(enabled) = self.enabled.take() {
+            enabled.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.sender = None;
+        self.selection = None;
+    }
+
     fn send(&mut self, payload: Value) {
         if !cfg!(windows) {
             return;
         }
         let sender = self.sender.get_or_insert_with(|| {
             let (sender, receiver) = std::sync::mpsc::sync_channel(64);
+            let enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+            self.enabled = Some(enabled.clone());
             if let Err(error) = std::thread::Builder::new()
                 .name("oraja-helper-pipe".into())
-                .spawn(move || pipe_worker(receiver))
+                .spawn(move || pipe_worker(receiver, enabled))
             {
                 tracing::warn!(%error, "failed to start oraja_helper sender");
             }
@@ -31,12 +42,18 @@ impl HelperClient {
 }
 
 #[cfg(windows)]
-fn pipe_worker(receiver: std::sync::mpsc::Receiver<(Instant, Value)>) {
+fn pipe_worker(
+    receiver: std::sync::mpsc::Receiver<(Instant, Value)>,
+    enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
         tracing::warn!("failed to create oraja_helper I/O runtime");
         return;
     };
     for (queued_at, payload) in receiver {
+        if !enabled.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
         if queued_at.elapsed() > Duration::from_secs(2) {
             continue;
         }
@@ -71,7 +88,11 @@ async fn send_line(path: &str, body: &str) {
 }
 
 #[cfg(not(windows))]
-fn pipe_worker(_: std::sync::mpsc::Receiver<(Instant, Value)>) {}
+fn pipe_worker(
+    _: std::sync::mpsc::Receiver<(Instant, Value)>,
+    _: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+}
 
 fn base(
     event: &str,
@@ -202,6 +223,10 @@ fn add_result(payload: &mut Value, result: &PlayResult) {
 
 impl WinitApp {
     pub(super) fn publish_helper_selection(&mut self, scene: AppSceneKind) {
+        if !self.boot.app_config.oraja_helper_enabled {
+            self.integrations.oraja_helper.disable();
+            return;
+        }
         if scene != AppSceneKind::Select {
             self.integrations.oraja_helper.selection = None;
             return;
@@ -225,6 +250,9 @@ impl WinitApp {
     }
 
     pub(super) fn publish_helper_play(&mut self) {
+        if !self.boot.app_config.oraja_helper_enabled {
+            return;
+        }
         let Some(active) = &self.play.active_play else {
             return;
         };
@@ -253,6 +281,9 @@ impl WinitApp {
     }
 
     pub(super) fn publish_helper_play_end(&mut self, quick_retry: bool) {
+        if !self.boot.app_config.oraja_helper_enabled {
+            return;
+        }
         let Some(active) = &self.play.active_play else {
             return;
         };
@@ -307,6 +338,9 @@ impl WinitApp {
     }
 
     pub(super) fn publish_helper_result(&mut self) {
+        if !self.boot.app_config.oraja_helper_enabled {
+            return;
+        }
         let Some(finished) = &self.result.finished_play else {
             return;
         };
@@ -335,6 +369,21 @@ impl WinitApp {
 mod tests {
     use super::*;
     use crate::select_options::ArrangeOption;
+
+    #[test]
+    fn disabling_clears_selection_and_stops_old_worker() {
+        let enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (sender, _receiver) = std::sync::mpsc::sync_channel(1);
+        let mut client = HelperClient {
+            sender: Some(sender),
+            enabled: Some(enabled.clone()),
+            selection: Some([1; 32]),
+        };
+        client.disable();
+        assert!(!enabled.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(client.sender.is_none());
+        assert!(client.selection.is_none());
+    }
 
     #[test]
     fn helper_placements_use_beatoraja_source_numbers() {

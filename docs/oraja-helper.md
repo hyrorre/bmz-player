@@ -1,7 +1,9 @@
 # oraja_helper 連携
 
 Windows では `oraja_helper` が作成する `\\.\pipe\oraja_helper` に、
-UTF-8 の JSON Lines を送信します。BMZ 側の追加設定は不要です。
+UTF-8 の JSON Lines を送信します。既定では無効です。BMZ メニューの「連携・録画」で
+「oraja_helper 連携」を有効にしてください。設定は本体に保存され、変更は実行中に反映されます。
+無効化すると待機中のイベントは破棄されますが、送信中のイベントは完了する場合があります。
 helper の設定でプレイヤーを BMZ Player にし、本体フォルダを指定してください。
 BMZ モードで pipe を受信し、`source: "bmz-player"` を認識する helper が必要です。
 従来の DB 監視専用の BMZ 対応版では、選曲・配置・クイックリトライ情報を受信できません。

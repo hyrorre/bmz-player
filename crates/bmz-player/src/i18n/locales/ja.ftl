@@ -382,6 +382,7 @@ settings-logging-level = レベル
 settings-logging-file = ファイルに保存
 settings-logging-help = 変更は次に起動したときから反映されます。
 settings-obs-enabled = OBS WebSocket 連携
+settings-oraja-helper-enabled = oraja_helper 連携
 settings-obs-connection-status = 接続状態
 settings-obs-next-retry = 次の再試行: { $seconds } 秒
 settings-obs-host = ホスト
