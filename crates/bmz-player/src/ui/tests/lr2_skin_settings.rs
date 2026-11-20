@@ -25,6 +25,8 @@ fn lr2_skin_targets_map_to_bmz_slots() {
 #[test]
 fn lr2_skin_change_wraps_through_default_and_candidates_keeping_history() {
     let target = Lr2SkinTarget::from_button(175).unwrap();
+    let app_paths =
+        AppPaths::from_dirs("resources".into(), "data".into(), "cache".into(), "logs".into());
     let catalog = SkinCatalog {
         select: vec![candidate("data:skins/a.lr2skin"), candidate("data:skins/b.lr2skin")],
         ..Default::default()
@@ -32,13 +34,13 @@ fn lr2_skin_change_wraps_through_default_and_candidates_keeping_history() {
     let mut skin = SkinConfig { select: "data:skins/a.lr2skin".to_string(), ..Default::default() };
     skin.select_options.insert("Layout".to_string(), "HD".to_string());
 
-    assert!(target.cycle_skin(&mut skin, &catalog, 1));
+    assert!(target.cycle_skin(&mut skin, &catalog, &app_paths, 1));
     assert_eq!(skin.select, "data:skins/b.lr2skin");
     assert!(skin.select_options.is_empty(), "b has no saved options");
-    assert!(target.cycle_skin(&mut skin, &catalog, 1));
+    assert!(target.cycle_skin(&mut skin, &catalog, &app_paths, 1));
     assert_eq!(skin.select, "", "wraps to BMZ's default skin");
-    assert!(target.cycle_skin(&mut skin, &catalog, -1));
-    assert!(target.cycle_skin(&mut skin, &catalog, -1));
+    assert!(target.cycle_skin(&mut skin, &catalog, &app_paths, -1));
+    assert!(target.cycle_skin(&mut skin, &catalog, &app_paths, -1));
     assert_eq!(skin.select, "data:skins/a.lr2skin");
     assert_eq!(skin.select_options.get("Layout").map(String::as_str), Some("HD"));
 }
