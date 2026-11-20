@@ -131,12 +131,6 @@ impl PracticeProperty {
         self.format_version < 2
     }
 
-    /// The file is shared by every rule mode. When its gauge depends on the rule mode that
-    /// opens it, the saved start value is limited only where it is shown or used.
-    pub(super) fn keeps_shared_start_gauge(&self) -> bool {
-        self.uses_legacy_gauge() || self.gauge_category.is_none()
-    }
-
     pub(super) fn gauge_category_override(&self, rule_mode: RuleMode) -> Option<GaugeProperty> {
         if self.uses_legacy_gauge() && rule_mode == RuleMode::Lr2Oraja {
             None
@@ -225,11 +219,9 @@ impl PracticeRuleContext {
         PracticeGaugeBounds { initial: (definition.init.round() as u32).clamp(1, max), max }
     }
 
+    /// Commit the displayed start value after an explicit gauge edit.
     pub fn clamp_start_gauge(self, property: &mut PracticeProperty) {
-        // A shared start value can be valid in another rule using the same file.
-        if !property.keeps_shared_start_gauge() {
-            property.start_gauge = self.gauge_bounds(property).start(property);
-        }
+        property.start_gauge = self.gauge_bounds(property).start(property);
     }
 
     pub fn set_gauge(self, property: &mut PracticeProperty, gauge: PracticeGaugeType) {
@@ -245,14 +237,17 @@ impl PracticeRuleContext {
     }
 
     pub fn set_gauge_category(self, property: &mut PracticeProperty, category: GaugeProperty) {
-        if self.is_dx() || self.gauge_category(property) == category {
+        if self.is_dx() {
             return;
         }
+        let previous = self.gauge_category(property);
         if self.rule_mode == RuleMode::Lr2Oraja && property.uses_legacy_gauge() {
             property.format_version = PRACTICE_PROPERTY_FORMAT_VERSION;
         }
         property.gauge_category = Some(category);
-        property.start_gauge = self.gauge_bounds(property).initial;
+        if previous != category {
+            property.start_gauge = self.gauge_bounds(property).initial;
+        }
     }
 
     pub fn field_is_fixed(self, field: usize) -> bool {
@@ -427,17 +422,17 @@ pub fn practice_chart_zero_time(property: &PracticeProperty, skin_playstart_us: 
     TimeUs(lead_us.saturating_sub(ready_chart_us))
 }
 
+/// Clamp chart settings shared by all rules. The start gauge is bounded when displayed or played.
 pub fn clamp_practice_property(
     property: &mut PracticeProperty,
     chart: &PlayableChart,
-    rules: PracticeRuleContext,
+    _rules: PracticeRuleContext,
 ) {
     let max_end = default_end_time_ms(chart);
     property.start_time_ms = property.start_time_ms.min(max_end.saturating_sub(3000));
     property.end_time_ms =
         property.end_time_ms.clamp(property.start_time_ms.saturating_add(1000), max_end);
     property.judgerank = property.judgerank.clamp(1, 400);
-    rules.clamp_start_gauge(property);
     property.playback_rate_percent = property
         .playback_rate_percent
         .clamp(PRACTICE_PLAYBACK_RATE_MIN, PRACTICE_PLAYBACK_RATE_MAX);
@@ -957,10 +952,22 @@ mod tests {
             }
         }
 
-        // A selected category is shared, as before.
-        let mut property = PracticeProperty::default();
-        rules(Beatoraja).set_gauge_category(&mut property, GaugeProperty::Pms);
-        assert_eq!(rules(Lr2Oraja).gauge_category(&property), GaugeProperty::Pms);
+        // Pin the displayed 7KEYS and reload it in a mode whose default is LR2.
+        let mut property = PracticeProperty { start_gauge: 77, ..Default::default() };
+        rules(Beatoraja).set_gauge_category(&mut property, GaugeProperty::SevenKeys);
+        save_practice_property(&paths, hash, &property).unwrap();
+        let loaded = load_practice_property(
+            &paths,
+            hash,
+            &chart,
+            GaugeTypeConfig::Normal,
+            rules(Lr2Oraja),
+            &Default::default(),
+        )
+        .unwrap();
+        assert_eq!(loaded.gauge_category, Some(GaugeProperty::SevenKeys));
+        assert_eq!(rules(Lr2Oraja).gauge_category(&loaded), GaugeProperty::SevenKeys);
+        assert_eq!(loaded.start_gauge, 77);
     }
 
     #[test]
@@ -1085,7 +1092,7 @@ mod tests {
     }
 
     #[test]
-    fn saved_practice_preserves_custom_values_and_clamps_only_to_actual_gauge_maximum() {
+    fn saved_practice_preserves_custom_values_and_limits_the_displayed_start_gauge() {
         let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
         let paths = crate::paths::resolve_profile_paths(&data.paths, "default").unwrap();
         let chart = empty_chart(120_000);
@@ -1118,7 +1125,9 @@ mod tests {
                 &Default::default(),
             )
             .unwrap();
-            assert_eq!(loaded.start_gauge, expected, "{rule_mode:?} {key_mode:?} {gauge:?}");
+            assert_eq!(loaded.start_gauge, value);
+            let rules = PracticeRuleContext { rule_mode, key_mode };
+            assert_eq!(rules.gauge_bounds(&loaded).start(&loaded), expected, "{rules:?} {gauge:?}");
             assert_eq!(loaded.gauge, saved.gauge);
             assert_eq!(loaded.gauge_category, saved.gauge_category);
             assert_eq!(loaded.judgerank, saved.judgerank);
@@ -1128,16 +1137,24 @@ mod tests {
 
     #[test]
     fn practice_gauge_selection_and_keyboard_share_dx_initial_values_and_non_dx_clamping() {
-        for (rule_mode, expected) in [(RuleMode::Dx, 30), (RuleMode::Beatoraja, 100)] {
+        for (rule_mode, category, expected) in [
+            (RuleMode::Dx, Some(GaugeProperty::Pms), 30),
+            (RuleMode::Beatoraja, Some(GaugeProperty::Pms), 100),
+            (RuleMode::Beatoraja, None, 100),
+        ] {
             let rules = PracticeRuleContext { rule_mode, key_mode: KeyMode::K9 };
             let mut selected = PracticeProperty {
-                gauge_category: Some(GaugeProperty::Pms),
+                gauge_category: category,
                 start_gauge: 119,
                 ..Default::default()
             };
             let mut keyboard = selected.clone();
             rules.set_gauge(&mut selected, PracticeGaugeType::Hard);
             adjust_practice_selected_field(&mut keyboard, 2, false, true, 120_000, rules);
+            assert_eq!(selected, keyboard);
+            assert_eq!(selected.start_gauge, expected);
+            rules.set_gauge(&mut selected, PracticeGaugeType::Normal);
+            adjust_practice_selected_field(&mut keyboard, 2, false, false, 120_000, rules);
             assert_eq!(selected, keyboard);
             assert_eq!(selected.start_gauge, expected);
         }

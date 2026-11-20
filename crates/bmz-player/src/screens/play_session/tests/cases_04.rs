@@ -515,14 +515,22 @@ fn practice_autosave_preserves_rule_dependent_gauges_across_rule_changes() {
     let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
     let paths = crate::paths::resolve_profile_paths(&data.paths, "default").unwrap();
     let mut source = chart();
-    source.metadata.key_mode = KeyMode::K9;
     let hash = &source.identity.file_sha256;
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
 
-    for modes in [[Lr2Oraja, Beatoraja, Dx], [Beatoraja, Lr2Oraja, Dx], [Dx, Lr2Oraja, Beatoraja]] {
-        // Format 2 without a category is a settings file that has never chosen one.
-        for (version, category) in [(0, None), (1, Some(GaugeProperty::Pms)), (1, None), (2, None)]
-        {
+    for modes in [
+        [Lr2Oraja, Beatoraja, Dx, Lr2Oraja],
+        [Beatoraja, Lr2Oraja, Dx, Beatoraja],
+        [Dx, Lr2Oraja, Beatoraja, Dx],
+    ] {
+        for (version, category, key_mode, capped_rule) in [
+            (0, None, KeyMode::K9, Lr2Oraja),
+            (1, Some(GaugeProperty::Pms), KeyMode::K9, Lr2Oraja),
+            (1, None, KeyMode::K9, Lr2Oraja),
+            (2, None, KeyMode::K9, Lr2Oraja),
+            (2, Some(GaugeProperty::Pms), KeyMode::K7, Dx),
+        ] {
+            source.metadata.key_mode = key_mode;
             let saved = PracticeProperty {
                 format_version: version,
                 gauge_category: category,
@@ -532,7 +540,7 @@ fn practice_autosave_preserves_rule_dependent_gauges_across_rule_changes() {
             save_practice_property(&paths, hash, &saved).unwrap();
             for mode in modes {
                 profile.play.rule_mode = mode;
-                let rules = PracticeRuleContext { rule_mode: mode, key_mode: KeyMode::K9 };
+                let rules = PracticeRuleContext { rule_mode: mode, key_mode };
                 let loaded = load_practice_property(
                     &paths,
                     hash,
@@ -550,7 +558,7 @@ fn practice_autosave_preserves_rule_dependent_gauges_across_rule_changes() {
                     Box::new(NullInputBackend),
                 );
                 let gauge = prepared.session.gauge.current();
-                let expected = if mode == Lr2Oraja { (100.0, 100.0) } else { (117.0, 120.0) };
+                let expected = if mode == capped_rule { (100.0, 100.0) } else { (117.0, 120.0) };
                 assert_eq!((gauge.value, gauge.definition.max), expected, "{modes:?} {mode:?}");
                 assert_eq!(loaded.gauge_category, category);
                 assert_eq!(loaded.start_gauge, 117);
@@ -625,7 +633,8 @@ fn practice_dx_preloaded_gauges_match_effective_rules_and_keep_fixed_scoring() {
         assert_eq!(rules.gauge_bounds(&property).initial, initial);
         assert_eq!(rules.gauge_bounds(&property).max, max);
         clamp_practice_property(&mut property, &source, rules);
-        assert_eq!(property.start_gauge, max);
+        assert_eq!(property.start_gauge, 120);
+        assert_eq!(rules.gauge_bounds(&property).start(&property), max);
         let prepared = build_practice_prepared_from_preloaded(
             preloaded_play_session(source.clone()),
             &profile,
