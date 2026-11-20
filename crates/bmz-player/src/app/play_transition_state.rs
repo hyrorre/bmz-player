@@ -133,7 +133,7 @@ pub(super) struct PendingPlayStart {
     pub(super) play_config_key_mode: KeyMode,
     pub(super) lane: PendingPlayLaneState,
     pub(super) lane_actions: Vec<PlayLaneAction>,
-    pub(super) visual_input: PendingPlayVisualInput,
+    pub(super) visual_input: Box<PendingPlayVisualInput>,
 }
 
 impl PendingPlayStart {
@@ -212,7 +212,11 @@ impl PendingPlayStart {
                 playback_rate_percent,
             ),
             lane_actions: Vec::new(),
-            visual_input: PendingPlayVisualInput::new(key_mode, binding, snapshot.autoplay),
+            visual_input: Box::new(PendingPlayVisualInput::new(
+                key_mode,
+                binding,
+                snapshot.autoplay,
+            )),
         }
     }
 }
@@ -609,7 +613,7 @@ pub(super) struct PendingPlayVisualInput {
     pub(super) suppress_human_input: bool,
     pub(super) lane_keyon_started_at: [Option<TimeUs>; LANE_COUNT],
     pub(super) lane_keyoff_started_at: [Option<TimeUs>; LANE_COUNT],
-    pub(super) lane_scratch_direction: [Option<ScratchDirection>; LANE_COUNT],
+    held_keys: [bmz_gameplay::session::LaneKeyHold; LANE_COUNT],
     pub(super) lane_scratch_angle_delta_ms: [i64; LANE_COUNT],
     pub(super) scratch_angle_last_render_at: Option<TimeUs>,
 }
@@ -622,7 +626,7 @@ impl PendingPlayVisualInput {
             suppress_human_input,
             lane_keyon_started_at: [None; LANE_COUNT],
             lane_keyoff_started_at: [None; LANE_COUNT],
-            lane_scratch_direction: [None; LANE_COUNT],
+            held_keys: Default::default(),
             lane_scratch_angle_delta_ms: [0; LANE_COUNT],
             scratch_angle_last_render_at: None,
         }
@@ -636,18 +640,18 @@ impl PendingPlayVisualInput {
             return;
         };
         let lane = binding.lane.index();
+        self.held_keys[lane].update(event.kind, binding.scratch_direction);
         match event.kind {
             InputKind::Press => {
                 self.lane_keyon_started_at[lane] = Some(visual_now);
                 self.lane_keyoff_started_at[lane] = None;
-                self.lane_scratch_direction[lane] = binding.scratch_direction;
             }
             InputKind::Release => {
-                if self.lane_keyon_started_at[lane].is_some() {
-                    self.lane_keyon_started_at[lane] = None;
+                if !self.held_keys[lane].is_held()
+                    && self.lane_keyon_started_at[lane].take().is_some()
+                {
                     self.lane_keyoff_started_at[lane] = Some(visual_now);
                 }
-                self.lane_scratch_direction[lane] = None;
             }
         }
     }
@@ -665,21 +669,21 @@ impl PendingPlayVisualInput {
             if self.lane_keyon_started_at[lane_index].is_none() {
                 continue;
             }
-            let sign =
-                match self.lane_scratch_direction[lane_index].unwrap_or(ScratchDirection::Down) {
-                    ScratchDirection::Up => 1,
-                    ScratchDirection::Down => -1,
-                };
+            let sign = match self.held_keys[lane_index].direction.unwrap_or(ScratchDirection::Down)
+            {
+                ScratchDirection::Up => 1,
+                ScratchDirection::Down => -1,
+            };
             self.lane_scratch_angle_delta_ms[lane_index] =
                 (self.lane_scratch_angle_delta_ms[lane_index] + sign * delta_ms.saturating_mul(2))
                     .rem_euclid(2_160);
         }
     }
 
-    pub(super) fn apply_to_session(self, session: &mut bmz_gameplay::session::GameSession) {
+    pub(super) fn apply_to_session(&self, session: &mut bmz_gameplay::session::GameSession) {
         session.lane_keyon_started_at = self.lane_keyon_started_at;
         session.lane_keyoff_started_at = self.lane_keyoff_started_at;
-        session.lane_scratch_direction = self.lane_scratch_direction;
+        session.lane_key_hold = self.held_keys;
         session.lane_scratch_angle_delta_ms = self.lane_scratch_angle_delta_ms;
         session.scratch_angle_last_render_at = self.scratch_angle_last_render_at;
     }

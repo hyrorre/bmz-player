@@ -84,31 +84,61 @@ pub fn update_recent_inputs(session: &mut GameSession, inputs: &[InputEvent], no
     session.recent_inputs.retain(|input| now.0 <= input.time.0 + INPUT_DISPLAY_US);
 }
 
+/// A directionless key and the two scratch directions can be held independently.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LaneKeyHold {
+    held: [bool; 3],
+    pub direction: Option<ScratchDirection>,
+}
+
+impl LaneKeyHold {
+    pub fn update(&mut self, kind: InputKind, direction: Option<ScratchDirection>) {
+        use ScratchDirection::{Down, Up};
+        let index = match direction {
+            None => 0,
+            Some(Up) => 1,
+            Some(Down) => 2,
+        };
+        self.held[index] = kind == InputKind::Press;
+        self.direction = if kind == InputKind::Press {
+            direction
+        } else if self.held[1] {
+            Some(Up)
+        } else if self.held[2] {
+            Some(Down)
+        } else {
+            None
+        };
+    }
+
+    pub fn is_held(self) -> bool {
+        self.held.contains(&true)
+    }
+}
+
 /// レーンごとのキー押下/解放状態を更新する。beatoraja の KEYON/KEYOFF タイマー相当。
 /// Press → keyon を新しい時刻にセット、keyoff をクリア(autoplay 入力なら 80ms 後の自動 release も予約)。
 /// Release → 押下中だった場合のみ keyoff をセット、keyon と auto_release_at をクリア。
 pub fn update_lane_key_states(session: &mut GameSession, inputs: &[InputEvent]) {
     for input in inputs {
         let lane_index = input.lane.index();
+        let held = &mut session.lane_key_hold[lane_index];
+        held.update(input.kind, input.scratch_direction);
         match input.kind {
             InputKind::Press => {
                 session.lane_keyon_started_at[lane_index] = Some(input.time);
                 session.lane_keyoff_started_at[lane_index] = None;
-                session.lane_scratch_direction[lane_index] = input.scratch_direction;
                 session.lane_auto_release_at[lane_index] = match input.source {
                     InputSource::Auto => Some(TimeUs(input.time.0 + AUTO_KEYBEAM_DURATION_US)),
                     _ => None,
                 };
             }
             InputKind::Release => {
-                if session.lane_keyon_started_at[lane_index].is_some() {
-                    session.lane_keyoff_started_at[lane_index] = Some(input.time);
-                    session.lane_keyon_started_at[lane_index] = None;
+                if held.is_held() {
+                    continue;
                 }
-                if input.scratch_direction.is_none()
-                    || session.lane_scratch_direction[lane_index] == input.scratch_direction
-                {
-                    session.lane_scratch_direction[lane_index] = None;
+                if session.lane_keyon_started_at[lane_index].take().is_some() {
+                    session.lane_keyoff_started_at[lane_index] = Some(input.time);
                 }
                 session.lane_auto_release_at[lane_index] = None;
             }
@@ -133,12 +163,12 @@ pub fn apply_auto_key_release(session: &mut GameSession, audio_now: TimeUs) {
                     time: release_at,
                     source: InputSource::Auto,
                     device_kind: Default::default(),
-                    scratch_direction: session.lane_scratch_direction[lane_index],
+                    scratch_direction: session.lane_key_hold[lane_index].direction,
                 }),
             );
             session.lane_keyoff_started_at[lane_index] = Some(release_at);
             session.lane_keyon_started_at[lane_index] = None;
-            session.lane_scratch_direction[lane_index] = None;
+            session.lane_key_hold[lane_index] = Default::default();
             session.lane_auto_release_at[lane_index] = None;
         }
     }
@@ -164,7 +194,8 @@ fn collect_player_lane_inputs(session: &mut GameSession) -> Vec<InputEvent> {
 }
 
 pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
-    let inputs = collect_player_lane_inputs(session);
+    let mut inputs = collect_player_lane_inputs(session);
+    inputs.sort_by_key(|input| input.time);
     let mut judgements = Vec::new();
     for input in inputs {
         if session.play_end_reached() {
@@ -178,6 +209,10 @@ pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
             } else {
                 session.replay_recorder.record(input);
             }
+        }
+        judgements.extend(misses_before_input(session, input.time));
+        if session.state == PlayState::Failed {
+            break;
         }
         let events = process_session_input(session, input);
         super::latency::judged();
@@ -354,7 +389,7 @@ pub fn update_scratch_angle_phase(session: &mut GameSession, render_now: TimeUs)
             continue;
         }
         let sign =
-            match session.lane_scratch_direction[lane_index].unwrap_or(ScratchDirection::Down) {
+            match session.lane_key_hold[lane_index].direction.unwrap_or(ScratchDirection::Down) {
                 ScratchDirection::Up => 1,
                 ScratchDirection::Down => -1,
             };
@@ -393,6 +428,10 @@ pub fn process_replay_inputs(session: &mut GameSession, audio_now: TimeUs) -> Ve
     let mut judgements = Vec::new();
     for input in inputs {
         if session.play_end_reached() {
+            break;
+        }
+        judgements.extend(misses_before_input(session, input.time));
+        if session.state == PlayState::Failed || session.play_end_reached() {
             break;
         }
         judgements.extend(process_session_input(session, input));
@@ -442,14 +481,14 @@ fn closest_pending_scratch_lane(
         .iter()
         .copied()
         .filter(|lane| scratch_lane_mask[lane.index()])
-        .flat_map(|lane| chart.notes_for_lane(lane))
-        .filter(|note| matches!(note.kind, NoteKind::Tap | NoteKind::LongStart | NoteKind::Mine))
-        .filter(|note| match note.kind {
-            NoteKind::Mine => judge.lanes[note.lane.index()].last_mine_hit_time != Some(note.time),
-            _ => !judge.judged_notes.contains_key(&note.id),
+        .flat_map(|lane| chart.notes_for_lane(lane).iter().enumerate())
+        .filter(|(index, note)| match note.kind {
+            NoteKind::Mine => *index >= judge.lanes[note.lane.index()].next_mine_index,
+            NoteKind::Tap | NoteKind::LongStart => !judge.judged_notes.contains_key(&note.id),
+            _ => false,
         })
-        .min_by_key(|note| note.time.0.abs_diff(time.0))
-        .map(|note| note.lane)
+        .min_by_key(|(_, note)| note.time.0.abs_diff(time.0))
+        .map(|(_, note)| note.lane)
 }
 
 pub fn process_autoplay_inputs(
@@ -478,8 +517,8 @@ pub fn process_autoplay_inputs(
     judgements
 }
 
-/// HLN の時間積分を進める前に、人間・Replay・Autoplay の入力を一本の時系列へまとめる。
-pub(super) fn process_hln_inputs(session: &mut GameSession, now: TimeUs) -> Vec<JudgementEvent> {
+/// 通過判定・時間積分のため、人間・Replay・Autoplay の入力を一本の時系列へまとめる。
+pub(super) fn process_timed_inputs(session: &mut GameSession, now: TimeUs) -> Vec<JudgementEvent> {
     let ctx = InputTimingContext {
         audio_clock: &session.audio_clock,
         offsets: session.offsets,
@@ -487,7 +526,8 @@ pub(super) fn process_hln_inputs(session: &mut GameSession, now: TimeUs) -> Vec<
     };
     let mut human = session.input_system.collect_game_inputs(&ctx);
     let ordered_timeline = uses_ordered_inputs(session);
-    if ordered_timeline {
+    let has_mines = session.judge.has_mines(&session.chart);
+    if ordered_timeline || has_mines {
         human.append(&mut session.conditional.pending_inputs);
         let (ready, future): (Vec<_>, Vec<_>) =
             human.into_iter().partition(|input| input.time <= now);
@@ -536,36 +576,56 @@ pub(super) fn process_hln_inputs(session: &mut GameSession, now: TimeUs) -> Vec<
     }
     inputs.sort_by_key(|(input, _)| input.time);
     let mut events = Vec::new();
-    for (mut input, human) in inputs {
+    for group in inputs.chunk_by(|(left, _), (right, _)| left.time == right.time) {
         if session.state == PlayState::Failed || session.play_end_reached() {
             break;
         }
+        let time = group[0].0.time;
+        let before = TimeUs(time.0.saturating_sub(1));
         if ordered_timeline {
-            let before = TimeUs(input.time.0.saturating_sub(1));
             events.extend(super::conditional::advance_time(session, before));
+            super::frame::sync_judge_windows(session, time);
+        } else {
+            if has_mines {
+                events.extend(process_mine_passes(session, before));
+            }
+            events.extend(misses_before_input(session, time));
+        }
+        if session.state == PlayState::Failed {
+            break;
+        }
+        let mut outcomes = Vec::new();
+        for &(mut input, human) in group {
+            if input.source == InputSource::Replay {
+                input = project_replay_input(session, input);
+            }
+            update_recent_inputs(session, &[input], now);
+            update_lane_key_states(session, &[input]);
+            outcomes.push((input, human, evaluate_session_input(session, input)));
+        }
+        // Passing sees the final held state of the timestamp, before the input
+        // judgements affect the gauge. Earlier mines saw the previous state.
+        if has_mines {
+            events.extend(process_mine_passes(session, time));
+        }
+        for (input, human, outcome) in outcomes {
             if session.state == PlayState::Failed {
                 break;
             }
-            super::frame::sync_judge_windows(session, input.time);
-        }
-        if input.source == InputSource::Replay {
-            input = project_replay_input(session, input);
-        }
-        update_recent_inputs(session, &[input], now);
-        update_lane_key_states(session, &[input]);
-        let judged = process_session_input(session, input);
-        if ordered_timeline {
-            apply_hcn_gauge(session, input.time);
-            update_hcn_lane_timers(session, input.time);
-            if session.lane_hcn_timer.iter().any(Option::is_some) {
-                session.last_hcn_gauge_at = Some(input.time);
+            let judged = apply_input_outcome(session, input, outcome);
+            if human {
+                apply_input_offset_auto_adjust(session, &judged);
             }
-            session.conditional.processed_time = Some(input.time);
+            events.extend(judged);
         }
-        if human {
-            apply_input_offset_auto_adjust(session, &judged);
+        if ordered_timeline {
+            apply_hcn_gauge(session, time);
+            update_hcn_lane_timers(session, time);
+            if session.lane_hcn_timer.iter().any(Option::is_some) {
+                session.last_hcn_gauge_at = Some(time);
+            }
+            session.conditional.processed_time = Some(time);
         }
-        events.extend(judged);
     }
     if session.autoplay.is_some() {
         apply_auto_key_release(session, now);
@@ -573,10 +633,22 @@ pub(super) fn process_hln_inputs(session: &mut GameSession, now: TimeUs) -> Vec<
     events
 }
 
+fn misses_before_input(session: &mut GameSession, time: TimeUs) -> Vec<JudgementEvent> {
+    if session.state != PlayState::Playing {
+        return Vec::new();
+    }
+    process_misses(session, TimeUs(time.0.saturating_sub(1)))
+}
+
 pub(super) fn process_session_input(
     session: &mut GameSession,
     input: InputEvent,
 ) -> Vec<JudgementEvent> {
+    let outcome = evaluate_session_input(session, input);
+    apply_input_outcome(session, input, outcome)
+}
+
+fn evaluate_session_input(session: &mut GameSession, input: InputEvent) -> JudgeOutcome {
     push_skin_runtime_event(session, SkinRuntimeEventKind::Input(input));
     let judge_time = if input.source == InputSource::Auto {
         input.time
@@ -587,17 +659,6 @@ pub(super) fn process_session_input(
     if input.kind == InputKind::Press {
         let hcn_passing = hold_note_passing_at(session, input.lane, input.time, LongNoteMode::Hcn);
         let hln_passing = hold_note_passing_at(session, input.lane, input.time, LongNoteMode::Hln);
-        if hcn_passing && outcome.events.iter().all(|event| event.judge == Judge::EmptyPoor) {
-            outcome.events.clear();
-            // HLN の時間更新が同時に出した別ノーツの終端音は残す。
-            outcome.keysounds.retain(|sound| {
-                session
-                    .chart
-                    .note_by_id(sound.note_id)
-                    .is_some_and(|note| note.lane != input.lane || note.kind == NoteKind::LongEnd)
-            });
-            outcome.consumed_input = false;
-        }
         if outcome.events.is_empty()
             && outcome.keysounds.is_empty()
             && !outcome.consumed_input
@@ -617,6 +678,14 @@ pub(super) fn process_session_input(
             });
         }
     }
+    outcome
+}
+
+fn apply_input_outcome(
+    session: &mut GameSession,
+    input: InputEvent,
+    outcome: JudgeOutcome,
+) -> Vec<JudgementEvent> {
     // 判定・記録・発音には補正済み input.time を維持し、表示だけ打鍵時から始める。
     // 処理時の now ではなく入力の元時刻を使い、入力配送や描画の遅延を引き継ぐ。
     // Replay / Auto は譜面時刻が確定済みなので現在の profile offset を引かない。

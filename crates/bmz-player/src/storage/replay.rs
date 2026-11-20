@@ -14,9 +14,9 @@ use crate::screens::play_session::SRandomScheme;
 use crate::select_options::{ArrangeOption, DoubleOption, DoubleOptionScoreBucket};
 
 pub const REPLAY_FILE_VERSION: u32 = 8;
-/// Judge rule revision written by this build. 0 (missing) means a replay from
-/// before the DX MODE POP judge revision; 1 adopts the revised POP windows.
-pub const REPLAY_JUDGE_REVISION: u32 = 1;
+/// Revision 1 updated DX POP windows. Revision 2 updates scoring and passage judgement.
+/// Revision 3 applies the HCN EmptyPoor policy in the shared judge before recording history.
+pub const REPLAY_JUDGE_REVISION: u32 = 3;
 pub const SEED_SCHEME_BEATORAJA_24BIT_V1: &str = "beatoraja_24bit_v1";
 pub const SEED_SCHEME_LEGACY_SHARED_V3: &str = "legacy_shared_v3";
 pub const S_RANDOM_SCHEME_LEGACY_40MS_V1: &str = SRandomScheme::LEGACY_40MS_V1;
@@ -29,6 +29,8 @@ pub struct ReplayFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch_decisions: Option<Vec<bmz_core::replay::BranchDecision>>,
     pub version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge_window_rates: Option<bmz_gameplay::judge::window::JudgeWindowRates>,
     pub chart_sha256: String,
     #[serde(default)]
     pub ln_policy: String,
@@ -100,12 +102,21 @@ impl ReplayFile {
             kaleid: self.kaleid.clone(),
             events: self.events.clone(),
             judge_algorithm: self.judge_algorithm,
-            legacy_dx_pop_judge: self.judge_revision < 1,
+            legacy_dx_pop_judge: self.judge_revision == 0,
             input_excludes_start_margin: self.input_excludes_start_margin,
             branch_decisions: self.branch_decisions.clone(),
             next_index: 0,
             next_scoring_time: None,
+            judge_window_rates: self.judge_window_rates,
         }
+    }
+
+    pub fn with_judge_window_rates(
+        mut self,
+        rates: Option<bmz_gameplay::judge::window::JudgeWindowRates>,
+    ) -> Self {
+        self.judge_window_rates = rates;
+        self
     }
 
     pub fn with_branch_decisions(
@@ -165,6 +176,8 @@ impl ReplayFile {
             kaleid: None,
             branch_decisions: None,
             version: REPLAY_FILE_VERSION,
+            judge_revision: REPLAY_JUDGE_REVISION,
+            judge_window_rates: None,
             chart_sha256: hex_encode(&chart_sha256),
             ln_policy: ln_policy.as_str().to_string(),
             played_at,
@@ -177,7 +190,6 @@ impl ReplayFile {
             h_random_threshold_ms: None,
             freq_semitones: None,
             judge_algorithm: None,
-            judge_revision: REPLAY_JUDGE_REVISION,
             input_excludes_start_margin: false,
             arrange_seed,
             arrange_seed_2p: None,
@@ -565,6 +577,24 @@ fn hex_digit(byte: u8) -> Result<u8> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn judge_revision_and_recorded_rates_survive_round_trip() {
+        use bmz_gameplay::judge::window::JudgeWindowRates;
+
+        let rates = JudgeWindowRates { keys: [100, 100, 0], ..Default::default() };
+        let replay = ReplayFile::new([1; 32], 1, None, ArrangeOption::Normal, None, None, vec![])
+            .with_judge_window_rates(Some(rates));
+        let text = toml::to_string(&replay).unwrap();
+        let current = parse_replay(&text).unwrap();
+        assert_eq!(current.judge_revision, REPLAY_JUDGE_REVISION);
+        assert!(!current.player().legacy_dx_pop_judge);
+        assert_eq!(current.player().judge_window_rates.unwrap().keys, [100, 100, 0]);
+        let legacy = text.replace(&format!("judge_revision = {REPLAY_JUDGE_REVISION}\n"), "");
+        let legacy = parse_replay(&legacy).unwrap();
+        assert_eq!(legacy.judge_revision, 0);
+        assert!(legacy.player().legacy_dx_pop_judge);
+    }
+
     use bmz_core::clear::GaugeType;
     use bmz_core::input::{InputDeviceKind, InputKind, ScratchDirection};
     use bmz_core::lane::Lane;

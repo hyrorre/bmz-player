@@ -11,7 +11,6 @@ use bmz_chart::timing::{TICKS_PER_MEASURE, TimingMap};
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::{ChartTick, TimeUs};
-use bmz_gameplay::gauge::gauge_total_for_chart;
 use bmz_gameplay::judge::model::JudgementEvent;
 use bmz_gameplay::score::scored_note_count;
 use bmz_gameplay::session::GameSession;

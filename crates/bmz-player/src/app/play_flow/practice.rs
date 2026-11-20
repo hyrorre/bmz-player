@@ -594,15 +594,11 @@ impl WinitApp {
             && let Some(preloaded) = self.play.preloaded_play_session.as_ref()
             && preloaded.chart_id == practice.chart_id
         {
-            let rules = crate::screens::practice::PracticeRuleContext::for_play_session(
+            practice.rules = crate::screens::practice::PracticeRuleContext::for_play_session(
                 self.boot.profile_config.play.rule_mode,
                 preloaded.preloaded.chart.metadata.key_mode,
                 &preloaded.session_options,
             );
-            if practice.rules != rules {
-                practice.rules = rules;
-                rules.clamp_start_gauge(&mut practice.property);
-            }
         }
         let (chart_id, start_time_ms) = {
             let Some(practice) = self.play.practice_session.as_ref() else {

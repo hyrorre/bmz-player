@@ -203,8 +203,8 @@ pub struct GameSession {
     pub lane_keyon_started_at: [Option<TimeUs>; LANE_COUNT],
     /// 各レーンのキー解放時刻。離した直後のみ Some(次の Press でクリア)。skin の keyoff タイマー(120..=127)。
     pub lane_keyoff_started_at: [Option<TimeUs>; LANE_COUNT],
-    /// Scratch lane rotation direction while the scratch input is held.
-    pub lane_scratch_direction: [Option<ScratchDirection>; LANE_COUNT],
+    /// Held inputs and the active turntable direction for each lane.
+    pub lane_key_hold: [LaneKeyHold; LANE_COUNT],
     /// Extra turntable phase accumulated by scratch input, in beatoraja scratch-angle ms.
     pub lane_scratch_angle_delta_ms: [i64; LANE_COUNT],
     pub scratch_angle_last_render_at: Option<TimeUs>,
@@ -405,6 +405,7 @@ pub struct BattleOpponentSession {
     pub gauge_max_started_at: Option<TimeUs>,
     pub full_combo_started_at: Option<TimeUs>,
     pub lane_keyon_started_at: [Option<TimeUs>; LANE_COUNT],
+    pub lane_key_hold: [LaneKeyHold; LANE_COUNT],
     pub lane_hcn_timer: [Option<HcnLaneTimer>; LANE_COUNT],
     pub last_hcn_gauge_at: Option<TimeUs>,
 }

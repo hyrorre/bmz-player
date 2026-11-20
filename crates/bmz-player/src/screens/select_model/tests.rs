@@ -546,6 +546,7 @@ fn score_for_chart(chart_sha256: [u8; 32]) -> ScoreRecord {
         delta: TimeUs(0),
         time: TimeUs(0),
         affects_score: true,
+        advances_score: true,
     });
 
     ScoreRecord {

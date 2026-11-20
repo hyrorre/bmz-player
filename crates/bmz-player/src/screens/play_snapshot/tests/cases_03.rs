@@ -357,6 +357,7 @@ fn build_render_snapshot_sums_judge_counts() {
         delta: TimeUs(-1_000),
         time: TimeUs(1_000),
         affects_score: true,
+        advances_score: true,
     });
     session.score.apply(&JudgementEvent {
         note_id: None,
@@ -366,6 +367,7 @@ fn build_render_snapshot_sums_judge_counts() {
         delta: TimeUs(40_000),
         time: TimeUs(2_000),
         affects_score: true,
+        advances_score: true,
     });
 
     let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);

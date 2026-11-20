@@ -154,10 +154,16 @@ pub(super) fn timing_judge_areas(state: &SkinDrawState) -> [TimingJudgeArea; 5] 
 pub(super) fn timing_judge_areas_from_window(
     window: bmz_gameplay::judge::model::JudgeWindow,
 ) -> [TimingJudgeArea; 5] {
+    let fast = window.bands(true);
+    let slow = window.bands(false);
+    let band = |i: usize| TimingJudgeArea {
+        late_ms: -fast[i] as f32 / 1_000.0,
+        early_ms: slow[i] as f32 / 1_000.0,
+    };
     [
-        symmetric_timing_judge_area(window.pgreat_us),
-        symmetric_timing_judge_area(window.great_us),
-        symmetric_timing_judge_area(window.good_us),
+        band(0),
+        band(1),
+        band(2),
         TimingJudgeArea {
             late_ms: -window.bad_fast_us as f32 / 1_000.0,
             early_ms: window.bad_slow_us as f32 / 1_000.0,
@@ -169,24 +175,15 @@ pub(super) fn timing_judge_areas_from_window(
     ]
 }
 
-pub(super) fn symmetric_timing_judge_area(us: i64) -> TimingJudgeArea {
-    let ms = us as f32 / 1_000.0;
-    TimingJudgeArea { late_ms: -ms, early_ms: ms }
-}
-
 pub(super) fn beatoraja_judge_rank_percent_for_mode(
     key_mode: KeyMode,
     judge_rank: Option<i32>,
 ) -> i32 {
-    let Some(rank) = judge_rank else {
-        return 100;
-    };
+    let rank = judge_rank.unwrap_or(2);
     if rank >= 10 {
         return rank;
     }
-    let table =
-        if key_mode == KeyMode::K9 { [33, 50, 70, 100, 133] } else { [25, 50, 75, 100, 125] };
-    table.get(rank as usize).copied().unwrap_or(table[2])
+    bmz_gameplay::judge::window::beatoraja_judge_rank_to_percent_for_keymode(rank, key_mode)
 }
 
 pub(super) fn timing_distribution_x(rect: Rect, center: usize, value_ms: f32) -> f32 {

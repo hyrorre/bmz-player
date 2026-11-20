@@ -10,28 +10,27 @@ score DB / replay slotでも別条件として扱います。
 - `Lr2Oraja`
 - `Dx`
 
-参照ソース:
+互換確認の基準は次のコミットです。
 
-- beatoraja: `.local/beatoraja/`
-- LR2oraja Endless Dream: `.local/lr2oraja-endlessdream/`
-
-DX MODEも現在のLR2oraja Endless Dream本体に統合されているため、同じ参照ツリーを使います。
+- beatoraja `93e704d9eedcb3b52e558f6581c00d6077ceb639`。[JudgeManager](https://github.com/exch-bms2/beatoraja/blob/93e704d9eedcb3b52e558f6581c00d6077ceb639/src/bms/player/beatoraja/play/JudgeManager.java)
+- LR2orajaの `lr2oraja` ブランチ `c1c8e4e0148abd318a9375de1631227cc383d0e4`。[JudgeManager](https://github.com/wcko87/lr2oraja/blob/c1c8e4e0148abd318a9375de1631227cc383d0e4/src/bms/player/beatoraja/play/JudgeManager.java)
+- LR2oraja Endless DreamのDX MODE `3bc4b9b40dc6a44f7ebf0594a6ec1b8ffb7370fe`。[JudgeManager](https://github.com/rian-eimu/lr2oraja-endlessdream/blob/3bc4b9b40dc6a44f7ebf0594a6ec1b8ffb7370fe/core/src/bms/player/beatoraja/play/JudgeManager.java)
 
 ## モードの概要
 
 | item | Beatoraja | Lr2Oraja | Dx |
 | --- | --- | --- | --- |
-| 主な参照 | beatoraja | LR2oraja Endless Dream | LR2oraja Endless Dream DX MODE |
+| 主な参照 | beatoraja | LR2oraja | LR2oraja Endless Dream DX MODE |
 | 判定property | key mode別`JudgeProperty` | `JudgeProperty.LR2` | 9K（PMS 5K含む）は`JudgeProperty.POP`、それ以外は`IIDX` |
-| ゲージproperty | key mode別`GaugeProperty` | `GaugeProperty.LR2` | 9K（PMS 5K含む）はPOP用、それ以外はIIDX用gauge |
-| `#RANK`未指定 | 100% | 75% (`#RANK 2`相当) | 固定窓のため無視 |
+| ゲージproperty | key mode別`GaugeProperty` | 既定は`GaugeProperty.LR2`、コース・Practiceの明示指定を優先 | 9K（PMS 5K含む）はPOP用、それ以外はIIDX用gauge |
+| `#RANK`未指定 | 75%（PMSは70%） | 75% (`#RANK 2`相当) | 固定窓のため無視 |
 | `#RANK 4` | 125% (`PMS`は133%) | 75% (`#RANK 2`相当) | 固定窓のため無視 |
 | `#EXRANKxx` / chA0 | importはするがruntimeでは無視 | importはするがruntimeでは無視 | 固定窓のため無視 |
 | MultiBad | 無効 | 有効 | 有効 |
 | LN start late BAD抑制 | 無効 | 有効 | 有効 |
 | BAD消費 | 消費 (`PMS`だけ非消費) | 消費 | 9Kは非消費、それ以外は消費 |
 | EmptyPoor combo break | 5K / 10K / 9Kだけbreak | 継続 | 9Kはbreak、それ以外は継続 |
-| CN/HCN早離し猶予 | 9Kは200ms、それ以外は0 | 0 | 9Kは116.667ms、それ以外は0 |
+| CN/HCN早離し猶予 | 9Kは200ms、それ以外は0 | 0 | 9Kは116,667μs、それ以外は0 |
 | score / replay保存 | `rule_mode=Beatoraja` | `rule_mode=Lr2Oraja` | `rule_mode=Dx` |
 
 DX MODE固有のIR抑制はBMZ公式IR / rianIRには適用しません。
@@ -97,7 +96,7 @@ key modeからbeatorajaのplayer ruleに対応する`JudgeProperty`を選びま�
 | 3 | 100 |
 | 4 | 133 |
 
-未指定は100%、範囲外は各ruleの`#RANK 2` (`NORMAL=75%`, `PMS=70%`)に寄せます。
+BMSの未指定・範囲外は各ruleの `#RANK 2`（NORMALは75%、PMSは70%）になります。BMSONの `judge_rank` の既定値は100%です。
 
 `#DEFEXRANK`はbeatoraja `BMSPlayerRule.validate`と同じく、そのruleの`#RANK 2`
 を基準にします。たとえば`#DEFEXRANK 100`は`NORMAL=75%`, `PMS=70%`です。
@@ -110,13 +109,15 @@ PGREAT / GREAT / GOODがBADを超えないようにし、狭い上位判定が�
 
 `PMS`はbeatoraja `judgeVanish[Bad] = false` / `MissCondition.ONE`に従います。
 BADはスコア/ゲージへ反映するがノーツを消費しないため、同じノーツを後続の
-GOOD以上で再判定できます。BAD後に見逃した場合は内部的にノーツを消費するが、
-追加のPOORはスコア/ゲージへ入れません。
+GOOD以上で再判定できます。通常LNの始点で出た非消費BADも、この時点で判定数・BP・コンボ・ゲージへ反映します。
+`MissCondition.ONE` ではBADと空POORの履歴があるノーツをGOOD以上の窓で取り直せます。
+消費済みノーツは候補から除外します。履歴のあるノーツを見逃すとノーツを消費し、
+処理済み数を増やしてghostにPOORを記録します。判定数・BP・コンボ・ゲージへの追加は抑止します。
 
 任意の`play.play_keysound_on_miss`（既定OFF）は採点を変えず、見逃しPOOR確定時に
 通常ノート・LN始端、押したまま見逃したCN/HCN終端のキー音を再生します。
 CN/HCN始端を見逃すと始端・終端の2判定を集計するが、発音は始端だけとなります。
-非消費BAD済みノートの見逃し、空POOR、早離しPOOR、地雷、不可視ノートに
+非消費BAD・空POOR済みノートの見逃し、空POOR、早離しPOOR、地雷、不可視ノートに
 追加の発音は行いません。通常の自動キー音ON時は重複発音を抑えます。
 
 `#EXRANKxx` / chA0はimport結果として`judge_rank_events`に残すが、
@@ -164,8 +165,10 @@ LR2orajaのjbms-parser経路ではchA0がruntimeの判定ランク変更とし�
 
 ### DX
 
-DX MODEはLR2oraja Endless Dreamの`dxMode`を参照します。custom judge rateは
-無効化し、9K以外は`JudgeProperty.IIDX`、9Kは`JudgeProperty.POP`に固定します。
+DX MODEは9K以外で`JudgeProperty.IIDX`、9Kで`JudgeProperty.POP`を使います。
+EXPAND JUDGEの任意倍率と再押下猶予倍率は設定に保持され、DXの実効窓には使いません。
+上流の`BMSPlayer`に従い、設定中の倍率が100%を超える場合のAssist・スコア保存・IR送信の制限は
+他ルールと同じです。コースのNO_GOOD／NO_GREATはDXにも適用します。
 参照側の`POP`対象はPOPN_5K / POPN_9Kです。BMZはPMS 5K譜面も9K（`KeyMode::K9`）として
 取り込むため、同じPOP判定・POPゲージになります。beatoraja 5K（BEAT_5K）はIIDXのままです。
 
@@ -190,7 +193,7 @@ DX MODEはLR2oraja Endless Dreamの`dxMode`を参照します。custom judge rat
 - GREAT: `±50000us`
 - GOOD: `±116667us`
 - BAD: `±183333us`
-- EMPTY POOR FAST: `529167us`
+- EMPTY POOR FAST: `529167us`（候補走査の上限は排他的）
 - EMPTY POOR SLOW: `183333us`
 
 9KのLN / CN / HCN end（早離し側だけ広い）:
@@ -218,6 +221,16 @@ LN end PGREAT / GREAT / GOOD / BAD `±120000` / `150000` / `217000` / `283000us`
 BMZの実装でもDX modeの`judge_percent_at_time`は常に100%を返し、
 `judge_windows_for_rule_mode`は倍率を無視します。
 
+### コース制約と任意倍率
+
+ランクを適用した後、PGREAT／GREAT／GOODの任意倍率にコース制約を反映します。
+NO_GOODはGOODの倍率を0%、NO_GREATはGREATとGOODの倍率を0%にします。
+各側でBAD幅を上限として、PGREATから順に幅が狭くならないよう補正します。
+beatoraja／LR2orajaでは、上流と同じく鍵盤側の任意倍率をスクラッチとlong scratch endにも使います。
+スクラッチ側の任意倍率は設定に保持しますが、実効窓には使いません。
+LR2orajaの `#RANK 2` では、通常ノーツのPGREAT／GREAT／GOOD窓は
+NO_GOODで18／40／40ms、NO_GREATで18／18／18msです。
+
 ## 判定アルゴリズム
 
 判定対象ノーツの選択アルゴリズムはrule modeとは別設定で、profileの
@@ -231,8 +244,9 @@ BMZの実装でもDX modeの`judge_percent_at_time`は常に100%を返し、
 - `Score`
 
 `Duration`は時間差最小、`Lowest`は先に見つかったノーツ優先、`Combo`はcombo継続寄り、
-`Score`はscore寄りの比較を行います。BMZではすべてのrule modeで同じ設定値を使います。
-`Duration`で時間差が等しい候補が複数ある場合は、譜面のレーン内の順序で先の候補を採用します。
+`Score`はscore寄りの比較を行います。すべてのルールで同じ設定値を使います。
+DURATIONは未消費のBADと空POORを同じ走査で比較し、同じ距離では先に見つかった候補を維持します。
+通常・スクラッチの窓から求めた全体のFAST側走査上限は排他的です。各判定窓の端は含みます。
 
 リプレイに判定アルゴリズムの記録があれば、再生・動画出力・G-BATTLEでその記録を使います。
 記録がなければプロフィールの設定を使います。
@@ -243,6 +257,30 @@ LR2oraja / DX modeでは、押下時に選ばれたノーツ周辺のBAD範囲�
 これはLR2oraja Endless Dreamの`MultiBadCollector`相当です。
 
 Beatoraja modeではMultiBadを出しません。
+9KのDX POPでは、非消費BADの履歴があるノーツにも、上流と同じくMultiBadのBADを再度付けます。
+主判定が空POORでも、先行ノーツが追加BADの条件を満たせば両方を記録します。
+HLNの始点がMultiBadの対象になった場合は、押下が終端時刻以降のときだけBADにします。
+終端前のHLNは未処理のまま残し、後の押下や見逃しで通常どおり判定します。
+LR2oraja / DX modeでは、上流と同じくLNの始点（HLNを含む）にGOOD幅より遅いBADを付けません。
+MultiBadで消費されたCN／HCNの始点に対応する未処理終端は、終端時刻を通常ノーツの
+late BAD幅より過ぎた時点でPOORにします。
+
+## HCN中の空POOR
+
+BMZはbeatoraja／LR2oraja／DX MODEの全3ルールで、同一レーンの実効HCN本体を通過中に
+発生する空POORを抑止します。保持復帰の押し直しに追加ペナルティを与えないための仕様です。
+DX MODEはLR2oraja Endless Dreamの`state.passing != null && judge >= 4`の分岐と同じ扱いで、
+beatoraja／LR2orajaについては上流と異なる意図的な互換例外です。通常プレイ・リプレイ・コースで共通です。
+対象区間と維持する判定は[LNの仕様](ln.md#実行時の判定)を参照してください。
+
+## Mine
+
+地雷の時刻にレーンが押されていれば通過時に1回被弾します。スクラッチの上下を重ねて押した場合は、
+片方向を離しても、もう一方を離すまで押下が続きます。
+同時刻の入力は、その時刻の全Press／Releaseを反映した保持状態で通過を判定します。
+譜面のダメージをゲージから直接引き、被弾音を再生します。BP、コンボ、処理済み数は増減しません。
+BSSの同方向Release後に吸収した逆方向Pressは、そのPressと同時刻の地雷を起動しません。
+押したまま後続の地雷を通過すれば被弾します。
 
 ## ゲージ
 
@@ -264,7 +302,7 @@ max(260.0, 7.605 * total_notes / (0.01 * total_notes + 6.5))
 
 ### LR2oraja
 
-`GaugeProperty.LR2`相当を使います。
+コースで明示されたゲージpropertyを使います。指定がなければ`GaugeProperty.LR2`です。
 
 `#TOTAL`が正値ならそれを使います。未指定または0以下ならLR2oraja Endless Dreamの既定TOTAL:
 
@@ -272,6 +310,14 @@ max(260.0, 7.605 * total_notes / (0.01 * total_notes + 6.5))
 160.0 + (total_notes + clamp(total_notes - 400, 0, 200)) * 0.16
 ```
 
+BMSONの正のTOTALは、実効LN種別を反映した採点ノーツ数でルール別の既定TOTALを求め、
+その値にかける百分率です。BMSONの未指定・0以下は既定の100%相当です。
+正のBMS `#TOTAL` は絶対値です。
+
+Beatorajaの `GAUGE_LR2` ではHARD／CLASS／EXCLASSの減少量が30%未満で0.6倍になります。
+`ModifyDamage` はbeatorajaとLR2orajaでそれぞれの `GrooveGauge` の式を使います。
+
+LR2orajaのLR2 propertyではEXHARDCLASSを含む閉店ゲージが2%未満で閉店し、2%ちょうどなら継続します。
 HARD / CLASS系のgutsやdeath borderは`crates/bmz-gameplay/src/gauge.rs`の
 `lr2oraja_gauge_definitions()`を正とします。
 
@@ -397,7 +443,7 @@ replay再生結果はローカルスコアを更新せず、IRにも送信しま
 
 - rule mode enum: `crates/bmz-gameplay/src/rule.rs`
 - judge windows / rank conversion: `crates/bmz-gameplay/src/judge/window.rs`
-- judge engine / MultiBad: `crates/bmz-gameplay/src/judge/engine.rs`
+- judge engine / MultiBad: `crates/bmz-gameplay/src/judge/engine/mod.rs`
 - judge algorithm enum: `crates/bmz-gameplay/src/judge/model.rs`
 - score / combo policy: `crates/bmz-gameplay/src/score.rs`
 - gauge definitions / TOTAL: `crates/bmz-gameplay/src/gauge.rs`

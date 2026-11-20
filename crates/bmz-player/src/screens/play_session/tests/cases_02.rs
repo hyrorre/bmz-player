@@ -1,6 +1,80 @@
 use super::*;
 
 #[test]
+fn course_hcn_constraint_suppresses_empty_poor_for_an_undefined_long_note() {
+    use crate::screens::play_start::{
+        PlayStartOptions, apply_course_constraints, play_session_options_from_start,
+    };
+    use bmz_chart::model::{LongNoteMode, LongNotePair, LongNoteStyle};
+    use bmz_core::course::{CourseConstraints, CourseLnConstraint};
+    use bmz_core::judge::Judge;
+    use bmz_core::replay::ReplayEvent;
+    use bmz_gameplay::session::{PlayState, process_replay_inputs};
+
+    let mut chart = chart();
+    let head = NoteEvent { kind: NoteKind::LongStart, ..note(1, Lane::Key1, 1_000_000) };
+    let tail = NoteEvent { kind: NoteKind::LongEnd, ..note(2, Lane::Key1, 2_000_000) };
+    chart.long_notes.push(LongNotePair {
+        lane: Lane::Key1,
+        style: LongNoteStyle::ChannelPair,
+        mode: None,
+        start_note_id: head.id,
+        end_note_id: tail.id,
+        start_tick: head.tick,
+        end_tick: tail.tick,
+        start_time: head.time,
+        end_time: tail.time,
+        sound: None,
+    });
+    chart.lane_notes[Lane::Key1.index()] = vec![head, tail, note(3, Lane::Key1, 2_100_000)];
+    chart.total_notes = 2;
+    chart.end_time = TimeUs(2_100_000);
+    let mut start = PlayStartOptions::default();
+    apply_course_constraints(
+        &mut start,
+        &CourseConstraints { ln: CourseLnConstraint::Hcn, ..Default::default() },
+    );
+    let mut options = play_session_options_from_start(&Default::default(), start);
+    let policy = crate::ln_policy::course_score_ln_policy(
+        options.ln_policy_setting,
+        options.ln_mode_override,
+        ChartLnProfile::from_chart(&chart),
+    );
+    crate::ln_policy::apply_score_ln_policy_to_chart(policy, &mut chart);
+    assert_eq!(chart.long_notes[0].mode, Some(LongNoteMode::Hcn));
+
+    options.replay_player = Some(ReplayPlayer::new(
+        [
+            (1_000_000, InputKind::Press),
+            (1_200_000, InputKind::Release),
+            (1_700_000, InputKind::Press),
+        ]
+        .into_iter()
+        .map(|(time, kind)| ReplayEvent {
+            time: TimeUs(time),
+            kind,
+            lane: Lane::Key1,
+            device_kind: bmz_core::input::InputDeviceKind::Keyboard,
+            scratch_direction: None,
+        })
+        .collect(),
+    ));
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    for rule in [RuleMode::Beatoraja, RuleMode::Lr2Oraja, RuleMode::Dx] {
+        profile.play.rule_mode = rule;
+        let mut session = build_game_session(Arc::new(chart.clone()), &profile, options.clone());
+        session.state = PlayState::Playing;
+        process_replay_inputs(&mut session, TimeUs(1_000_000));
+        let release = process_replay_inputs(&mut session, TimeUs(1_200_000));
+        assert_eq!(release[0].judge, Judge::Poor);
+        assert!(session.judge.lanes[Lane::Key1.index()].active_long.is_none());
+        assert!(process_replay_inputs(&mut session, TimeUs(1_700_000)).is_empty());
+        assert_eq!((session.score.bp(), session.score.past_notes), (1, 2));
+        assert!(!session.judge.judged_notes.contains_key(&NoteId(3)));
+    }
+}
+
+#[test]
 fn battle_presentation_uses_opponent_arrangement_on_2p_lanes() {
     let mut primary = chart();
     primary.metadata.key_mode = KeyMode::K7;
@@ -106,6 +180,24 @@ fn dx_9key_replay_judgements_apply_current_pop_damage() {
         assert_eq!(judgements[0].judge, expected_judge);
         assert!((session.gauge.current().value - expected_gauge).abs() < 0.000_1);
     }
+}
+
+#[test]
+fn legacy_dx_pop_replay_uses_its_original_bands_and_margin() {
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.play.rule_mode = RuleMode::Dx;
+    let mut chart = chart();
+    chart.metadata.key_mode = KeyMode::K9;
+    let session = build_game_session(
+        Arc::new(chart),
+        &profile,
+        PlaySessionOptions {
+            replay_player: Some(ReplayPlayer { legacy_dx_pop_judge: true, ..Default::default() }),
+            ..Default::default()
+        },
+    );
+    assert_eq!(session.judge.windows.good_us, 87_500);
+    assert_eq!(session.judge.window_set.long_note_release_margin_us, 200_000);
 }
 
 #[test]

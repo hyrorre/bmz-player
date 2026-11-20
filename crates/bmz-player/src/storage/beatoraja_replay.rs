@@ -277,6 +277,7 @@ impl BeatorajaReplay {
         file.judge_algorithm =
             self.data.config.as_ref().and_then(BeatorajaPlayConfig::judge_algorithm);
         file.input_excludes_start_margin = true;
+        file.judge_revision = 0;
         Ok(file)
     }
 }

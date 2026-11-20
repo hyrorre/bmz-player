@@ -100,6 +100,7 @@ mod tests {
             delta: TimeUs(0),
             time: TimeUs(0),
             affects_score: true,
+            advances_score: true,
         });
         let gauge = gauge(82.0);
 
@@ -205,6 +206,7 @@ mod tests {
             delta: TimeUs(0),
             time: TimeUs(0),
             affects_score: true,
+            advances_score: true,
         });
         score
     }

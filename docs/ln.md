@@ -119,6 +119,11 @@ profile policyを適用した後のeffective LN modeを指します。
 
 - LNは始点押下時の判定を保持し、終点まで維持できた時点で1ノーツ分として確定します。
   始点と終点を別々のスコア対象にはしません。
+- beatoraja modeのLNを終点のGOOD幅以内で早く離した場合は、上流と同じく終点時刻まで判定を保留します。
+  終点前に押し直すと早離しを取り消し、始点の判定で確定します。押し直さなければ、離した時刻の
+  判定（始点と終点の悪い方）を終点通過時に確定します。BAD以下は離し猶予が0ならその場で確定し、
+  9Kでは猶予切れと終点通過のうち先に到達した時点で、保留中の離し判定を確定します。
+  LR2oraja / DX modeは上流と同じく離した時点で確定します。
 - CN / HCNは始点と終点を別々のスコア対象として扱います。始点は押下時、終点は離した時に
   それぞれ判定します。
 - CN / HCNの始点を見逃した場合、beatorajaと同じく始点と対応する終点の両方を
@@ -128,17 +133,25 @@ profile policyを適用した後のeffective LN modeを指します。
   そのReleaseで終点を判定します。beatorajaはこのReleaseを無視して逆方向Pressを待つが、
   BMZはスクラッチを止める操作だけでも終点を取れるよう、ここを意図的に変更しています。
 - 上記Releaseの直後30ms以内（30msちょうどを含む）に来た最初の逆方向Pressは1回だけ
-  消費し、通常ノート、Mine、フォールバックキー音へ流しません。別方向のPressまたは30ms超過後の
-  Pressは通常どおり処理します。Releaseを伴わず逆方向Pressで終点を取る場合は、終点だけを判定し、
+  吸収し、通常ノート、空POOR、同時刻のMine、フォールバックキー音を起動しません。
+  採点確定後の入力音も同じ条件で抑止します。後続の地雷を保持したまま通過すれば被弾します。
+  2回目以降のPress、同方向Press、30msを超えたPressは通常どおり処理します。Releaseを伴わず逆方向Pressで終点を取る場合は、終点だけを判定し、
   同じ入力を直後の通常ノートへ流しません。
 - CN / HCNを離さず終点を通過した場合の見逃し確定時刻は、long-note endの
   BAD終端ではなく通常ノートのlate BAD終端を使います。
-- 9Kのbeatoraja PMSには200ms、DX POPには116.667msのrelease marginがあります。BAD / POOR相当の
+- 9Kのbeatoraja PMSとDX POPのrelease marginはそれぞれ200msと116,667μsです。BAD / POOR相当の
   早離しは直ちに確定せず、この猶予内に押し直すと取り消します。猶予を過ぎると保留判定を確定します。
   それ以外の通常レーンとlong scratchのmarginは0です。
 - HCNの`passing`参照自体は現在時刻が始点を通過すると設定されるが、始点stateが未判定の
   `0`の間はactive/damageタイマーとゲージ増減を動かしません。始点が判定済みになった後、
   HCN区間中は200msごとに、押下中なら回復、非押下なら減少を適用します。
+- BMZは3ルール共通で、同じレーンの実効HCN本体を通過中に選ばれた空POORを抑止します。
+  保持復帰操作への追加ペナルティを避けるための仕様で、DX MODEは上流と同じ、
+  beatoraja / LR2orajaは意図的な互換例外です。
+  補正済みの判定時刻で `start_time <= input_time < end_time` を確認します。
+  途中離しや始端見逃しで保持の管理状態が解除された後も、この区間内は対象です。
+  空POORの判定表示・音・履歴を発生させず、押下状態と既存の保持復帰・音量復帰は通常どおり更新します。
+  始端・終端の失敗、離している間の継続ダメージ、通常ノーツの判定とMultiBad、地雷は維持します。
 
 参照箇所:
 
@@ -243,7 +256,7 @@ BMZのscore DB schema migrationで既存行へ付けた`ForceLn`既定値は、�
 
 - policy calculation / expected scored notes: `crates/bmz-player/src/ln_policy.rs`
 - external score import: `crates/bmz-player/src/storage/score_import.rs`
-- runtime judgement: `crates/bmz-gameplay/src/judge/engine.rs`
+- runtime judgement: `crates/bmz-gameplay/src/judge/engine/mod.rs`
 - HCN passing / gauge: `crates/bmz-gameplay/src/session.rs`
 - profile config: `crates/bmz-player/src/config/profile_config.rs`
 - chart LN profile persistence: `crates/bmz-player/src/storage/library_db.rs`

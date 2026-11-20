@@ -31,6 +31,7 @@ impl JudgeEngine {
             }
             if inner {
                 event.affects_score = false;
+                event.advances_score = false;
                 if matches!(event.judge, Judge::PGreat | Judge::Great | Judge::Good | Judge::Bad) {
                     for zone in &chart.metadata.free_zones {
                         if event.note_id.is_some_and(|id| zone.inner_notes.contains(&id)) {
@@ -123,6 +124,7 @@ impl JudgeEngine {
                 delta: TimeUs(0),
                 time: now,
                 affects_score: true,
+                advances_score: true,
             });
         }
     }

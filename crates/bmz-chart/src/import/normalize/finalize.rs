@@ -115,6 +115,7 @@ pub(super) fn finalize_playable_chart(
         .to_string();
     }
     if draft.total_is_bmson_percent {
+        draft.metadata.bmson_total_percent = Some(draft.metadata.total.unwrap_or(100.0));
         draft.metadata.total =
             Some(bmson_total_on_bms_scale(draft.metadata.total, beatoraja_total_notes));
     }

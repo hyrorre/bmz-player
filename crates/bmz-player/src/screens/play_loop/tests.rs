@@ -335,6 +335,7 @@ fn refresh_play_ending_snapshot_expires_old_judgements() {
         time: TimeUs(0),
         note_id: Some(NoteId(1)),
         affects_score: true,
+        advances_score: true,
     });
     session.recent_display_judgements.push(bmz_gameplay::session::DisplayJudgementEvent {
         judgement: session.recent_judgements[0].clone(),

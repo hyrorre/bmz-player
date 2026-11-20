@@ -90,16 +90,16 @@ impl ScoreState {
     }
 
     pub fn apply(&mut self, event: &JudgementEvent) {
+        if event.advances_score {
+            self.past_notes += 1;
+            self.ghost.push(ghost_judge_code(event.judge));
+        }
         if !event.affects_score {
             return;
         }
 
-        self.increment_judge(event.judge, event.side);
-
-        if event.note_id.is_some() {
-            self.past_notes += 1;
-            self.ghost.push(ghost_judge_code(event.judge));
-        }
+        let side = if event.delta.0 == 0 { TimingSide::Fast } else { event.side };
+        self.increment_judge(event.judge, side);
 
         match event.judge {
             Judge::PGreat | Judge::Great | Judge::Good => {
@@ -223,6 +223,7 @@ mod tests {
             delta: TimeUs(0),
             time: TimeUs(0),
             affects_score: true,
+            advances_score: note_id.is_some(),
         }
     }
 
@@ -266,6 +267,7 @@ mod tests {
         let mut score = ScoreState::default();
         let mut event = event(Judge::PGreat, TimingSide::Slow, Some(NoteId(1)));
         event.affects_score = false;
+        event.advances_score = false;
 
         score.apply(&event);
 

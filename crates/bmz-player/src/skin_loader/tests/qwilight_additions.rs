@@ -250,6 +250,7 @@ fn qwilight_lane_timing_follows_fast_slow_mode_and_threshold_in_play_and_replay(
                         delta: TimeUs(delta_us),
                         time,
                         affects_score: true,
+                        advances_score: true,
                     }),
                 }],
                 ..Default::default()

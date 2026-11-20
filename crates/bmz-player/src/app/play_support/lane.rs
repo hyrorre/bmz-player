@@ -331,7 +331,7 @@ pub(in crate::app) fn handoff_pending_play_visual_input(
 ) {
     let mut input = input.clone();
     let _ = input.drain_events();
-    visual_input.clone().apply_to_session(session);
+    visual_input.apply_to_session(session);
 }
 
 pub(in crate::app) fn apply_green_number_step_to_session(

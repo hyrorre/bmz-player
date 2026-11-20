@@ -62,6 +62,8 @@ pub struct ChartMetadata {
     pub initial_bpm: f64,
     /// Effective BMS-scale TOTAL after BMSON percentage normalization.
     pub total: Option<f64>,
+    /// Original BMSON TOTAL percentage for rule-specific gameplay calculation.
+    pub bmson_total_percent: Option<f64>,
     pub stage_file: String,
     pub banner_file: String,
     pub backbmp_file: String,
@@ -161,6 +163,7 @@ impl Default for ChartMetadata {
             play_level: String::new(),
             initial_bpm: 0.0,
             total: None,
+            bmson_total_percent: None,
             stage_file: String::new(),
             banner_file: String::new(),
             backbmp_file: String::new(),

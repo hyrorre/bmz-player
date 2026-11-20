@@ -672,7 +672,7 @@ pub fn apply_course_constraints(options: &mut PlayStartOptions, constraints: &Co
     let selected = options.gauge.unwrap_or(GaugeTypeConfig::Normal);
     options.course_gauge_override = Some(course_gauge_for(selected));
     // beatoraja `GrooveGauge.create` の `case GAUGE_X` 分岐に対応。`Default` は
-    // チャートのキーモードから推定するため None のまま (play_session 側で導出)。
+    // 選択ルールの既定値を使うため None のまま (play_session 側で導出)。
     options.course_gauge_property_override = match constraints.gauge {
         CourseGaugeConstraint::Default => None,
         CourseGaugeConstraint::Lr2 => Some(GaugeProperty::Lr2),

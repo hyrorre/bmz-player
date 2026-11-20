@@ -23,15 +23,14 @@ pub fn beatoraja_judge_rank_to_percent_for_keymode(rank: i32, key_mode: KeyMode)
 fn beatoraja_rank_to_percent_for_table(rank: i32, table: [i32; 5]) -> i32 {
     match rank {
         0..=4 => table[rank as usize],
-        r if r >= 10 => r,
         // beatoraja `BMSPlayerRule.validate`: 範囲外は NORMAL (#RANK 2) へフォールバック
         _ => table[2],
     }
 }
 
-/// `#RANK` 未指定時は beatoraja 既定の EASY (100%) を使う。
+/// BMSModel defaults an omitted BMS #RANK to NORMAL (2).
 pub fn judge_rank_to_percent_optional(rank: Option<i32>) -> i32 {
-    rank.map(judge_rank_to_percent).unwrap_or(100)
+    judge_rank_to_percent(rank.unwrap_or(2))
 }
 
 pub fn judge_rank_to_percent_for_rule_mode(rank: i32, rule_mode: RuleMode) -> i32 {
@@ -68,7 +67,7 @@ pub fn judge_rank_spec_to_percent_optional_for_keymode_and_rule_mode(
 
 fn beatoraja_judge_rank_spec_to_percent(spec: Option<JudgeRankSpec>, key_mode: KeyMode) -> i32 {
     match spec {
-        None => 100,
+        None => beatoraja_judge_rank_to_percent_for_keymode(2, key_mode),
         Some(JudgeRankSpec { value, kind: JudgeRankKind::BmsRank }) => {
             beatoraja_judge_rank_to_percent_for_keymode(value, key_mode)
         }
@@ -89,7 +88,6 @@ fn lr2oraja_judge_rank_to_percent(rank: i32) -> i32 {
         3 => 100,
         // 元祖 LR2 は #RANK 4 非対応で、NORMAL (#RANK 2) 相当にフォールバックする。
         4 => 75,
-        r if r >= 10 => r,
         _ => 75,
     }
 }
@@ -174,7 +172,7 @@ fn scale_judge_window_for_playback_rate(window: JudgeWindow, rate: u16) -> Judge
         bad_slow_us: scale_judge_time(window.bad_slow_us, rate),
         empty_poor_fast_us: scale_judge_time(window.empty_poor_fast_us, rate),
         empty_poor_slow_us: scale_judge_time(window.empty_poor_slow_us, rate),
-        mine_hit_us: scale_judge_time(window.mine_hit_us, rate),
+        fast_bands: window.fast_bands.map(|bands| bands.map(|width| scale_judge_time(width, rate))),
     }
 }
 
@@ -218,44 +216,32 @@ pub fn judge_windows_for_rule_mode_and_keymode(
     rule_mode: RuleMode,
     key_mode: KeyMode,
 ) -> JudgeWindows {
-    match rule_mode {
-        RuleMode::Beatoraja => JudgeWindows {
-            note: beatoraja_judge_window_for_rank_and_keymode(base.note, percent, key_mode),
-            scratch: beatoraja_judge_window_for_rank_and_keymode(base.scratch, percent, key_mode),
-            long_note_end: beatoraja_judge_window_for_rank_and_keymode(
-                base.long_note_end,
-                percent,
-                key_mode,
-            ),
-            long_scratch_end: beatoraja_judge_window_for_rank_and_keymode(
-                base.long_scratch_end,
-                percent,
-                key_mode,
-            ),
-            long_note_end_fast: base.long_note_end_fast.map(|window| {
-                beatoraja_judge_window_for_rank_and_keymode(window, percent, key_mode)
-            }),
-            long_scratch_end_fast: base.long_scratch_end_fast.map(|window| {
-                beatoraja_judge_window_for_rank_and_keymode(window, percent, key_mode)
-            }),
-            long_note_release_margin_us: base.long_note_release_margin_us,
-            long_scratch_release_margin_us: base.long_scratch_release_margin_us,
-        },
-        RuleMode::Lr2Oraja => JudgeWindows {
-            note: lr2oraja_judge_window_for_rank(base.note, percent),
-            scratch: lr2oraja_judge_window_for_rank(base.scratch, percent),
-            long_note_end: lr2oraja_judge_window_for_rank(base.long_note_end, percent),
-            long_scratch_end: lr2oraja_judge_window_for_rank(base.long_scratch_end, percent),
-            long_note_end_fast: base
-                .long_note_end_fast
-                .map(|window| lr2oraja_judge_window_for_rank(window, percent)),
-            long_scratch_end_fast: base
-                .long_scratch_end_fast
-                .map(|window| lr2oraja_judge_window_for_rank(window, percent)),
-            long_note_release_margin_us: base.long_note_release_margin_us,
-            long_scratch_release_margin_us: base.long_scratch_release_margin_us,
-        },
-        RuleMode::Dx => base,
+    JudgeWindowRates::default().for_rank(base, percent, rule_mode, key_mode)
+}
+
+impl JudgeWindowRates {
+    pub fn for_rank(
+        self,
+        base: JudgeWindows,
+        percent: i32,
+        rule_mode: RuleMode,
+        key_mode: KeyMode,
+    ) -> JudgeWindows {
+        let ranked = |window| match rule_mode {
+            RuleMode::Beatoraja => beatoraja_ranked_window(window, percent, key_mode),
+            RuleMode::Lr2Oraja => lr2oraja_judge_window_for_rank(window, percent),
+            RuleMode::Dx => window,
+        };
+        // The 5K BSS table has a raw GOOD narrower than GREAT. Nest the bands only after both rates.
+        self.apply(JudgeWindows {
+            note: ranked(base.note),
+            scratch: ranked(base.scratch),
+            long_note_end: ranked(base.long_note_end),
+            long_scratch_end: ranked(base.long_scratch_end),
+            long_note_end_fast: base.long_note_end_fast.map(ranked),
+            long_scratch_end_fast: base.long_scratch_end_fast.map(ranked),
+            ..base
+        })
     }
 }
 
@@ -315,7 +301,7 @@ pub const fn beatoraja_note_judge_window_for_keymode(key_mode: KeyMode) -> Judge
             bad_slow_us: 150_000,
             empty_poor_fast_us: 500_000,
             empty_poor_slow_us: 150_000,
-            mine_hit_us: 16_000,
+            fast_bands: None,
         },
         KeyMode::K9 => JudgeWindow {
             pgreat_us: 20_000,
@@ -325,7 +311,7 @@ pub const fn beatoraja_note_judge_window_for_keymode(key_mode: KeyMode) -> Judge
             bad_slow_us: 183_000,
             empty_poor_fast_us: 500_000,
             empty_poor_slow_us: 175_000,
-            mine_hit_us: 16_000,
+            fast_bands: None,
         },
         KeyMode::K7 | KeyMode::K14 => JudgeWindow {
             pgreat_us: 20_000,
@@ -335,7 +321,7 @@ pub const fn beatoraja_note_judge_window_for_keymode(key_mode: KeyMode) -> Judge
             bad_slow_us: 280_000,
             empty_poor_fast_us: 500_000,
             empty_poor_slow_us: 150_000,
-            mine_hit_us: 16_000,
+            fast_bands: None,
         },
         // beatoraja `Beatoraja_Other` uses SEVENKEYS rules.
         KeyMode::K4 | KeyMode::K6 | KeyMode::K8 => JudgeWindow {
@@ -346,7 +332,7 @@ pub const fn beatoraja_note_judge_window_for_keymode(key_mode: KeyMode) -> Judge
             bad_slow_us: 280_000,
             empty_poor_fast_us: 500_000,
             empty_poor_slow_us: 150_000,
-            mine_hit_us: 16_000,
+            fast_bands: None,
         },
     }
 }
@@ -361,7 +347,7 @@ pub const fn beatoraja_scratch_judge_window_for_keymode(key_mode: KeyMode) -> Ju
             bad_slow_us: 160_000,
             empty_poor_fast_us: 500_000,
             empty_poor_slow_us: 160_000,
-            mine_hit_us: 16_000,
+            fast_bands: None,
         },
         KeyMode::K9 => beatoraja_note_judge_window_for_keymode(key_mode),
         KeyMode::K7 | KeyMode::K14 | KeyMode::K4 | KeyMode::K6 | KeyMode::K8 => JudgeWindow {
@@ -372,7 +358,7 @@ pub const fn beatoraja_scratch_judge_window_for_keymode(key_mode: KeyMode) -> Ju
             bad_slow_us: 290_000,
             empty_poor_fast_us: 500_000,
             empty_poor_slow_us: 160_000,
-            mine_hit_us: 16_000,
+            fast_bands: None,
         },
     }
 }
@@ -387,7 +373,7 @@ pub const fn beatoraja_long_note_end_judge_window_for_keymode(key_mode: KeyMode)
             bad_slow_us: 250_000,
             empty_poor_fast_us: 0,
             empty_poor_slow_us: 0,
-            mine_hit_us: 16_000,
+            fast_bands: None,
         },
         KeyMode::K9 => JudgeWindow {
             pgreat_us: 120_000,
@@ -397,7 +383,7 @@ pub const fn beatoraja_long_note_end_judge_window_for_keymode(key_mode: KeyMode)
             bad_slow_us: 283_000,
             empty_poor_fast_us: 0,
             empty_poor_slow_us: 0,
-            mine_hit_us: 16_000,
+            fast_bands: None,
         },
         KeyMode::K7 | KeyMode::K14 | KeyMode::K4 | KeyMode::K6 | KeyMode::K8 => JudgeWindow {
             pgreat_us: 120_000,
@@ -407,7 +393,7 @@ pub const fn beatoraja_long_note_end_judge_window_for_keymode(key_mode: KeyMode)
             bad_slow_us: 280_000,
             empty_poor_fast_us: 0,
             empty_poor_slow_us: 0,
-            mine_hit_us: 16_000,
+            fast_bands: None,
         },
     }
 }
@@ -422,7 +408,7 @@ pub const fn beatoraja_long_scratch_end_judge_window_for_keymode(key_mode: KeyMo
             bad_slow_us: 260_000,
             empty_poor_fast_us: 0,
             empty_poor_slow_us: 0,
-            mine_hit_us: 16_000,
+            fast_bands: None,
         },
         KeyMode::K9 => beatoraja_long_note_end_judge_window_for_keymode(key_mode),
         KeyMode::K7 | KeyMode::K14 | KeyMode::K4 | KeyMode::K6 | KeyMode::K8 => JudgeWindow {
@@ -433,7 +419,7 @@ pub const fn beatoraja_long_scratch_end_judge_window_for_keymode(key_mode: KeyMo
             bad_slow_us: 290_000,
             empty_poor_fast_us: 0,
             empty_poor_slow_us: 0,
-            mine_hit_us: 16_000,
+            fast_bands: None,
         },
     }
 }
@@ -459,9 +445,16 @@ pub fn beatoraja_judge_window_for_rank_and_keymode(
     percent: i32,
     key_mode: KeyMode,
 ) -> JudgeWindow {
+    apply_band_rates(beatoraja_ranked_window(base, percent, key_mode), [100; 3])
+}
+
+fn beatoraja_ranked_window(base: JudgeWindow, percent: i32, key_mode: KeyMode) -> JudgeWindow {
     let fixjudge = beatoraja_fixjudge_for_keymode(key_mode);
     let fast = beatoraja_create_judge_bands(
-        [base.pgreat_us, base.great_us, base.good_us, base.bad_fast_us],
+        {
+            let [pg, gr, gd] = base.bands(true);
+            [pg, gr, gd, base.bad_fast_us]
+        },
         percent,
         fixjudge,
     );
@@ -472,14 +465,14 @@ pub fn beatoraja_judge_window_for_rank_and_keymode(
     );
 
     JudgeWindow {
-        pgreat_us: fast[0].max(slow[0]),
-        great_us: fast[1].max(slow[1]),
-        good_us: fast[2].max(slow[2]),
+        pgreat_us: slow[0],
+        great_us: slow[1],
+        good_us: slow[2],
         bad_fast_us: fast[3],
         bad_slow_us: slow[3],
         empty_poor_fast_us: base.empty_poor_fast_us,
         empty_poor_slow_us: base.empty_poor_slow_us,
-        mine_hit_us: base.mine_hit_us,
+        fast_bands: (fast[..3] != slow[..3]).then_some([fast[0], fast[1], fast[2]]),
     }
 }
 
@@ -508,15 +501,6 @@ fn beatoraja_create_judge_bands(base: [i64; 4], percent: i32, fixjudge: [bool; 5
         }
     }
 
-    for i in 0..3 {
-        if judge[i].abs() > judge[3].abs() {
-            judge[i] = judge[3];
-        }
-        if i > 0 && judge[i].abs() < judge[i - 1].abs() {
-            judge[i] = judge[i - 1];
-        }
-    }
-
     judge
 }
 
@@ -538,7 +522,7 @@ pub const fn lr2oraja_note_judge_window() -> JudgeWindow {
         bad_slow_us: 200_000,
         empty_poor_fast_us: 1_000_000,
         empty_poor_slow_us: 0,
-        mine_hit_us: 16_000,
+        fast_bands: None,
     }
 }
 
@@ -551,7 +535,7 @@ pub const fn lr2oraja_long_note_end_judge_window() -> JudgeWindow {
         bad_slow_us: 200_000,
         empty_poor_fast_us: 0,
         empty_poor_slow_us: 0,
-        mine_hit_us: 16_000,
+        fast_bands: None,
     }
 }
 
@@ -581,7 +565,7 @@ pub const fn dx_note_judge_window() -> JudgeWindow {
         bad_slow_us: 200_000,
         empty_poor_fast_us: 500_000,
         empty_poor_slow_us: 200_000,
-        mine_hit_us: 16_000,
+        fast_bands: None,
     }
 }
 
@@ -594,7 +578,7 @@ pub const fn dx_long_note_end_judge_window() -> JudgeWindow {
         bad_slow_us: 200_000,
         empty_poor_fast_us: 0,
         empty_poor_slow_us: 0,
-        mine_hit_us: 16_000,
+        fast_bands: None,
     }
 }
 
@@ -626,7 +610,7 @@ pub const fn dx_pop_note_judge_window() -> JudgeWindow {
         bad_slow_us: 183_333,
         empty_poor_fast_us: 529_167,
         empty_poor_slow_us: 183_333,
-        mine_hit_us: 16_000,
+        fast_bands: None,
     }
 }
 
@@ -644,7 +628,7 @@ pub const fn dx_pop_long_note_end_judge_window() -> JudgeWindow {
         bad_slow_us: 183_333,
         empty_poor_fast_us: 0,
         empty_poor_slow_us: 0,
-        mine_hit_us: 16_000,
+        fast_bands: None,
     }
 }
 
@@ -663,7 +647,7 @@ pub const fn dx_pop_long_note_end_fast_judge_window() -> JudgeWindow {
         bad_slow_us: 366_667,
         empty_poor_fast_us: 0,
         empty_poor_slow_us: 0,
-        mine_hit_us: 16_000,
+        fast_bands: None,
     }
 }
 
@@ -694,7 +678,7 @@ pub const fn dx_pop_legacy_judge_windows() -> JudgeWindows {
         bad_slow_us: 100_000,
         empty_poor_fast_us: 500_000,
         empty_poor_slow_us: 112_500,
-        mine_hit_us: 16_000,
+        fast_bands: None,
     };
     const LONG_END: JudgeWindow = JudgeWindow {
         pgreat_us: 120_000,
@@ -704,7 +688,7 @@ pub const fn dx_pop_legacy_judge_windows() -> JudgeWindows {
         bad_slow_us: 283_000,
         empty_poor_fast_us: 0,
         empty_poor_slow_us: 0,
-        mine_hit_us: 16_000,
+        fast_bands: None,
     };
     JudgeWindows {
         note: NOTE,
@@ -802,7 +786,7 @@ fn lr2oraja_judge_window_for_rank(base: JudgeWindow, percent: i32) -> JudgeWindo
         bad_slow_us: base.bad_slow_us,
         empty_poor_fast_us: base.empty_poor_fast_us,
         empty_poor_slow_us: base.empty_poor_slow_us,
-        mine_hit_us: base.mine_hit_us,
+        fast_bands: None,
     }
 }
 
@@ -847,6 +831,62 @@ fn lr2_scale_window_us(base: i64, percent: i32) -> i64 {
     let low_rank = (judge_index as i32) * 25;
     let scaled = (x1 + (rank - low_rank) as i64 * (x2 - x1) / 25) / d;
     sign * scaled
+}
+
+/// Window rates are applied after rank conversion, independently on each side.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct JudgeWindowRates {
+    pub keys: [u16; 3],
+    pub scratch: [u16; 3],
+    pub long_note_margin: u16,
+}
+
+impl Default for JudgeWindowRates {
+    fn default() -> Self {
+        Self { keys: [100; 3], scratch: [100; 3], long_note_margin: 100 }
+    }
+}
+
+impl JudgeWindowRates {
+    pub fn apply(self, windows: JudgeWindows) -> JudgeWindows {
+        JudgeWindows {
+            note: apply_band_rates(windows.note, self.keys),
+            scratch: apply_band_rates(windows.scratch, self.scratch),
+            long_note_end: apply_band_rates(windows.long_note_end, self.keys),
+            long_scratch_end: apply_band_rates(windows.long_scratch_end, self.scratch),
+            long_note_end_fast: windows
+                .long_note_end_fast
+                .map(|window| apply_band_rates(window, self.keys)),
+            long_scratch_end_fast: windows
+                .long_scratch_end_fast
+                .map(|window| apply_band_rates(window, self.scratch)),
+            long_note_release_margin_us: scale_judge_time(
+                windows.long_note_release_margin_us,
+                self.long_note_margin,
+            ),
+            long_scratch_release_margin_us: windows.long_scratch_release_margin_us,
+        }
+    }
+}
+
+fn apply_band_rates(window: JudgeWindow, rates: [u16; 3]) -> JudgeWindow {
+    let scale = |mut bands: [i64; 3], cap| {
+        let mut previous = 0;
+        for (width, rate) in bands.iter_mut().zip(rates) {
+            *width = scale_judge_time(*width, rate).clamp(previous, cap);
+            previous = *width;
+        }
+        bands
+    };
+    let fast = scale(window.bands(true), window.bad_fast_us);
+    let slow = scale(window.bands(false), window.bad_slow_us);
+    JudgeWindow {
+        pgreat_us: slow[0],
+        great_us: slow[1],
+        good_us: slow[2],
+        fast_bands: (fast != slow).then_some(fast),
+        ..window
+    }
 }
 
 #[cfg(test)]
