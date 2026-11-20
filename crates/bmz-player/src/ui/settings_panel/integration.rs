@@ -62,6 +62,7 @@ pub(super) fn build_integration_settings_sections(
             );
         });
 
+    #[cfg(windows)]
     SettingsSection::new(SettingsPage::Integration, "oraja_helper")
         .scope(tr!(text, "settings-scope-app"))
         .show(ui, |ui| {
