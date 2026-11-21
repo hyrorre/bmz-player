@@ -687,17 +687,19 @@ fn archive_rewritten_during_partial_scan_keeps_registrations() {
 fn enclosing_root_spellings_do_not_block_pruning() {
     let base = temp();
     let source = base.path().join("source");
-    for name in ["a", "b", "c", "d"] {
+    for name in ["a", "b", "c", "d", "e", "f"] {
         chart(&source.join(format!("{name}.bms")), name);
     }
     let mut db = db();
     scan_song_roots(&mut db, &[entry(&source, true)], &config(), 1, false).unwrap();
     let drive = "C:/bmz-issue69-missing/BMS";
     for (name, path) in [
-        ("a", format!("{drive}/INSANE2/song_B/a.bms")),
-        ("b", format!("{drive}/INSANE2/b.bms")),
+        ("a", r"\\?\C:\bmz-issue69-missing\BMS\INSANE2\song_B\a.bms".into()),
+        ("b", format!("//?/{drive}/INSANE2/b.bms")),
         ("c", format!("{drive}/INSANE2/protected/c.bms")),
         ("d", format!("{drive}/INSANE2-old/d.bms")),
+        ("e", "G:/bmz-issue69-missing/BMS/INSANE2/e.bms".into()),
+        ("f", if cfg!(windows) { drive.to_lowercase() } else { drive.into() } + "/INSANE2/f.bms"),
     ] {
         db.conn()
             .execute(
@@ -734,13 +736,17 @@ fn enclosing_root_spellings_do_not_block_pruning() {
         )
         .unwrap();
 
-    assert_eq!(removed, 2);
+    assert_eq!(removed, 3);
     let mut stmt = db.conn().prepare("SELECT path FROM chart_files ORDER BY path").unwrap();
     let paths: Vec<String> =
         stmt.query_map([], |row| row.get(0)).unwrap().map(Result::unwrap).collect();
     assert_eq!(
         paths,
-        [format!("{drive}/INSANE2-old/d.bms"), format!("{drive}/INSANE2/protected/c.bms")]
+        [
+            format!("{drive}/INSANE2-old/d.bms"),
+            format!("{drive}/INSANE2/protected/c.bms"),
+            "G:/bmz-issue69-missing/BMS/INSANE2/e.bms".into()
+        ]
     );
 }
 

@@ -10,8 +10,28 @@ impl LibraryDatabase {
     ) -> Result<ChartPathIndex> {
         let prefix = only_root.map(library_path_key);
         let prefix = prefix.as_deref().map(|root| root.trim_end_matches('/'));
-        let mut stmt = self.conn.prepare("SELECT id, path FROM chart_files")?;
-        let mut query = stmt.query([])?;
+        let mut stmt;
+        let mut query = if let Some([drive, b':', ..]) = prefix.map(str::as_bytes)
+            && drive.is_ascii_alphabetic()
+        {
+            // These disjoint ranges all use the existing binary path index. Keep
+            // namespace-prefixed paths and non-ASCII initials for the full scope check.
+            stmt = self.conn.prepare_cached(
+                r"SELECT id, path FROM chart_files WHERE path GLOB ?1
+                  UNION ALL SELECT id, path FROM chart_files WHERE path GLOB ?2
+                  UNION ALL SELECT id, path FROM chart_files WHERE path GLOB '/*'
+                  UNION ALL SELECT id, path FROM chart_files WHERE path GLOB '\*'
+                  UNION ALL SELECT id, path FROM chart_files WHERE path >= char(128)",
+            )?;
+            let drive = char::from(*drive);
+            stmt.query([
+                format!("{}:*", drive.to_ascii_lowercase()),
+                format!("{}:*", drive.to_ascii_uppercase()),
+            ])?
+        } else {
+            stmt = self.conn.prepare_cached("SELECT id, path FROM chart_files")?;
+            stmt.query([])?
+        };
         let mut rows = Vec::new();
         while let Some(row) = query.next()? {
             let path = row.get_ref(1)?.as_str()?;
