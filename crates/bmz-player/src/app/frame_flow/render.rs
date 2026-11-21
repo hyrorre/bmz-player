@@ -129,6 +129,7 @@ impl WinitApp {
                 phase.complete();
             }
             self.skin.skin_pipeline.start_initial_result_decode();
+            self.skin.skin_catalog.start();
         }
         self.arm_select_scene_timers_after_render(select_view, surface_status);
         self.log_pending_skin_render_probe(

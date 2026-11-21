@@ -24,7 +24,8 @@ startup phase complete phase="renderer_default" elapsed_ms=... startup_elapsed_m
 Selectのdecodeは同梱PNGの読み込みやwindow初期化と並列に進みます。
 Decideのdecodeは同梱PNGの読み込み後に開始し、起動直後の曲決定に備えます。
 通常起動のResultは初回present成功後に開始します。直接Resultへ遷移する場合はその要求を優先します。
-`skin_catalog_scan_dispatch` は走査workerの起動要求まで、`load_initial_skin_textures` は
+`skin_catalog_scan_dispatch` は走査workerの準備までです。スキン候補の列挙は初回present後、
+または設定画面・LR2から先に一覧を要求された時点で開始します。`load_initial_skin_textures` は
 同梱PNGの同期ロードとfrontend decode要求・pending登録までです。
 非同期decode / uploadの完了は既存のskin pipelineログと照合します。
 
