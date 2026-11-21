@@ -522,17 +522,20 @@ pub fn lua_main_state_option(
 
 pub fn lua_main_state_number(ref_id: i32, state: &SkinDrawState) -> i64 {
     skin_state_number(ref_id, state)
-        .or_else(|| lua_missing_number_sentinel(ref_id, state))
+        .or_else(|| lua_missing_number(ref_id, state))
         .unwrap_or_default()
 }
 
-/// beatorajaの欠損値をLuaにもそのまま渡し、数値画像だけを非表示にする。
-/// 最終プレイ日時、IRランキングのEXSCORE/順位、未プレイResultの前回BP/BP差分が対象。
-/// 通常のnumber描画はNoneのまま維持し、実在する0は隠さない。
-pub(in crate::skin) fn lua_missing_number_sentinel(
-    ref_id: i32,
-    state: &SkinDrawState,
-) -> Option<i64> {
+/// 通常の数値描画では非表示のまま、Luaと数値式にはbeatoraja互換の欠損値を渡す。
+pub(in crate::skin) fn lua_missing_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
+    if matches!(ref_id, 1163 | 1164)
+        && state.select_screen
+        && state.select_row_kind == SelectRowKind::Song
+        && !state.select_in_library
+    {
+        // beatorajaでは難易度表の未所持譜面にも譜面情報があり、譜面長の初期値は0。
+        return Some(0);
+    }
     (matches!(ref_id, 243..=249 | 380..=399 | 1163 | 1164)
         || (state.result_failed.is_some() && matches!(ref_id, 176 | 178)))
     .then_some(i64::from(i32::MIN))
