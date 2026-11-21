@@ -529,11 +529,13 @@ pub fn scan_song_roots_with_progress(
         report.timing.parse_ms += parse_ms;
         // Discovery already enumerated every song directory. Persist the shared
         // folder flag even when every chart was skipped as unchanged.
-        folder_document_flags.retain(|(folder, _)| {
-            !matches!(crate::chart_source::ChartLocator::parse(folder),
-                Ok(crate::chart_source::ChartLocator::Archive { container, .. })
-                if failed_archives.contains(&container))
-        });
+        if !failed_archives.is_empty() {
+            folder_document_flags.retain(|(folder, _)| {
+                !matches!(crate::chart_source::ChartLocator::parse(folder),
+                    Ok(crate::chart_source::ChartLocator::Archive { container, .. })
+                    if failed_archives.contains(&container))
+            });
+        }
         let folder_flags_start = Instant::now();
         db.update_folder_document_flags(&folder_document_flags)?;
         report.timing.folder_flags_ms += folder_flags_start.elapsed().as_millis();

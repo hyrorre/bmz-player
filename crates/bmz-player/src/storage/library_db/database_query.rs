@@ -224,6 +224,11 @@ impl LibraryDatabase {
             return Ok(());
         }
 
+        // Visit neighboring folder index entries together during large rescans.
+        // Stable order preserves the last flag for equivalent normalized paths.
+        let mut ordered: Vec<_> =
+            folder_flags.iter().map(|(folder, flag)| (library_path_key(folder), flag)).collect();
+        ordered.sort_by(|a, b| a.0.cmp(&b.0));
         let tx = self.conn.transaction()?;
         {
             // Unchanged rows are not rewritten, so a rescan adds nothing to the WAL.
@@ -231,8 +236,8 @@ impl LibraryDatabase {
                 "UPDATE charts SET has_document = ?1
                  WHERE folder_path = ?2 AND has_document IS NOT ?1",
             )?;
-            for (folder, has_document) in folder_flags {
-                stmt.execute(params![has_document, to_folder_key(&path_to_string(folder))])?;
+            for (folder, has_document) in ordered {
+                stmt.execute(params![has_document, folder])?;
             }
         }
         tx.commit()?;
