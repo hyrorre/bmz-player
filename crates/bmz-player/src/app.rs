@@ -523,7 +523,18 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
                 );
                 (viewer.app, Some(viewer.cleanup))
             } else {
-                (bootstrap::bootstrap_with_paths_profile(app_paths, profile_id)?, None)
+                let direct_boot = options.boot_play_path.is_some()
+                    || options.boot_play_sample
+                    || options.boot_result_sample
+                    || options.boot_course_id.is_some()
+                    || options.boot_course_replay_id.is_some()
+                    || options.boot_replay_file.is_some();
+                let mode = if direct_boot {
+                    bootstrap::StartupScan::Synchronous
+                } else {
+                    bootstrap::StartupScan::Select
+                };
+                (bootstrap::bootstrap_with_paths_mode(app_paths, mode, profile_id)?, None)
             };
             prepare_boot_chart_options(&mut boot, &mut options)?;
             boot.app_config.set_cli_window(options.window_overrides.clone())?;

@@ -81,6 +81,14 @@ impl WinitApp {
         self.start_startup_course_link_repair_after_first_frame();
         self.start_startup_table_fetch_after_first_frame();
         self.start_startup_rival_sync_after_first_frame();
+        if self.smoke.first_present_logged && std::mem::take(&mut self.boot.deferred_startup_scan) {
+            self.spawn_song_scan_with_scope(
+                Vec::new(),
+                false,
+                "startup rescan".into(),
+                SongScanScope::Startup,
+            );
+        }
         self.start_queued_table_fetch_if_idle();
         self.start_queued_rian_table_fetch_if_idle();
         self.maybe_start_periodic_rian_table_fetch();

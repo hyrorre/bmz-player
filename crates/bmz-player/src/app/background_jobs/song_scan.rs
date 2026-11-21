@@ -120,20 +120,29 @@ impl WinitApp {
 
     pub(in crate::app) fn start_song_scan(&mut self, request: QueuedSongScan) {
         let QueuedSongScan { mut roots, force, label, scope, .. } = request.clone();
-        let library_roots = if scope == SongScanScope::Library {
-            // A full sync is authoritative only after the settings were saved.
-            if let Err(error) = self.save_app_config_now().and_then(|()| self.publish_song_scope())
-            {
-                self.song_scan_error(&error);
-                return;
+        let configured_roots = || {
+            crate::songs_cmd::configured_library_roots(&self.boot.app_config, &self.boot.app_paths)
+        };
+        let library_roots = match scope {
+            SongScanScope::Paths => None,
+            SongScanScope::Library => {
+                if let Err(error) =
+                    self.save_app_config_now().and_then(|()| self.publish_song_scope())
+                {
+                    self.song_scan_error(&error);
+                    return;
+                }
+                roots = configured_roots();
+                Some(roots.clone())
             }
-            roots = crate::songs_cmd::configured_library_roots(
-                &self.boot.app_config,
-                &self.boot.app_paths,
-            );
-            Some(roots.clone())
-        } else {
-            None
+            SongScanScope::Startup => {
+                if !self.boot.app_config.scan.auto_rescan_on_startup {
+                    return;
+                }
+                // Bootstrap added the bundled sample to the scan list only if it exists.
+                roots = self.boot.app_config.songs.roots.clone();
+                Some(configured_roots())
+            }
         };
         let library_db_path = self.boot.app_paths.library_db.clone();
         let scan_config = self.boot.app_config.scan.clone();

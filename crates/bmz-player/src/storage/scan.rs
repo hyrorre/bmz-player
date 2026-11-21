@@ -40,6 +40,8 @@ pub struct ScanSummary {
 pub enum SongScanScope {
     Paths,
     Library,
+    /// Saved configuration was already loaded and published during bootstrap.
+    Startup,
 }
 
 #[derive(Debug, Clone)]
