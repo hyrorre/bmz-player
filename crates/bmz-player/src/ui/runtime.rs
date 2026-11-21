@@ -301,6 +301,7 @@ impl EguiLayer {
             skin_meta,
             skin_catalog,
             course_result,
+            course_stage_result,
             course_preview,
             course_editor,
             mut select_course_builder,
@@ -352,7 +353,7 @@ impl EguiLayer {
         let mut practice_leave = false;
         let mut course_editor_action = None;
         let mut select_course_builder_action = None;
-        let settings_editable = !scene_restricts_settings(info.scene);
+        let settings_editable = !course_stage_result && !scene_restricts_settings(info.scene);
         let visible_flag = &mut self.visible;
         let ir_login = &mut self.ir_login;
         let directory_open_status = &mut self.directory_open_status;
@@ -419,7 +420,7 @@ impl EguiLayer {
                     self.ir_manual.queue_hidden();
                 }
                 let profile_name = profile_config.display_name.clone();
-                build_menu_window(ctx, visible_flag, &profile_name, text, |ui| match page {
+                let build_contents = |ui: &mut egui::Ui, page| match page {
                     SettingsPage::Downloads => {
                         ui.add_enabled_ui(settings_editable, |ui| {
                             save_app_config |= downloads::build_archive_setting(
@@ -571,7 +572,15 @@ impl EguiLayer {
                         obs_enabled_changed |=
                             before_obs != serde_json::to_value(&app_config.obs).ok();
                     }
-                });
+                };
+                build_menu_window(
+                    ctx,
+                    visible_flag,
+                    &profile_name,
+                    text,
+                    course_stage_result,
+                    build_contents,
+                );
                 if settings_editable {
                     build_ir_confirm_modal(ctx, &profile_config.ir, &mut self.ir_manual, text);
                 }

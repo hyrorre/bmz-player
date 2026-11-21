@@ -770,7 +770,8 @@ mod tests {
                         &mut true,
                         "Default",
                         Localizer::new(AppLocale::En),
-                        |ui| {
+                        false,
+                        |ui, _| {
                             build_skin_panel(
                                 ui,
                                 &mut skin,

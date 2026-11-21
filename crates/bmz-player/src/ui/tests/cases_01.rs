@@ -155,7 +155,7 @@ fn open_f1_menu_passes_unfocused_keys_and_keeps_pointer_input_over_the_menu() {
     let frame = |events: Vec<egui::Event>| {
         let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
         let _ = ctx.run_ui(input, |ui| {
-            build_menu_window(ui.ctx(), &mut true, "Default", text, |ui| {
+            build_menu_window(ui.ctx(), &mut true, "Default", text, false, |ui, _| {
                 ui.label("page body");
             });
         });
@@ -200,7 +200,7 @@ fn escape_closes_the_menu_only_after_text_input_and_popups_are_done() {
     let frame = |events: Vec<egui::Event>| {
         let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
         let _ = ctx.run_ui(input, |ui| {
-            build_menu_window(ui.ctx(), &mut true, "Default", text, |ui| {
+            build_menu_window(ui.ctx(), &mut true, "Default", text, false, |ui, _| {
                 let mut value = String::new();
                 let edit = ui.text_edit_singleline(&mut value);
                 if focus_text.replace(false) {
