@@ -4,7 +4,7 @@
 OS別のRust / FFmpeg等の準備は[README](../README.md)を確認してください。
 以下のコマンドは、特に記載がなければリポジトリrootで実行します。
 
-過去の調査・実装・計測記録は[notesの索引](../notes/README.md)にまとめています。
+過去の調査・実装・計測記録は[作業記録の案内](../notes/README.md)から年別に辿れます。
 
 LinuxのPipeWire/SPA開発依存、任意evdev、共通診断、独立したデータでのA/B検証は
 [Linux遅延検証](linux-latency.md)を参照してください。

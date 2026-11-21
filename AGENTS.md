@@ -121,7 +121,7 @@ BMZ Player の継続開発で常に参照する作業方針です。機能の詳
 作業経緯・過去の計測や検証結果は `notes/YYYY/YYYY-MM-DD-topic.md` に記録します。
 確定した仕様・再利用する手順は `docs/` に反映し、必要に応じて記録へリンクします。
 一時的な下書きは `.local/notes/`、生ログや個別環境の計測素材は `.local/performance/` 等へ置き、コミットしません。
-命名・追記・索引のルールは [notes/README.md](notes/README.md) を確認します。
+命名・追記のルールと記録の探し方は [notes/README.md](notes/README.md) を確認します。
 
 ## 5. 検証
 
