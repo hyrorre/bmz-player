@@ -1464,6 +1464,8 @@ BMZ追加のLayer2（0A）も曲長には含めず、終了待ちでの従来の
 Practiceは区間・速度の適用前の全体長です。経過時刻、残り時間、ノーツ表示時間、終了判定とは独立しています。
 `1163 = (length_ms / 60000) % 60`、`1164 = (length_ms / 1000) % 60`で、整数除算します。
 Playの譜面情報がまだなければLuaは`INT_MIN`、数値画像と`numberRef`テキストは非表示です。
+Selectでライブラリにない譜面行を選んだときは、Luaの`main_state.number()`と数値式の`number()`が
+どちらのrefにも`0`を返します。数値画像と`numberRef`テキストは非表示です。
 
 Playスキンのデコード依頼は先行できますが、Luaロードは変換済み譜面の通知を待ちます。
 同じ譜面からロード時定数、runtime callback、数値画像、`numberRef`へ値を渡します。
@@ -1993,6 +1995,18 @@ BMZ default JSONでは、digit atlasを同梱せずに既存フォントで数�
 `judgeTimingColor`, `prefix`, `suffix`を使えます。
 `numberRef`は既存の`value.ref`と同じ`SkinDrawState` number refを文字列化し、
 未取得時は空文字として扱います。外部beatoraja JSON skinの`value` sprite表示には影響しません。
+`numberRef`にはLuaとJSONの両方で`digit`、`zeropadding`、その別名の`padding`を指定できます。
+`digit`は符号を含む最小文字数です。幅は0〜64に収め、指定幅を超える数値は全桁を表示します。
+`zeropadding`の既定値は`0`で、埋め文字を付けません。`1`ならゼロ、`2`なら半角空白で左側を埋めます。
+両方のフィールドを指定した場合、数値スプライトと同じく`2`が優先されます。
+負数のゼロ埋めは符号の後ろに入り、`digit = 3, zeropadding = 1`の`-7`は`-07`になります。
+`prefix`と`suffix`は整形した数値の前後に付きます。欠損値はパディングを指定しても空文字です。
+
+```lua
+{ id = "dur_sec", font = 1, size = 38, align = 2,
+  numberRef = 1164, digit = 2, zeropadding = 1 },
+```
+
 Lua skinの`text`で`value = function() return main_state.number(id) end`のように
 数値refをそのまま返す関数は、text refではなく`numberRef`へ推論します。
 `judgeRegion`は最新判定の表示領域index (通常は`0`)を文字列化し、判定タイマーが

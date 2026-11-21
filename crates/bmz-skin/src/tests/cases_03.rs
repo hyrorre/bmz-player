@@ -1,6 +1,31 @@
 use super::*;
 
 #[test]
+fn lua_skin_preserves_number_ref_digit_and_padding_fields() {
+    let root = TestDir::created("bmz-skin-text-number-padding");
+    let path = root.join("select.luaskin");
+    fs::write(
+        &path,
+        r#"
+            return {
+                type = 0,
+                text = {
+                    { id = "seconds", numberRef = 1164, digit = 2, zeropadding = 1 },
+                    { id = "rate", numberRef = 103, digit = 2, padding = 1 }
+                }
+            }
+        "#,
+    )
+    .unwrap();
+
+    let loaded =
+        load_lua_skin(&path, SkinKind::Select, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let text = &loaded.document.text;
+    assert_eq!((text[0].number_ref, text[0].digit, text[0].zeropadding), (Some(1164), 2, 1));
+    assert_eq!((text[1].number_ref, text[1].digit, text[1].padding), (Some(103), 2, 1));
+}
+
+#[test]
 fn lua_skin_preserves_text_shrink_mode() {
     let root = unique_test_dir("bmz-skin-text-shrink-mode");
     fs::create_dir_all(&root).unwrap();
