@@ -10,10 +10,10 @@ fn initial_select_is_queued_before_surface_and_not_installed_synchronously() {
     let mut renderer = Renderer::default();
     let mut pipeline = SkinPipelineRuntime::new();
     let skin = SkinConfig { select: path.to_string_lossy().into_owned(), ..Default::default() };
-    let (_, _, pending_select, _, _) = load_initial_skin_textures(
+    let (_, _, pending_select, pending_decide, pending_result) = load_initial_skin_textures(
         &mut renderer,
         &data.paths,
-        &pipeline,
+        &mut pipeline,
         0,
         FrontendLuaLoadInputs {
             player_name: "test",
@@ -27,6 +27,9 @@ fn initial_select_is_queued_before_surface_and_not_installed_synchronously() {
         Instant::now(),
     );
     assert!(pending_select);
+    assert!(pending_decide && pending_result);
+    assert!(pipeline.screen_request(SkinKind::Decide).is_some());
+    assert!(pipeline.screen_request(SkinKind::Result).is_none());
     assert!(renderer.select_skin_document().is_none());
     assert_eq!(pipeline.screen_request(SkinKind::Select).unwrap().path, path);
     loop {
@@ -37,6 +40,9 @@ fn initial_select_is_queued_before_surface_and_not_installed_synchronously() {
             break;
         }
     }
+    pipeline.bump_generation(SkinKind::Result);
+    pipeline.start_initial_result_decode();
+    assert!(pipeline.screen_request(SkinKind::Result).is_none());
     pipeline.shutdown_workers();
 }
 

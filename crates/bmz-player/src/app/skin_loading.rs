@@ -4,14 +4,14 @@ use super::*;
 ///
 /// - default skin は必ず一度だけ renderer にインストールする。
 /// - select skin はwindow/surface初期化と並行してdecodeし、初回描画前にinstallする。
-/// - decide / result skin はバックグラウンドスレッドで Phase A (decode) を実行。
+/// - Decide は Select 投入後、Result は初回 present 後または直接入場時に decode を開始する。
 ///   完了したものは main thread の `try_recv` で順次 Phase B (install) する。
 /// - 空パスは同梱スキンを使い、非対応のパスは警告ログのみ。
 /// - プレイスキンは決定画面でチャートの key_mode から個別に decode するためここでは扱わない。
 pub(super) fn load_initial_skin_textures(
     renderer: &mut Renderer,
     app_paths: &crate::paths::AppPaths,
-    pipeline: &SkinPipelineRuntime,
+    pipeline: &mut SkinPipelineRuntime,
     generation: u64,
     frontend: FrontendLuaLoadInputs<'_>,
     skin: &SkinConfig,
@@ -21,8 +21,8 @@ pub(super) fn load_initial_skin_textures(
     startup_started_at: Instant,
 ) -> (Option<SkinManifest>, HashMap<SkinKind, Vec<ActiveSkinVideoSource>>, bool, bool, bool) {
     tracing::info!("startup initial skin texture load begin");
-    // Frontend payload decoding overlaps window/surface initialization. The
-    // initial Select is installed before the first frame in ensure_window.
+    // Queue Select before loading the default assets. Its decode overlaps
+    // window/surface initialization and ensure_window installs it before presenting.
     let mut pending_select = false;
     let mut pending_decide = false;
     let mut pending_result = false;
@@ -31,51 +31,6 @@ pub(super) fn load_initial_skin_textures(
     let decide_trimmed = skin.decide.trim().to_string();
     let result_trimmed = skin.result.trim().to_string();
 
-    if load_frontend_skins {
-        let decide_path = if decide_trimmed.is_empty() {
-            default_skin_document_path_from_paths(app_paths, SkinKind::Decide)
-        } else {
-            match app_paths.resolve_path_ref(&decide_trimmed) {
-                Ok(path) => path,
-                Err(error) => {
-                    tracing::warn!(
-                        path = %decide_trimmed,
-                        error = %format_error_chain(&error),
-                        "failed to resolve decide skin path; ignoring"
-                    );
-                    PathBuf::new()
-                }
-            }
-        };
-        if !decide_path.as_os_str().is_empty() && is_decodable_skin_path(&decide_path) {
-            let mut runtime_state = frontend.lua_runtime_state(None);
-            apply_decide_chart_lua_load_state(&mut runtime_state, &RenderSnapshot::default());
-            spawn_skin_decode(
-                pipeline,
-                SkinDecodeRequest::new(
-                    generation,
-                    decide_path,
-                    SkinKind::Decide,
-                    if decide_trimmed.is_empty() {
-                        BTreeMap::new()
-                    } else {
-                        skin.decide_options.clone()
-                    },
-                    if decide_trimmed.is_empty() {
-                        BTreeMap::new()
-                    } else {
-                        skin.decide_files.clone()
-                    },
-                    lua_runtime_state_with_mode(
-                        lua_runtime_state_with_skin_offsets(runtime_state, &skin.decide_offsets),
-                        lua_runtime_mode,
-                    ),
-                )
-                .with_skin_access(app_paths, skin),
-            );
-            pending_decide = true;
-        }
-    }
     if load_frontend_skins {
         let result_path = if result_trimmed.is_empty() {
             default_skin_document_path_from_paths(app_paths, SkinKind::Result)
@@ -93,8 +48,7 @@ pub(super) fn load_initial_skin_textures(
             }
         };
         if !result_path.as_os_str().is_empty() && is_decodable_skin_path(&result_path) {
-            spawn_skin_decode(
-                pipeline,
+            pipeline.initial_result_decode = Some(
                 SkinDecodeRequest::new(
                     generation,
                     result_path,
@@ -130,26 +84,6 @@ pub(super) fn load_initial_skin_textures(
             pending_result = true;
         }
     }
-
-    let default_skin_started_at = Instant::now();
-    tracing::info!("startup default skin manifest load begin");
-    let phase = StartupPhase::begin(startup_started_at, "default_skin_assets_load");
-    let default_manifest =
-        match phase.result(load_default_skin_into_renderer_from_paths(renderer, app_paths)) {
-            Ok(manifest) => Some(manifest),
-            Err(error) => {
-                tracing::warn!(
-                    error = %format_error_chain(&error),
-                    "failed to load default skin; using fallback drawing"
-                );
-                None
-            }
-        };
-    tracing::info!(
-        load_ms = default_skin_started_at.elapsed().as_millis(),
-        loaded = default_manifest.is_some(),
-        "startup default skin manifest load complete"
-    );
 
     // Select payload decoding overlaps window creation and surface attachment.
     let select_trimmed = skin.select.trim();
@@ -207,6 +141,73 @@ pub(super) fn load_initial_skin_textures(
                     "failed to resolve select skin path; ignoring"
                 );
             }
+        }
+    }
+
+    let default_skin_started_at = Instant::now();
+    tracing::info!("startup default skin manifest load begin");
+    let phase = StartupPhase::begin(startup_started_at, "default_skin_assets_load");
+    let default_manifest =
+        match phase.result(load_default_skin_into_renderer_from_paths(renderer, app_paths)) {
+            Ok(manifest) => Some(manifest),
+            Err(error) => {
+                tracing::warn!(
+                    error = %format_error_chain(&error),
+                    "failed to load default skin; using fallback drawing"
+                );
+                None
+            }
+        };
+    tracing::info!(
+        load_ms = default_skin_started_at.elapsed().as_millis(),
+        loaded = default_manifest.is_some(),
+        "startup default skin manifest load complete"
+    );
+
+    // Decide can be needed immediately after the first Select frame.
+    if load_frontend_skins {
+        let decide_path = if decide_trimmed.is_empty() {
+            default_skin_document_path_from_paths(app_paths, SkinKind::Decide)
+        } else {
+            match app_paths.resolve_path_ref(&decide_trimmed) {
+                Ok(path) => path,
+                Err(error) => {
+                    tracing::warn!(
+                        path = %decide_trimmed,
+                        error = %format_error_chain(&error),
+                        "failed to resolve decide skin path; ignoring"
+                    );
+                    PathBuf::new()
+                }
+            }
+        };
+        if !decide_path.as_os_str().is_empty() && is_decodable_skin_path(&decide_path) {
+            let mut runtime_state = frontend.lua_runtime_state(None);
+            apply_decide_chart_lua_load_state(&mut runtime_state, &RenderSnapshot::default());
+            spawn_skin_decode(
+                pipeline,
+                SkinDecodeRequest::new(
+                    generation,
+                    decide_path,
+                    SkinKind::Decide,
+                    if decide_trimmed.is_empty() {
+                        BTreeMap::new()
+                    } else {
+                        skin.decide_options.clone()
+                    },
+                    if decide_trimmed.is_empty() {
+                        BTreeMap::new()
+                    } else {
+                        skin.decide_files.clone()
+                    },
+                    lua_runtime_state_with_mode(
+                        lua_runtime_state_with_skin_offsets(runtime_state, &skin.decide_offsets),
+                        lua_runtime_mode,
+                    ),
+                )
+                .with_skin_access(app_paths, skin),
+            );
+            pending_decide = true;
         }
     }
 
