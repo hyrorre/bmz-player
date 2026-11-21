@@ -99,6 +99,9 @@ impl WinitApp {
         };
         self.result.result_gauge_graph_type = last.summary.gauge_type as i32;
         self.result.finished_play = Some(last);
+        if let Some(egui) = self.ui.egui.as_mut() {
+            egui.cancel_key_config_listening();
+        }
         self.result.result_exit = None;
         self.result.result_key5_held = false;
         self.result.result_key7_held = false;

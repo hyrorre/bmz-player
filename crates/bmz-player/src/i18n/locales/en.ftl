@@ -280,6 +280,7 @@ update-kind-manual = Update manually from the release page.
 
 settings-app-title = Application Settings
 settings-disabled-during-play = Application settings cannot be changed during Decide or Play.
+settings-disabled-during-course-stage-result = Settings are locked on individual song results within a course.
 settings-drag-to-reorder = Drag to reorder
 settings-song-folders = Song Folders
 settings-song-recursive = Recursive scan

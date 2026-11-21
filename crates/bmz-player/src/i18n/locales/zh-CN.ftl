@@ -280,6 +280,7 @@ update-kind-manual = 请从发布页面手动更新。
 
 settings-app-title = 程序设置
 settings-disabled-during-play = Decide / Play 期间无法更改程序设置。
+settings-disabled-during-course-stage-result = 在课程的单曲结算画面中无法更改设置。
 settings-drag-to-reorder = 拖动排序
 settings-song-folders = 歌曲文件夹
 settings-song-recursive = 递归扫描

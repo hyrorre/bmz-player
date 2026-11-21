@@ -223,8 +223,9 @@ impl WinitApp {
             self.sync_selected_play_mode();
         }
         let scene = egui_scene_name(scene_kind);
-        let course_result_active =
-            matches!(scene_kind, AppSceneKind::Result) && self.result.finished_course.is_some();
+        let is_result = scene_kind == AppSceneKind::Result;
+        let course_result_active = is_result && self.result.finished_course.is_some();
+        let course_stage_result = is_result && self.is_course_intermediate_result();
 
         // Result IR is consumed by both the skin snapshot and the optional egui panel.
         // Keep its async state moving even while the hidden menu uses an idle egui frame.
@@ -291,6 +292,7 @@ impl WinitApp {
                 skin_meta: &skin_meta,
                 skin_catalog: self.skin.skin_catalog.get(),
                 course_result,
+                course_stage_result,
                 course_preview: course_preview.as_ref(),
                 course_editor,
                 select_course_builder: self.select.course_builder.as_mut().map(|builder| {
