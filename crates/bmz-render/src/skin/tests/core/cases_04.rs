@@ -340,6 +340,49 @@ fn skin_state_text_formats_bmz_number_ref_extension() {
 }
 
 #[test]
+fn number_ref_text_uses_minimum_width_and_sprite_padding_options() {
+    for (value, digit, zeropadding, padding, expected) in [
+        (7, 2, 0, 0, "7"),
+        (7, 2, 1, 0, "07"),
+        (7, 2, 0, 1, "07"),
+        (7, 2, 2, 1, " 7"),
+        (7, 2, 1, 2, " 7"),
+        (-7, 3, 1, 0, "-07"),
+        (-7, 3, 2, 0, " -7"),
+        (0, 2, 1, 0, "00"),
+        (123, 2, 1, 0, "123"),
+        (7, -2, 1, 0, "7"),
+    ] {
+        let document = SkinDocument::from_json_value(&serde_json::json!({
+            "text": [{ "id": "offset", "numberRef": 12, "digit": digit,
+                       "zeropadding": zeropadding, "padding": padding,
+                       "prefix": "[", "suffix": "]" }],
+        }))
+        .unwrap();
+        let draw_state = SkinDrawState { judge_timing_offset_ms: value, ..Default::default() };
+        assert_eq!(
+            skin_state_text_with_draw_state(
+                &document.text[0],
+                Some(&draw_state),
+                &SkinTextState::default(),
+            ),
+            format!("[{expected}]")
+        );
+    }
+
+    let text =
+        SkinTextDef { number_ref: Some(12), digit: i32::MAX, zeropadding: 1, ..Default::default() };
+    assert_eq!(
+        skin_state_text_with_draw_state(
+            &text,
+            Some(&SkinDrawState::default()),
+            &SkinTextState::default(),
+        ),
+        "0".repeat(64)
+    );
+}
+
+#[test]
 fn lua_text_values_preserve_resolved_target_names_and_select_option_labels() {
     let play = SkinDrawState { play_screen: true, ..Default::default() };
     for name in ["ライバル_A", "AAA", "NONE", "RIVAL_2", "IR_TOP", ""] {

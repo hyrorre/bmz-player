@@ -101,7 +101,12 @@ pub(super) fn skin_state_text_with_draw_state(
         let Some(value) = draw_state.and_then(|state| skin_state_number(ref_id, state)) else {
             return String::new();
         };
-        return format!("{}{}{}", text.prefix, value, text.suffix);
+        let width = text.digit.clamp(0, 64) as usize;
+        return match NumberPadding::from_skin_fields(text.zeropadding, text.padding) {
+            NumberPadding::None => format!("{}{value}{}", text.prefix, text.suffix),
+            NumberPadding::Zero => format!("{}{value:0width$}{}", text.prefix, text.suffix),
+            NumberPadding::Blank => format!("{}{value:>width$}{}", text.prefix, text.suffix),
+        };
     }
     if let Some(region) = text.judge_region {
         let Some(state) = draw_state else {

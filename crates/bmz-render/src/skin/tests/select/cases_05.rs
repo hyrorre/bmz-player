@@ -15,7 +15,13 @@ fn select_chart_length_for_missing_song_defaults_to_zero_in_lua() {
     state.select_in_library = false;
     for ref_id in [1163, 1164] {
         let value = SkinValueDef { ref_id, ..SkinValueDef::default() };
-        let text = SkinTextDef { number_ref: Some(ref_id), ..SkinTextDef::default() };
+        let text = SkinTextDef {
+            number_ref: Some(ref_id),
+            digit: 2,
+            zeropadding: 1,
+            suffix: "s".to_string(),
+            ..SkinTextDef::default()
+        };
         assert_eq!(lua_main_state_number(ref_id, &state), 0);
         assert_eq!(skin_value_number_for_destination(&value, &state), None);
         assert!(
