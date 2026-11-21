@@ -254,6 +254,15 @@ pub fn apply_placeholder_session_visuals(
     snapshot.skin_offsets = offsets;
 }
 
+fn apply_auto_scratch_with_audio_keys(chart: &mut PlayableChart, lanes: &[Lane]) {
+    let keys = (chart.metadata.conditional.is_some() || chart.metadata.conditional_revision != 0)
+        .then(|| bmz_chart::conditional::ConditionalAudioKeys::capture(chart));
+    crate::assist::move_auto_scratch_notes_to_background(chart, lanes);
+    if let Some(keys) = keys {
+        keys.apply(chart);
+    }
+}
+
 pub fn build_game_session(
     chart: Arc<PlayableChart>,
     profile: &ProfileConfig,
@@ -358,7 +367,14 @@ pub fn build_game_session_with_input_backend(
             auto_scratch_lanes[lane.index()] = true;
         }
         if crate::assist::has_auto_scratch_notes(&chart, lanes) {
-            crate::assist::move_auto_scratch_notes_to_background(Arc::make_mut(&mut chart), lanes);
+            apply_auto_scratch_with_audio_keys(Arc::make_mut(&mut chart), lanes);
+        }
+        // Preload installs its own transform. A directly built session still
+        // needs the same conversion for branches materialized during play.
+        if chart.metadata.conditional.as_ref().is_some_and(|p| p.transform.is_none()) {
+            let program = Arc::make_mut(&mut chart).metadata.conditional.as_mut().unwrap();
+            Arc::make_mut(program).transform =
+                Some(Arc::new(move |chart| apply_auto_scratch_with_audio_keys(chart, lanes)));
         }
     }
     let input_offset_auto_adjust_enabled = profile.judge.visual_offset_auto_adjust;

@@ -272,6 +272,8 @@ pub struct IrOwnScoreHistoryCursor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IrOwnScoreHistoryEntry {
     pub score_id: String,
+    #[serde(default)]
+    pub auto_scratch_scoring: Option<String>,
     /// 投稿時のidempotency key。BMS-IRなど返さないproviderでは `None`。
     #[serde(default)]
     pub idempotency_key: Option<String>,

@@ -169,6 +169,16 @@ fn repair_kaleid_migration_collisions(
 
 const BATTLE_AS_SCORE_MIGRATION_VERSION: i32 = 41;
 
+// v40 was used by development builds, and v41 is the Rust migration below.
+const _: () = {
+    let mut index = 0;
+    while index < SCORE_MIGRATIONS.len() {
+        let version = SCORE_MIGRATIONS[index].version;
+        assert!(version != 40 && version != BATTLE_AS_SCORE_MIGRATION_VERSION);
+        index += 1;
+    }
+};
+
 pub(crate) const SCORE_DB_VERSION: i32 = match SCORE_MIGRATIONS.last() {
     Some(migration) if migration.version > BATTLE_AS_SCORE_MIGRATION_VERSION => migration.version,
     _ => BATTLE_AS_SCORE_MIGRATION_VERSION,
@@ -927,6 +937,19 @@ mod tests {
             )
             .unwrap();
         }
+        conn.execute(
+            "INSERT INTO ir_score_jobs (
+                id, provider, account_id, kind, local_score_id, chart_sha256, ln_policy,
+                payload_json, status, last_error, created_at, updated_at, submission_key
+             ) VALUES (8, 'bmz', 'player', 'score', 8, ?1, 'ForceLn', ?2,
+                'ineligible', ?3, 1, 1, '8')",
+            params![
+                "00".repeat(32),
+                r#"{"play_options":{"double_option":"battle_auto_scratch","source_kind":"beatoraja"}}"#,
+                crate::ir::payload::LEGACY_BATTLE_AS_MESSAGE,
+            ],
+        )
+        .unwrap();
 
         // Simulate databases whose earlier v9 left abandoned sending jobs behind.
         conn.pragma_update(None, "user_version", 9).unwrap();
@@ -950,10 +973,11 @@ mod tests {
                 (5, "pending".to_string(), 0),
                 (6, "ineligible".to_string(), no_retry),
                 (7, "sending".to_string(), 0),
+                (8, "pending".to_string(), 0),
             ]
         );
         let mut db = crate::storage::network_db::NetworkDatabase::from_connection(conn);
         let claimed = db.claim_pending_ir_score_jobs(600, 100, false).unwrap();
-        assert_eq!(claimed.iter().map(|job| job.id).collect::<Vec<_>>(), [4, 5, 7]);
+        assert_eq!(claimed.iter().map(|job| job.id).collect::<Vec<_>>(), [4, 5, 7, 8]);
     }
 }

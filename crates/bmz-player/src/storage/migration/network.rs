@@ -9,8 +9,10 @@ const DISABLE_LEGACY_BATTLE_AS_JOBS: &str = "UPDATE ir_score_jobs
     WHERE kind = 'score'
       AND status IN ('pending', 'failed', 'sending')
       AND json_valid(payload_json)
-      AND json_extract(payload_json, '$.play_options.double_option')
+      AND replace(lower(trim(json_extract(payload_json, '$.play_options.double_option'))), '-', '_')
           IN ('battle_auto_scratch', 'battle_assist')
+      AND lower(trim(COALESCE(json_extract(payload_json, '$.play_options.source_kind'), '')))
+          IN ('', 'local')
       AND COALESCE(json_extract(payload_json, '$.play_options.auto_scratch_scoring'), '')
           <> 'unscored';";
 
@@ -288,5 +290,17 @@ pub const NETWORK_MIGRATIONS: &[Migration] = &[
         version: 10,
         // Earlier v9 migrations only handled pending and failed jobs.
         statements: &[DISABLE_LEGACY_BATTLE_AS_JOBS],
+    },
+    Migration {
+        version: 11,
+        statements: &[
+            DISABLE_LEGACY_BATTLE_AS_JOBS,
+            "UPDATE ir_score_jobs SET status = 'pending', next_attempt_at = 0, last_error = ''
+             WHERE kind = 'score' AND status = 'ineligible'
+               AND last_error = 'BATTLE AS score recorded before auto scratch left scoring'
+               AND json_valid(payload_json)
+               AND replace(lower(trim(json_extract(payload_json, '$.play_options.source_kind'))), '-', '_')
+                   IN ('beatoraja', 'lr2', 'lr2oraja', 'lr2_oraja', 'lr2oraja_dx', 'lr2_oraja_dx');",
+        ],
     },
 ];

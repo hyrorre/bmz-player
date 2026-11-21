@@ -93,7 +93,7 @@ export async function submitScore(
   )
   // Kept as history, but never a best or a ranking entry. Old clients ignore
   // `accepted`, so they finish the job instead of retrying it.
-  const legacyAutoScratch = isLegacyAutoScratchScore(doubleOption, payload.play_options)
+  const legacyAutoScratch = isLegacyAutoScratchScore(doubleOption, sourceKind, payload.play_options)
 
   // ユーザー・譜面の状態は idempotency key の確認より先に判定する。BAN・ブロック前に
   // 保存済みのスコアを再送しても、成功応答やランキングを返さない。

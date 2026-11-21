@@ -1544,52 +1544,56 @@ fn cli_auto_scratch_keeps_branch_bgm_and_leaves_new_scratches_unscored() {
         PlaySessionOptions::default(),
     )
     .unwrap();
-    std::fs::remove_file(path).unwrap();
     assert!(prepared.score_save_disabled);
 
-    let session = &mut prepared.session;
-    let scratch_time = session.chart.notes_for_lane(Lane::Scratch)[0].time.0;
-    let old_common_key = *session.chart.metadata.conditional_bgm_keys.last().unwrap();
-    assert_eq!(session.chart.bgm_events.len(), 2);
-    assert_eq!(session.chart.metadata.conditional_bgm_keys.len(), 2);
-    let mut audio = bmz_audio::queue::ScheduledSoundQueue::new();
-    session.audio_clock.start_output_frame = 0;
-    session.audio_clock.running = true;
-    for time in [scratch_time, scratch_time + 2_010_000, scratch_time + 4_010_000] {
-        session
-            .audio_clock
-            .current_frame
-            .store((time * 48 / 1000) as u64, std::sync::atomic::Ordering::Relaxed);
-        bmz_gameplay::session::advance_session_frame(session, &mut audio);
-    }
-    assert_eq!(session.conditional.decisions[0].branch, 0);
-    assert_eq!(session.chart.bgm_events.len(), 4);
-    assert_eq!(session.chart.metadata.conditional_bgm_keys.len(), 4);
-    let heard: Vec<_> = audio
-        .drain_all()
-        .map(|event| {
+    let mut direct =
+        load_game_session_for_chart(&library_db, chart_id, &profile, PlaySessionOptions::default())
+            .unwrap();
+    std::fs::remove_file(path).unwrap();
+    for session in [&mut prepared.session, &mut direct] {
+        let scratch_time = session.chart.notes_for_lane(Lane::Scratch)[0].time.0;
+        let old_common_key = *session.chart.metadata.conditional_bgm_keys.last().unwrap();
+        assert_eq!(session.chart.bgm_events.len(), 2);
+        assert_eq!(session.chart.metadata.conditional_bgm_keys.len(), 2);
+        let mut audio = bmz_audio::queue::ScheduledSoundQueue::new();
+        session.audio_clock.start_output_frame = 0;
+        session.audio_clock.running = true;
+        for time in [scratch_time, scratch_time + 2_010_000, scratch_time + 4_010_000] {
             session
-                .chart
-                .sounds
-                .iter()
-                .find(|asset| asset.id == event.sound_id)
-                .unwrap()
-                .path
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .into_owned()
-        })
-        .collect();
-    for sound in ["scratch.wav", "branch.wav", "common.wav", "later-scratch.wav"] {
-        assert_eq!(heard.iter().filter(|name| *name == sound).count(), 1, "{heard:?}");
+                .audio_clock
+                .current_frame
+                .store((time * 48 / 1000) as u64, std::sync::atomic::Ordering::Relaxed);
+            bmz_gameplay::session::advance_session_frame(session, &mut audio);
+        }
+        assert_eq!(session.conditional.decisions[0].branch, 0);
+        assert_eq!(session.chart.bgm_events.len(), 4);
+        assert_eq!(session.chart.metadata.conditional_bgm_keys.len(), 4);
+        let heard: Vec<_> = audio
+            .drain_all()
+            .map(|event| {
+                session
+                    .chart
+                    .sounds
+                    .iter()
+                    .find(|asset| asset.id == event.sound_id)
+                    .unwrap()
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        for sound in ["scratch.wav", "branch.wav", "common.wav", "later-scratch.wav"] {
+            assert_eq!(heard.iter().filter(|name| *name == sound).count(), 1, "{heard:?}");
+        }
+        assert!(session.chart.metadata.conditional_bgm_keys.contains(&old_common_key));
+        assert!(session.chart.notes_for_lane(Lane::Scratch).iter().any(|note| {
+            note.time.0 == scratch_time + 4_000_000 && note.kind == NoteKind::DummyTap
+        }));
+        assert_eq!(session.scored_total_notes, 2);
+        assert_eq!((session.score.ex_score(), session.score.combo, session.score.bp()), (0, 0, 0));
     }
-    assert!(session.chart.metadata.conditional_bgm_keys.contains(&old_common_key));
-    assert!(session.chart.notes_for_lane(Lane::Scratch).iter().any(|note| {
-        note.time.0 == scratch_time + 4_000_000 && note.kind == NoteKind::DummyTap
-    }));
-    assert_eq!(session.scored_total_notes, 2);
-    assert_eq!((session.score.ex_score(), session.score.combo, session.score.bp()), (0, 0, 0));
 }
 
 #[test]

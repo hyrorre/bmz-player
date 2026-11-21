@@ -376,10 +376,12 @@ export const LEGACY_AUTO_SCRATCH_REJECTION = 'battle_auto_scratch_legacy_scoring
  */
 export function isLegacyAutoScratchScore(
   doubleOption: IrDoubleOption,
+  sourceKind: IrScoreSourceKind,
   playOptions: Record<string, unknown>,
 ): boolean {
   return (
     doubleOption === 'battle_auto_scratch' &&
+    sourceKind === 'local' &&
     playOptions.auto_scratch_scoring !== AUTO_SCRATCH_SCORING_UNSCORED
   )
 }

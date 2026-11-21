@@ -17,9 +17,23 @@ use super::types::{
 
 /// Generate once before enqueue; retries must use the persisted payload.
 /// `play_options.auto_scratch_scoring` for BATTLE AS scores that leave the auto
-/// scratch out of scoring. BMZ IR treats BATTLE AS without it as the old scoring
-/// that counted the auto scratch as PGREAT.
+/// scratch out of scoring. BMZ IR uses it to distinguish new and old BMZ plays.
 pub const AUTO_SCRATCH_SCORING_UNSCORED: &str = "unscored";
+pub(crate) const LEGACY_BATTLE_AS_MESSAGE: &str =
+    "BATTLE AS score recorded before auto scratch left scoring";
+
+pub(crate) fn is_legacy_battle_as(
+    double_option: Option<&str>,
+    source_kind: Option<&str>,
+    scoring: Option<&str>,
+) -> bool {
+    let normalize = |value: Option<&str>| {
+        value.unwrap_or_default().trim().to_ascii_lowercase().replace('-', "_")
+    };
+    matches!(normalize(double_option).as_str(), "battle_auto_scratch" | "battle_assist")
+        && matches!(normalize(source_kind).as_str(), "" | "local")
+        && scoring != Some(AUTO_SCRATCH_SCORING_UNSCORED)
+}
 
 pub(crate) fn insert_auto_scratch_scoring(
     play_options: &mut std::collections::BTreeMap<String, serde_json::Value>,

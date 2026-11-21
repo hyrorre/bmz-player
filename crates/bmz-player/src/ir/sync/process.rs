@@ -62,6 +62,30 @@ pub(super) async fn sync_pending_ir_jobs_with_filter(
         Vec::new();
     for (index, job) in jobs.into_iter().enumerate() {
         let job_now = now.saturating_add(batch_started.elapsed().as_secs() as i64);
+        if job.kind == IrJobKind::Score
+            && serde_json::from_str::<serde_json::Value>(&job.payload_json).is_ok_and(|payload| {
+                let options = &payload["play_options"];
+                crate::ir::payload::is_legacy_battle_as(
+                    options["double_option"].as_str(),
+                    options["source_kind"].as_str(),
+                    options["auto_scratch_scoring"].as_str(),
+                )
+            })
+        {
+            let message = crate::ir::payload::LEGACY_BATTLE_AS_MESSAGE;
+            network_db.mark_ir_score_job_status(
+                job.id,
+                IrScoreJobStatus::Ineligible,
+                job_now,
+                message,
+            )?;
+            report.record_failure(
+                job.id,
+                IrSyncFailureClass::Job,
+                format!("job {}: {message}", job.id),
+            );
+            continue;
+        }
         if let Some((_, _, code, message)) =
             restricted_accounts.iter().find(|(provider, account, _, _)| {
                 *provider == job.provider && *account == job.account_id

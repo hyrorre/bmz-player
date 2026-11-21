@@ -105,22 +105,23 @@ BMZはスクラッチレーンへ自動入力を作り、通常の判定でPGREA
 - 新旧の採点は、クライアントのバージョンでは区別できない。採点を変えた後のmainの
   開発版も0.5.3を名乗るため。新しいクライアントはBATTLE ASのpayloadに
   `play_options.auto_scratch_scoring = "unscored"`を付け、サーバーは印の無い
-  `battle_auto_scratch`を旧採点として扱う。
+  `battle_auto_scratch`のうち、BMZでプレイした記録を旧採点として扱う。
 - 旧採点のスコアは`accepted = false`、`rejection_reason = "battle_auto_scratch_legacy_scoring"`
   で保存し、bestを作らず、`accepted: false`を返す。BMZ公式IRのクライアントは応答の
   `accepted`を見ないので、旧クライアントのjobは完了扱いになり、再送を繰り返さない。
   同じidempotency keyの再送も、保存済みの`accepted`を返す。
 - D1 migration 0020は、保存済みの印の無い`battle_auto_scratch`を同じ扱いにし、
   それを含むキーの`best_scores`を削除する。更新triggerで`score_history_revision`も進む。
-- 0020より前に印付きのスコアが同じキーにあった場合も、そのキーのbestは消える。
-  印はこのcommitから送るので、対象は開発版で送った記録だけになる。
+- 0020は取り込み由来のスコアも除外し、同じキーに有効な履歴があってもbestを削除する。
+  0021で、旧採点判定によって除外された取り込み記録を元のIDで復元し、受理済みスコアから
+  EX・ランプ・最大コンボ・BP・CBごとにベストを再構築する。
 
 ### サーバーの検証
 
 - `bmz-ir-web/server/services/ir/submission.test.ts`の`BATTLE AS auto scratch scoring`:
   印の無いスコアは不受理で保存されbest・ランキングに出ない、再送も不受理を返す、
-  印付きは受理される、migration 0020が保存済みの旧記録を外し通常のbestを残す。
-- 本番のD1へのmigrationの適用とデプロイは未実施。
+  印付きと外部取り込みは受理される、0020の適用後に0021を実行すると取り込み記録と各ベストが戻り、
+  同じidempotency keyの再送で復元済みのスコアIDが返る。
 
 ## スキンの自動演奏レーン用ノーツ画像
 
@@ -151,7 +152,7 @@ AUTO SCRATCHのレーンをAUTO画像で描く。LR2のoption 54..57も全体AUT
 
 ## 残課題
 
-- 本番のD1へmigration 0020を適用し、サーバーをデプロイする（クライアントの公開より前）。
+- D1の0020は適用済み。0021の適用と修正版サーバーのデプロイが必要（クライアントの公開より前）。
 - BMS-IRへ送信済みのBATTLE ASの記録は、BMZからは変えられない。
 
 ## PR #147のレビュー後の検証
@@ -161,3 +162,8 @@ AUTO SCRATCHのレーンをAUTO画像で描く。LR2のoption 54..57も全体AUT
 - score DBのv39・v40からの移行、取り込み履歴からのベスト復元、除外済み履歴の削除後の曲別回数を検証した。network DBでは旧採点の`sending`が再取得されず、`unscored`のジョブは再取得されることを確認した。
 - Windowsでworkspaceのfmt・check・all-targets Clippy・testが成功した（5929件成功、144件ignored）。実機での音声確認と本番IRの確認は未実施。
 - 再レビューでは、LN→CN・CN→LNでpreload後のIR payloadを生成し、元のレーン構成にLNポリシーを適用した件数と既定TOTALを確認した。ローカルライバルはv39・v40に更新を案内し、移行後のDBを読み込むことを確認した。
+- BATTLE ASの取り込み区分と`source_kind`の保存は `cbb6b698e` で同時に追加された。
+  それより前の取り込みは`Off`区分なので、v41の除外対象にはならない。
+- 追加レビューでは、network DB v11による取り込みジョブの再開、旧ジョブの個別再送の遮断、
+  旧BMZ IRの履歴から旧BMZ採点を取り込まないことを回帰テストに追加した。
+  Kaleidはpreload経由と直接構築の両方を通し、分岐後も音声イベントが各1回で皿が採点されないことを確認した。

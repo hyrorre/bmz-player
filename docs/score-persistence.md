@@ -149,9 +149,11 @@ migration v41は、これらを履歴に残したまま集計から外します�
 - ローカルライバルの参照先にもv41以降が必要です。v39・v40ではプロファイルの更新を案内します。
 - replay slotはリプレイを残し、比較用の値（EX・BP・CB・最大コンボ・ランプ）を空にします。
   slotの規則が無効でなければ、次のプレイで更新されます。
-- 旧BMZ履歴はIRの一括送信から外します。network DB migration v9/v10は、旧採点の送信待ち・失敗・
-  送信中のまま残ったBATTLE ASジョブを`ineligible`にします。
-- BMZ IRに送信済みの記録は、サーバーのD1 migration 0020でbestとランキングから外します
+- 旧BMZ履歴はIRの一括送信から外します。network DB migrationは、旧BMZ採点の送信待ち・失敗・
+  送信中のBATTLE ASジョブを`ineligible`にします。v11はv9/v10で除外された取り込みジョブを
+  送信待ちに戻します。旧BMZ採点のジョブを個別再送しても、送信前に`ineligible`に戻ります。
+- BMZ IRに送信済みの旧BMZ採点はbestとランキングから外します。D1 migration 0021は、0020で
+  除外された取り込み記録を復元し、有効なBATTLE ASのbestを再構築します
   （[IR](ir.md)の`auto_scratch_scoring`）。BMS-IRに送信済みの記録は変えられません。
 - コースの記録（`course_scores`）は変えません。
 

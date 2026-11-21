@@ -142,8 +142,17 @@ function scoreOptionMetadata(playOptions: Record<string, unknown> | null | undef
   random_seed?: number | string
   assist_mask?: number
   seed_scheme?: string
+  auto_scratch_scoring?: 'unscored'
 } {
-  const metadata: { random_seed?: number | string; assist_mask?: number; seed_scheme?: string } = {}
+  const metadata: {
+    random_seed?: number | string
+    assist_mask?: number
+    seed_scheme?: string
+    auto_scratch_scoring?: 'unscored'
+  } = {}
+  if (playOptions?.auto_scratch_scoring === 'unscored') {
+    metadata.auto_scratch_scoring = 'unscored'
+  }
   const randomSeed = playOptions?.random_seed
   if (typeof randomSeed === 'number' && Number.isSafeInteger(randomSeed)) {
     metadata.random_seed = randomSeed

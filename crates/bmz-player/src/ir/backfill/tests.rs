@@ -65,6 +65,7 @@ pub(crate) fn test_playable_chart(title: &str) -> PlayableChart {
 
 fn imported_score_entry(chart_sha256: [u8; 32]) -> IrOwnScoreHistoryEntry {
     IrOwnScoreHistoryEntry {
+        auto_scratch_scoring: None,
         score_id: "remote-score".to_string(),
         idempotency_key: None,
         chart_sha256: crate::storage::common::hash_to_hex(&chart_sha256),
