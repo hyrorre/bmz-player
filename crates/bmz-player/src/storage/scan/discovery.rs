@@ -418,6 +418,15 @@ impl DiscoveryWalk<'_> {
                 continue;
             }
 
+            // Keysounds usually account for most entries in a song folder.
+            // Only ordinary audio files can bypass link and directory handling.
+            if file_type.is_file()
+                && file_name.as_encoded_bytes().last_chunk::<4>().is_some_and(|suffix| {
+                    suffix.eq_ignore_ascii_case(b".wav") || suffix.eq_ignore_ascii_case(b".ogg")
+                })
+            {
+                continue;
+            }
             if file_type.is_file() && is_document_file_name(&file_name) {
                 has_document = true;
             }
