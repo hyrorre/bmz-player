@@ -169,6 +169,11 @@ fn repair_kaleid_migration_collisions(
 
 const BATTLE_AS_SCORE_MIGRATION_VERSION: i32 = 41;
 
+pub(crate) const SCORE_DB_VERSION: i32 = match SCORE_MIGRATIONS.last() {
+    Some(migration) if migration.version > BATTLE_AS_SCORE_MIGRATION_VERSION => migration.version,
+    _ => BATTLE_AS_SCORE_MIGRATION_VERSION,
+};
+
 pub(crate) fn run_score_migrations(conn: &mut Connection) -> Result<()> {
     repair_ir_score_migration_20_collision(conn)?;
     repair_player_stats_migration_37_collision(conn)?;
@@ -350,7 +355,7 @@ mod tests {
         for _ in 0..2 {
             run_score_migrations(&mut conn).unwrap();
             let version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-            assert_eq!(version, BATTLE_AS_SCORE_MIGRATION_VERSION);
+            assert_eq!(version, SCORE_DB_VERSION);
             let play_count: i32 = conn
                 .query_row("SELECT play_count FROM imported_player_stats", [], |r| r.get(0))
                 .unwrap();
@@ -877,7 +882,7 @@ mod tests {
         run_score_migrations(&mut conn).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, BATTLE_AS_SCORE_MIGRATION_VERSION);
+        assert_eq!(version, SCORE_DB_VERSION);
         assert!(column_exists(&conn, "score_history", "source_kind").unwrap());
         assert!(column_exists(&conn, "score_history", "arrange_2p").unwrap());
         assert!(column_exists(&conn, "score_history", "applied_double_option").unwrap());

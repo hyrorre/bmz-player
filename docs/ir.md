@@ -314,7 +314,7 @@ POST /api/v1/scores?include=rankings&ranking_scopes=global,self_and_rivals&ranki
 - `device_type`はスコアを記録した主な入力デバイスです。判定のルールは[判定・EXスコア・クリアランプ](#判定exスコアクリアランプ)を参照してください。ランキングを分ける条件ではなく、表示・検索・検証の補助に使います。
 - `rule.ln_policy`は、プロファイルの設定と譜面のLN情報からBMZが正規化した値で、ランキング・best・集計の単位に使います。`rule.effective_ln_mode`は実際に降らせたLNの種別を示す補助情報です。`chart.ln_profile`はサーバーが譜面情報を補完・検証するための参考情報で、bestを分ける単位にはしません。
 - `play_options.double_option`はランキングを分ける単位で、`off` / `battle` / `battle_auto_scratch`のどれかです（`flip`は`off`として扱います）。実際に適用したDPオプションは`applied_double_option`（`off` / `flip` / `battle` / `battle_auto_scratch`）に入れ、個別のスコアの履歴に残します。
-- D-BATTLE / BATTLE ASの`chart.mode`・`rule.key_mode`は元譜面の5K / 7Kです。`chart.notes`の種別別件数と既定TOTALは、複製や自動演奏の皿を採点から外す前の値です。`result.notes`は実際の採点対象数です。BATTLE ASでは自動演奏した両側のスクラッチを除き、一括送信でも記録時の採点対象数を送ります（[スコア保存](score-persistence.md#auto-scratchの採点)）。
+- D-BATTLE / BATTLE ASの`chart.mode`・`rule.key_mode`は元譜面の5K / 7Kです。`chart.notes`の種別別件数と既定TOTALは、LNポリシーを適用した元のレーン構成から求めます。自動演奏する皿も含みます。`result.notes`は実際の採点対象数です。BATTLE ASでは自動演奏した両側のスクラッチを除き、一括送信でも記録時の採点対象数を送ります（[スコア保存](score-persistence.md#auto-scratchの採点)）。
 - BATTLE ASのスコアには、`play_options.auto_scratch_scoring = "unscored"`を付けます。自動演奏したスクラッチを採点から外したことを示します。v0.5.3までのクライアントは付けず、スクラッチをPGREATとして数えていました。サーバーは、これが無い`battle_auto_scratch`のスコアを`accepted = false`（`rejection_reason = "battle_auto_scratch_legacy_scoring"`）として保存し、bestとランキングに含めません。応答も`accepted: false`です。旧クライアントは`accepted`を見ないため、jobは完了し、再送しません。サーバーのD1 migration 0020は、保存済みの同じスコアに同じ扱いを適用し、そのbestを削除します。
 - `play_options.option`は初期のpayloadとの互換用で、`arrange_1p`と同じ値です。
 - `seed` / `random_seed`は10進数の文字列で送ります。数値も過去のpayloadとの互換のために受け付けます。

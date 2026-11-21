@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::profile_config::RivalEntry;
 use crate::paths::{AppPaths, resolve_profile_paths};
-use crate::storage::migration::SCORE_MIGRATIONS;
+use crate::storage::migration::SCORE_DB_VERSION;
 use crate::storage::score_db::{BestScoreSummary, ScoreDatabase, ScoreKey};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,7 +46,7 @@ fn load_local_rival_scores(path: &Path) -> Result<Vec<BestScoreSummary>, LocalRi
         .conn()
         .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
         .map_err(LocalRivalLoadError::load_failed)?;
-    let required = SCORE_MIGRATIONS.last().expect("score migrations are nonempty").version;
+    let required = SCORE_DB_VERSION;
     if found < required {
         return Err(LocalRivalLoadError::OutdatedSchema { found, required });
     }
@@ -199,7 +199,7 @@ impl SelectIrRanking {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::migration::{SCORE_MIGRATIONS, run_migrations};
+    use crate::storage::migration::{SCORE_MIGRATIONS, run_migrations, run_score_migrations};
     use crate::storage::score_db::{ScoreRecord, ScoreRecordMetadata};
     use bmz_core::clear::{ClearType, GaugeType};
     use bmz_core::input::InputDeviceKind;
@@ -239,7 +239,7 @@ mod tests {
 
     fn database(path: &Path) -> ScoreDatabase {
         let mut db = ScoreDatabase::open(path).unwrap();
-        run_migrations(db.conn_mut(), SCORE_MIGRATIONS).unwrap();
+        run_score_migrations(db.conn_mut()).unwrap();
         db
     }
 
@@ -371,8 +371,7 @@ mod tests {
 
     #[test]
     fn outdated_schemas_request_an_update_without_modifying_the_source() {
-        // v1 lacks columns queried today; v36 also predates the v37/v38 data repairs.
-        for version in [1, 36] {
+        for version in [1, 36, 39, 40] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("score.db");
             let mut db = ScoreDatabase::open(&path).unwrap();
@@ -381,6 +380,10 @@ mod tests {
                 .take_while(|migration| migration.version <= version)
                 .count();
             run_migrations(db.conn_mut(), &SCORE_MIGRATIONS[..migrations]).unwrap();
+            if version == 40 {
+                // v40 was used by a development build before the v41 data repair.
+                db.conn().pragma_update(None, "user_version", version).unwrap();
+            }
             // Close/checkpoint the writable connection before checking the file bytes.
             drop(db);
             let before = std::fs::read(&path).unwrap();
@@ -389,15 +392,14 @@ mod tests {
             state.update(Some(target.clone()));
             wait_until(&mut state, &target, |state| state.error.is_some());
             let error = state.error.take().unwrap();
-            assert!(
-                matches!(error, LocalRivalLoadError::OutdatedSchema { found, .. } if found == version)
-            );
+            assert!(matches!(error, LocalRivalLoadError::OutdatedSchema { found, required }
+                    if found == version && required == SCORE_DB_VERSION));
             assert_eq!(error.message_key(), "local-rival-schema-outdated");
             assert!(state.scores.is_empty());
             assert_eq!(std::fs::read(&path).unwrap(), before);
 
             let mut db = ScoreDatabase::open(&path).unwrap();
-            run_migrations(db.conn_mut(), SCORE_MIGRATIONS).unwrap();
+            run_score_migrations(db.conn_mut()).unwrap();
             drop(db);
             state.invalidate();
             state.update(Some(target.clone()));

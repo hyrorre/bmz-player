@@ -1036,9 +1036,6 @@ fn transform_chart_for_play(
     if options.assist.auto_scratch && options.replay_player.is_none() {
         applied_double_option = applied_double_option.with_auto_scratch(true);
     }
-    if applied_double_option == DoubleOption::BattleAutoScratch {
-        chart.metadata.source_note_counts = Some(crate::ir::payload::chart_note_counts(&chart));
-    }
     let ln_policy = course_score_ln_policy(
         options.ln_policy_setting,
         options.ln_mode_override,
@@ -1051,6 +1048,9 @@ fn transform_chart_for_play(
         options.rule_mode,
     );
     apply_score_ln_policy_to_chart(ln_policy, &mut chart);
+    if applied_double_option == DoubleOption::BattleAutoScratch {
+        chart.metadata.source_note_counts = Some(crate::ir::payload::chart_note_counts(&chart));
+    }
     let mut assist_runtime = crate::assist::apply_chart_assists(
         &mut chart,
         options.assist,

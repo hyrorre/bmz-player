@@ -1450,6 +1450,78 @@ fn load_transformed_chart_marks_auto_scratch_and_removes_it_from_scoring() {
 }
 
 #[test]
+fn battle_as_preload_sends_source_counts_after_forced_ln_policy() {
+    use crate::ir::payload::{IrSubmissionContext, build_score_submission};
+    use crate::screens::play_finish::play_result_from_session;
+    use std::fmt::Write as _;
+
+    let profile = ProfileConfig::new_default("default", "Default", 1);
+    let double = DoubleOption::BattleAutoScratch;
+    // Enough pairs to exercise the default TOTAL above its 260-point floor.
+    let pairs = 200;
+    for (source_lnmode, setting, cn_count) in
+        [(1, LnPolicySetting::ForceCn, pairs), (2, LnPolicySetting::ForceLn, 0)]
+    {
+        let mut body = format!(
+            "#TITLE Battle AS LN Policy\n#BPM 120\n#LNMODE {source_lnmode}\n#LNOBJ ZZ\n#00016:01\n"
+        );
+        for measure in 0..pairs {
+            writeln!(body, "#{measure:03}11:01ZZ").unwrap();
+        }
+        let (path, library_db, chart_id) = register_temp_bms(&body);
+        let prepared = load_prepared_play_session_for_chart(
+            &library_db,
+            chart_id,
+            &profile,
+            PlaySessionOptions {
+                double_option: double,
+                ln_policy_setting: setting,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        std::fs::remove_file(path).unwrap();
+
+        let payload = build_score_submission(
+            &prepared.session.chart,
+            &play_result_from_session(&prepared.session),
+            IrSubmissionContext {
+                played_at: 1,
+                play_duration_ms: None,
+                chart_length_ms: Some(prepared.chart_length_ms),
+                ln_policy: prepared.score_key.ln_policy,
+                source_ln_profile: prepared.source_ln_profile,
+                gauge_option: "normal".into(),
+                device_type: bmz_core::input::InputDeviceKind::Keyboard,
+                idempotency_key: "battle-as-ln-policy".into(),
+                arrange: ArrangeOption::Normal,
+                arrange_2p: ArrangeOption::Normal,
+                double_option: double.score_bucket(),
+                applied_double_option: prepared.applied_arrange.double_option,
+                arrange_seed: None,
+                random_seed: None,
+                seed_scheme: String::new(),
+                bms_random_choices: Vec::new(),
+                bms_switch_choices: Vec::new(),
+                rule_mode: RuleMode::Beatoraja.as_str().into(),
+                course_stage: false,
+                replay_hash: None,
+            },
+        );
+        let source_notes = pairs + cn_count + 1;
+        assert_eq!(payload.chart.notes.total, source_notes, "{setting:?}");
+        assert_eq!(payload.chart.notes.ln, pairs);
+        assert_eq!(payload.chart.notes.cn, cn_count);
+        assert_eq!(payload.chart.ln_profile.has_defined_cn, source_lnmode == 2);
+        assert_eq!(
+            payload.chart.total,
+            Some(bmz_gameplay::gauge::default_gauge_total(source_notes))
+        );
+        assert_eq!(payload.result.notes, 2 * (pairs + cn_count));
+    }
+}
+
+#[test]
 fn cli_auto_scratch_keeps_branch_bgm_and_leaves_new_scratches_unscored() {
     let (path, library_db, chart_id) = register_temp_bms(concat!(
         "#TITLE Conditional Scratch\n#BPM 120\n",
