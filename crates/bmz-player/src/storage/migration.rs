@@ -473,7 +473,8 @@ mod tests {
             );
             CREATE TABLE charts (
                 id INTEGER PRIMARY KEY,
-                folder_path TEXT NOT NULL DEFAULT ''
+                folder_path TEXT NOT NULL DEFAULT '',
+                has_document INTEGER
             );
             CREATE TABLE chart_file_links (chart_id INTEGER, chart_file_id INTEGER);
             CREATE TABLE chart_import_warnings (chart_file_id INTEGER);
