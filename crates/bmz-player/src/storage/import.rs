@@ -74,11 +74,8 @@ pub(crate) fn import_chart_file_with_encoding_source(
     if let (crate::chart_source::ChartLocator::Archive { entry, .. }, Some(index)) =
         (&locator, &archive_index)
     {
-        import.chart.metadata.preview_file = crate::chart_source::archive_preview_file(
-            index,
-            entry,
-            &import.chart.metadata.preview_file,
-        );
+        import.chart.metadata.preview_file = crate::chart_source::ArchivePreviewFiles::new(index)
+            .resolve(entry, &import.chart.metadata.preview_file);
     }
     let chart = &mut import.chart;
     let record =

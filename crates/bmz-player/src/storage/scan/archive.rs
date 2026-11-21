@@ -1,6 +1,6 @@
 use super::content_cache::{ChartContentCache, ImportWork, ScanImportError};
 use super::*;
-use crate::chart_source::{ChartLocator, archive_preview_file};
+use crate::chart_source::{ArchivePreviewFiles, ChartLocator};
 use crate::song_archive::{self, ArchiveControl};
 use crate::storage::library_db::{ChartImportSource, encoding_revision_matches};
 use rusqlite::OptionalExtension;
@@ -68,6 +68,7 @@ pub(super) fn import_archive<'a>(
         .unwrap_or(0);
     let started = Instant::now();
     let cache = cache();
+    let previews = ArchivePreviewFiles::new(&index);
     let tx = db.conn_mut().transaction()?;
     let scanned = song_archive::scan_charts(container, &control, |entry, bytes| {
         let path =
@@ -80,11 +81,8 @@ pub(super) fn import_archive<'a>(
         let result = cache.import(&path, bytes, &mut work);
         match result {
             Ok(chart) => {
-                let preview_file = archive_preview_file(
-                    &index,
-                    &entry.name,
-                    chart.prepared.declared_preview_file(),
-                );
+                let preview_file =
+                    previews.resolve(&entry.name, chart.prepared.declared_preview_file());
                 let record = ChartImportSource {
                     root_id: Some(root_id),
                     file_path: &path,
