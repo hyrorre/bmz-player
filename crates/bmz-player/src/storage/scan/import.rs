@@ -204,17 +204,15 @@ pub fn scan_song_roots_with_progress(
 
         // Partial scans share fingerprints with overlapping roots.
         let fingerprint_start = Instant::now();
-        let fingerprints = if force {
-            HashMap::new()
-        } else {
-            db.scan_fingerprints(root.root_id, entries.iter().map(|(key, _)| key.as_str()))?
-        };
-        let fingerprint_ms = fingerprint_start.elapsed().as_millis();
-        report.timing.fingerprint_ms += fingerprint_ms;
+        let mut fingerprints =
+            if force { HashMap::new() } else { db.load_fingerprints_for_root(root.root_id)? };
+        let mut fingerprint_ms = fingerprint_start.elapsed().as_millis();
         let skip_start = Instant::now();
         let mut to_import: Vec<FileTodo> = Vec::new();
         let mut preview_fallbacks = HashMap::new();
         let mut unchanged_count = 0_u32;
+        let mut missing = Vec::new();
+        let mut candidates = Vec::new();
         let mut archives: HashMap<PathBuf, (&crate::song_archive::ArchiveGeneration, Vec<&str>)> =
             root.archives
                 .iter()
@@ -228,6 +226,10 @@ pub fn scan_song_roots_with_progress(
                 })
                 .collect();
         for (key, entry) in entries {
+            let stored = fingerprints.get(key);
+            if !force && stored.is_none() {
+                missing.push(key.as_str());
+            }
             if key.contains('!')
                 && let Ok(crate::chart_source::ChartLocator::Archive { container, .. }) =
                     crate::chart_source::ChartLocator::parse(&entry.path)
@@ -237,28 +239,37 @@ pub fn scan_song_roots_with_progress(
                 }
                 continue;
             }
-            let unchanged = !force
-                && fingerprints.get(key).is_some_and(|fp| {
-                    fp.file_size == entry.file_size
-                        && fp.modified_at == entry.modified_at
-                        && fp.import_version == CHART_IMPORT_VERSION
-                });
-            if unchanged {
-                report.summary.skipped = report.summary.skipped.saturating_add(1);
+            if stored.is_some_and(|fp| unchanged_file(fp, entry)) {
                 unchanged_count = unchanged_count.saturating_add(1);
             } else {
-                let preview_fallback = preview_fallbacks
-                    .entry(entry.path.parent().unwrap_or(Path::new("")))
-                    .or_insert_with(|| Arc::new(OnceLock::new()));
-                to_import.push(FileTodo {
-                    path: entry.path.clone(),
-                    file_size: entry.file_size,
-                    modified_at: entry.modified_at,
-                    preview_fallback: Arc::clone(preview_fallback),
-                });
+                candidates.push((key, entry));
             }
         }
-        let skip_check_ms = skip_start.elapsed().as_millis();
+        // Only candidates that missed the root lookup can gain a matching fingerprint.
+        let other_roots_started = Instant::now();
+        db.extend_scan_fingerprints(&mut fingerprints, &missing)?;
+        let other_roots_ms = other_roots_started.elapsed().as_millis();
+        fingerprint_ms += other_roots_ms;
+        report.timing.fingerprint_ms += fingerprint_ms;
+        for (key, entry) in candidates {
+            if !missing.is_empty()
+                && fingerprints.get(key).is_some_and(|fp| unchanged_file(fp, entry))
+            {
+                unchanged_count = unchanged_count.saturating_add(1);
+                continue;
+            }
+            let preview_fallback = preview_fallbacks
+                .entry(entry.path.parent().unwrap_or(Path::new("")))
+                .or_insert_with(|| Arc::new(OnceLock::new()));
+            to_import.push(FileTodo {
+                path: entry.path.clone(),
+                file_size: entry.file_size,
+                modified_at: entry.modified_at,
+                preview_fallback: Arc::clone(preview_fallback),
+            });
+        }
+        report.summary.skipped = report.summary.skipped.saturating_add(unchanged_count);
+        let skip_check_ms = skip_start.elapsed().as_millis().saturating_sub(other_roots_ms);
         report.timing.skip_check_ms += skip_check_ms;
         progress_done = progress_done.saturating_add(unchanged_count).min(files_total);
         on_progress(ScanProgress { done: progress_done, total: files_total });
@@ -647,6 +658,15 @@ pub fn scan_song_roots_with_progress(
     on_progress(ScanProgress { done: files_total, total: files_total });
     report.timing.total_ms = total_start.elapsed().as_millis();
     Ok(report)
+}
+
+fn unchanged_file(
+    fp: &crate::storage::library_db::ChartFileFingerprint,
+    entry: &ChartFileEntry,
+) -> bool {
+    fp.file_size == entry.file_size
+        && fp.modified_at == entry.modified_at
+        && fp.import_version == CHART_IMPORT_VERSION
 }
 
 /// The importer version to record for a failure. Bytes that failed to parse fail the

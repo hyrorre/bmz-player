@@ -834,13 +834,11 @@ impl LibraryDatabase {
     }
 
     /// A partial scan can share registered files with its enclosing library.
-    pub(crate) fn scan_fingerprints<'a>(
+    pub(crate) fn extend_scan_fingerprints(
         &self,
-        root_id: i64,
-        discovered: impl Iterator<Item = &'a str>,
-    ) -> Result<HashMap<String, ChartFileFingerprint>> {
-        let mut map = self.load_fingerprints_for_root(root_id)?;
-        let missing: Vec<_> = discovered.filter(|path| !map.contains_key(*path)).collect();
+        map: &mut HashMap<String, ChartFileFingerprint>,
+        missing: &[&str],
+    ) -> Result<()> {
         if !missing.is_empty() {
             let mut stmt = self.conn.prepare_cached(&format!(
                 "{FINGERPRINT_QUERY} WHERE cf.path IN (SELECT value FROM json_each(?1))
@@ -855,7 +853,7 @@ impl LibraryDatabase {
                 }
             }
         }
-        Ok(map)
+        Ok(())
     }
 }
 
