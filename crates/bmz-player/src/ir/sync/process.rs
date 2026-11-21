@@ -72,6 +72,7 @@ pub(super) async fn sync_pending_ir_jobs_with_filter(
                 )
             })
         {
+            // Excluded on purpose, like an ineligible Bokutachi chart: not a send failure.
             let message = crate::ir::payload::LEGACY_BATTLE_AS_MESSAGE;
             network_db.mark_ir_score_job_status(
                 job.id,
@@ -79,11 +80,7 @@ pub(super) async fn sync_pending_ir_jobs_with_filter(
                 job_now,
                 message,
             )?;
-            report.record_failure(
-                job.id,
-                IrSyncFailureClass::Job,
-                format!("job {}: {message}", job.id),
-            );
+            report.messages.push(format!("job {}: {message}", job.id));
             continue;
         }
         if let Some((_, _, code, message)) =

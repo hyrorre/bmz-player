@@ -607,7 +607,12 @@ async fn resend_job_keeps_legacy_battle_as_ineligible() {
     let report = resend_job(&fixture.ctx(), &mut db, provider, "account-1", IrJobKind::Score, 1)
         .await
         .unwrap();
-    assert_eq!((report.targeted, report.failed), (1, 1));
+    // Not sent, and not a failure either: the job is excluded on purpose.
+    assert_eq!(
+        (report.targeted, report.submitted, report.failed, report.skipped_busy),
+        (1, 0, 0, 0)
+    );
+    assert!(report.messages.iter().any(|line| line.contains(message)), "{:?}", report.messages);
     let jobs = db.ir_score_jobs_for_local_score(IrJobKind::Score, 1).unwrap();
     assert_eq!(jobs[0].status, IrScoreJobStatus::Ineligible.as_str());
     assert_eq!(jobs[0].last_error, message);
