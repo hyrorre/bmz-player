@@ -799,7 +799,7 @@ LR2 Playのnumber ref=120..136は2Pの実プレイ状態へ接続します（127
 122/123は判定済みノート基準の率、135/136は全ノート基準の率、128は2P EX−1P EXです。
 120はLR2判定配点からのスコア確定値を表示します（LR2の数値カウントアップ補間は含まない）。
 
-LR2の`SRC_AUTO_*`は`note.lr2Auto`へ分離し、部分AUTO入力の対象レーンだけに使います。
+LR2の`SRC_AUTO_*`は[`note.auto`](#自動演奏レーンのノーツbmz拡張)へ分離し、部分AUTO入力の対象レーンだけに使います。
 全体AUTOPLAYとG-BATTLEの表示専用側は通常画像を使います。AUTO画像がない箇所は通常画像へ戻ります。
 `DST_NOTE`は`note.lr2Dst`に全行を保持し、時計・条件・座標・大きさを毎フレーム評価します。
 LR2の5KEYS / 10KEYSのノーツ画像とレーン座標は片側8枠の配置を使います。
@@ -817,6 +817,34 @@ LR2 CSVから変換したdestinationは、各dst行の`lr2Style`にblend/filter/
 
 LR2の画像合成`blend=3`は減算を使います。描画先RGBからsource RGB×alphaを引き、
 描画先alphaは保持します。`blend=2`の加算、`blend=4`の乗算と区別します。
+
+## 自動演奏レーンのノーツ（BMZ拡張）
+
+JSON / Luaスキンは、`note.auto`に自動演奏レーン用のノーツ画像を定義できます。
+`note`と同じ画像の配列を、同じレーン順（1Pの鍵盤、1Pの皿、2Pの鍵盤、2Pの皿）で書きます。
+LR2の`SRC_AUTO_*`も同じ欄へ変換します。以前の内部名`lr2Auto`も読みます。
+
+```lua
+skin.note = {
+  id = "notes",
+  note = {"note-w", "note-b", "note-w", "note-b", "note-w", "note-b", "note-w", "note-s"},
+  -- lnstart / lnend / lnbody 等
+  auto = {
+    note    = {"", "", "", "", "", "", "", "note-s-auto"},
+    lnstart = {"", "", "", "", "", "", "", "lns-s-auto"},
+  },
+}
+```
+
+- 受け付ける配列は`note`、`lnstart` / `lnend` / `lnbody` / `lnbodyActive` / `lnactive`、
+  HCN系、HLN系、`mine`、`potion`です。座標・大きさ（`dst` / `size`等）は`note`側の定義を使います。
+- 使うのは、プレイヤーの代わりに自動演奏しているレーンだけです。現在はAUTO SCRATCH /
+  BATTLE ASの皿のレーンが該当します。全体AUTOPLAY、リプレイ再生、G-BATTLEの相手側は
+  通常の画像を使います。鍵盤の位置にも定義できますが、鍵盤を自動演奏する機能は現在ありません。
+- 空文字や配列の不足は、まず`auto`の中で通常と同じ順（LNの始点はHLN→HCN→LN→通常のノーツ）に
+  代わりを探し、無ければ`note`側の画像を使います。皿の位置だけを書けば足ります。
+- [AUTO SCRATCHのノーツを非表示](settings.md#auto-scratchのノーツ表示)にした場合は描画しません。
+- beatorajaはJSON / Luaとも`note`内の未知のキーを無視するため、beatorajaでの読み込みには影響しません。
 
 ## KaleidBeat拡張のノーツ
 

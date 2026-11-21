@@ -563,7 +563,7 @@ impl<'a> CsvBuilder<'a> {
             json!({
                 "id": "notes",
                 "lr2Horizontal": self.note.horizontal,
-                "lr2Auto": self.note.auto.as_ref().map(|auto| json!({
+                "auto": self.note.auto.as_ref().map(|auto| json!({
                     "note": auto.note, "lnstart": auto.lnstart, "lnend": auto.lnend,
                     "lnbody": auto.lnbody, "lnbodyActive": auto.lnbody_active, "mine": auto.mine, "potion": auto.potion,
                 })),

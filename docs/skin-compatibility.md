@@ -131,6 +131,7 @@ Resultのお気に入りは、単曲・コース曲間で`act = 89 / 90`とimage
 | graph | type `101/102/110..115/140..149`の値解決と、Select / Result等のgraph描画があります。[graph値](../crates/bmz-render/src/skin/state_values/graph.rs)、[graph描画](../crates/bmz-render/src/skin/document_render/graph/) |
 | Antiqueのロード進捗 | graph type `102`の幅と数値ref `165`が音声・BGAの進捗に追従します。destinationの`blend=9`でバーが通過した部分の文字と背景を反転し、READY開始時にロード表示を隠します。[仕様](skin.md#playのロード進捗)、[GPUテスト](../crates/bmz-player/src/skin_loader/tests/lua/antique_progress.rs) |
 | songlistの`graph` | フォルダ行のランプ分布に加え、LR2oraja Endless Dreamと同様に譜面ダウンロード中の曲バーへ進捗を描きます。[描画](../crates/bmz-render/src/skin/document_render/select/graph.rs)、[仕様](chart-downloads.md#進捗と操作) |
+| 自動演奏レーンのノーツ画像 | BMZ拡張です。JSON / Luaの`note.auto`とLR2の`SRC_AUTO_*`で、AUTO SCRATCH / BATTLE ASの皿を別の画像で描きます。未定義の部分は通常の画像です。[仕様](skin.md#自動演奏レーンのノーツbmz拡張)、[描画テスト](../crates/bmz-render/src/skin/tests/play/prepared_layout.rs)、[Luaテスト](../crates/bmz-skin/src/tests/cases_06.rs) |
 | Playターゲットスコア | 数値ref `121/151`は最終値、`153`は進行値との差分です。グラフ`114`は進行値、`115`は最終値を最大EX SCOREに対する割合で返します。value / text / Luaの共通処理で解決します。[仕様](skin.md#play-target-score-refs)、[回帰テスト](../crates/bmz-render/src/skin/tests/graphs_more.rs) |
 | Mine sprite | JSON / Luaの`note.mine`を使い、指定がない場合はデフォルトtextureへfallbackします。[note描画](../crates/bmz-render/src/skin/document_render/play/note.rs)、[plan](../crates/bmz-render/src/plan/play/document.rs) |
 | Selectの`judgegraph`背景 | type 0の背景を密度10刻みの帯で塗り、ピークに応じた縦軸で拡縮します。Luxe Flat等の標準描画へ適用し、`backTexOff=1`では非表示です。[仕様](skin.md#selectのノート分布グラフ)、[回帰テスト](../crates/bmz-render/src/skin/state_values/note_graph.rs) |

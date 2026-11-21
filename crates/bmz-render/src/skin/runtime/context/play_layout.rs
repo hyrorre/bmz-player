@@ -245,7 +245,7 @@ impl PreparedNoteLayout<'_> {
             id.filter(|id| !id.is_empty()).map(String::as_str)
         }
         let auto =
-            self.state.auto_note_lanes[lane.index()].then_some(note.lr2_auto.as_deref()).flatten();
+            self.state.auto_note_lanes[lane.index()].then_some(note.auto.as_deref()).flatten();
         let id = auto
             .and_then(|auto| select(document, auto, index, part))
             .or_else(|| select(document, note, index, part))?;
