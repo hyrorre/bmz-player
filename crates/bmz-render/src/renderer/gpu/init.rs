@@ -175,62 +175,30 @@ impl WgpuRenderer {
         let image_bind_group_layout = create_image_bind_group_layout(&device);
         let image_sampler = create_image_sampler(&device);
         let image_sampler_linear = create_image_sampler_linear(&device);
-        let image_pipeline = create_image_pipeline(
+        let layout = image_quad_layout(&device, &image_bind_group_layout);
+        let shader = image_quad_shader(&device, IMAGE_SHADER);
+        let image = |blend| create_image_pipeline(&device, config.format, &layout, &shader, blend);
+        let image_pipeline = image(BlendMode::Normal);
+        let image_add_pipeline = image(BlendMode::Add);
+        let image_subtract_pipeline = image(BlendMode::Subtract);
+        let image_multiply_pipeline = image(BlendMode::Multiply);
+        let image_invert_destination_pipeline = image(BlendMode::InvertDestination);
+        let image_premultiplied_pipeline = image(BlendMode::Premultiplied);
+        let image_invert_pipeline = image(BlendMode::InvertRgb);
+        let layer = image_quad_shader(&device, IMAGE_SHADER_LAYER);
+        let image_layer_pipeline =
+            create_image_pipeline(&device, config.format, &layout, &layer, BlendMode::LayerMask);
+        let image_composite_pipelines =
+            (0..=12).map(|mode| image(BlendMode::Composite(mode))).collect();
+        let upscale_pipeline = create_image_quad_pipeline(
             &device,
             config.format,
-            &image_bind_group_layout,
-            BlendMode::Normal,
+            &layout,
+            &shader,
+            "fs_main",
+            "bmz-render internal upscale pipeline",
+            None,
         );
-        let image_add_pipeline =
-            create_image_pipeline(&device, config.format, &image_bind_group_layout, BlendMode::Add);
-        let image_subtract_pipeline = create_image_pipeline(
-            &device,
-            config.format,
-            &image_bind_group_layout,
-            BlendMode::Subtract,
-        );
-        let image_multiply_pipeline = create_image_pipeline(
-            &device,
-            config.format,
-            &image_bind_group_layout,
-            BlendMode::Multiply,
-        );
-        let image_invert_destination_pipeline = create_image_pipeline(
-            &device,
-            config.format,
-            &image_bind_group_layout,
-            BlendMode::InvertDestination,
-        );
-        let image_premultiplied_pipeline = create_image_pipeline(
-            &device,
-            config.format,
-            &image_bind_group_layout,
-            BlendMode::Premultiplied,
-        );
-        let image_invert_pipeline = create_image_pipeline(
-            &device,
-            config.format,
-            &image_bind_group_layout,
-            BlendMode::InvertRgb,
-        );
-        let image_layer_pipeline = create_image_pipeline(
-            &device,
-            config.format,
-            &image_bind_group_layout,
-            BlendMode::LayerMask,
-        );
-        let image_composite_pipelines = (0..=12)
-            .map(|mode| {
-                create_image_pipeline(
-                    &device,
-                    config.format,
-                    &image_bind_group_layout,
-                    BlendMode::Composite(mode),
-                )
-            })
-            .collect();
-        let upscale_pipeline =
-            create_upscale_pipeline(&device, config.format, &image_bind_group_layout);
         let upscale_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("bmz-render internal upscale buffer"),
             size: IMAGE_INSTANCE_BYTES as u64,

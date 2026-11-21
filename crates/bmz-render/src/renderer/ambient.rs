@@ -313,8 +313,8 @@ impl WgpuRenderer {
             let pipeline = create_image_quad_pipeline(
                 &self.device,
                 self.config.format,
-                &bind_group_layout,
-                include_str!("ambient.wgsl"),
+                &image_quad_layout(&self.device, &bind_group_layout),
+                &image_quad_shader(&self.device, include_str!("ambient.wgsl")),
                 "fs_main",
                 "bmz-render ambient blur",
                 None,
