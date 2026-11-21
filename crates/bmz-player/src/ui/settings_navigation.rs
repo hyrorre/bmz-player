@@ -291,7 +291,8 @@ pub(super) fn build_menu_window(
     open: &mut bool,
     profile_name: &str,
     text: Localizer,
-    contents: impl FnOnce(&mut egui::Ui),
+    course_stage_result: bool,
+    contents: impl FnOnce(&mut egui::Ui, SettingsPage),
 ) {
     localized_sized_panel_window(
         "settings_workspace",
@@ -391,6 +392,13 @@ pub(super) fn build_menu_window(
                         // スクロール領域そのものの ID 変更診断を発生させない。
                         let content_id =
                             ("settings_content_body", navigation.page, navigation.subpage());
+                        let contents = |ui: &mut egui::Ui| {
+                            if course_stage_result && navigation.page != SettingsPage::Debug {
+                                ui.label(tr!(text, "settings-disabled-during-course-stage-result"));
+                            } else {
+                                contents(ui, navigation.page);
+                            }
+                        };
                         let owns_scroll = navigation.page.owns_scroll()
                             || (navigation.page == SettingsPage::Skin
                                 && ui.available_height() >= 380.0);
@@ -513,6 +521,42 @@ mod tests {
     }
 
     #[test]
+    fn course_stage_result_locks_menu_pages_until_the_course_result() {
+        let ctx = egui::Context::default();
+        let text = Localizer::new(AppLocale::En);
+        let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+        let mut open = true;
+        let mut render = |page, course_stage_result| {
+            SettingsNavigation::select(&ctx, page);
+            let mut built = false;
+            let _ = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(screen_rect), ..Default::default() },
+                |_| {
+                    build_menu_window(
+                        &ctx,
+                        &mut open,
+                        "Test",
+                        text,
+                        course_stage_result,
+                        |_, page| {
+                            assert_eq!(page, SettingsNavigation::load(&ctx).page);
+                            built = true;
+                        },
+                    );
+                },
+            );
+            assert!(open);
+            built
+        };
+
+        assert!(render(SettingsPage::Play, false));
+        for page in SettingsPage::ALL {
+            assert_eq!(render(page, true), page == SettingsPage::Debug, "{page:?}");
+        }
+        assert!(render(SettingsPage::Play, false));
+    }
+
+    #[test]
     fn settings_window_keeps_autosave_status_inside_viewport_with_long_content() {
         for size in [egui::vec2(480.0, 480.0), egui::vec2(1280.0, 800.0)] {
             let ctx = egui::Context::default();
@@ -527,7 +571,8 @@ mod tests {
                             &mut true,
                             "Test",
                             Localizer::new(AppLocale::En),
-                            |ui| {
+                            false,
+                            |ui, _| {
                                 for _ in 0..100 {
                                     ui.label("A setting with explanatory text");
                                 }
@@ -575,7 +620,7 @@ mod tests {
         for _ in 0..3 {
             let output = ctx
                 .run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {
-                    build_menu_window(ui.ctx(), &mut true, "Default", text, |_| {})
+                    build_menu_window(ui.ctx(), &mut true, "Default", text, false, |_, _| {})
                 });
             for shape in output.shapes {
                 if let egui::Shape::Text(label) = shape.shape
@@ -613,7 +658,7 @@ mod tests {
             let output = ctx.run_ui(
                 egui::RawInput { screen_rect: Some(rect), ..Default::default() },
                 |ui| {
-                    build_menu_window(ui.ctx(), &mut true, "Default", text, |_| {});
+                    build_menu_window(ui.ctx(), &mut true, "Default", text, false, |_, _| {});
                 },
             );
             for shape in output.shapes {
@@ -642,7 +687,7 @@ mod tests {
         let mut open = true;
         let render = |ctx: &egui::Context, open: &mut bool| {
             ctx.run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |_| {
-                build_menu_window(ctx, open, "Default", text, |ui| {
+                build_menu_window(ctx, open, "Default", text, false, |ui, _| {
                     let rect = ui.available_rect_before_wrap();
                     let _ = ui.interact(
                         egui::Rect::from_min_size(rect.min, egui::vec2(200.0, 22.0)),

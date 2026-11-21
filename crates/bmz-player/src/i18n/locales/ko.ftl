@@ -281,6 +281,7 @@ update-kind-manual = 릴리스 페이지에서 수동으로 업데이트하세�
 
 settings-app-title = 애플리케이션 설정
 settings-disabled-during-play = Decide / Play 중에는 애플리케이션 설정을 변경할 수 없습니다.
+settings-disabled-during-course-stage-result = 코스의 곡별 결과 화면에서는 설정을 변경할 수 없습니다.
 settings-drag-to-reorder = 드래그하여 순서 변경
 settings-song-folders = 곡 폴더
 settings-song-recursive = 하위 폴더도 스캔

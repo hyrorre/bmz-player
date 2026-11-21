@@ -282,6 +282,7 @@ update-kind-manual = 請從發布頁面手動更新。
 
 settings-app-title = 程式設定
 settings-disabled-during-play = Decide / Play 期間無法變更程式設定。
+settings-disabled-during-course-stage-result = 在組曲的單曲結算畫面中無法更改設定。
 settings-drag-to-reorder = 拖曳以重新排序
 settings-song-folders = 歌曲資料夾
 settings-song-recursive = 遞迴掃描

@@ -1018,6 +1018,13 @@ pub struct SkinTextDef {
     /// default JSON skin to avoid shipping a separate digit atlas.
     #[serde(default, rename = "numberRef")]
     pub number_ref: Option<i32>,
+    /// Minimum formatted width for `numberRef`, including the sign.
+    #[serde(default)]
+    pub digit: i32,
+    #[serde(default)]
+    pub zeropadding: i32,
+    #[serde(default)]
+    pub padding: i32,
     /// BMZ extension: render the latest judgement text for a judge region.
     /// Region 0 corresponds to the normal 1P judgement area.
     #[serde(default, rename = "judgeRegion")]

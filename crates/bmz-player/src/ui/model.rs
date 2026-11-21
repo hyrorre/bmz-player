@@ -319,6 +319,7 @@ pub struct EguiRunContext<'a, 'practice> {
     pub skin_meta: &'a SkinConfigMeta,
     pub skin_catalog: &'a SkinCatalog,
     pub course_result: Option<&'a CourseResultSummary>,
+    pub course_stage_result: bool,
     pub course_preview: Option<&'a SelectCourseRow>,
     pub course_editor: &'a CourseEditorData,
     pub select_course_builder: Option<SelectCourseBuilderData<'a>>,

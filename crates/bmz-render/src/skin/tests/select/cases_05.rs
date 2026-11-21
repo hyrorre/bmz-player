@@ -1,6 +1,44 @@
 use super::*;
 
 #[test]
+fn select_chart_length_for_missing_song_defaults_to_zero_in_lua() {
+    let mut state = SkinDrawState {
+        select_screen: true,
+        select_row_kind: SelectRowKind::Song,
+        select_in_library: true,
+        select_length_ms: 63_000,
+        ..SkinDrawState::default()
+    };
+    assert_eq!(lua_main_state_number(1163, &state), 1);
+    assert_eq!(lua_main_state_number(1164, &state), 3);
+
+    state.select_in_library = false;
+    for ref_id in [1163, 1164] {
+        let value = SkinValueDef { ref_id, ..SkinValueDef::default() };
+        let text = SkinTextDef {
+            number_ref: Some(ref_id),
+            digit: 2,
+            zeropadding: 1,
+            suffix: "s".to_string(),
+            ..SkinTextDef::default()
+        };
+        assert_eq!(lua_main_state_number(ref_id, &state), 0);
+        assert_eq!(skin_value_number_for_destination(&value, &state), None);
+        assert!(
+            skin_state_text_with_draw_state(&text, Some(&state), &SkinTextState::default())
+                .is_empty()
+        );
+        assert!(eval_skin_draw_condition(&format!("number({ref_id}) == 0"), &state));
+    }
+
+    state.select_row_kind = SelectRowKind::Folder;
+    state.select_is_folder = true;
+    for ref_id in [1163, 1164] {
+        assert_eq!(lua_main_state_number(ref_id, &state), i64::from(i32::MIN));
+    }
+}
+
+#[test]
 fn luxe_flat_select_score_and_chart_values_use_runtime_metadata() {
     let state = SkinDrawState {
         select_screen: true,

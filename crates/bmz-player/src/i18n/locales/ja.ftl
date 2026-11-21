@@ -281,6 +281,7 @@ update-kind-manual = リリースページから手動で更新します。
 
 settings-app-title = 本体設定
 settings-disabled-during-play = Decide / Play 中は本体設定を変更できません。
+settings-disabled-during-course-stage-result = コース中の単曲リザルトでは設定を変更できません。
 settings-drag-to-reorder = ドラッグして並び替え
 settings-song-folders = 曲フォルダ
 settings-song-recursive = 再帰スキャン
