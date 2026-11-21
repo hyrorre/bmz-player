@@ -264,7 +264,11 @@ pub(crate) fn bootstrap_with_paths_mode(
     );
 
     let migration_started_at = Instant::now();
-    crate::storage::migration::migrate_library_db(&app_paths.library_db)?;
+    if scan_mode == StartupScan::Select {
+        crate::storage::migration::migrate_library_db_for_select(&app_paths.library_db)?;
+    } else {
+        crate::storage::migration::migrate_library_db(&app_paths.library_db)?;
+    }
     let library_migration_ms = migration_started_at.elapsed().as_millis();
     let profile_started_at = Instant::now();
     let profile = PreparedProfile::open(profile_config, profile_paths)?;

@@ -11,9 +11,23 @@ pub struct Migration {
 }
 
 pub fn migrate_library_db(path: &Path) -> Result<()> {
+    prepare_library_db(path, LIBRARY_MIGRATIONS)
+}
+
+pub(crate) fn migrate_library_db_for_select(path: &Path) -> Result<()> {
+    // The first-frame maintenance worker applies the full list. Only a trailing
+    // index-only migration can wait: later schema changes must run before Select.
+    let migrations = match LIBRARY_MIGRATIONS.split_last() {
+        Some((last, required)) if last.version == library::DOCUMENT_INDEX_VERSION => required,
+        _ => LIBRARY_MIGRATIONS,
+    };
+    prepare_library_db(path, migrations)
+}
+
+fn prepare_library_db(path: &Path, migrations: &[Migration]) -> Result<()> {
     let mut conn = Connection::open(path)?;
     configure_connection(&conn)?;
-    run_migrations(&mut conn, LIBRARY_MIGRATIONS)?;
+    run_migrations(&mut conn, migrations)?;
     backfill_unknown_chart_document_flags(&mut conn)?;
     // Process start: let play/preview checks reuse hashes of unchanged archives.
     super::library_db::prime_archive_generations(&conn)
@@ -418,6 +432,49 @@ mod tests {
         assert!(analysis_columns.iter().any(|column| column == "short_term_lufs"));
         assert!(analysis_columns.iter().any(|column| column == "sample_peak"));
         assert!(!analysis_columns.iter().any(|column| column == "normalization_gain"));
+    }
+
+    #[test]
+    fn select_upgrade_keeps_document_flags_ready_and_indexes_during_maintenance() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("library.db");
+        std::fs::write(folder.path().join("README.TXT"), b"document").unwrap();
+        let mut conn = Connection::open(&path).unwrap();
+        let before_index =
+            LIBRARY_MIGRATIONS.partition_point(|m| m.version < library::DOCUMENT_INDEX_VERSION);
+        run_migrations(&mut conn, &LIBRARY_MIGRATIONS[..before_index]).unwrap();
+        conn.execute(
+            "INSERT INTO charts (sha256,md5,title,subtitle,artist,subartist,genre,difficulty_name,
+             play_level,mode,total_notes,initial_bpm,ln_type,folder_path,stage_file,preview_file,
+             import_version) VALUES ('sha','md5','title','','','','','','1','7K',1,120,'ln',?1,'','',1)",
+            [folder.path().to_string_lossy()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO library_maintenance (task, completed_at) VALUES (?1, 0)",
+            [COURSE_LINK_REPAIR_TASK],
+        )
+        .unwrap();
+        let has_index = || {
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='idx_charts_missing_document')",
+                [],
+                |r| r.get::<_, bool>(0),
+            )
+            .unwrap()
+        };
+        migrate_library_db_for_select(&path).unwrap();
+        let flag: bool =
+            conn.query_row("SELECT has_document FROM charts", [], |r| r.get(0)).unwrap();
+        assert!(flag);
+        if LIBRARY_MIGRATIONS.last().unwrap().version == library::DOCUMENT_INDEX_VERSION {
+            assert!(!has_index());
+        }
+        assert!(repair_course_entry_chart_links_once(&path).unwrap().already_completed);
+        assert!(has_index());
+        migrate_library_db_for_select(&path).unwrap();
+        let version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(version, LIBRARY_MIGRATIONS.last().unwrap().version);
     }
 
     #[test]

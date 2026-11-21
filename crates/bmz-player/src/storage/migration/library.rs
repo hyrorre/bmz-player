@@ -1,5 +1,7 @@
 use super::*;
 
+pub(super) const DOCUMENT_INDEX_VERSION: i32 = 40;
+
 pub const LIBRARY_MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -982,9 +984,11 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
         ],
     },
     Migration {
-        version: 40,
+        version: DOCUMENT_INDEX_VERSION,
         // Startup and scan workers only need folders still awaiting document detection.
-        statements: &["CREATE INDEX idx_charts_missing_document ON charts(folder_path)
-                       WHERE has_document IS NULL;"],
+        statements: &[
+            "CREATE INDEX IF NOT EXISTS idx_charts_missing_document ON charts(folder_path)
+                       WHERE has_document IS NULL;",
+        ],
     },
 ];

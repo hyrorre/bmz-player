@@ -21,6 +21,9 @@ startup phase complete phase="renderer_default" elapsed_ms=... startup_elapsed_m
 停止中は最後の `begin` と、対応する `complete` / `failed` がない段階を確認してください。
 
 各時間は子の処理を含みます。親子を足すと二重計上になります。
+通常のSelect起動では文書フラグを初回表示までに補完し、v40の部分索引は初回present後の
+ライブラリ保守中に作成します。索引作成前に終了した場合は次回も保守の対象になります。
+直接起動とCLIでは起動時に索引を作成します。
 Selectのdecodeは同梱PNGの読み込みやwindow初期化と並列に進みます。
 Decideのdecodeは同梱PNGの読み込み後に開始し、起動直後の曲決定に備えます。
 通常起動のResultは初回present成功後に開始します。直接Resultへ遷移する場合はその要求を優先します。
