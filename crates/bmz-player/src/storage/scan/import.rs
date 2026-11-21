@@ -202,9 +202,13 @@ pub fn scan_song_roots_with_progress(
             .map(|(folder, flag)| (folder.to_path_buf(), flag))
             .collect();
 
-        // Phase 2: skip判定（1クエリでrootの全fingerprintsをロードしてHashMap lookup）
+        // Partial scans share fingerprints with overlapping roots.
         let fingerprint_start = Instant::now();
-        let fingerprints = db.load_fingerprints_for_root(root.root_id)?;
+        let fingerprints = if force {
+            HashMap::new()
+        } else {
+            db.scan_fingerprints(root.root_id, entries.iter().map(|(key, _)| key.as_str()))?
+        };
         let fingerprint_ms = fingerprint_start.elapsed().as_millis();
         report.timing.fingerprint_ms += fingerprint_ms;
         let skip_start = Instant::now();
@@ -616,7 +620,11 @@ pub fn scan_song_roots_with_progress(
         validated.push((root_path, root_id, recursive, backend));
     }
     if !validated.is_empty() {
-        let mut index = db.chart_paths_not_discovered(&discovered_any)?;
+        let only_root = match validated.as_slice() {
+            [(path, ..)] => Some(path.as_path()),
+            _ => None,
+        };
+        let mut index = db.chart_paths_not_discovered(&discovered_any, only_root)?;
         for (root_path, root_id, recursive, backend) in validated {
             let request = crate::storage::library_db::PruneRequest {
                 root: &root_path,

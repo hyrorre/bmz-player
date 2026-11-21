@@ -818,32 +818,59 @@ impl LibraryDatabase {
         &self,
         root_id: i64,
     ) -> Result<HashMap<String, ChartFileFingerprint>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT cf.path, cf.file_size, cf.modified_at,
-                CASE WHEN cf.parse_status = 'Failed' THEN cf.failed_import_version
-                    ELSE COALESCE(c.import_version, 0) END
-            FROM chart_files cf
-            LEFT JOIN chart_file_links cfl ON cfl.chart_file_id = cf.id
-            LEFT JOIN charts c ON c.id = cfl.chart_id
-            WHERE cf.root_id = ?1",
-        )?;
-        let rows = stmt.query_map(params![root_id], |row| {
-            let path: String = row.get(0)?;
-            let file_size: i64 = row.get(1)?;
-            Ok((
-                path,
-                ChartFileFingerprint {
-                    file_size: file_size.max(0) as u64,
-                    modified_at: row.get(2)?,
-                    import_version: row.get(3)?,
-                },
-            ))
-        })?;
+        let mut stmt =
+            self.conn.prepare_cached(&format!("{FINGERPRINT_QUERY} WHERE cf.root_id = ?1"))?;
         let mut map = HashMap::new();
-        for row in rows {
-            let (path, fingerprint) = row?;
-            map.insert(path, fingerprint);
+        for row in stmt.query_map([root_id], chart_file_fingerprint)? {
+            let (path, value) = row?;
+            map.insert(path, value);
         }
         Ok(map)
     }
+
+    /// A partial scan can share registered files with its enclosing library.
+    pub(crate) fn scan_fingerprints<'a>(
+        &self,
+        root_id: i64,
+        discovered: impl Iterator<Item = &'a str>,
+    ) -> Result<HashMap<String, ChartFileFingerprint>> {
+        let mut map = self.load_fingerprints_for_root(root_id)?;
+        let missing: Vec<_> = discovered.filter(|path| !map.contains_key(*path)).collect();
+        if !missing.is_empty() {
+            let mut stmt = self.conn.prepare_cached(&format!(
+                "{FINGERPRINT_QUERY} WHERE cf.path IN (SELECT value FROM json_each(?1))
+                 AND cf.root_id IS NOT NULL"
+            ))?;
+            for chunk in missing.chunks(1024) {
+                for row in
+                    stmt.query_map([serde_json::to_string(chunk)?], chart_file_fingerprint)?
+                {
+                    let (path, value) = row?;
+                    map.insert(path, value);
+                }
+            }
+        }
+        Ok(map)
+    }
+}
+
+const FINGERPRINT_QUERY: &str = "SELECT cf.path, cf.file_size, cf.modified_at,
+    CASE WHEN cf.parse_status = 'Failed' THEN cf.failed_import_version
+        ELSE COALESCE(c.import_version, 0) END
+    FROM chart_files cf
+    LEFT JOIN chart_file_links cfl ON cfl.chart_file_id = cf.id
+    LEFT JOIN charts c ON c.id = cfl.chart_id";
+
+fn chart_file_fingerprint(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(String, ChartFileFingerprint)> {
+    let file_size: i64 = row.get(1)?;
+    Ok((
+        row.get(0)?,
+        ChartFileFingerprint {
+            file_size: file_size.max(0) as u64,
+            modified_at: row.get(2)?,
+            import_version: row.get(3)?,
+        },
+    ))
 }
