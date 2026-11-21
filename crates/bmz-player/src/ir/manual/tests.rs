@@ -12,7 +12,9 @@ use crate::storage::common::configure_connection;
 use crate::storage::migration::{
     NETWORK_MIGRATIONS, migrate_library_db, migrate_network_db, migrate_score_db, run_migrations,
 };
-use crate::storage::network_db::{IrJobKind, IrJobRetryFilter, NetworkDatabase, NewIrScoreJob};
+use crate::storage::network_db::{
+    IrJobKind, IrJobRetryFilter, IrScoreJobStatus, NetworkDatabase, NewIrScoreJob,
+};
 
 use super::sync::{IrManualSyncScope, sync_jobs};
 use super::upload::full_upload_stop_reason;
@@ -579,6 +581,41 @@ async fn resend_job_ignores_backoff_and_skips_a_job_being_sent() {
             .await
             .unwrap();
     assert_eq!((report.failed, report.skipped_busy), (0, 1));
+}
+
+#[tokio::test]
+async fn resend_job_keeps_legacy_battle_as_ineligible() {
+    let mut fixture = Fixture::new("resend-legacy-battle-as");
+    fixture.config.providers = vec![IrProviderConfig::bms_ir()];
+    let mut db = open_network_db();
+    let provider = crate::ir::bms_ir::BMS_IR_PROVIDER;
+    let job_id = db
+        .enqueue_ir_score_job(&NewIrScoreJob {
+            provider: provider.into(),
+            account_id: "account-1".into(),
+            kind: IrJobKind::Score,
+            local_score_id: 1,
+            chart_sha256: [1; 32],
+            ln_policy: LnScorePolicy::ForceLn,
+            payload_json: r#"{"play_options":{"double_option":"battle_auto_scratch"}}"#.into(),
+            now: 1,
+        })
+        .unwrap();
+    let message = crate::ir::payload::LEGACY_BATTLE_AS_MESSAGE;
+    db.mark_ir_score_job_status(job_id, IrScoreJobStatus::Ineligible, 2, message).unwrap();
+
+    let report = resend_job(&fixture.ctx(), &mut db, provider, "account-1", IrJobKind::Score, 1)
+        .await
+        .unwrap();
+    // Not sent, and not a failure either: the job is excluded on purpose.
+    assert_eq!(
+        (report.targeted, report.submitted, report.failed, report.skipped_busy),
+        (1, 0, 0, 0)
+    );
+    assert!(report.messages.iter().any(|line| line.contains(message)), "{:?}", report.messages);
+    let jobs = db.ir_score_jobs_for_local_score(IrJobKind::Score, 1).unwrap();
+    assert_eq!(jobs[0].status, IrScoreJobStatus::Ineligible.as_str());
+    assert_eq!(jobs[0].last_error, message);
 }
 
 #[tokio::test]

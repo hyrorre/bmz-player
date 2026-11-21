@@ -88,8 +88,8 @@ FULL COMBOでも`LightAssistEasy` / `AssistEasy`になります。
 
 `BATTLE AS`のscratch autoplayは部分autoplayであり、BMZのfull autoplay判定には
 なりません。したがって現状は`BattleAutoScratch` bucketへ通常スコアを保存します。
-リプレイには人間の入力を記録し、再生時は両側のスクラッチを自動演奏します。
-リプレイの判定時計で自動演奏も進めるため、再生速度やフレーム間隔に依存しません。
+両側のスクラッチは[採点の対象外](#auto-scratchの採点)です。リプレイには人間の入力を
+記録し、再生時も両側のスクラッチを採点から外します。
 
 `G-BATTLE`は相手リプレイを表示専用レーンで進め、プレイヤー側だけを採点するBMZ
 独自モードです。beatorajaの`BATTLE` / `BATTLE AS`と同じものではありません。
@@ -124,6 +124,40 @@ AUTO SCRATCHはLR2 / LR2oraja Endless Dreamの同名オプションに合わせ�
 全体AUTOPLAYではもともと保存しません。DP OPTIONの`BATTLE`と併用した場合は`BATTLE AS`
 として専用bucketに通常保存し、アシスト扱いにしない（LR2もD-BATTLE中のAUTO SCRATCHを
 イージー扱いにしない）です。CLIの`--auto-scratch on`は従来どおりスコア・リプレイを保存しません。
+
+### AUTO SCRATCHの採点
+
+AUTO SCRATCHとBATTLE ASは、beatoraja / LR2oraja Endless Dreamの`AutoplayModifier`と
+同じく、自動演奏するスクラッチレーンのノーツを採点の対象外にします。全譜面オプションを
+適用した後に変換するため、配置でスクラッチへ移ったノーツも対象です。
+
+- 判定・コンボ・EXスコア・ゲージの増減・BP・総ノーツ数に含めません。地雷のダメージもありません。
+- キー音は、ノーツの位置でBGMとして鳴らします。見えないノーツはレーンに残します。
+- Kaleidのフリーゾーンは区間ごと外します。
+- ノーツは表示だけに残し、[非表示の設定](settings.md#auto-scratchのノーツ表示)で隠せます。
+  beatorajaはノーツを表示しません。LR2はAUTO用のノーツ画像で表示し、判定しません。
+
+BMZ v0.5.3までにプレイした`BATTLE AS`は、スクラッチをPGREATとして数えています。score DB
+migration v41は、これらを履歴に残したまま集計から外します。
+
+- `BattleAutoScratch` bucketのBMZでプレイした履歴を`normal_best_eligible = 0`にします。ベスト・ランプ・
+  曲別のプレイ回数とクリア回数・デバイス別ベスト・LR2のクリアしたオプション
+  （option 118..149）の集計に使いません。プロファイル全体の統計と日別の統計には残します。
+- beatorajaなどから取り込んだBATTLE ASは、残る履歴からベスト・ランプ・曲別回数を再集計します。
+  開発版のv40で除外された取り込み履歴も復元します。除外済みの旧BMZ履歴を重複整理で削除した場合、
+  プロファイル全体の統計から削除分を引き、曲別回数は維持します。
+- ローカルライバルの参照先にもv41以降が必要です。v39・v40ではプロファイルの更新を案内します。
+- replay slotはリプレイを残し、比較用の値（EX・BP・CB・最大コンボ・ランプ）を空にします。
+  slotの規則が無効でなければ、次のプレイで更新されます。
+- 旧BMZ履歴はIRの一括送信から外します。network DB migrationは、旧BMZ採点の送信待ち・失敗・
+  送信中のBATTLE ASジョブを`ineligible`にします。v11はv9/v10で除外された取り込みジョブを
+  送信待ちに戻します。旧BMZ採点のジョブを個別再送しても、送信前に`ineligible`に戻ります。
+- BMZ IRに送信済みの旧BMZ採点はbestとランキングから外します。D1 migration 0021は、0020で
+  除外された取り込み記録を復元し、有効なBATTLE ASのbestを再構築します
+  （[IR](ir.md)の`auto_scratch_scoring`）。BMS-IRに送信済みの記録は変えられません。
+- コースの記録（`course_scores`）は変えません。
+
+元に戻す場合は、対象の履歴の`normal_best_eligible`を1へ戻し、ベストを履歴から集計し直します。
 
 重要なのは「設定値」ではなく「実際に効果が出たか」です。たとえば固定BPM譜面の
 BPM GUIDE、Mineの無い譜面のNO MINE、100%以下のEXPAND JUDGEはスコアを無効化しません。

@@ -1,5 +1,21 @@
 use super::*;
 
+// Unsent BATTLE AS scores from the old scoring must not be retried, including
+// abandoned sends. The retry time is IR_JOB_NO_AUTO_RETRY_AT.
+const DISABLE_LEGACY_BATTLE_AS_JOBS: &str = "UPDATE ir_score_jobs
+    SET status = 'ineligible',
+        next_attempt_at = 253402300799,
+        last_error = 'BATTLE AS score recorded before auto scratch left scoring'
+    WHERE kind = 'score'
+      AND status IN ('pending', 'failed', 'sending')
+      AND json_valid(payload_json)
+      AND replace(lower(trim(json_extract(payload_json, '$.play_options.double_option'))), '-', '_')
+          IN ('battle_auto_scratch', 'battle_assist')
+      AND lower(trim(COALESCE(json_extract(payload_json, '$.play_options.source_kind'), '')))
+          IN ('', 'local')
+      AND COALESCE(json_extract(payload_json, '$.play_options.auto_scratch_scoring'), '')
+          <> 'unscored';";
+
 pub const NETWORK_MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -264,6 +280,27 @@ pub const NETWORK_MIGRATIONS: &[Migration] = &[
                 max_combo, min_bp, play_option, arrange_1p, arrange_2p, double_option,
                 play_seed, fetched_at FROM ir_rival_scores_v7;",
             "DROP TABLE ir_rival_scores_v7;",
+        ],
+    },
+    Migration {
+        version: 9,
+        statements: &[DISABLE_LEGACY_BATTLE_AS_JOBS],
+    },
+    Migration {
+        version: 10,
+        // Earlier v9 migrations only handled pending and failed jobs.
+        statements: &[DISABLE_LEGACY_BATTLE_AS_JOBS],
+    },
+    Migration {
+        version: 11,
+        statements: &[
+            DISABLE_LEGACY_BATTLE_AS_JOBS,
+            "UPDATE ir_score_jobs SET status = 'pending', next_attempt_at = 0, last_error = ''
+             WHERE kind = 'score' AND status = 'ineligible'
+               AND last_error = 'BATTLE AS score recorded before auto scratch left scoring'
+               AND json_valid(payload_json)
+               AND replace(lower(trim(json_extract(payload_json, '$.play_options.source_kind'))), '-', '_')
+                   IN ('beatoraja', 'lr2', 'lr2oraja', 'lr2_oraja', 'lr2oraja_dx', 'lr2_oraja_dx');",
         ],
     },
 ];

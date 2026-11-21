@@ -65,6 +65,7 @@ pub(crate) fn test_playable_chart(title: &str) -> PlayableChart {
 
 fn imported_score_entry(chart_sha256: [u8; 32]) -> IrOwnScoreHistoryEntry {
     IrOwnScoreHistoryEntry {
+        auto_scratch_scoring: None,
         score_id: "remote-score".to_string(),
         idempotency_key: None,
         chart_sha256: crate::storage::common::hash_to_hex(&chart_sha256),
@@ -327,6 +328,7 @@ fn local_backfill_payload_uses_history_counts_and_options() {
     assert_eq!(payload.play_options["arrange_2p"], "mirror");
     assert_eq!(payload.play_options["double_option"], "battle");
     assert_eq!(payload.play_options["applied_double_option"], "battle");
+    assert!(!payload.play_options.contains_key("auto_scratch_scoring"));
     assert_eq!(payload.play_options["source_kind"], "beatoraja");
     assert_eq!(payload.play_options["device_type"], "controller");
     assert_eq!(payload.play_options["assist_mask"], 4);
@@ -349,6 +351,23 @@ fn local_backfill_payload_resolves_mixed_auto_mode_from_library_profile() {
     assert_eq!(payload.rule.effective_ln_mode, IrEffectiveLnMode::Cn);
     assert!(payload.chart.ln_profile.has_defined_ln);
     assert!(payload.chart.ln_profile.has_defined_cn);
+}
+
+#[test]
+fn local_backfill_payload_keeps_battle_as_count_without_auto_scratch() {
+    let chart = test_chart();
+    let battle_notes = 2 * chart.scored_total_notes(LnScorePolicy::ForceCn);
+    let mut row = test_row();
+    row.double_option = DoubleOptionScoreBucket::BattleAutoScratch;
+    row.applied_double_option = DoubleOption::BattleAutoScratch;
+    // The played count excludes both auto scratch lanes, below the library count.
+    row.total_notes = battle_notes - 40;
+
+    let payload = build_local_score_submission(&row, &chart, Some(&test_analysis()), None);
+
+    assert_eq!(payload.result.notes, battle_notes - 40);
+    assert_eq!(payload.chart.notes.total, chart.scored_total_notes(LnScorePolicy::ForceCn));
+    assert_eq!(payload.play_options["auto_scratch_scoring"], "unscored");
 }
 
 #[test]

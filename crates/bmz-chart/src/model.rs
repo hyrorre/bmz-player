@@ -39,6 +39,8 @@ pub struct PlayableChart {
 #[derive(Debug, Clone)]
 pub struct ChartMetadata {
     pub kaleid: crate::kaleid::KaleidProvenance,
+    /// Counts of the original chart retained when BATTLE AS transforms it for scoring.
+    pub source_note_counts: Option<ChartNoteCounts>,
     /// Amount already added to the source timeline to make room for the first note.
     pub start_note_margin: TimeUs,
     pub free_zones: Vec<FreeZone>,
@@ -89,6 +91,17 @@ pub struct ChartMetadata {
     /// False means long notes should be treated as undefined until player
     /// policy resolves them.
     pub long_note_mode_defined: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+pub struct ChartNoteCounts {
+    pub total: u32,
+    pub ln: u32,
+    pub cn: u32,
+    pub hcn: u32,
+    #[serde(default)]
+    pub hln: u32,
+    pub mine: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -144,6 +157,7 @@ impl Default for ChartMetadata {
     fn default() -> Self {
         Self {
             kaleid: Default::default(),
+            source_note_counts: None,
             start_note_margin: TimeUs(0),
             free_zones: Vec::new(),
             isolated_sound_sources: Default::default(),

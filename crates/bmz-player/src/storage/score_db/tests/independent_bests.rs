@@ -395,6 +395,7 @@ fn repair_extrema_separates_full_score_keys_and_includes_imports() {
         .execute("UPDATE score_best SET bp = bp + 15, cb = cb + 9, max_combo = max_combo - 100", [])
         .unwrap();
     let before = metadata(db.conn());
+    // Exercise the SQL repairs without the separate BATTLE AS scoring migration.
     run_migrations(db.conn_mut(), SCORE_MIGRATIONS).unwrap();
     assert_eq!(metadata(db.conn()), before);
     for (key, bp, cb, combo) in expected {

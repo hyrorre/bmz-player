@@ -96,7 +96,8 @@ impl ScoreDatabase {
              WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3
                AND CASE rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
                    WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = ?4
-               AND autoplay = 0 AND clear_type NOT IN ('NoPlay', 'Failed')",
+               AND autoplay = 0 AND normal_best_eligible = 1
+               AND clear_type NOT IN ('NoPlay', 'Failed')",
         )?;
         let rows = stmt.query_map(
             params![
@@ -150,6 +151,7 @@ impl ScoreDatabase {
         for chunk in unique_keys.chunks(SCORE_KEY_LOOKUP_BATCH_SIZE) {
             let placeholders =
                 std::iter::repeat_n("(?, ?, ?, ?)", chunk.len()).collect::<Vec<_>>().join(", ");
+            let eligible_prior = eligible_prior_condition(&self.conn);
             let sql = format!(
                 "SELECT
                     b.chart_sha256,
@@ -192,6 +194,7 @@ impl ScoreDatabase {
                           AND prior.double_option = b.double_option
                           AND CASE prior.rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
                               WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = b.rule_mode
+                          {eligible_prior}
                     ) END
                 FROM score_best b
                 LEFT JOIN score_history h ON h.id = b.best_score_history_id

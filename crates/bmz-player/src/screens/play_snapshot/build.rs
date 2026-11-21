@@ -422,12 +422,13 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         bpm_graph_segments: Arc::clone(&cache.bpm_graph_segments),
         play_note_graphs: cache.play_note_graphs.clone(),
         autoplay: session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full()),
+        // AUTO SCRATCH lanes stay display-only under full autoplay as well.
         auto_note_lanes: std::array::from_fn(|index| {
-            session.autoplay.as_ref().is_some_and(|autoplay| {
-                !autoplay.is_full()
-                    && autoplay.is_lane_enabled(Lane::ALL[index])
-                    && !session.display_only_lane_mask[index]
-            })
+            !session.display_only_lane_mask[index]
+                && (session.auto_scratch_lanes[index]
+                    || session.autoplay.as_ref().is_some_and(|autoplay| {
+                        !autoplay.is_full() && autoplay.is_lane_enabled(Lane::ALL[index])
+                    }))
         }),
         replay_playback: session.replay_player.is_some() && session.replay_lane_mask.is_none(),
         rule_mode_index: crate::skin_extension::rule_mode_index(session.rule_mode),

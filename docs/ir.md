@@ -314,7 +314,10 @@ POST /api/v1/scores?include=rankings&ranking_scopes=global,self_and_rivals&ranki
 - `device_type`はスコアを記録した主な入力デバイスです。判定のルールは[判定・EXスコア・クリアランプ](#判定exスコアクリアランプ)を参照してください。ランキングを分ける条件ではなく、表示・検索・検証の補助に使います。
 - `rule.ln_policy`は、プロファイルの設定と譜面のLN情報からBMZが正規化した値で、ランキング・best・集計の単位に使います。`rule.effective_ln_mode`は実際に降らせたLNの種別を示す補助情報です。`chart.ln_profile`はサーバーが譜面情報を補完・検証するための参考情報で、bestを分ける単位にはしません。
 - `play_options.double_option`はランキングを分ける単位で、`off` / `battle` / `battle_auto_scratch`のどれかです（`flip`は`off`として扱います）。実際に適用したDPオプションは`applied_double_option`（`off` / `flip` / `battle` / `battle_auto_scratch`）に入れ、個別のスコアの履歴に残します。
-- D-BATTLE / BATTLE ASの`chart.mode`・`rule.key_mode`は元譜面の5K / 7Kです。`chart.notes`と既定TOTALも複製前の情報を使い、倍増した採点ノーツ数は`result.notes`に入れます。一括送信も同じ区分を使います。
+- D-BATTLE / BATTLE ASの`chart.mode`・`rule.key_mode`は元譜面の5K / 7Kです。`chart.notes`の種別別件数と既定TOTALは、LNポリシーを適用した元のレーン構成から求めます。自動演奏する皿も含みます。`result.notes`は実際の採点対象数です。BATTLE ASでは自動演奏した両側のスクラッチを除き、一括送信でも記録時の採点対象数を送ります（[スコア保存](score-persistence.md#auto-scratchの採点)）。
+- BMZでプレイしたBATTLE ASのスコアには、`play_options.auto_scratch_scoring = "unscored"`を付けます。自動演奏したスクラッチを採点から外したことを示します。サーバーは、この印が無い`battle_auto_scratch`のスコアのうち、`source_kind`が`local`または省略されたものを旧採点として扱います。`accepted = false`（`rejection_reason = "battle_auto_scratch_legacy_scoring"`）で保存し、bestとランキングに含めません。応答も`accepted: false`です。旧クライアントは`accepted`を見ないため、jobは完了し、再送しません。beatorajaなどの取り込み記録は印が無くても受理します。
+- D1 migration 0021は、0020の旧採点判定で除外された取り込み記録を復元し、受理済みのBATTLE ASからbestを指標ごとに再構築します。復元した記録は元のスコアIDを維持し、同じidempotency keyで再送した場合も受理済みとして返ります。
+- BMZ IRの本人スコア取得APIは、印付きの記録に`auto_scratch_scoring`を返します。`download-scores`は、この印を返さない旧サーバーから受け取ったBMZプレイ由来のBATTLE ASを取り込み対象から外します。
 - `play_options.option`は初期のpayloadとの互換用で、`arrange_1p`と同じ値です。
 - `seed` / `random_seed`は10進数の文字列で送ります。数値も過去のpayloadとの互換のために受け付けます。
 - `result.ghost`には、通常のプレイでbeatoraja形式のghostを入れます。
@@ -788,6 +791,7 @@ jobの状態は`pending` / `sending` / `succeeded` / `failed`です。
 - 送信済みの履歴と、queueにある履歴は既定で飛ばします。
 - `download-scores`で同じprovider / accountから取得したscoreも、IRにscoreがあるため候補から除き、`--resend`でも入れ直しません。別のprovider・別のaccountへの送信は候補になります。取得元の印はBMZ IR / BMS-IR共通の`bmz_ir`で、providerとaccountも照合します。
 - コース中の単曲とautoplayは既定で除きます。コース中の単曲は`--include-course-stages`で含められます。
+- 通常ベストの対象外にした履歴（`normal_best_eligible = 0`。v0.5.3までのBATTLE ASの記録）は、候補に含めません（[スコア保存](score-persistence.md#auto-scratchの採点)）。
 - 値を解釈できない履歴や、譜面情報・リプレイファイルを読めない履歴は、その行だけを飛ばし、`invalid`として件数と理由を出力します。ほかの履歴の投入は続け、1件以上あれば最後に非ゼロで終了します。`--all`では、同じ実行の中で失敗した行を読み直しません。
 - local backfillは未登録の譜面を作成できますが、既存の譜面の正規のmetadataは上書きしません。
 

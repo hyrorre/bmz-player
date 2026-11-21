@@ -111,7 +111,7 @@ fn double_battle_uses_dp_settings_and_independent_keyboard_and_controller_lanes(
 }
 
 #[test]
-fn double_battle_as_replay_autoplays_both_scratches_on_the_replay_clock() {
+fn double_battle_as_replay_leaves_both_scratches_unscored_on_the_replay_clock() {
     use bmz_core::replay::ReplayEvent;
     for sp in [KeyMode::K5, KeyMode::K7] {
         for viewing_rate in [25, 100, 300] {
@@ -143,9 +143,11 @@ fn double_battle_as_replay_autoplays_both_scratches_on_the_replay_clock() {
             // A delayed frame crosses both key inputs and both scratch notes.
             session.audio_clock.pause_at(TimeUs(1_400_000));
             bmz_gameplay::session::advance_session_frame(&mut session, &mut audio);
-            assert_eq!(session.score.ex_score(), 8, "{sp:?} {viewing_rate}");
+            // beatoraja moves BATTLE AS scratches to the background: no judge, combo or miss.
+            assert_eq!(session.scored_total_notes, 2, "{sp:?} {viewing_rate}");
+            assert_eq!(session.score.ex_score(), 4, "{sp:?} {viewing_rate}");
             assert_eq!(session.score.cb(), 0);
-            assert_eq!(session.score.max_combo, 4);
+            assert_eq!(session.score.max_combo, 2);
         }
     }
 }

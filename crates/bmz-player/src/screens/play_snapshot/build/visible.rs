@@ -83,6 +83,9 @@ fn populate_visible_notes(
         cache.missed_notes.frame(lane_render_now, session.judge.window_set.note.empty_poor_slow_us)
     });
     for lane in Lane::ALL {
+        if scratch_notes_hidden(snapshot, session, lane) {
+            continue;
+        }
         let output_lane = session.output_lane(lane);
         let first_note = missed.map_or(0, |frame| frame.first_note(lane));
         // PMS落下はnote_retentionより優先するため、保持設定で期限切れの範囲を広げない。
@@ -182,6 +185,16 @@ fn populate_visible_notes(
     }
 }
 
+fn scratch_notes_hidden(
+    snapshot: &RenderSnapshot,
+    session: &PlayfieldView<'_>,
+    lane: Lane,
+) -> bool {
+    session.hide_auto_scratch_notes
+        && matches!(lane, Lane::Scratch | Lane::Scratch2)
+        && snapshot.auto_note_lanes[lane.index()]
+}
+
 fn populate_visible_guide_lines(
     snapshot: &mut RenderSnapshot,
     session: &PlayfieldView<'_>,
@@ -271,7 +284,7 @@ fn populate_visible_long_notes(
 ) {
     let visible_from = scroll.visibility_start(scroll_time);
     for zone in &session.chart.metadata.free_zones {
-        if zone.end_time < visible_from {
+        if zone.end_time < visible_from || scratch_notes_hidden(snapshot, session, zone.lane) {
             continue;
         }
         let head = scroll.note_progress(zone.start_time, cursor_tick);
@@ -295,6 +308,9 @@ fn populate_visible_long_notes(
         visible_from,
         tick_upper_bound,
     ) {
+        if scratch_notes_hidden(snapshot, session, long.lane) {
+            continue;
+        }
         let Some(alpha) = constant_object_alpha(session, scroll_time, long.start_time) else {
             continue;
         };

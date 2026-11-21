@@ -259,6 +259,93 @@ fn mixed_chart() -> PlayableChart {
 }
 
 #[test]
+fn auto_scratch_visibility_matches_live_projection_and_direct_snapshots() {
+    use crate::config::profile_config::AssistOptionConfig;
+    use crate::select_options::DoubleOption;
+
+    let mut chart = mixed_chart();
+    chart.metadata.key_mode = KeyMode::K14;
+    for (lane, id_offset) in [(Lane::Scratch, 10), (Lane::Scratch2, 20)] {
+        for source in [Lane::Key3, Lane::Key1, Lane::Key2] {
+            let mut notes = chart.notes_for_lane(source).to_vec();
+            for note in &mut notes {
+                note.id.0 += id_offset;
+                note.lane = lane;
+            }
+            chart.lane_notes[lane.index()].extend(notes);
+        }
+        chart.lane_notes[lane.index()].sort_by_key(|note| note.time);
+        let mut long = chart.long_notes[0].clone();
+        long.lane = lane;
+        long.start_note_id.0 += id_offset;
+        long.end_note_id.0 += id_offset;
+        chart.long_notes.push(long);
+    }
+    chart.long_notes.sort_by_key(|long| long.start_time);
+    let chart = Arc::new(chart);
+    let mut profile = ProfileConfig::new_default("test", "Test", 1);
+    let with_auto_scratch = PlaySessionOptions {
+        assist: AssistOptionConfig { auto_scratch: true, ..Default::default() },
+        ..Default::default()
+    };
+
+    for (hide_notes, options, hidden) in [
+        (false, with_auto_scratch.clone(), false),
+        (true, PlaySessionOptions::default(), false),
+        (true, with_auto_scratch.clone(), true),
+        (
+            true,
+            PlaySessionOptions {
+                double_option: DoubleOption::BattleAutoScratch,
+                ..Default::default()
+            },
+            true,
+        ),
+        // Full AUTOPLAY never presses the scratch AUTO SCRATCH took out of scoring.
+        (true, PlaySessionOptions { autoplay: true, ..with_auto_scratch.clone() }, true),
+        (
+            true,
+            PlaySessionOptions {
+                replay_player: Some(bmz_gameplay::replay::ReplayPlayer::default()),
+                ..with_auto_scratch
+            },
+            false,
+        ),
+    ] {
+        profile.play.hide_auto_scratch_notes = hide_notes;
+        let mut session = build_game_session(chart.clone(), &profile, options);
+        let now = TimeUs(0);
+        session.hispeed = 1.0;
+        session.audio_clock.pause_at(now);
+        let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+        let direct = build::build_render_snapshot_with_target_and_bga_frames_cached(
+            &session,
+            now,
+            &[],
+            None,
+            None,
+            None,
+            &BgaFrameCatalog::new(),
+            &cache,
+        );
+        let mut projected = base(&session, now, &cache);
+        PlayfieldProjection::pool(&session, &cache)[0].project(
+            &mut projected,
+            now,
+            &mut ProjectionClock::default(),
+        );
+        assert_playfield_eq(&projected, &direct);
+        for lane in [Lane::Scratch, Lane::Scratch2] {
+            assert_eq!(direct.visible_notes[lane.index()].is_empty(), hidden);
+            assert_eq!(direct.visible_mines[lane.index()].is_empty(), hidden);
+            assert_eq!(direct.visible_long_notes.iter().all(|long| long.lane != lane), hidden);
+        }
+        assert!(!direct.visible_notes[Lane::Key1.index()].is_empty());
+        assert!(direct.visible_long_notes.iter().any(|long| long.lane == Lane::Key3));
+    }
+}
+
+#[test]
 fn hispeed_motion_projects_every_object_with_cubic_easing_across_publications_and_stalls() {
     use std::time::Duration;
 

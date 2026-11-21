@@ -365,6 +365,27 @@ export function asScope(value: string): IrRankingScope {
   return value as IrRankingScope
 }
 
+/** BMZ Player marks BATTLE AS scores that leave the auto scratch out of scoring. */
+export const AUTO_SCRATCH_SCORING_UNSCORED = 'unscored'
+/** `scores.rejection_reason` for BATTLE AS scores that count the auto scratch. */
+export const LEGACY_AUTO_SCRATCH_REJECTION = 'battle_auto_scratch_legacy_scoring'
+
+/**
+ * BMZ Player 0.5.3 and earlier counted the BATTLE AS auto scratch as PGREAT.
+ * Such scores are kept as history but excluded from bests and rankings.
+ */
+export function isLegacyAutoScratchScore(
+  doubleOption: IrDoubleOption,
+  sourceKind: IrScoreSourceKind,
+  playOptions: Record<string, unknown>,
+): boolean {
+  return (
+    doubleOption === 'battle_auto_scratch' &&
+    sourceKind === 'local' &&
+    playOptions.auto_scratch_scoring !== AUTO_SCRATCH_SCORING_UNSCORED
+  )
+}
+
 export function normalizeDoubleOption(value: unknown): IrDoubleOption {
   const normalized = String(value ?? 'off')
     .trim()

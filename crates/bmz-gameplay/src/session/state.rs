@@ -295,6 +295,10 @@ pub struct GameSession {
     pub bga_stretch: i32,
     /// LN モードでも終端 (tail) キャップを描画するか。既定 OFF (beatoraja 準拠)。
     pub show_ln_tail_cap: bool,
+    pub hide_auto_scratch_notes: bool,
+    /// Scratch lanes AUTO SCRATCH / BATTLE AS took out of scoring. Their notes
+    /// are display-only even under full autoplay, which never presses them.
+    pub auto_scratch_lanes: [bool; LANE_COUNT],
     /// HCN passing 中のレーン状態。beatoraja の TIMER_HCN_ACTIVE / TIMER_HCN_DAMAGE 相当。
     /// HCN の区間内 (始端ノート判定済み) のレーンのみ Some。
     pub lane_hcn_timer: [Option<HcnLaneTimer>; LANE_COUNT],

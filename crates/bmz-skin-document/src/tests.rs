@@ -453,3 +453,15 @@ fn json_skin_file_load_handles_shift_jis_comments_and_string_bools() -> anyhow::
     assert!(!document.text[0].wrapping);
     Ok(())
 }
+
+#[test]
+fn note_auto_sprites_also_accept_the_earlier_lr2_auto_name() {
+    for key in ["auto", "lr2Auto"] {
+        let document: SkinDocument = serde_json::from_str(&format!(
+            r#"{{"note": {{"note": ["key", "scratch"], "{key}": {{"note": ["", "scratch-auto"]}}}}}}"#
+        ))
+        .unwrap();
+        let note = document.note.expect("note set");
+        assert_eq!(note.auto.expect("auto sprites").note, ["", "scratch-auto"], "{key}");
+    }
+}

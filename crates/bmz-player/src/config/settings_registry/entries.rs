@@ -450,6 +450,14 @@ define_settings! {
         },
         format: |profile| format_bool_on_off(profile.play.assist.auto_scratch),
     }
+    HideAutoScratchNotes(bool) {
+        value: [field play.hide_auto_scratch_notes],
+        adjust: |profile, _delta| {
+            profile.play.hide_auto_scratch_notes = !profile.play.hide_auto_scratch_notes;
+            true
+        },
+        format: |profile| format_bool_on_off(profile.play.hide_auto_scratch_notes),
+    }
     AssistScrollMode(AssistOptionConfig) {
         value: [field play.assist],
         adjust: |profile, delta| {

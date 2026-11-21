@@ -254,6 +254,15 @@ pub fn apply_placeholder_session_visuals(
     snapshot.skin_offsets = offsets;
 }
 
+fn apply_auto_scratch_with_audio_keys(chart: &mut PlayableChart, lanes: &[Lane]) {
+    let keys = (chart.metadata.conditional.is_some() || chart.metadata.conditional_revision != 0)
+        .then(|| bmz_chart::conditional::ConditionalAudioKeys::capture(chart));
+    crate::assist::move_auto_scratch_notes_to_background(chart, lanes);
+    if let Some(keys) = keys {
+        keys.apply(chart);
+    }
+}
+
 pub fn build_game_session(
     chart: Arc<PlayableChart>,
     profile: &ProfileConfig,
@@ -347,6 +356,27 @@ pub fn build_game_session_with_input_backend(
     } else {
         None
     };
+    // AUTO SCRATCH / BATTLE ASのスクラッチは、通常preloadで採点対象から外している。
+    // CLIの`--auto-scratch`など、preloadのオプションに含まれない経路もここで揃える。
+    let mut chart = chart;
+    let mut auto_scratch_lanes = [false; LANE_COUNT];
+    if auto_scratch {
+        let lanes: &[Lane] =
+            if battle_presentation { &[Lane::Scratch] } else { &[Lane::Scratch, Lane::Scratch2] };
+        for lane in lanes {
+            auto_scratch_lanes[lane.index()] = true;
+        }
+        if crate::assist::has_auto_scratch_notes(&chart, lanes) {
+            apply_auto_scratch_with_audio_keys(Arc::make_mut(&mut chart), lanes);
+        }
+        // Preload installs its own transform. A directly built session still
+        // needs the same conversion for branches materialized during play.
+        if chart.metadata.conditional.as_ref().is_some_and(|p| p.transform.is_none()) {
+            let program = Arc::make_mut(&mut chart).metadata.conditional.as_mut().unwrap();
+            Arc::make_mut(program).transform =
+                Some(Arc::new(move |chart| apply_auto_scratch_with_audio_keys(chart, lanes)));
+        }
+    }
     let input_offset_auto_adjust_enabled = profile.judge.visual_offset_auto_adjust;
     let input_offset_auto_adjust =
         if input_offset_auto_adjust_enabled && !autoplay_enabled && !is_full_replay {
@@ -699,6 +729,8 @@ pub fn build_game_session_with_input_backend(
         result_wait_end_time,
         bga_stretch: bga_stretch_from_profile(profile),
         show_ln_tail_cap: profile.play.show_ln_tail_cap,
+        hide_auto_scratch_notes: profile.play.hide_auto_scratch_notes,
+        auto_scratch_lanes,
         lane_hcn_timer: [None; bmz_core::lane::LANE_COUNT],
         lane_hcn_keysound_muted: [None; bmz_core::lane::LANE_COUNT],
         pending_keysounds: Vec::new(),

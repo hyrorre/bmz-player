@@ -7,9 +7,12 @@ pub struct SkinNoteSetDef {
     pub qwilight_geometry: Vec<QwilightNoteGeometry>,
     #[serde(default, rename = "lr2Horizontal")]
     pub lr2_horizontal: bool,
-    /// LR2 sprites for lanes played automatically by an assist.
-    #[serde(default, rename = "lr2Auto")]
-    pub lr2_auto: Option<Box<SkinNoteSetDef>>,
+    /// BMZ extension: sprites for lanes played automatically for the player
+    /// (AUTO SCRATCH / BATTLE AS). Same per-lane image arrays as this note set;
+    /// missing parts fall back to the normal note set. LR2 `SRC_AUTO_*` is
+    /// converted here. `lr2Auto` is the earlier internal name.
+    #[serde(default, alias = "lr2Auto")]
+    pub auto: Option<Box<SkinNoteSetDef>>,
     /// Full LR2 DST_NOTE animation per lane. `dst` remains the initial lane geometry.
     #[serde(default, rename = "lr2Dst")]
     pub lr2_dst: Vec<Option<SkinDestinationDef>>,

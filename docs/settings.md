@@ -280,6 +280,13 @@ EXTRA NOTE DEPTHは、BGMから配置できるノーツのうち曲全体で何�
 - MISS KEYSOUNDは、空POORや早く離したことによるPOORでは追加で鳴らしません。CN / HCNの始点の見逃しによる2つのPOORでは、始点の音だけを鳴らします。
 - キー音の自動再生がONの場合は、重ねて再生しません。
 
+### AUTO SCRATCHのノーツ表示
+
+「BMZ メニュー → プレイ → ASSIST / MODIFIERS」の「AUTO SCRATCHのノーツを非表示」、または「選曲画面の 設定 → PLAY → ASSIST」の`HIDE AUTO SCRATCH NOTES`で切り替えます。
+プロファイルごとに`play.hide_auto_scratch_notes`へ保存し、既定はOFFです。
+ONにすると、AUTO SCRATCHやBATTLE ASで自動演奏するスクラッチレーンのノーツを非表示にします。全体AUTOPLAY中も同じです。キー音は引き続き鳴ります。
+このレーンのノーツは設定にかかわらず判定・コンボ・総ノーツ数に含めません（[採点](score-persistence.md#auto-scratchの採点)）。
+
 ### S-RANDOMの補正
 
 「BMZ メニュー → プレイ」の「S-RANDOM 補正」、または「選曲画面の 設定 → PLAY」の`S-RANDOM CORRECTION`で、S-RANDOM / S-RANDOM-EXが同じレーンへの連続を避ける方法を選べます。どちらもSESSION MODEとKEY CONVERSIONの間にあります。

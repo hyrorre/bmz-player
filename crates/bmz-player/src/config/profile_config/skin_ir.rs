@@ -614,6 +614,7 @@ impl ProfileConfig {
                 play_keysound_on_miss: false,
                 play_exit_hold_ms: default_play_exit_hold_ms(),
                 show_ln_tail_cap: false,
+                hide_auto_scratch_notes: false,
             },
             judge: JudgeConfig {
                 input_offset_us: 0,

@@ -25,6 +25,7 @@ pub(super) struct PlayfieldView<'a> {
     pub lift: f32,
     pub note_retention: bool,
     pub missed_note_fall: bool,
+    pub hide_auto_scratch_notes: bool,
     pub constant_enabled: bool,
     pub constant_fade_ms: i32,
     pub target_green_number: u32,
@@ -47,6 +48,7 @@ impl<'a> From<&'a GameSession> for PlayfieldView<'a> {
             lift: session.lift,
             note_retention: session.note_retention,
             missed_note_fall: session.missed_note_fall,
+            hide_auto_scratch_notes: session.hide_auto_scratch_notes,
             constant_enabled: session.constant_enabled,
             constant_fade_ms: session.constant_fade_ms,
             target_green_number: session.target_green_number,
@@ -71,6 +73,7 @@ pub(crate) struct PlayfieldProjection {
     lift: f32,
     note_retention: bool,
     missed_note_fall: bool,
+    hide_auto_scratch_notes: bool,
     constant_enabled: bool,
     constant_fade_ms: i32,
     target_green_number: u32,
@@ -103,6 +106,7 @@ impl PlayfieldProjection {
                 lift: session.lift,
                 note_retention: session.note_retention,
                 missed_note_fall: session.missed_note_fall,
+                hide_auto_scratch_notes: session.hide_auto_scratch_notes,
                 constant_enabled: session.constant_enabled,
                 constant_fade_ms: session.constant_fade_ms,
                 target_green_number: session.target_green_number,
@@ -153,6 +157,7 @@ impl PlayfieldProjection {
         self.lift = session.lift;
         self.note_retention = session.note_retention;
         self.missed_note_fall = session.missed_note_fall;
+        self.hide_auto_scratch_notes = session.hide_auto_scratch_notes;
         self.constant_enabled = session.constant_enabled;
         self.constant_fade_ms = session.constant_fade_ms;
         self.target_green_number = session.target_green_number;
@@ -234,6 +239,7 @@ impl PlayfieldProjection {
             lift: self.lift,
             note_retention: self.note_retention,
             missed_note_fall: self.missed_note_fall,
+            hide_auto_scratch_notes: self.hide_auto_scratch_notes,
             constant_enabled: self.constant_enabled,
             constant_fade_ms: self.constant_fade_ms,
             target_green_number: self.target_green_number,
@@ -313,6 +319,7 @@ impl PlayfieldProjection {
             snapshot.visible_free_zones.retain(|zone| zone.lane.index() < 8);
             let opponent_view = PlayfieldView {
                 player_two: true,
+                hide_auto_scratch_notes: false,
                 chart: &opponent.chart,
                 timing_map: &opponent.timing_map,
                 judge: PlayfieldJudgeView {

@@ -1356,40 +1356,72 @@ fn load_transformed_chart_marks_beatoraja_arrange_assists() {
     std::fs::remove_file(path).unwrap();
 }
 
+fn register_temp_bms(body: &str) -> (std::path::PathBuf, LibraryDatabase, i64) {
+    let path = write_temp_bms(body);
+    let imported = import_bms_chart(&path, None, true).unwrap();
+    let mut conn = Connection::open_in_memory().unwrap();
+    configure_connection(&conn).unwrap();
+    run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+    let mut library_db = LibraryDatabase::from_connection(conn);
+    let chart_id = library_db
+        .upsert_chart_import(&ChartImportRecord {
+            root_id: None,
+            file_path: &path,
+            file_size: 1,
+            modified_at: 1,
+            scanned_at: 1,
+            chart: &imported.chart,
+        })
+        .unwrap();
+    (path, library_db, chart_id)
+}
+
 #[test]
-fn load_transformed_chart_marks_auto_scratch_only_when_scratch_notes_exist() {
-    let load = |body: &str| {
-        let path = write_temp_bms(body);
-        let imported = import_bms_chart(&path, None, true).unwrap();
-        let mut conn = Connection::open_in_memory().unwrap();
-        configure_connection(&conn).unwrap();
-        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
-        let mut library_db = LibraryDatabase::from_connection(conn);
-        let chart_id = library_db
-            .upsert_chart_import(&ChartImportRecord {
-                root_id: None,
-                file_path: &path,
-                file_size: 1,
-                modified_at: 1,
-                scanned_at: 1,
-                chart: &imported.chart,
-            })
-            .unwrap();
-        (path, library_db, chart_id)
-    };
+fn load_transformed_chart_marks_auto_scratch_and_removes_it_from_scoring() {
     let auto_scratch = |double_option| PlaySessionOptions {
         assist: AssistOptionConfig { auto_scratch: true, ..Default::default() },
         double_option,
         ..Default::default()
     };
 
-    let (path, library_db, chart_id) = load("#TITLE Scratch\n#BPM 120\n#00011:01\n#00016:01\n");
+    let (path, library_db, chart_id) =
+        register_temp_bms("#TITLE Scratch\n#BPM 120\n#00011:01\n#00016:01\n");
     let transformed =
         load_transformed_chart_for_play(&library_db, chart_id, &auto_scratch(DoubleOption::Off))
             .unwrap();
     // LR2: no score, the clear counts as an assist clear.
     assert_eq!(transformed.assist_runtime.level, bmz_gameplay::session::AssistLevel::Assist);
     assert!(!transformed.assist_runtime.score_update_enabled());
+    // beatoraja / Endless Dream move the auto scratch to the background.
+    let scratch_kinds = |chart: &PlayableChart, lane: Lane| {
+        chart.notes_for_lane(lane).iter().map(|note| note.kind).collect::<Vec<_>>()
+    };
+    assert_eq!(scratch_kinds(&transformed.chart, Lane::Scratch), [NoteKind::DummyTap]);
+    assert_eq!(scored_note_count(&transformed.chart), 1);
+    assert!(!transformed.chart.metadata.kaleid.effective.dummy);
+    // A replay follows its key log, so a live AUTO SCRATCH setting does not apply.
+    let replay = load_transformed_chart_for_play(
+        &library_db,
+        chart_id,
+        &PlaySessionOptions {
+            replay_player: Some(ReplayPlayer::default()),
+            ..auto_scratch(DoubleOption::Off)
+        },
+    )
+    .unwrap();
+    assert_eq!(scratch_kinds(&replay.chart, Lane::Scratch), [NoteKind::Tap]);
+    assert_eq!(scored_note_count(&replay.chart), 2);
+    let battle_replay = load_transformed_chart_for_play(
+        &library_db,
+        chart_id,
+        &PlaySessionOptions {
+            replay_player: Some(ReplayPlayer::default()),
+            ..auto_scratch(DoubleOption::Battle)
+        },
+    )
+    .unwrap();
+    assert_eq!(battle_replay.applied_arrange.double_option, DoubleOption::Battle);
+    assert_eq!(scored_note_count(&battle_replay.chart), 4);
 
     // D-BATTLE with AUTO SCRATCH is BATTLE AS: its own bucket, not an assist.
     let battle =
@@ -1401,14 +1433,167 @@ fn load_transformed_chart_marks_auto_scratch_only_when_scratch_notes_exist() {
         crate::select_options::DoubleOptionScoreBucket::BattleAutoScratch
     );
     assert_eq!(battle.assist_runtime.level, bmz_gameplay::session::AssistLevel::None);
+    for lane in [Lane::Scratch, Lane::Scratch2] {
+        assert_eq!(scratch_kinds(&battle.chart, lane), [NoteKind::DummyTap]);
+    }
+    assert_eq!(scored_note_count(&battle.chart), 2);
+    assert_eq!(battle.chart.metadata.source_note_counts.unwrap().total, 2);
     std::fs::remove_file(path).unwrap();
 
-    let (path, library_db, chart_id) = load("#TITLE No Scratch\n#BPM 120\n#00011:01\n");
+    let (path, library_db, chart_id) =
+        register_temp_bms("#TITLE No Scratch\n#BPM 120\n#00011:01\n");
     let no_scratch =
         load_transformed_chart_for_play(&library_db, chart_id, &auto_scratch(DoubleOption::Off))
             .unwrap();
     assert_eq!(no_scratch.assist_runtime.level, bmz_gameplay::session::AssistLevel::None);
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn battle_as_preload_sends_source_counts_after_forced_ln_policy() {
+    use crate::ir::payload::{IrSubmissionContext, build_score_submission};
+    use crate::screens::play_finish::play_result_from_session;
+    use std::fmt::Write as _;
+
+    let profile = ProfileConfig::new_default("default", "Default", 1);
+    let double = DoubleOption::BattleAutoScratch;
+    // Enough pairs to exercise the default TOTAL above its 260-point floor.
+    let pairs = 200;
+    for (source_lnmode, setting, cn_count) in
+        [(1, LnPolicySetting::ForceCn, pairs), (2, LnPolicySetting::ForceLn, 0)]
+    {
+        let mut body = format!(
+            "#TITLE Battle AS LN Policy\n#BPM 120\n#LNMODE {source_lnmode}\n#LNOBJ ZZ\n#00016:01\n"
+        );
+        for measure in 0..pairs {
+            writeln!(body, "#{measure:03}11:01ZZ").unwrap();
+        }
+        let (path, library_db, chart_id) = register_temp_bms(&body);
+        let prepared = load_prepared_play_session_for_chart(
+            &library_db,
+            chart_id,
+            &profile,
+            PlaySessionOptions {
+                double_option: double,
+                ln_policy_setting: setting,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        std::fs::remove_file(path).unwrap();
+
+        let payload = build_score_submission(
+            &prepared.session.chart,
+            &play_result_from_session(&prepared.session),
+            IrSubmissionContext {
+                played_at: 1,
+                play_duration_ms: None,
+                chart_length_ms: Some(prepared.chart_length_ms),
+                ln_policy: prepared.score_key.ln_policy,
+                source_ln_profile: prepared.source_ln_profile,
+                gauge_option: "normal".into(),
+                device_type: bmz_core::input::InputDeviceKind::Keyboard,
+                idempotency_key: "battle-as-ln-policy".into(),
+                arrange: ArrangeOption::Normal,
+                arrange_2p: ArrangeOption::Normal,
+                double_option: double.score_bucket(),
+                applied_double_option: prepared.applied_arrange.double_option,
+                arrange_seed: None,
+                random_seed: None,
+                seed_scheme: String::new(),
+                bms_random_choices: Vec::new(),
+                bms_switch_choices: Vec::new(),
+                rule_mode: RuleMode::Beatoraja.as_str().into(),
+                course_stage: false,
+                replay_hash: None,
+            },
+        );
+        let source_notes = pairs + cn_count + 1;
+        assert_eq!(payload.chart.notes.total, source_notes, "{setting:?}");
+        assert_eq!(payload.chart.notes.ln, pairs);
+        assert_eq!(payload.chart.notes.cn, cn_count);
+        assert_eq!(payload.chart.ln_profile.has_defined_cn, source_lnmode == 2);
+        assert_eq!(
+            payload.chart.total,
+            Some(bmz_gameplay::gauge::default_gauge_total(source_notes))
+        );
+        assert_eq!(payload.result.notes, 2 * (pairs + cn_count));
+    }
+}
+
+#[test]
+fn cli_auto_scratch_keeps_branch_bgm_and_leaves_new_scratches_unscored() {
+    let (path, library_db, chart_id) = register_temp_bms(concat!(
+        "#TITLE Conditional Scratch\n#BPM 120\n",
+        "#WAV01 scratch.wav\n#WAV02 branch.wav\n#WAV03 common.wav\n#WAV04 later-scratch.wav\n",
+        "#00016:01\n#00201:03\n#00311:0101\n",
+        "#CONDITIONAL 1\n#WHEN AUTO==0\n#00101:02\n#00216:04\n#DEFAULT\n#ENDCONDITIONAL\n",
+    ));
+    let crate::cli::Command::Run(options) =
+        crate::cli::parse_command(["chart.bms", "--auto-scratch", "on"]).unwrap()
+    else {
+        panic!("expected play command")
+    };
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.set_cli_play(options.play_overrides);
+    assert!(!profile.play.assist.auto_scratch);
+    let mut prepared = load_prepared_play_session_for_chart(
+        &library_db,
+        chart_id,
+        &profile,
+        PlaySessionOptions::default(),
+    )
+    .unwrap();
+    assert!(prepared.score_save_disabled);
+
+    let mut direct =
+        load_game_session_for_chart(&library_db, chart_id, &profile, PlaySessionOptions::default())
+            .unwrap();
+    std::fs::remove_file(path).unwrap();
+    for session in [&mut prepared.session, &mut direct] {
+        let scratch_time = session.chart.notes_for_lane(Lane::Scratch)[0].time.0;
+        let old_common_key = *session.chart.metadata.conditional_bgm_keys.last().unwrap();
+        assert_eq!(session.chart.bgm_events.len(), 2);
+        assert_eq!(session.chart.metadata.conditional_bgm_keys.len(), 2);
+        let mut audio = bmz_audio::queue::ScheduledSoundQueue::new();
+        session.audio_clock.start_output_frame = 0;
+        session.audio_clock.running = true;
+        for time in [scratch_time, scratch_time + 2_010_000, scratch_time + 4_010_000] {
+            session
+                .audio_clock
+                .current_frame
+                .store((time * 48 / 1000) as u64, std::sync::atomic::Ordering::Relaxed);
+            bmz_gameplay::session::advance_session_frame(session, &mut audio);
+        }
+        assert_eq!(session.conditional.decisions[0].branch, 0);
+        assert_eq!(session.chart.bgm_events.len(), 4);
+        assert_eq!(session.chart.metadata.conditional_bgm_keys.len(), 4);
+        let heard: Vec<_> = audio
+            .drain_all()
+            .map(|event| {
+                session
+                    .chart
+                    .sounds
+                    .iter()
+                    .find(|asset| asset.id == event.sound_id)
+                    .unwrap()
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        for sound in ["scratch.wav", "branch.wav", "common.wav", "later-scratch.wav"] {
+            assert_eq!(heard.iter().filter(|name| *name == sound).count(), 1, "{heard:?}");
+        }
+        assert!(session.chart.metadata.conditional_bgm_keys.contains(&old_common_key));
+        assert!(session.chart.notes_for_lane(Lane::Scratch).iter().any(|note| {
+            note.time.0 == scratch_time + 4_000_000 && note.kind == NoteKind::DummyTap
+        }));
+        assert_eq!(session.scored_total_notes, 2);
+        assert_eq!((session.score.ex_score(), session.score.combo, session.score.bp()), (0, 0, 0));
+    }
 }
 
 #[test]

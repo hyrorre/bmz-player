@@ -979,3 +979,129 @@ describe('score submission idempotency', () => {
     },
   )
 })
+
+describe('BATTLE AS auto scratch scoring', () => {
+  function battleAs(key: string, marked: boolean): IrScoreSubmission {
+    const payload = submission()
+    payload.idempotency_key = key
+    payload.play_options.double_option = 'battle_auto_scratch'
+    payload.play_options.applied_double_option = 'battle_auto_scratch'
+    if (marked) payload.play_options.auto_scratch_scoring = 'unscored'
+    return validateScoreSubmission(payload)
+  }
+  const battleAsRanking = parseRankingQuery({
+    scope: 'global',
+    limit: 10,
+    double_option: 'battle_auto_scratch',
+  })
+
+  test('an unmarked BATTLE AS score stays history without a best or a ranking entry', async () => {
+    const response = await submitScore(user, battleAs('legacy', false), [], 10)
+    const retry = await submitScore(user, battleAs('legacy', false), [], 10)
+
+    expect(response).toMatchObject({ accepted: false, best_updated: false })
+    expect(retry).toMatchObject({ accepted: false, score_id: response.score_id })
+    expect(await db.select().from(schema.scores)).toMatchObject([
+      { accepted: false, rejectionReason: 'battle_auto_scratch_legacy_scoring' },
+    ])
+    expect(await db.select().from(schema.bestScores)).toEqual([])
+    const ranking = await getRanking(user, 'a'.repeat(64), battleAsRanking)
+    expect(ranking.ranking.entries).toEqual([])
+  })
+
+  test('a marked BATTLE AS score is accepted into its own bucket', async () => {
+    const response = await submitScore(user, battleAs('unscored', true), [], 10)
+
+    expect(response).toMatchObject({ accepted: true, best_updated: true })
+    expect(await db.select().from(schema.bestScores)).toMatchObject([
+      { doubleOption: 'battle_auto_scratch', scoreId: response.score_id },
+    ])
+    const ranking = await getRanking(user, 'a'.repeat(64), battleAsRanking)
+    expect(ranking.ranking.entries).toMatchObject([{ score: { score_id: response.score_id } }])
+  })
+
+  test('an imported BATTLE AS score without the BMZ scoring marker is accepted', async () => {
+    const payload = battleAs('imported-battle-as', false)
+    payload.play_options.source_kind = 'beatoraja'
+    const result = await submitScore(user, payload, [], 10)
+    expect(result).toMatchObject({ accepted: true, best_updated: true })
+    const replay = await submitScore(user, payload, [], 10)
+    expect(replay).toMatchObject({ accepted: true, score_id: result.score_id })
+  })
+
+  test('migration 0020 removes stored legacy BATTLE AS scores from bests', async () => {
+    const legacy = await submitScore(user, battleAs('stored-legacy', true), [], 10)
+    const normal = await submitScore(user, validateScoreSubmission(submission()), [], 10)
+    // Rows stored before the marker existed have no auto_scratch_scoring.
+    await db
+      .update(schema.scores)
+      .set({ playOptions: { device_type: 'keyboard', double_option: 'battle_auto_scratch' } })
+      .where(eq(schema.scores.id, legacy.score_id!))
+
+    const migration = new URL('0020_battle_as_legacy_scoring.sql', migrations)
+    await client.executeMultiple(await readFile(migration, 'utf8'))
+
+    const rows = await db.select().from(schema.scores)
+    expect(rows.find((row) => row.id === legacy.score_id)).toMatchObject({
+      accepted: false,
+      rejectionReason: 'battle_auto_scratch_legacy_scoring',
+    })
+    expect(rows.find((row) => row.id === normal.score_id)).toMatchObject({ accepted: true })
+    expect(await db.select().from(schema.bestScores)).toMatchObject([
+      { doubleOption: 'off', scoreId: normal.score_id },
+    ])
+  })
+
+  test('migration 0021 restores 0020 imports and rebuilds independent bests', async () => {
+    const legacy = await submitScore(user, battleAs('restore-legacy', true), [], 10)
+    const validPayload = battleAs('restore-marked', true)
+    Object.assign(validPayload.result, {
+      clear: 'Failed',
+      ex_score: 196,
+      max_combo: 98,
+      min_bp: 2,
+      min_cb: 2,
+    })
+    Object.assign(validPayload.result.judges.fast, { pgreat: 98, bad: 2 })
+    const valid = await submitScore(user, validateScoreSubmission(validPayload), [], 10)
+    const importPayload = battleAs('restore-import', false)
+    importPayload.play_options.source_kind = 'beatoraja'
+    importPayload.result.ex_score = 100
+    Object.assign(importPayload.result.judges.fast, { pgreat: 0, great: 100 })
+    const imported = await submitScore(user, validateScoreSubmission(importPayload), [], 10)
+    await db
+      .update(schema.scores)
+      .set({ playOptions: { double_option: 'battle_auto_scratch' } })
+      .where(eq(schema.scores.id, legacy.score_id!))
+
+    await client.executeMultiple(
+      await readFile(new URL('0020_battle_as_legacy_scoring.sql', migrations), 'utf8'),
+    )
+    expect(await db.select().from(schema.bestScores)).toEqual([])
+    const excluded = await db.select().from(schema.scores)
+    expect(excluded.find((row) => row.id === imported.score_id)?.accepted).toBe(false)
+
+    await client.executeMultiple(
+      await readFile(new URL('0021_restore_imported_battle_as_bests.sql', migrations), 'utf8'),
+    )
+    const rows = await db.select().from(schema.scores)
+    expect(rows.find((row) => row.id === imported.score_id)).toMatchObject({
+      accepted: true,
+      rejectionReason: null,
+    })
+    expect(rows.find((row) => row.id === legacy.score_id)?.accepted).toBe(false)
+    expect(rows.find((row) => row.id === valid.score_id)?.accepted).toBe(true)
+    const best = await db.select().from(schema.bestScores)
+    expect(best).toHaveLength(1)
+    expect(best[0]).toMatchObject({
+      scoreId: valid.score_id,
+      bestExScoreId: valid.score_id,
+      bestClearScoreId: imported.score_id,
+      bestMaxComboScoreId: imported.score_id,
+      bestMinBpScoreId: imported.score_id,
+      bestMinCbScoreId: imported.score_id,
+    })
+    const replay = await submitScore(user, importPayload, [], 10)
+    expect(replay).toMatchObject({ accepted: true, score_id: imported.score_id })
+  })
+})

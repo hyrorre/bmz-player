@@ -175,7 +175,7 @@ fn lr2_prepared_notes_animate_and_use_auto_sprites_only_for_assisted_lanes() {
         "image":[{"id":"normal","src":"1","x":0,"w":20,"h":10,"divx":2,"cycle":100},
             {"id":"auto","src":"1","x":20,"w":20,"h":10,"divx":2,"cycle":100}],
         "note":{"note":["normal"],"lnstart":["normal"],"lnend":["normal"],"lnbody":["normal"],"mine":["normal"],
-            "lr2Auto":{"note":["auto"],"lnstart":["auto"],"lnend":["auto"],"lnbody":["auto"],"mine":["auto"]},
+            "auto":{"note":["auto"],"lnstart":["auto"],"lnend":["auto"],"lnbody":["auto"],"mine":["auto"]},
             "dst":[{"x":10,"y":20,"w":10,"h":80}],
             "lr2Dst":[{"lr2Timing":true,"loop":200,"dst":[
                 {"time":100,"x":10,"y":20,"w":10,"h":10,"r":128},
@@ -385,4 +385,44 @@ fn prepared_tap_sprites_preserve_lane_mapping_missing_assets_and_duplicate_ids()
         }
     }
     assert!(rendered > 0);
+}
+
+#[test]
+fn json_auto_sprites_replace_only_auto_lanes_and_fall_back_per_part() {
+    let lanes = |id: &'static str| vec![id; 8];
+    let mut auto_note = vec![""; 8];
+    auto_note[7] = "auto";
+    let document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "w":100,"h":100,
+        "image":[{"id":"normal","src":"1","x":0,"w":20,"h":10},
+            {"id":"auto","src":"1","x":20,"w":20,"h":10}],
+        "note":{"note":lanes("normal"),"lnstart":lanes("normal"),"mine":lanes("normal"),
+            "auto":{"note":auto_note},
+            "dst":vec![serde_json::json!({"x":10,"y":20,"w":10,"h":80}); 8]}
+    }))
+    .unwrap();
+    let skin = SkinContext::from_manifest_and_document(
+        default_skin_manifest(),
+        document,
+        mock_source("1", 40.0, 10.0).into_values(),
+    );
+    let rect = Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 };
+    let uv_x = |item: Option<SkinRenderItem>| {
+        let Some(SkinRenderItem::Image { uv, .. }) = item else { panic!("note") };
+        uv.x
+    };
+    for auto in [false, true] {
+        let mut state = SkinDrawState::default();
+        state.auto_note_lanes[Lane::Scratch.index()] = auto;
+        state.auto_note_lanes[Lane::Key1.index()] = auto;
+        let prepared = skin.prepare_note_layout(KeyMode::K7, &state);
+        let expected = if auto { 0.5 } else { 0.0 };
+        assert_eq!(uv_x(prepared.tap_item(Lane::Scratch, rect, false)), expected);
+        // An undefined LN start uses the auto tap sprite, like the normal set.
+        let start = prepared.cap_item(Lane::Scratch, rect, LongNoteMode::Ln, false);
+        assert_eq!(uv_x(start), expected);
+        // Empty or missing auto entries keep the normal sprites.
+        assert_eq!(uv_x(prepared.tap_item(Lane::Key1, rect, false)), 0.0);
+        assert_eq!(uv_x(prepared.mine_item(Lane::Scratch, rect)), 0.0);
+    }
 }

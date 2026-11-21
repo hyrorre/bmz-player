@@ -146,6 +146,7 @@ pub async fn download_ir_scores_with_hooks(
             provider_key,
             account_id,
             &page.scores,
+            matches!(client, IrOwnScoreHistoryClient::BmzOfficial(_)),
             options.dry_run,
             now,
             &mut report,
@@ -193,6 +194,7 @@ pub fn import_ir_score_entries(
         provider_key,
         account_id,
         entries,
+        !crate::ir::bms_ir::is_bms_ir_provider(provider_key),
         dry_run,
         now,
         report,
@@ -207,6 +209,7 @@ fn import_ir_score_entries_up_to(
     provider_key: &str,
     account_id: &str,
     entries: &[IrOwnScoreHistoryEntry],
+    bmz_official: bool,
     dry_run: bool,
     now: i64,
     report: &mut IrScoreDownloadReport,
@@ -219,6 +222,17 @@ fn import_ir_score_entries_up_to(
         }
         consumed += 1;
         report.scanned += 1;
+        // BMS-IR has no BMZ scoring marker on its history API.
+        if bmz_official
+            && super::payload::is_legacy_battle_as(
+                Some(&entry.double_option),
+                Some(&entry.source_kind),
+                entry.auto_scratch_scoring.as_deref(),
+            )
+        {
+            report.messages.push(format!("{}: skipped legacy BMZ BATTLE AS score", entry.score_id));
+            continue;
+        }
         if let Err(error) = import_ir_score_entry(
             score_db,
             network_db,

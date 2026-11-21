@@ -167,10 +167,40 @@ fn repair_kaleid_migration_collisions(
     Ok(())
 }
 
-fn run_score_migrations(conn: &mut Connection) -> Result<()> {
+const BATTLE_AS_SCORE_MIGRATION_VERSION: i32 = 41;
+
+// v40 was used by development builds, and v41 is the Rust migration below.
+const _: () = {
+    let mut index = 0;
+    while index < SCORE_MIGRATIONS.len() {
+        let version = SCORE_MIGRATIONS[index].version;
+        assert!(version != 40 && version != BATTLE_AS_SCORE_MIGRATION_VERSION);
+        index += 1;
+    }
+};
+
+pub(crate) const SCORE_DB_VERSION: i32 = match SCORE_MIGRATIONS.last() {
+    Some(migration) if migration.version > BATTLE_AS_SCORE_MIGRATION_VERSION => migration.version,
+    _ => BATTLE_AS_SCORE_MIGRATION_VERSION,
+};
+
+pub(crate) fn run_score_migrations(conn: &mut Connection) -> Result<()> {
     repair_ir_score_migration_20_collision(conn)?;
     repair_player_stats_migration_37_collision(conn)?;
-    run_migrations(conn, SCORE_MIGRATIONS)
+    let split = SCORE_MIGRATIONS.partition_point(|m| m.version < BATTLE_AS_SCORE_MIGRATION_VERSION);
+    let (before, after) = SCORE_MIGRATIONS.split_at(split);
+    run_migrations(conn, before)?;
+    let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < BATTLE_AS_SCORE_MIGRATION_VERSION {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let version: i32 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version < BATTLE_AS_SCORE_MIGRATION_VERSION {
+            super::score_db::migrate_battle_as_bests(&tx, version == 40)?;
+            tx.pragma_update(None, "user_version", BATTLE_AS_SCORE_MIGRATION_VERSION)?;
+        }
+        tx.commit()?;
+    }
+    run_migrations(conn, after)
 }
 
 /// The local v37 created `imported_player_stats` while main's v37 repaired BP/CB.
@@ -306,7 +336,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         let before_v37 = SCORE_MIGRATIONS.iter().position(|m| m.version == 37).unwrap();
         run_migrations(&mut conn, &SCORE_MIGRATIONS[..before_v37]).unwrap();
-        let player_stats_v39 = SCORE_MIGRATIONS.last().unwrap();
+        let player_stats_v39 = SCORE_MIGRATIONS.iter().find(|m| m.version == 39).unwrap();
         run_migrations(
             &mut conn,
             &[Migration { version: 37, statements: player_stats_v39.statements }],
@@ -335,7 +365,7 @@ mod tests {
         for _ in 0..2 {
             run_score_migrations(&mut conn).unwrap();
             let version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-            assert_eq!(version, player_stats_v39.version);
+            assert_eq!(version, SCORE_DB_VERSION);
             let play_count: i32 = conn
                 .query_row("SELECT play_count FROM imported_player_stats", [], |r| r.get(0))
                 .unwrap();
@@ -862,7 +892,7 @@ mod tests {
         run_score_migrations(&mut conn).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, SCORE_MIGRATIONS.last().unwrap().version);
+        assert_eq!(version, SCORE_DB_VERSION);
         assert!(column_exists(&conn, "score_history", "source_kind").unwrap());
         assert!(column_exists(&conn, "score_history", "arrange_2p").unwrap());
         assert!(column_exists(&conn, "score_history", "applied_double_option").unwrap());
@@ -872,5 +902,82 @@ mod tests {
         assert!(column_exists(&conn, "course_scores", "replay_source_fingerprint").unwrap());
         assert!(column_exists(&conn, "replay_slots", "source_fingerprint").unwrap());
         assert!(table_exists(&conn, "score_history_sources").unwrap());
+    }
+
+    #[test]
+    fn network_migration_stops_unsent_old_battle_as_jobs() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let before = NETWORK_MIGRATIONS.iter().position(|m| m.version == 9).unwrap();
+        run_migrations(&mut conn, &NETWORK_MIGRATIONS[..before]).unwrap();
+        let jobs = [
+            (1, "pending", "battle_auto_scratch", None),
+            (2, "failed", "battle_auto_scratch", None),
+            (3, "succeeded", "battle_auto_scratch", None),
+            (4, "pending", "battle", None),
+            (5, "pending", "off", None),
+            (6, "sending", "battle_assist", None),
+            (7, "sending", "battle_auto_scratch", Some("unscored")),
+        ];
+        for (id, status, double_option, scoring) in jobs {
+            conn.execute(
+                "INSERT INTO ir_score_jobs (
+                    id, provider, account_id, kind, local_score_id, chart_sha256, ln_policy,
+                    payload_json, status, created_at, updated_at, submission_key
+                 ) VALUES (?1, 'bmz', 'player', 'score', ?1, ?4, 'ForceLn', ?2, ?3, 1, 1, ?1)",
+                params![
+                    id,
+                    serde_json::json!({"play_options": {
+                        "double_option": double_option,
+                        "auto_scratch_scoring": scoring,
+                    }})
+                    .to_string(),
+                    status,
+                    "00".repeat(32),
+                ],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO ir_score_jobs (
+                id, provider, account_id, kind, local_score_id, chart_sha256, ln_policy,
+                payload_json, status, last_error, created_at, updated_at, submission_key
+             ) VALUES (8, 'bmz', 'player', 'score', 8, ?1, 'ForceLn', ?2,
+                'ineligible', ?3, 1, 1, '8')",
+            params![
+                "00".repeat(32),
+                r#"{"play_options":{"double_option":"battle_auto_scratch","source_kind":"beatoraja"}}"#,
+                crate::ir::payload::LEGACY_BATTLE_AS_MESSAGE,
+            ],
+        )
+        .unwrap();
+
+        // Simulate databases whose earlier v9 left abandoned sending jobs behind.
+        conn.pragma_update(None, "user_version", 9).unwrap();
+        run_migrations(&mut conn, NETWORK_MIGRATIONS).unwrap();
+
+        let statuses: Vec<(i64, String, i64)> = conn
+            .prepare("SELECT id, status, next_attempt_at FROM ir_score_jobs ORDER BY id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        let no_retry = crate::storage::network_db::IR_JOB_NO_AUTO_RETRY_AT;
+        assert_eq!(
+            statuses,
+            [
+                (1, "ineligible".to_string(), no_retry),
+                (2, "ineligible".to_string(), no_retry),
+                (3, "succeeded".to_string(), 0),
+                (4, "pending".to_string(), 0),
+                (5, "pending".to_string(), 0),
+                (6, "ineligible".to_string(), no_retry),
+                (7, "sending".to_string(), 0),
+                (8, "pending".to_string(), 0),
+            ]
+        );
+        let mut db = crate::storage::network_db::NetworkDatabase::from_connection(conn);
+        let claimed = db.claim_pending_ir_score_jobs(600, 100, false).unwrap();
+        assert_eq!(claimed.iter().map(|job| job.id).collect::<Vec<_>>(), [4, 5, 7, 8]);
     }
 }

@@ -1541,3 +1541,29 @@ fn local_result_level_layout_has_one_visible_destination_when_available() {
         }
     }
 }
+
+#[test]
+fn lua_play_skin_note_auto_sprites_reach_the_document() {
+    let root = unique_test_dir("bmz-skin-note-auto");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("skin.luaskin");
+    fs::write(
+        &path,
+        r#"
+        local skin = { type = 0 }
+        skin.note = {
+            id = "notes",
+            note = {"note-w", "note-s"},
+            auto = { note = {"", "note-s-auto"}, lnstart = {"", "lns-s-auto"} },
+        }
+        return skin
+        "#,
+    )
+    .unwrap();
+
+    let loaded = load_lua_skin(&path, SkinKind::Play, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+
+    let auto = loaded.document.note.expect("note set").auto.expect("auto sprites");
+    assert_eq!(auto.note, ["", "note-s-auto"]);
+    assert_eq!(auto.lnstart, ["", "lns-s-auto"]);
+}

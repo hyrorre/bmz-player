@@ -34,6 +34,7 @@ mod database_replay;
 mod database_stats;
 mod device_best;
 mod reconcile;
+pub(crate) use reconcile::migrate_battle_as_bests;
 mod rows;
 mod write;
 

@@ -20,6 +20,7 @@ fn open_network_db() -> NetworkDatabase {
 
 fn score_entry(id: &str) -> IrOwnScoreHistoryEntry {
     IrOwnScoreHistoryEntry {
+        auto_scratch_scoring: None,
         score_id: id.to_string(),
         idempotency_key: None,
         chart_sha256: "11".repeat(32),
@@ -89,6 +90,46 @@ fn score_record_from_ir_preserves_judges_and_options() {
     assert_eq!(record.source_kind, ScoreSourceKind::Beatoraja);
     assert_eq!(record.assist_mask, 4);
     assert_eq!(record.device_type, InputDeviceKind::Controller);
+}
+
+#[test]
+fn bmz_history_download_skips_legacy_local_battle_as_and_keeps_valid_scores() {
+    let mut db = open_score_db();
+    let network = open_network_db();
+    let mut legacy = score_entry("old-local");
+    legacy.double_option = "battle_auto_scratch".into();
+    legacy.applied_double_option.clone_from(&legacy.double_option);
+    legacy.source_kind = "local".into();
+    let imported = IrOwnScoreHistoryEntry {
+        score_id: "imported".into(),
+        source_kind: "beatoraja".into(),
+        ..legacy.clone()
+    };
+    let new = IrOwnScoreHistoryEntry {
+        score_id: "new-local".into(),
+        auto_scratch_scoring: Some("unscored".into()),
+        ..legacy.clone()
+    };
+    let no_source = IrOwnScoreHistoryEntry {
+        score_id: "no-source".into(),
+        source_kind: String::new(),
+        ..legacy.clone()
+    };
+    let mut report = IrScoreDownloadReport::default();
+    import_ir_score_entries(
+        &mut db,
+        &network,
+        "bmz",
+        "account",
+        &[legacy, imported, new, no_source],
+        false,
+        1,
+        &mut report,
+    )
+    .unwrap();
+    assert_eq!((report.imported, report.failed, report.scanned), (2, 0, 4));
+    assert_eq!(report.messages.len(), 2);
+    assert_eq!(db.all_best_scores().unwrap().len(), 1);
 }
 
 #[test]
@@ -417,6 +458,7 @@ fn import_limit_skips_known_scores_before_importing_next_candidate() {
         "provider-1",
         "account-1",
         &entries,
+        true,
         false,
         1_800_000_001,
         &mut next_report,

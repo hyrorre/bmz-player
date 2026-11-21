@@ -613,9 +613,10 @@ fn load_score_history_page(
          FROM score_history
          JOIN score_history_ir_identity
            ON score_history_ir_identity.score_history_id = score_history.id
-         WHERE ?1 IS NULL
-            OR played_at > ?1
-            OR (played_at = ?1 AND score_history.id > ?2)
+         WHERE score_history.normal_best_eligible = 1
+           AND (?1 IS NULL
+                OR played_at > ?1
+                OR (played_at = ?1 AND score_history.id > ?2))
          ORDER BY played_at ASC, score_history.id ASC
          LIMIT ?3",
     )?;
@@ -722,7 +723,13 @@ fn build_local_score_submission(
     let expected_total_notes = base_total_notes.saturating_mul(double_multiplier);
     // Preserve a larger historical count for forward compatibility, while
     // repairing legacy BMZ CN/HCN rows that stored the base library count.
-    let scored_total_notes = row.total_notes.max(expected_total_notes);
+    // BATTLE AS excludes the arranged scratch lanes, which the library count
+    // cannot reproduce, so its stored play-time count is authoritative.
+    let scored_total_notes = if row.double_option == DoubleOptionScoreBucket::BattleAutoScratch {
+        row.total_notes
+    } else {
+        row.total_notes.max(expected_total_notes)
+    };
     let mut play_options = BTreeMap::new();
     let arrange_1p = arrange_option_ir(row.arrange);
     play_options
@@ -738,6 +745,9 @@ fn build_local_score_submission(
         "applied_double_option".to_string(),
         Value::String(backfill_applied_double_option(row).ir_value().to_string()),
     );
+    // History scored the old way is excluded from backfill, so BATTLE AS rows here
+    // already leave the auto scratch unscored.
+    crate::ir::payload::insert_auto_scratch_scoring(&mut play_options, row.double_option);
     play_options.insert(
         "source_kind".to_string(),
         Value::String(score_source_kind_ir(row.source_kind).to_string()),
