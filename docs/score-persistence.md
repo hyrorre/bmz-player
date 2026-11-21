@@ -137,8 +137,20 @@ AUTO SCRATCHとBATTLE ASは、beatoraja / LR2oraja Endless Dreamの`AutoplayModi
 - ノーツは表示だけに残し、[非表示の設定](settings.md#auto-scratchのノーツ表示)で隠せます。
   beatorajaはノーツを表示しません。LR2はAUTO用のノーツ画像で表示し、判定しません。
 
-v0.5.3までの`BATTLE AS`の記録は、スクラッチをPGREATとして数えた総ノーツ数・
-EXスコアのまま残ります。
+v0.5.3までの`BATTLE AS`の記録は、スクラッチをPGREATとして数えています。score DB
+migration v40は、これらを履歴に残したまま集計から外します。
+
+- `BattleAutoScratch` bucketの履歴を`normal_best_eligible = 0`にします。ベスト・ランプ・
+  曲別のプレイ回数とクリア回数・デバイス別ベスト・LR2のクリアしたオプション
+  （option 118..149）の集計に使いません。プロファイル全体の統計と日別の統計には残します。
+- `BattleAutoScratch` bucketの`score_best`を削除します。次のプレイから新しい採点で作り直します。
+- replay slotはリプレイを残し、比較用の値（EX・BP・CB・最大コンボ・ランプ）を空にします。
+  slotの規則が無効でなければ、次のプレイで更新されます。
+- IRの一括送信の候補にしません。network DB migration v9は、送信待ち・失敗のBATTLE ASの
+  jobを`ineligible`にし、自動では送りません。BMZ IR・BMS-IRに送信済みの記録は変えません。
+- コースの記録（`course_scores`）は変えません。
+
+元に戻す場合は、対象の履歴の`normal_best_eligible`を1へ戻し、ベストを履歴から集計し直します。
 
 重要なのは「設定値」ではなく「実際に効果が出たか」です。たとえば固定BPM譜面の
 BPM GUIDE、Mineの無い譜面のNO MINE、100%以下のEXPAND JUDGEはスコアを無効化しません。

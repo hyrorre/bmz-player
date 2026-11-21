@@ -266,4 +266,19 @@ pub const NETWORK_MIGRATIONS: &[Migration] = &[
             "DROP TABLE ir_rival_scores_v7;",
         ],
     },
+    Migration {
+        version: 9,
+        // Unsent BATTLE AS scores still count the auto scratch as PGREAT.
+        // Keep the jobs for inspection, but never send them automatically.
+        // The retry time is IR_JOB_NO_AUTO_RETRY_AT.
+        statements: &["UPDATE ir_score_jobs
+            SET status = 'ineligible',
+                next_attempt_at = 253402300799,
+                last_error = 'BATTLE AS score recorded before auto scratch left scoring'
+            WHERE kind = 'score'
+              AND status IN ('pending', 'failed')
+              AND json_valid(payload_json)
+              AND json_extract(payload_json, '$.play_options.double_option')
+                  IN ('battle_auto_scratch', 'battle_assist');"],
+    },
 ];

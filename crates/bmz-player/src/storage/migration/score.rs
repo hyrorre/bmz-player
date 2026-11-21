@@ -1384,4 +1384,18 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
             updated_at INTEGER NOT NULL
         );"],
     },
+    Migration {
+        version: 40,
+        // BATTLE AS used to score the auto scratch as PGREAT. Keep those plays
+        // in history, but drop them from bests, lamps, play counts and replay
+        // slot comparisons; new plays leave the auto scratch unscored.
+        statements: &[
+            "UPDATE score_history SET normal_best_eligible = 0
+             WHERE double_option IN ('BattleAutoScratch', 'BattleAssist');",
+            "DELETE FROM score_best WHERE double_option IN ('BattleAutoScratch', 'BattleAssist');",
+            "UPDATE replay_slots
+             SET ex_score = NULL, bp = NULL, cb = NULL, max_combo = NULL, clear_rank = NULL
+             WHERE double_option IN ('BattleAutoScratch', 'BattleAssist');",
+        ],
+    },
 ];

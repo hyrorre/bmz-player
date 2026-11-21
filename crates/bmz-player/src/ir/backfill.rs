@@ -613,9 +613,10 @@ fn load_score_history_page(
          FROM score_history
          JOIN score_history_ir_identity
            ON score_history_ir_identity.score_history_id = score_history.id
-         WHERE ?1 IS NULL
-            OR played_at > ?1
-            OR (played_at = ?1 AND score_history.id > ?2)
+         WHERE score_history.normal_best_eligible = 1
+           AND (?1 IS NULL
+                OR played_at > ?1
+                OR (played_at = ?1 AND score_history.id > ?2))
          ORDER BY played_at ASC, score_history.id ASC
          LIMIT ?3",
     )?;

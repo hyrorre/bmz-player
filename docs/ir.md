@@ -788,6 +788,7 @@ jobの状態は`pending` / `sending` / `succeeded` / `failed`です。
 - 送信済みの履歴と、queueにある履歴は既定で飛ばします。
 - `download-scores`で同じprovider / accountから取得したscoreも、IRにscoreがあるため候補から除き、`--resend`でも入れ直しません。別のprovider・別のaccountへの送信は候補になります。取得元の印はBMZ IR / BMS-IR共通の`bmz_ir`で、providerとaccountも照合します。
 - コース中の単曲とautoplayは既定で除きます。コース中の単曲は`--include-course-stages`で含められます。
+- 通常ベストの対象外にした履歴（`normal_best_eligible = 0`。v0.5.3までのBATTLE ASの記録）は、候補に含めません（[スコア保存](score-persistence.md#auto-scratchの採点)）。
 - 値を解釈できない履歴や、譜面情報・リプレイファイルを読めない履歴は、その行だけを飛ばし、`invalid`として件数と理由を出力します。ほかの履歴の投入は続け、1件以上あれば最後に非ゼロで終了します。`--all`では、同じ実行の中で失敗した行を読み直しません。
 - local backfillは未登録の譜面を作成できますが、既存の譜面の正規のmetadataは上書きしません。
 

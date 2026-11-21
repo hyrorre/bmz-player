@@ -234,6 +234,7 @@ pub(super) fn rebuild_score_aggregates(conn: &Connection) -> Result<()> {
         .query_row("SELECT playtime_seconds FROM player_stats WHERE id = 1", [], |row| row.get(0))
         .optional()?
         .unwrap_or(0);
+    // History excluded from normal bests (old BATTLE AS) feeds no best, lamp or count.
     const SCORE_KEY: &str = "h.chart_sha256 = score_best.chart_sha256
         AND h.ln_policy = score_best.ln_policy
         AND h.double_option = score_best.double_option
@@ -241,7 +242,8 @@ pub(super) fn rebuild_score_aggregates(conn: &Connection) -> Result<()> {
             WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
             WHEN 'Dx' THEN 'Dx'
             ELSE 'Beatoraja'
-        END = score_best.rule_mode";
+        END = score_best.rule_mode
+        AND h.normal_best_eligible = 1";
     const CLEAR_RANK: &str = "CASE h.clear_type
         WHEN 'NoPlay' THEN 0
         WHEN 'Failed' THEN 1

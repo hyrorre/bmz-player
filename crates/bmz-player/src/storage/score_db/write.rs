@@ -1,5 +1,18 @@
 use super::*;
 
+/// Extra condition for "an earlier play exists" checks on a best row.
+///
+/// History excluded from normal bests (BATTLE AS before the auto scratch left
+/// scoring) is not an earlier numeric best. Databases below v35 have neither the
+/// column nor excluded history; only migration fixtures write to those.
+pub(super) fn eligible_prior_condition(conn: &Connection) -> &'static str {
+    if conn.prepare_cached("SELECT normal_best_eligible FROM score_history LIMIT 0").is_ok() {
+        "AND prior.normal_best_eligible = 1"
+    } else {
+        ""
+    }
+}
+
 pub(super) fn ln_policy_from_row(
     row: &rusqlite::Row<'_>,
     index: usize,
@@ -420,8 +433,10 @@ pub(super) fn upsert_score_best(
         ],
     )?;
 
+    let eligible_prior = eligible_prior_condition(conn);
     let (current_ex_score, current_clear_rank, representative, has_numeric_best) = conn.query_row(
-        "SELECT b.ex_score, b.clear_type, h.ex_score, h.bp, h.cb, h.max_combo,
+        &format!(
+            "SELECT b.ex_score, b.clear_type, h.ex_score, h.bp, h.cb, h.max_combo,
                 b.best_score_history_id IS NOT NULL
                 OR b.ex_score != 0 OR b.bp != 0 OR b.cb != 0 OR b.max_combo != 0
                 OR EXISTS (
@@ -432,7 +447,7 @@ pub(super) fn upsert_score_best(
                       AND CASE prior.rule_mode
                           WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
                           WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = b.rule_mode
-                      AND prior.id != ?5
+                      AND prior.id != ?5 {eligible_prior}
                 )
          FROM score_best AS b
          LEFT JOIN score_history AS h ON h.id = b.best_score_history_id
@@ -441,7 +456,8 @@ pub(super) fn upsert_score_best(
            AND CASE h.rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
                WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = b.rule_mode
          WHERE b.chart_sha256 = ?1 AND b.ln_policy = ?2 AND b.double_option = ?3
-           AND b.rule_mode = ?4",
+           AND b.rule_mode = ?4"
+        ),
         params![
             hash_to_hex(&record.chart_sha256),
             record.ln_policy.as_str(),

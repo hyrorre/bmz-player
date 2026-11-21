@@ -70,7 +70,31 @@ BMZはスクラッチレーンへ自動入力を作り、通常の判定でPGREA
   `cargo test --workspace --locked --no-fail-fast`が成功（5922件成功、144件ignored）
 - 未実施: 実機でのプレイ確認（キー音のBGM再生、LR2スキンのAUTO画像、非表示の設定）
 
+## 旧BATTLE ASの記録の移行
+
+リプレイから新しい採点で計算し直す案と、旧記録を集計から外す案を比べ、後者にした。
+SQLのmigrationだけで済み、履歴が残るので元に戻せる。旧記録のランプとベストは消える。
+
+- score DB migration v40: `BattleAutoScratch`の履歴を`normal_best_eligible = 0`にし、
+  `score_best`を削除し、replay slotの比較値を空にする。
+- `normal_best_eligible`は、本番の保存経路ではこれまで0にならなかった列で、意味は
+  「通常ベストの比較基準にしない履歴」。デバイス別ベストと取り込みのBP集計は既に
+  この列で除外していた。集計の作り直し（`rebuild_score_aggregates`）、LR2のクリアした
+  オプション、IRの一括送信にも同じ除外を加えた。
+- ベストの書き込みと読み出しには「過去の履歴があるか」の判定がある。clear-onlyの行
+  （H-RANDOMなどのアシスト付きBATTLE AS）の後に通常プレイをすると、旧履歴があるだけで
+  BPのベストが0になったため、この判定でも除外する。migrationの途中のスキーマへ直接
+  書き込むテストがあるため、列がある場合だけ条件を加える。
+- network DB migration v9: 送信待ち・失敗のBATTLE ASのscore jobを`ineligible`にする。
+
+### 移行の検証
+
+- `storage::score_db::tests::battle_as_migration`: 履歴を残してベスト・ランプ・slotの比較値を
+  外すこと、次のプレイで作り直すこと、clear-onlyの後の通常プレイでBPが0にならないこと
+  （除外を外すとBPが0になり失敗することを確認）
+- `network_migration_stops_unsent_old_battle_as_jobs`: 送信待ち・失敗のjobだけを止めること
+
 ## 残課題
 
-- 既存のBATTLE ASの記録（ローカルの`BattleAutoScratch` bucketとIR上の記録）を新しい採点と
-  分けるか、移行するか。
+- BMZ IRの`battle_auto_scratch`の旧記録をサーバー側でどう扱うか（本番DBへの書き込み）。
+- BMS-IRへ送信済みのBATTLE ASの記録は、BMZからは変えられない。

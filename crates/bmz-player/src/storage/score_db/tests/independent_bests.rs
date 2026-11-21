@@ -395,7 +395,9 @@ fn repair_extrema_separates_full_score_keys_and_includes_imports() {
         .execute("UPDATE score_best SET bp = bp + 15, cb = cb + 9, max_combo = max_combo - 100", [])
         .unwrap();
     let before = metadata(db.conn());
-    run_migrations(db.conn_mut(), SCORE_MIGRATIONS).unwrap();
+    // v40 intentionally drops the BATTLE AS bests; stop before it.
+    let before_v40 = SCORE_MIGRATIONS.iter().position(|m| m.version == 40).unwrap();
+    run_migrations(db.conn_mut(), &SCORE_MIGRATIONS[..before_v40]).unwrap();
     assert_eq!(metadata(db.conn()), before);
     for (key, bp, cb, combo) in expected {
         let saved = db.best_scores_for_charts(&[key]).unwrap().remove(0);
