@@ -134,6 +134,18 @@ ECFNなどのノーツ画像には、AUTO SCRATCH用と思われる緑のスク�
 - 仕様は[skin.md](../../docs/skin.md#自動演奏レーンのノーツbmz拡張)。拡張済みECFN（ADFX02）への
   定義の追加は別作業。
 
+## 全体AUTOPLAY中の非表示（2026-11-22追記）
+
+AUTO SCRATCHとAUTOPLAYを両方ONにしたプロファイルで、非表示がONでも皿のノーツが表示された。
+非表示とAUTO画像は`auto_note_lanes`で判定し、これは全体AUTOPLAYでは常にfalseだった。
+採点の変更でAUTO SCRATCHは全体AUTOPLAY中にも掛かり、皿は押されない表示専用のノーツになるため、
+`GameSession.auto_scratch_lanes`（AUTO SCRATCH / BATTLE ASで採点から外したレーン）を加え、
+全体AUTOPLAY中もこのレーンを`auto_note_lanes`に含めるようにした。LR2も全体オート中に
+AUTO SCRATCHのレーンをAUTO画像で描く。LR2のoption 54..57も全体AUTOPLAY中にONになる。
+
+- 非表示の投影テストの「AUTOPLAY＋AUTO SCRATCHでは隠さない」という期待値を「隠す」に改めた。
+  修正を外すとこのテストが失敗することを確認した。
+
 ## 残課題
 
 - 本番のD1へmigration 0020を適用し、サーバーをデプロイする（クライアントの公開より前）。

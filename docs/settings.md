@@ -283,7 +283,7 @@ EXTRA NOTE DEPTHは、BGMから配置できるノーツのうち曲全体で何�
 
 「BMZ メニュー → プレイ → ASSIST / MODIFIERS」の「AUTO SCRATCHのノーツを非表示」、または「選曲画面の 設定 → PLAY → ASSIST」の`HIDE AUTO SCRATCH NOTES`で切り替えます。
 プロファイルごとに`play.hide_auto_scratch_notes`へ保存し、既定はOFFです。
-ONにすると、AUTO SCRATCHやBATTLE ASで自動演奏するスクラッチレーンのノーツを非表示にします。キー音は引き続き鳴ります。
+ONにすると、AUTO SCRATCHやBATTLE ASで自動演奏するスクラッチレーンのノーツを非表示にします。全体AUTOPLAY中も同じです。キー音は引き続き鳴ります。
 このレーンのノーツは設定にかかわらず判定・コンボ・総ノーツ数に含めません（[採点](score-persistence.md#auto-scratchの採点)）。
 
 ### S-RANDOMの補正

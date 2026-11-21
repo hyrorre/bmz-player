@@ -301,7 +301,8 @@ fn auto_scratch_visibility_matches_live_projection_and_direct_snapshots() {
             },
             true,
         ),
-        (true, PlaySessionOptions { autoplay: true, ..with_auto_scratch.clone() }, false),
+        // Full AUTOPLAY never presses the scratch AUTO SCRATCH took out of scoring.
+        (true, PlaySessionOptions { autoplay: true, ..with_auto_scratch.clone() }, true),
         (
             true,
             PlaySessionOptions {

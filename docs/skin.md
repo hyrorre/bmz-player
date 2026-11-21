@@ -482,7 +482,7 @@ option `94_000+ID`、否定は符号を維持）です。意味が一致する�
 | number | 120..136（シングルプレイ） | Result / Course Result | 自分と反対側は、ノーツ数だけを持つ空の2Pプレイヤーです。EX・率・判定数・コンボ・ゲージは0、ノーツ数は譜面（コース）のノーツ数、EX差と次ランク差はEX 0としてLR2の式で求めます。LR2のCourse Resultと同じで、単曲Result（LR2はターゲットの値）もBMZではこれに合わせます。AUTO BATTLE / G-BATTLEでは、LR2のBATTLE / G-BATTLEと同じく相手の最終成績（判定数・EX・率・コンボ・ゲージ・ノーツ数）を表示します。左右反転に追従する |
 | number | 272 / 273 / 274 | Select / Decide | ライバルの理論値EX・レート・ノーツ数（同じ譜面のノーツ数から計算） |
 | option | 52、620 / 622 | 全画面 | EXTRA OFF、ランキング表示OFF、ゴーストバトルOFFとして常にtrue（53、621 / 623はfalse） |
-| option | 54..57 | 全画面 | 1P / 2PのAUTO SCRATCH OFF / ONです。プレイ画面は実際に自動演奏しているスクラッチレーン、他の画面は設定値 |
+| option | 54..57 | 全画面 | 1P / 2PのAUTO SCRATCH OFF / ONです。プレイ画面はAUTO SCRATCH / BATTLE ASで採点から外したスクラッチレーン（全体AUTOPLAY中を含む）、他の画面は設定値 |
 | option | 100..105 / 110..117 | Select / Decide | 選択中の曲のクリアランプ（beatorajaのクリア種別をバーのランプと同じ5段階へ畳む）とランク（プレイ済みのみ）です。描画時に評価する |
 | option | 340..347 | Result / Course Result | 今回のスコアのランク |
 | option | 20 | Select / Decide | オプションパネルを開いていません。描画時に評価する |
@@ -636,7 +636,7 @@ PRACTICE・AUTOPLAY・FLIP・7K TO 9K / 6K / 8KはLR2に無い値のため、置
 D-BATTLE中はFLIPがOFFとして表示されます（button 54 / text 70）。option 10 / 12はDPのキーフィルターに加え、D-BATTLE / SP-TO-DPでも成立します。
 
 ASSIST（button 44 / 45、text 67 / 68）はプロフィールのAUTO SCRATCHを切り替えます。D-BATTLE中に切り替えると、BATTLEとBATTLE ASも連動して切り替わります。
-option 54..57（1P / 2PのAUTO SCRATCH OFF / ON）は、プレイ画面では実際に自動演奏しているスクラッチレーン、選曲・リザルト等の他の画面ではLR2と同じく設定値で判定します。
+option 54..57（1P / 2PのAUTO SCRATCH OFF / ON）は、プレイ画面ではAUTO SCRATCH / BATTLE ASで採点から外したスクラッチレーン（全体AUTOPLAY中を含む）、選曲・リザルト等の他の画面ではLR2と同じく設定値で判定します。
 option 62..66（このまま取れる最高ランプ）は、AUTO SCRATCHをD-BATTLE以外でEASY止まり、SP-TO-DPを保存なし（0）として扱います。
 
 マウスはLR2と同じく左クリックだけを受け付け、増減はbuttonの指定（plus only / minus only / 左右半分）で決めます。
@@ -800,7 +800,7 @@ LR2 Playのnumber ref=120..136は2Pの実プレイ状態へ接続します（127
 120はLR2判定配点からのスコア確定値を表示します（LR2の数値カウントアップ補間は含まない）。
 
 LR2の`SRC_AUTO_*`は[`note.auto`](#自動演奏レーンのノーツbmz拡張)へ分離し、部分AUTO入力の対象レーンだけに使います。
-全体AUTOPLAYとG-BATTLEの表示専用側は通常画像を使います。AUTO画像がない箇所は通常画像へ戻ります。
+LR2と同じく、全体AUTOPLAY中もAUTO SCRATCHのレーンにはAUTO画像を使います。G-BATTLEの表示専用側は通常画像を使います。AUTO画像がない箇所は通常画像へ戻ります。
 `DST_NOTE`は`note.lr2Dst`に全行を保持し、時計・条件・座標・大きさを毎フレーム評価します。
 LR2の5KEYS / 10KEYSのノーツ画像とレーン座標は片側8枠の配置を使います。
 10KEYSとBATTLEでは、スクラッチ位置のスキンオプションを変更しても両側のレーンを保持します。
@@ -839,8 +839,9 @@ skin.note = {
 - 受け付ける配列は`note`、`lnstart` / `lnend` / `lnbody` / `lnbodyActive` / `lnactive`、
   HCN系、HLN系、`mine`、`potion`です。座標・大きさ（`dst` / `size`等）は`note`側の定義を使います。
 - 使うのは、プレイヤーの代わりに自動演奏しているレーンだけです。現在はAUTO SCRATCH /
-  BATTLE ASの皿のレーンが該当します。全体AUTOPLAY、リプレイ再生、G-BATTLEの相手側は
-  通常の画像を使います。鍵盤の位置にも定義できますが、鍵盤を自動演奏する機能は現在ありません。
+  BATTLE ASで採点から外した皿のレーンが該当し、全体AUTOPLAY中やBATTLE ASのリプレイ再生中も
+  含みます。全体AUTOPLAYのほかのレーンとG-BATTLEの相手側は通常の画像を使います。
+  鍵盤の位置にも定義できますが、鍵盤を自動演奏する機能は現在ありません。
 - 空文字や配列の不足は、まず`auto`の中で通常と同じ順（LNの始点はHLN→HCN→LN→通常のノーツ）に
   代わりを探し、無ければ`note`側の画像を使います。皿の位置だけを書けば足ります。
 - [AUTO SCRATCHのノーツを非表示](settings.md#auto-scratchのノーツ表示)にした場合は描画しません。

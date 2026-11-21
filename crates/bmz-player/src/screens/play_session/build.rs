@@ -350,9 +350,13 @@ pub fn build_game_session_with_input_backend(
     // AUTO SCRATCH / BATTLE ASのスクラッチは、通常preloadで採点対象から外している。
     // CLIの`--auto-scratch`など、preloadのオプションに含まれない経路もここで揃える。
     let mut chart = chart;
+    let mut auto_scratch_lanes = [false; LANE_COUNT];
     if auto_scratch {
         let lanes: &[Lane] =
             if battle_presentation { &[Lane::Scratch] } else { &[Lane::Scratch, Lane::Scratch2] };
+        for lane in lanes {
+            auto_scratch_lanes[lane.index()] = true;
+        }
         if crate::assist::has_auto_scratch_notes(&chart, lanes) {
             crate::assist::move_auto_scratch_notes_to_background(Arc::make_mut(&mut chart), lanes);
         }
@@ -710,6 +714,7 @@ pub fn build_game_session_with_input_backend(
         bga_stretch: bga_stretch_from_profile(profile),
         show_ln_tail_cap: profile.play.show_ln_tail_cap,
         hide_auto_scratch_notes: profile.play.hide_auto_scratch_notes,
+        auto_scratch_lanes,
         lane_hcn_timer: [None; bmz_core::lane::LANE_COUNT],
         lane_hcn_keysound_muted: [None; bmz_core::lane::LANE_COUNT],
         pending_keysounds: Vec::new(),

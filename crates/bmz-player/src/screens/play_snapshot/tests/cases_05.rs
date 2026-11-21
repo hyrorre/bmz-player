@@ -82,6 +82,14 @@ fn snapshot_auto_note_lanes_exclude_full_autoplay_and_display_only_opponent() {
         assert!(!snapshot.auto_note_lanes[Lane::Key8.index()]);
         assert!(!snapshot.auto_note_lanes[Lane::Key1.index()]);
     }
+    // AUTO SCRATCH lanes are display-only even under full autoplay, but a
+    // display-only opponent lane never counts as the player's auto lane.
+    session.autoplay = Some(AutoplayController::default());
+    session.auto_scratch_lanes[Lane::Scratch.index()] = true;
+    session.auto_scratch_lanes[Lane::Key8.index()] = true;
+    let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+    assert!(snapshot.auto_note_lanes[Lane::Scratch.index()]);
+    assert!(!snapshot.auto_note_lanes[Lane::Key8.index()]);
 }
 
 #[test]
