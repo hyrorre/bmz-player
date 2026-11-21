@@ -228,8 +228,9 @@ pub fn scan_song_roots_with_progress(
                 })
                 .collect();
         for (key, entry) in entries {
-            if let Ok(crate::chart_source::ChartLocator::Archive { container, .. }) =
-                crate::chart_source::ChartLocator::parse(&entry.path)
+            if key.contains('!')
+                && let Ok(crate::chart_source::ChartLocator::Archive { container, .. }) =
+                    crate::chart_source::ChartLocator::parse(&entry.path)
             {
                 if let Some((_, entries)) = archives.get_mut(&container) {
                     entries.push(key);

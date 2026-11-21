@@ -18,12 +18,11 @@ impl ChartLocator {
     /// Accept archive!/entry and archive! directory roots. Entries may also name assets.
     pub fn parse(path: &Path) -> Result<Self> {
         let text = crate::paths::normalize_library_path(&path.to_string_lossy());
-        let lower = text.to_ascii_lowercase();
         for (index, _) in text.match_indices('!') {
             if !text[index + 1..].is_empty() && !text[index + 1..].starts_with('/') {
                 continue;
             }
-            if bmz_song_resource::archive_extension(&lower[..index]).is_none() {
+            if bmz_song_resource::archive_extension(&text[..index]).is_none() {
                 continue;
             }
             let entry = text[index + 1..].strip_prefix('/').unwrap_or("");
