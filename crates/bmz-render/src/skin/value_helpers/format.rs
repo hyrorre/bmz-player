@@ -74,6 +74,14 @@ pub(super) enum NumberPadding {
 }
 
 impl NumberPadding {
+    pub(super) fn from_skin_fields(zeropadding: i32, padding: i32) -> Self {
+        match (zeropadding, padding) {
+            (2, _) | (_, 2) => Self::Blank,
+            (0, 0) => Self::None,
+            _ => Self::Zero,
+        }
+    }
+
     pub(super) fn is_zero_padding(self) -> bool {
         matches!(self, Self::Zero)
     }
@@ -93,11 +101,9 @@ pub(super) enum SignedNumberRender {
 }
 
 pub(super) fn number_padding(value: &SkinValueDef) -> NumberPadding {
-    if value.zeropadding == 2 || value.padding == 2 {
-        return NumberPadding::Blank;
-    }
-    if value.zeropadding != 0 || value.padding != 0 {
-        return NumberPadding::Zero;
+    let padding = NumberPadding::from_skin_fields(value.zeropadding, value.padding);
+    if padding != NumberPadding::None {
+        return padding;
     }
     let image_cells = value.divx.max(1).saturating_mul(value.divy.max(1));
     if !value_layout_is_signed(value) && image_cells % 10 != 0 {
