@@ -327,6 +327,7 @@ fn local_backfill_payload_uses_history_counts_and_options() {
     assert_eq!(payload.play_options["arrange_2p"], "mirror");
     assert_eq!(payload.play_options["double_option"], "battle");
     assert_eq!(payload.play_options["applied_double_option"], "battle");
+    assert!(!payload.play_options.contains_key("auto_scratch_scoring"));
     assert_eq!(payload.play_options["source_kind"], "beatoraja");
     assert_eq!(payload.play_options["device_type"], "controller");
     assert_eq!(payload.play_options["assist_mask"], 4);
@@ -365,6 +366,7 @@ fn local_backfill_payload_keeps_battle_as_count_without_auto_scratch() {
 
     assert_eq!(payload.result.notes, battle_notes - 40);
     assert_eq!(payload.chart.notes.total, chart.scored_total_notes(LnScorePolicy::ForceCn));
+    assert_eq!(payload.play_options["auto_scratch_scoring"], "unscored");
 }
 
 #[test]

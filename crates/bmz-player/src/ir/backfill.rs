@@ -745,6 +745,9 @@ fn build_local_score_submission(
         "applied_double_option".to_string(),
         Value::String(backfill_applied_double_option(row).ir_value().to_string()),
     );
+    // History scored the old way is excluded from backfill, so BATTLE AS rows here
+    // already leave the auto scratch unscored.
+    crate::ir::payload::insert_auto_scratch_scoring(&mut play_options, row.double_option);
     play_options.insert(
         "source_kind".to_string(),
         Value::String(score_source_kind_ir(row.source_kind).to_string()),

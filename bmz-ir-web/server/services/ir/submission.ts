@@ -28,8 +28,10 @@ import {
   IrEvidenceValidationError,
   IrScoreNotFoundError,
   type IrRequestUser,
+  LEGACY_AUTO_SCRATCH_REJECTION,
   type LocalBackfillDeleteResult,
   type ScoreAttestationPayload,
+  isLegacyAutoScratchScore,
   judgeTotal,
   normalizeDoubleOption,
   playedAtDate,
@@ -89,6 +91,9 @@ export async function submitScore(
   const { doubleOption, appliedDoubleOption, sourceKind } = scoreSubmissionMetadata(
     payload.play_options,
   )
+  // Kept as history, but never a best or a ranking entry. Old clients ignore
+  // `accepted`, so they finish the job instead of retrying it.
+  const legacyAutoScratch = isLegacyAutoScratchScore(doubleOption, payload.play_options)
 
   // ユーザー・譜面の状態は idempotency key の確認より先に判定する。BAN・ブロック前に
   // 保存済みのスコアを再送しても、成功応答やランキングを返さない。
@@ -173,6 +178,8 @@ export async function submitScore(
     replayUploadIntent: payload.replay?.upload_intent ?? null,
     evidence: payload.evidence ?? {},
     verification,
+    accepted: !legacyAutoScratch,
+    rejectionReason: legacyAutoScratch ? LEGACY_AUTO_SCRATCH_REJECTION : null,
     idempotencyKey: payload.idempotency_key,
     serverReceivedAt,
   }
@@ -192,13 +199,21 @@ export async function submitScore(
   let updated: typeof previous
   try {
     // The response and the writes must use the same previous best under concurrent submissions.
-    const [before, , after] = await db.batch([
-      previousBestQuery,
-      db.insert(schema.scores).values(scoreInsert),
-      best,
-    ])
-    previous = before[0]
-    updated = after[0]
+    if (legacyAutoScratch) {
+      const [before] = await db.batch([
+        previousBestQuery,
+        db.insert(schema.scores).values(scoreInsert),
+      ])
+      previous = before[0]
+    } else {
+      const [before, , after] = await db.batch([
+        previousBestQuery,
+        db.insert(schema.scores).values(scoreInsert),
+        best,
+      ])
+      previous = before[0]
+      updated = after[0]
+    }
   } catch (error) {
     if (!isUniqueConstraintError(error)) {
       throw error
@@ -246,7 +261,7 @@ export async function submitScore(
   )
 
   return {
-    accepted: true,
+    accepted: !legacyAutoScratch,
     score_id: score.id,
     best_updated: updated !== undefined,
     updated_fields: {
@@ -548,11 +563,12 @@ export function idempotentScoreResponse(
   score: {
     id: string
     serverReceivedAt: Date
+    accepted?: boolean
   },
   rankings?: IrSubmitResponse['rankings'],
 ): IrSubmitResponse {
   return {
-    accepted: true,
+    accepted: score.accepted ?? true,
     score_id: score.id,
     best_updated: false,
     updated_fields: {

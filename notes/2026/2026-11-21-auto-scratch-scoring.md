@@ -94,7 +94,32 @@ SQLのmigrationだけで済み、履歴が残るので元に戻せる。旧記�
   （除外を外すとBPが0になり失敗することを確認）
 - `network_migration_stops_unsent_old_battle_as_jobs`: 送信待ち・失敗のjobだけを止めること
 
+## BMZ IRの旧BATTLE ASの記録
+
+サーバーの`scores`には、受理判定の`accepted`と`rejection_reason`がある。bestの再構築・
+ランキング・本人のスコア取得・日報は、すでに`accepted = true`だけを使っている。
+
+- 新旧の採点は、クライアントのバージョンでは区別できない。採点を変えた後のmainの
+  開発版も0.5.3を名乗るため。新しいクライアントはBATTLE ASのpayloadに
+  `play_options.auto_scratch_scoring = "unscored"`を付け、サーバーは印の無い
+  `battle_auto_scratch`を旧採点として扱う。
+- 旧採点のスコアは`accepted = false`、`rejection_reason = "battle_auto_scratch_legacy_scoring"`
+  で保存し、bestを作らず、`accepted: false`を返す。BMZ公式IRのクライアントは応答の
+  `accepted`を見ないので、旧クライアントのjobは完了扱いになり、再送を繰り返さない。
+  同じidempotency keyの再送も、保存済みの`accepted`を返す。
+- D1 migration 0020は、保存済みの印の無い`battle_auto_scratch`を同じ扱いにし、
+  それを含むキーの`best_scores`を削除する。更新triggerで`score_history_revision`も進む。
+- 0020より前に印付きのスコアが同じキーにあった場合も、そのキーのbestは消える。
+  印はこのcommitから送るので、対象は開発版で送った記録だけになる。
+
+### サーバーの検証
+
+- `bmz-ir-web/server/services/ir/submission.test.ts`の`BATTLE AS auto scratch scoring`:
+  印の無いスコアは不受理で保存されbest・ランキングに出ない、再送も不受理を返す、
+  印付きは受理される、migration 0020が保存済みの旧記録を外し通常のbestを残す。
+- 本番のD1へのmigrationの適用とデプロイは未実施。
+
 ## 残課題
 
-- BMZ IRの`battle_auto_scratch`の旧記録をサーバー側でどう扱うか（本番DBへの書き込み）。
+- 本番のD1へmigration 0020を適用し、サーバーをデプロイする（クライアントの公開より前）。
 - BMS-IRへ送信済みのBATTLE ASの記録は、BMZからは変えられない。

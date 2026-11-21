@@ -147,7 +147,9 @@ migration v40は、これらを履歴に残したまま集計から外します�
 - replay slotはリプレイを残し、比較用の値（EX・BP・CB・最大コンボ・ランプ）を空にします。
   slotの規則が無効でなければ、次のプレイで更新されます。
 - IRの一括送信の候補にしません。network DB migration v9は、送信待ち・失敗のBATTLE ASの
-  jobを`ineligible`にし、自動では送りません。BMZ IR・BMS-IRに送信済みの記録は変えません。
+  jobを`ineligible`にし、自動では送りません。
+- BMZ IRに送信済みの記録は、サーバーのD1 migration 0020でbestとランキングから外します
+  （[IR](ir.md)の`auto_scratch_scoring`）。BMS-IRに送信済みの記録は変えられません。
 - コースの記録（`course_scores`）は変えません。
 
 元に戻す場合は、対象の履歴の`normal_best_eligible`を1へ戻し、ベストを履歴から集計し直します。

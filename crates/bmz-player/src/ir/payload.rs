@@ -16,6 +16,23 @@ use super::types::{
 };
 
 /// Generate once before enqueue; retries must use the persisted payload.
+/// `play_options.auto_scratch_scoring` for BATTLE AS scores that leave the auto
+/// scratch out of scoring. BMZ IR treats BATTLE AS without it as the old scoring
+/// that counted the auto scratch as PGREAT.
+pub const AUTO_SCRATCH_SCORING_UNSCORED: &str = "unscored";
+
+pub(crate) fn insert_auto_scratch_scoring(
+    play_options: &mut std::collections::BTreeMap<String, serde_json::Value>,
+    double_option: DoubleOptionScoreBucket,
+) {
+    if double_option == DoubleOptionScoreBucket::BattleAutoScratch {
+        play_options.insert(
+            "auto_scratch_scoring".to_string(),
+            serde_json::Value::String(AUTO_SCRATCH_SCORING_UNSCORED.to_string()),
+        );
+    }
+}
+
 pub fn new_score_idempotency_key() -> anyhow::Result<String> {
     let mut bytes = [0; 16];
     getrandom::getrandom(&mut bytes)
@@ -80,6 +97,7 @@ pub fn build_score_submission(
         "applied_double_option".to_string(),
         serde_json::Value::String(context.applied_double_option.ir_value().to_string()),
     );
+    insert_auto_scratch_scoring(&mut play_options, context.double_option);
     play_options.insert("source_kind".to_string(), serde_json::Value::String("local".to_string()));
     if let Some(seed) = context.arrange_seed {
         play_options.insert("seed".to_string(), serde_json::json!(seed.to_string()));
@@ -576,6 +594,11 @@ mod tests {
                 assert_eq!(battle.result.notes, 2);
                 assert_eq!(battle.chart.total, Some(gauge_total_for_chart(None, 1)));
                 assert_eq!(battle.play_options["double_option"], double.ir_value());
+                assert_eq!(
+                    battle.play_options.get("auto_scratch_scoring").and_then(|v| v.as_str()),
+                    (double == DoubleOption::BattleAutoScratch)
+                        .then_some(AUTO_SCRATCH_SCORING_UNSCORED)
+                );
                 crate::ir::bms_ir::ensure_score_payload_supported(&battle).unwrap();
             }
         }
