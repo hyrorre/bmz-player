@@ -88,8 +88,8 @@ FULL COMBOでも`LightAssistEasy` / `AssistEasy`になります。
 
 `BATTLE AS`のscratch autoplayは部分autoplayであり、BMZのfull autoplay判定には
 なりません。したがって現状は`BattleAutoScratch` bucketへ通常スコアを保存します。
-リプレイには人間の入力を記録し、再生時は両側のスクラッチを自動演奏します。
-リプレイの判定時計で自動演奏も進めるため、再生速度やフレーム間隔に依存しません。
+両側のスクラッチは[採点の対象外](#auto-scratchの採点)です。リプレイには人間の入力を
+記録し、再生時も両側のスクラッチを採点から外します。
 
 `G-BATTLE`は相手リプレイを表示専用レーンで進め、プレイヤー側だけを採点するBMZ
 独自モードです。beatorajaの`BATTLE` / `BATTLE AS`と同じものではありません。
@@ -124,6 +124,21 @@ AUTO SCRATCHはLR2 / LR2oraja Endless Dreamの同名オプションに合わせ�
 全体AUTOPLAYではもともと保存しません。DP OPTIONの`BATTLE`と併用した場合は`BATTLE AS`
 として専用bucketに通常保存し、アシスト扱いにしない（LR2もD-BATTLE中のAUTO SCRATCHを
 イージー扱いにしない）です。CLIの`--auto-scratch on`は従来どおりスコア・リプレイを保存しません。
+
+### AUTO SCRATCHの採点
+
+AUTO SCRATCHとBATTLE ASは、beatoraja / LR2oraja Endless Dreamの`AutoplayModifier`と
+同じく、自動演奏するスクラッチレーンのノーツを採点の対象外にします。全譜面オプションを
+適用した後に変換するため、配置でスクラッチへ移ったノーツも対象です。
+
+- 判定・コンボ・EXスコア・ゲージの増減・BP・総ノーツ数に含めません。地雷のダメージもありません。
+- キー音は、ノーツの位置でBGMとして鳴らします。見えないノーツはレーンに残します。
+- Kaleidのフリーゾーンは区間ごと外します。
+- ノーツは表示だけに残し、[非表示の設定](settings.md#auto-scratchのノーツ表示)で隠せます。
+  beatorajaはノーツを表示しません。LR2はAUTO用のノーツ画像で表示し、判定しません。
+
+v0.5.3までの`BATTLE AS`の記録は、スクラッチをPGREATとして数えた総ノーツ数・
+EXスコアのまま残ります。
 
 重要なのは「設定値」ではなく「実際に効果が出たか」です。たとえば固定BPM譜面の
 BPM GUIDE、Mineの無い譜面のNO MINE、100%以下のEXPAND JUDGEはスコアを無効化しません。

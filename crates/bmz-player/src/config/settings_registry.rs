@@ -85,6 +85,7 @@ impl SettingsEntryId {
         Self::AssistLongNoteMode,
         Self::AssistMineMode,
         Self::AssistAutoScratch,
+        Self::HideAutoScratchNotes,
     ];
 
     pub const ASSIST_NOTE_ENTRIES: &'static [Self] = &[
@@ -253,6 +254,7 @@ impl SettingsEntryId {
             Self::AssistMarkNote => "MARK NOTE",
             Self::AssistBpmGuide => "BPM GUIDE",
             Self::AssistAutoScratch => "AUTO SCRATCH",
+            Self::HideAutoScratchNotes => "HIDE AUTO SCRATCH NOTES",
             Self::AssistScrollMode => "SCROLL",
             Self::AssistLongNoteMode => "LONGNOTE",
             Self::AssistMineMode => "MINE",
@@ -391,6 +393,7 @@ impl SettingsEntryId {
             Self::AssistMarkNote => "settings-entry-description-assist-mark-note",
             Self::AssistBpmGuide => "settings-entry-description-assist-bpm-guide",
             Self::AssistAutoScratch => "settings-entry-description-assist-auto-scratch",
+            Self::HideAutoScratchNotes => "settings-entry-description-hide-auto-scratch-notes",
             Self::AssistScrollMode => "settings-entry-description-assist-scroll-mode",
             Self::AssistLongNoteMode => "settings-entry-description-assist-long-note-mode",
             Self::AssistMineMode => "settings-entry-description-assist-mine-mode",

@@ -282,6 +282,8 @@ pub struct PlayDefaultsConfig {
     /// beatoraja は LN モードで tail キャップを描画しないため既定 OFF。
     #[serde(default)]
     pub show_ln_tail_cap: bool,
+    #[serde(default)]
+    pub hide_auto_scratch_notes: bool,
 }
 
 impl PlayDefaultsConfig {

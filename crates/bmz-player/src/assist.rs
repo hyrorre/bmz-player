@@ -21,7 +21,10 @@ use crate::config::profile_config::{
 use crate::random_option_seed::JavaRandom;
 use crate::select_options::ArrangeOption;
 
+mod auto_scratch;
 mod extra_notes;
+
+pub use auto_scratch::{has_auto_scratch_notes, move_auto_scratch_notes_to_background};
 
 pub const EXPAND_JUDGE_MASK: u32 = 1 << 0;
 pub const CONSTANT_MASK: u32 = 1 << 1;
@@ -180,13 +183,7 @@ pub fn apply_chart_assists(
         mark_effect(&mut runtime, BPM_GUIDE_MASK, AssistLevel::LightAssist);
     }
 
-    chart.total_notes = chart
-        .lane_notes
-        .iter()
-        .flatten()
-        .filter(|note| note.kind.is_scored_head() && !chart.is_free_zone_inner(note.id))
-        .count()
-        .min(u32::MAX as usize) as u32;
+    refresh_total_notes(chart);
     runtime
 }
 
@@ -211,13 +208,7 @@ pub fn apply_extra_note_assist(
         return None;
     }
     mark_effect(runtime, EXTRA_NOTE_MASK, AssistLevel::Assist);
-    chart.total_notes = chart
-        .lane_notes
-        .iter()
-        .flatten()
-        .filter(|note| note.kind.is_scored_head() && !chart.is_free_zone_inner(note.id))
-        .count()
-        .min(u32::MAX as usize) as u32;
+    refresh_total_notes(chart);
     Some(first_id)
 }
 
@@ -243,6 +234,17 @@ pub fn judge_window_rates(
         }
     }
     rates
+}
+
+/// 譜面オプションでノーツを変えた後に、譜面の採点対象ノーツ数を数え直す。
+fn refresh_total_notes(chart: &mut PlayableChart) {
+    chart.total_notes = chart
+        .lane_notes
+        .iter()
+        .flatten()
+        .filter(|note| note.kind.is_scored_head() && !chart.is_free_zone_inner(note.id))
+        .count()
+        .min(u32::MAX as usize) as u32;
 }
 
 fn mark_effect(runtime: &mut AssistRuntime, mask: u32, level: AssistLevel) {

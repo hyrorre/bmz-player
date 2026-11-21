@@ -1152,13 +1152,14 @@ fn transform_chart_for_play(
     }
     // LR2oraja Endless Dream と同じく全譜面オプションの後で判定し、配置で
     // スクラッチへ移ったノーツも自動演奏の対象として数える。
-    if options.assist.auto_scratch
-        && options.replay_player.is_none()
-        && !applied_double_option.is_battle()
-    {
-        let lanes: &[Lane] =
-            if battle_presentation { &[Lane::Scratch] } else { &[Lane::Scratch, Lane::Scratch2] };
-        crate::assist::merge_auto_scratch_assist_level(&mut assist_runtime, &chart, lanes);
+    let auto_scratch_lanes =
+        auto_scratch_chart_lanes(options, applied_double_option, battle_presentation);
+    if !applied_double_option.is_battle() && !auto_scratch_lanes.is_empty() {
+        crate::assist::merge_auto_scratch_assist_level(
+            &mut assist_runtime,
+            &chart,
+            auto_scratch_lanes,
+        );
     }
     applied_arrange.double_option = applied_double_option;
     applied_arrange.bms_random_choices = import.bms_random_choices;
@@ -1173,6 +1174,8 @@ fn transform_chart_for_play(
         keys.apply(&mut chart);
     }
     chart.metadata.kaleid.effective = bmz_chart::kaleid::features_for_chart(&chart);
+    // Kaleidの実効機能は譜面の内容で決め、自動演奏用のダミー化を含めない。
+    crate::assist::move_auto_scratch_notes_to_background(&mut chart, auto_scratch_lanes);
 
     TransformedPlayChart {
         archive_source: false,
@@ -1187,6 +1190,24 @@ fn transform_chart_for_play(
             || conversion_persistence_disabled
             || crate::cli::latency_validation_enabled(),
         source_key_mode,
+    }
+}
+
+/// 譜面上で自動演奏にするスクラッチレーン。
+///
+/// BATTLE ASはリプレイ再生でも両側を自動演奏する。単体のAUTO SCRATCHは、リプレイの
+/// キーログと食い違うため再生では掛けない。G-BATTLEの2P側は相手の表示用なので含めない。
+pub(super) fn auto_scratch_chart_lanes(
+    options: &PlaySessionOptions,
+    applied_double_option: DoubleOption,
+    battle_presentation: bool,
+) -> &'static [Lane] {
+    if applied_double_option == DoubleOption::BattleAutoScratch {
+        &[Lane::Scratch, Lane::Scratch2]
+    } else if options.assist.auto_scratch && options.replay_player.is_none() {
+        if battle_presentation { &[Lane::Scratch] } else { &[Lane::Scratch, Lane::Scratch2] }
+    } else {
+        &[]
     }
 }
 

@@ -1357,7 +1357,7 @@ fn load_transformed_chart_marks_beatoraja_arrange_assists() {
 }
 
 #[test]
-fn load_transformed_chart_marks_auto_scratch_only_when_scratch_notes_exist() {
+fn load_transformed_chart_marks_auto_scratch_and_removes_it_from_scoring() {
     let load = |body: &str| {
         let path = write_temp_bms(body);
         let imported = import_bms_chart(&path, None, true).unwrap();
@@ -1390,6 +1390,25 @@ fn load_transformed_chart_marks_auto_scratch_only_when_scratch_notes_exist() {
     // LR2: no score, the clear counts as an assist clear.
     assert_eq!(transformed.assist_runtime.level, bmz_gameplay::session::AssistLevel::Assist);
     assert!(!transformed.assist_runtime.score_update_enabled());
+    // beatoraja / Endless Dream move the auto scratch to the background.
+    let scratch_kinds = |chart: &PlayableChart, lane: Lane| {
+        chart.notes_for_lane(lane).iter().map(|note| note.kind).collect::<Vec<_>>()
+    };
+    assert_eq!(scratch_kinds(&transformed.chart, Lane::Scratch), [NoteKind::DummyTap]);
+    assert_eq!(scored_note_count(&transformed.chart), 1);
+    assert!(!transformed.chart.metadata.kaleid.effective.dummy);
+    // A replay follows its key log, so a live AUTO SCRATCH setting does not apply.
+    let replay = load_transformed_chart_for_play(
+        &library_db,
+        chart_id,
+        &PlaySessionOptions {
+            replay_player: Some(ReplayPlayer::default()),
+            ..auto_scratch(DoubleOption::Off)
+        },
+    )
+    .unwrap();
+    assert_eq!(scratch_kinds(&replay.chart, Lane::Scratch), [NoteKind::Tap]);
+    assert_eq!(scored_note_count(&replay.chart), 2);
 
     // D-BATTLE with AUTO SCRATCH is BATTLE AS: its own bucket, not an assist.
     let battle =
@@ -1401,6 +1420,10 @@ fn load_transformed_chart_marks_auto_scratch_only_when_scratch_notes_exist() {
         crate::select_options::DoubleOptionScoreBucket::BattleAutoScratch
     );
     assert_eq!(battle.assist_runtime.level, bmz_gameplay::session::AssistLevel::None);
+    for lane in [Lane::Scratch, Lane::Scratch2] {
+        assert_eq!(scratch_kinds(&battle.chart, lane), [NoteKind::DummyTap]);
+    }
+    assert_eq!(scored_note_count(&battle.chart), 2);
     std::fs::remove_file(path).unwrap();
 
     let (path, library_db, chart_id) = load("#TITLE No Scratch\n#BPM 120\n#00011:01\n");

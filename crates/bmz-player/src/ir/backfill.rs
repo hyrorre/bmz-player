@@ -722,7 +722,13 @@ fn build_local_score_submission(
     let expected_total_notes = base_total_notes.saturating_mul(double_multiplier);
     // Preserve a larger historical count for forward compatibility, while
     // repairing legacy BMZ CN/HCN rows that stored the base library count.
-    let scored_total_notes = row.total_notes.max(expected_total_notes);
+    // BATTLE AS excludes the arranged scratch lanes, which the library count
+    // cannot reproduce, so its stored play-time count is authoritative.
+    let scored_total_notes = if row.double_option == DoubleOptionScoreBucket::BattleAutoScratch {
+        row.total_notes
+    } else {
+        row.total_notes.max(expected_total_notes)
+    };
     let mut play_options = BTreeMap::new();
     let arrange_1p = arrange_option_ir(row.arrange);
     play_options

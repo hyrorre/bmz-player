@@ -250,6 +250,7 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
         result_wait_end_time: None,
         bga_stretch: 1,
         show_ln_tail_cap: false,
+        hide_auto_scratch_notes: false,
         lane_hcn_timer: [None; LANE_COUNT],
         lane_hcn_keysound_muted: [None; LANE_COUNT],
         pending_keysounds: Vec::new(),

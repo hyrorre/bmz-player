@@ -282,6 +282,11 @@ pub(in crate::ui::profile_panel) fn build_profile_play_section(
                     {
                         profile.play.set_auto_scratch(auto_scratch);
                     }
+                    ui.checkbox(
+                        &mut profile.play.hide_auto_scratch_notes,
+                        tr!(text, "profile-play-hide-auto-scratch-notes"),
+                    )
+                    .on_hover_text(tr!(text, "settings-entry-description-hide-auto-scratch-notes"));
                     let assist = &mut profile.play.assist;
                     ui.checkbox(&mut assist.expand_judge, "EXPAND JUDGE");
                     ui.checkbox(&mut assist.judge_area, "JUDGE AREA");

@@ -1855,6 +1855,7 @@ fn session() -> GameSession {
         result_wait_end_time: None,
         bga_stretch: 1,
         show_ln_tail_cap: false,
+        hide_auto_scratch_notes: false,
         lane_hcn_timer: [None; bmz_core::lane::LANE_COUNT],
         lane_hcn_keysound_muted: [None; bmz_core::lane::LANE_COUNT],
         pending_keysounds: Vec::new(),

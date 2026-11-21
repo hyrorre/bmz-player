@@ -71,6 +71,39 @@ fn profile_auto_scratch_plays_only_scratch_lanes() {
 }
 
 #[test]
+fn profile_auto_scratch_does_not_judge_or_combo_the_scratch() {
+    let mut source = chart();
+    source.lane_notes = std::array::from_fn(|_| Vec::new());
+    source.long_notes.clear();
+    source.lane_notes[Lane::Scratch.index()].push(note(1, Lane::Scratch, 1_000_000));
+    source.lane_notes[Lane::Key1.index()].push(note(2, Lane::Key1, 3_000_000));
+    source.total_notes = 2;
+    source.end_time = TimeUs(4_000_000);
+    let options = PlaySessionOptions {
+        assist: AssistOptionConfig { auto_scratch: true, ..Default::default() },
+        ..Default::default()
+    };
+    let mut session = build_game_session(
+        Arc::new(source),
+        &ProfileConfig::new_default("default", "Default", 1),
+        options,
+    );
+    assert_eq!(session.scored_total_notes, 1);
+    let mut audio = bmz_audio::queue::ScheduledSoundQueue::new();
+    // Well past the scratch note, before the Key1 note.
+    session.audio_clock.pause_at(TimeUs(1_500_000));
+    bmz_gameplay::session::advance_session_frame(&mut session, &mut audio);
+
+    assert_eq!(session.score.ex_score(), 0);
+    assert_eq!(session.score.combo, 0);
+    assert_eq!(session.score.bp(), 0);
+    assert_eq!(
+        session.chart.notes_for_lane(Lane::Scratch)[0].kind,
+        bmz_chart::model::NoteKind::DummyTap
+    );
+}
+
+#[test]
 fn build_game_session_uses_profile_play_settings() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
     profile.play.auto_play = true;

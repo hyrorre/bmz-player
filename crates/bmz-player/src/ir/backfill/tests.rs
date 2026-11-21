@@ -352,6 +352,22 @@ fn local_backfill_payload_resolves_mixed_auto_mode_from_library_profile() {
 }
 
 #[test]
+fn local_backfill_payload_keeps_battle_as_count_without_auto_scratch() {
+    let chart = test_chart();
+    let battle_notes = 2 * chart.scored_total_notes(LnScorePolicy::ForceCn);
+    let mut row = test_row();
+    row.double_option = DoubleOptionScoreBucket::BattleAutoScratch;
+    row.applied_double_option = DoubleOption::BattleAutoScratch;
+    // The played count excludes both auto scratch lanes, below the library count.
+    row.total_notes = battle_notes - 40;
+
+    let payload = build_local_score_submission(&row, &chart, Some(&test_analysis()), None);
+
+    assert_eq!(payload.result.notes, battle_notes - 40);
+    assert_eq!(payload.chart.notes.total, chart.scored_total_notes(LnScorePolicy::ForceCn));
+}
+
+#[test]
 fn local_backfill_payload_keeps_flip_separate_from_off_score_bucket() {
     let mut row = test_row();
     row.double_option = DoubleOptionScoreBucket::Off;
