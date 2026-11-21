@@ -42,29 +42,5 @@ pub(super) fn current_rank_index(state: &SkinDrawState) -> Option<usize> {
 }
 
 pub(super) fn rank_index(ex_score: Option<u32>, total_notes: u32) -> Option<usize> {
-    let ex_score = ex_score?;
-    let max_score = total_notes.saturating_mul(2);
-    if max_score == 0 {
-        return None;
-    }
-    let score = ex_score.min(max_score) as u64;
-    let max = max_score as u64;
-    let rank = if score * 9 >= max * 8 {
-        0
-    } else if score * 9 >= max * 7 {
-        1
-    } else if score * 9 >= max * 6 {
-        2
-    } else if score * 9 >= max * 5 {
-        3
-    } else if score * 9 >= max * 4 {
-        4
-    } else if score * 9 >= max * 3 {
-        5
-    } else if score * 9 >= max * 2 {
-        6
-    } else {
-        7
-    };
-    Some(rank)
+    bmz_core::score::score_rank_index(ex_score?, total_notes)
 }

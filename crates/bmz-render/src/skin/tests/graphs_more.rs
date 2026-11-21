@@ -564,6 +564,8 @@ fn graph_fill_dimensions_scales_lua_chart_graph_by_dst_multiplier() {
         cycle: 0,
         angle: 0,
         graph_type: 0,
+        distribution: None,
+        labels: None,
         is_ref_num: false,
     };
     let state = SkinDrawState {

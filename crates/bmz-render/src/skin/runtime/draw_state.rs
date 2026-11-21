@@ -346,6 +346,8 @@ pub struct SkinDrawState {
     pub select_replay_slot_rule_indices: [i64; 4],
     /// beatoraja ValueType folder_noplay..folder_max (320..330) 用のランプ別曲数。
     pub select_folder_lamp_counts: [u32; 11],
+    pub select_current_folder_lamp_counts: Option<[u32; 11]>,
+    pub select_current_folder_score_rank_counts: Option<[u32; 9]>,
     /// 選択中バー種別。OPTION_FOLDERBAR / SONGBAR / GRADEBAR の判定に使う。
     pub select_row_kind: SelectRowKind,
     /// 選択中 GradeBar の制約。OPTION_GRADEBAR_* (1002..1017) の判定に使う。
@@ -722,6 +724,8 @@ impl Default for SkinDrawState {
             result_favorite_song: None,
             select_replay_slot_rule_indices: [0; 4],
             select_folder_lamp_counts: [0; 11],
+            select_current_folder_lamp_counts: None,
+            select_current_folder_score_rank_counts: None,
             select_row_kind: SelectRowKind::Song,
             select_course_constraints: CourseConstraintFlags::default(),
             select_is_folder: false,

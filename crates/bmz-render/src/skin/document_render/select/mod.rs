@@ -6,6 +6,7 @@ mod render;
 mod songlist;
 
 pub(super) use bar::skin_document_render_select_bar_methods;
+pub(super) use graph::distribution_label_render_item;
 pub(super) use graph::skin_document_render_select_graph_methods;
 pub(super) use input::*;
 pub(super) use interaction::skin_document_render_select_interaction_methods;

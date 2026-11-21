@@ -172,14 +172,35 @@ macro_rules! skin_document_render_graph_image_methods {
             })
         }
 
-        fn graph_render_item(
+        fn graph_render_items(
             &self,
             graph: &SkinGraphDef,
             destination: &SkinDestinationDef,
             frame: ResolvedSkinFrame,
+            elapsed: i32,
             state: &SkinDrawState,
             sources: &HashMap<String, SkinDocumentTexture>,
-        ) -> Option<SkinRenderItem> {
+        ) -> Option<Vec<SkinRenderItem>> {
+            if let Some(distribution) = graph.distribution {
+                use bmz_skin_document::SkinGraphDistribution;
+                let counts: &[u32] = match distribution {
+                    SkinGraphDistribution::CurrentFolderLamp => {
+                        state.select_current_folder_lamp_counts.as_ref()?
+                    }
+                    SkinGraphDistribution::CurrentFolderScoreRank => {
+                        state.select_current_folder_score_rank_counts.as_ref()?
+                    }
+                };
+                return Some(self.select_bar_graph_render_items(
+                    SelectBarGraph::Distribution(counts),
+                    graph,
+                    destination,
+                    frame,
+                    elapsed,
+                    state,
+                    sources,
+                ));
+            }
             let source = sources.get(&graph.src)?;
             let (fill_multiplier, uv_ratio) = graph_fill_dimensions(graph, state);
             let fill_from_right = frame.w < 0;
@@ -221,7 +242,7 @@ macro_rules! skin_document_render_graph_image_methods {
             if rect.width <= 0.0 || rect.height <= 0.0 {
                 return None;
             }
-            Some(SkinRenderItem::Image {
+            Some(vec![SkinRenderItem::Image {
                 texture: source.texture,
                 rect,
                 uv,
@@ -236,7 +257,7 @@ macro_rules! skin_document_render_graph_image_methods {
                 border: None,
                 source_size: Some(source.source_size),
                 linear_filter: frame.linear_filter(false),
-            })
+            }])
         }
     };
 }

@@ -7,6 +7,7 @@ pub mod judge;
 pub mod lane;
 pub mod latency;
 pub mod replay;
+pub mod score;
 #[cfg(target_os = "macos")]
 pub mod suspend;
 #[cfg(target_os = "linux")]

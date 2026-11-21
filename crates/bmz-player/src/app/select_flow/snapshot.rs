@@ -335,6 +335,12 @@ impl WinitApp {
             self.apply_select_row_banners(displayed_rows);
         }
         let (detail_options, detail_options_scroll) = self.detail_options_frame();
+        let current_folder_summary = self
+            .select
+            .folder_stack
+            .last()
+            .filter(|_| !self.select.ir_battle.active)
+            .and_then(|path| self.select.select_folder_summaries.current_folder_summary(path));
         SelectSnapshot {
             screen_size: [0, 0],
             time: self.select_time(),
@@ -511,6 +517,9 @@ impl WinitApp {
                 self.boot.profile_config.audio_mix.bgm_volume,
             ),
             current_folder,
+            current_folder_lamp_counts: current_folder_summary.map(|summary| summary.lamp_counts),
+            current_folder_score_rank_counts: current_folder_summary
+                .map(|summary| summary.score_rank_counts),
             key_hint: self.select.select_keys.key_hint().to_string(),
             option_hint: self.select.select_keys.option_hint().to_string(),
             exit_hold: self.select_exit_hold_snapshot(),

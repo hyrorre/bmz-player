@@ -10,8 +10,12 @@ use bmz_render::scene::SelectRowKind;
 
 use crate::ln_policy::LnPolicySetting;
 use crate::screens::select_model::{
-    SelectFolderSummary, SelectItem, select_folder_summary_for_rule_mode,
+    COURSE_CONTENTS_PATH_PREFIX, COURSE_ROOT_PATH, FAVORITE_ROOT_PATH, SAME_FOLDER_PATH_PREFIX,
+    SEARCH_PATH_PREFIX, SelectFolderSummary, SelectItem, TABLE_ROOT_PATH, TablePath,
+    VIRTUAL_FOLDER_PATH_PREFIX, parse_same_folder_path, parse_search_query, parse_table_path,
+    select_folder_summary_for_rule_mode,
 };
+use crate::screens::settings_model::CONFIG_ROOT_PATH;
 use crate::storage::library_db::LibraryDatabase;
 use crate::storage::score_db::ScoreDatabase;
 
@@ -127,6 +131,7 @@ impl SelectFolderSummaryRuntime {
         ln_policy: LnPolicySetting,
         rule_mode: RuleMode,
         active_song_roots: &[String],
+        current_folder: Option<&str>,
     ) {
         if self.active_song_roots != active_song_roots {
             self.active_song_roots = active_song_roots.to_vec();
@@ -139,7 +144,23 @@ impl SelectFolderSummaryRuntime {
         }
         self.sync_score_context(items, ln_policy, rule_mode);
         self.poll(items);
-        self.request_visible(items, visible_indices);
+        if let Some((path, kind)) = current_folder.and_then(current_folder_summary_target) {
+            self.request(path, kind);
+        }
+        for &index in visible_indices {
+            if let Some(SelectItem::Folder { path, kind, summary: None, .. }) = items.get(index) {
+                self.request(path, *kind);
+            }
+        }
+    }
+
+    pub(super) fn current_folder_summary(&self, path: &str) -> Option<&SelectFolderSummary> {
+        let (path, kind) = current_folder_summary_target(path)?;
+        let key = cache_key(path, kind, self.ln_policy, self.rule_mode);
+        match self.cache.get(&key)? {
+            SelectFolderSummaryCacheEntry::Ready(Some(summary)) => Some(summary),
+            _ => None,
+        }
     }
 
     pub(super) fn sync_score_context(
@@ -198,49 +219,32 @@ impl SelectFolderSummaryRuntime {
         }
     }
 
-    fn request_visible(&mut self, items: &[SelectItem], visible_indices: &[usize]) {
-        let mut requests = Vec::new();
-        for &index in visible_indices {
-            let Some(SelectItem::Folder { path, kind, summary, .. }) = items.get(index) else {
-                continue;
-            };
-            if summary.is_some() {
-                continue;
-            }
-            let key = cache_key(path, *kind, self.ln_policy, self.rule_mode);
-            match self.cache.get(&key) {
-                Some(SelectFolderSummaryCacheEntry::Ready(_)) => continue,
-                Some(SelectFolderSummaryCacheEntry::Loading { view_generation })
-                    if *view_generation == self.view_generation =>
-                {
-                    continue;
-                }
-                Some(SelectFolderSummaryCacheEntry::Missing { view_generation })
-                    if *view_generation == self.view_generation =>
-                {
-                    continue;
-                }
-                Some(_) | None => {}
-            }
-            self.cache.insert(
-                key.clone(),
-                SelectFolderSummaryCacheEntry::Loading { view_generation: self.view_generation },
-            );
-            requests.push(SelectFolderSummaryRequest {
+    fn request(&mut self, path: &str, kind: SelectRowKind) {
+        let key = cache_key(path, kind, self.ln_policy, self.rule_mode);
+        match self.cache.get(&key) {
+            Some(SelectFolderSummaryCacheEntry::Ready(_)) => return,
+            Some(
+                SelectFolderSummaryCacheEntry::Loading { view_generation }
+                | SelectFolderSummaryCacheEntry::Missing { view_generation },
+            ) if *view_generation == self.view_generation => return,
+            _ => {}
+        }
+        self.cache.insert(
+            key.clone(),
+            SelectFolderSummaryCacheEntry::Loading { view_generation: self.view_generation },
+        );
+        let _ = self.request_tx.send(SelectFolderSummaryWorkerCommand::Load(
+            SelectFolderSummaryRequest {
                 key,
-                path: path.clone(),
-                kind: *kind,
+                path: path.to_owned(),
+                kind,
                 active_song_roots: self.active_song_roots.clone(),
                 ln_policy_setting: self.ln_policy,
                 rule_mode: self.rule_mode,
                 view_generation: self.view_generation,
                 data_generation: self.data_generation,
-            });
-        }
-
-        for request in requests {
-            let _ = self.request_tx.send(SelectFolderSummaryWorkerCommand::Load(request));
-        }
+            },
+        ));
     }
 
     fn send_worker_context(&self) {
@@ -391,7 +395,38 @@ fn cache_key(
     ln_policy_setting: LnPolicySetting,
     rule_mode: RuleMode,
 ) -> String {
+    // NEW and the other virtual folders share the same summary query.
+    let kind = if kind == SelectRowKind::NewSongFolder { SelectRowKind::Command } else { kind };
     format!("{kind:?}\n{}\n{}\n{path}", ln_policy_setting.as_ir_str(), rule_mode.as_str())
+}
+
+fn current_folder_summary_target(path: &str) -> Option<(&str, SelectRowKind)> {
+    if path.starts_with(TABLE_ROOT_PATH) {
+        return match parse_table_path(path) {
+            Some(TablePath::Table { .. } | TablePath::Level { .. }) => {
+                Some((path, SelectRowKind::TableFolder))
+            }
+            _ => None,
+        };
+    }
+    if path.starts_with(SEARCH_PATH_PREFIX) {
+        return parse_search_query(path).map(|_| (path, SelectRowKind::SearchFolder));
+    }
+    if path.starts_with(SAME_FOLDER_PATH_PREFIX) {
+        return parse_same_folder_path(path).map(|folder| (folder, SelectRowKind::Folder));
+    }
+    if path.starts_with(VIRTUAL_FOLDER_PATH_PREFIX) {
+        return Some((path, SelectRowKind::Command));
+    }
+    if path.is_empty()
+        || path == COURSE_ROOT_PATH
+        || path.starts_with(COURSE_CONTENTS_PATH_PREFIX)
+        || path.starts_with(FAVORITE_ROOT_PATH)
+        || path.starts_with(CONFIG_ROOT_PATH)
+    {
+        return None;
+    }
+    Some((path, SelectRowKind::Folder))
 }
 
 fn view_key(folder_stack: &[String]) -> String {
@@ -442,6 +477,57 @@ mod tests {
 
         assert_ne!(base, cn);
         assert_ne!(base, dx);
+    }
+
+    #[test]
+    fn open_folder_reuses_its_row_summary_and_follows_navigation_and_score_context() {
+        let path = "bmz-filter:new/today";
+        let ln = LnPolicySetting::AutoLn;
+        let rule = RuleMode::Beatoraja;
+        let mut runtime = SelectFolderSummaryRuntime::disabled(&[], ln, rule);
+        let (request_tx, requests) = mpsc::channel();
+        let (results, result_rx) = mpsc::channel();
+        runtime.request_tx = request_tx;
+        runtime.result_rx = result_rx;
+        let mut rows = [SelectItem::Folder {
+            path: path.to_owned(),
+            name: "Today".to_owned(),
+            kind: SelectRowKind::NewSongFolder,
+            summary: None,
+        }];
+        runtime.refresh(&mut rows, &[0], ln, rule, &[], None);
+        let SelectFolderSummaryWorkerCommand::Load(request) = requests.try_recv().unwrap() else {
+            panic!("expected a request for the NEW folder row");
+        };
+        runtime.sync_view(&[path.to_owned()]);
+        let summary = SelectFolderSummary { lamp_counts: [3; 11], score_rank_counts: [4; 9] };
+        results
+            .send(SelectFolderSummaryResult {
+                key: request.key,
+                view_generation: request.view_generation,
+                data_generation: request.data_generation,
+                result: Ok(Some(summary.clone())),
+            })
+            .unwrap();
+        runtime.refresh(&mut [], &[], ln, rule, &[], Some(path));
+        assert_eq!(runtime.current_folder_summary(path), Some(&summary));
+        assert_eq!(runtime.current_folder_summary("bmz-filter:new/yesterday"), None);
+        assert!(matches!(
+            requests.try_recv(),
+            Ok(SelectFolderSummaryWorkerCommand::SetContext { .. })
+        ));
+        assert!(requests.try_recv().is_err(), "entering the folder must reuse its row summary");
+
+        runtime.refresh(&mut [], &[], ln, RuleMode::Dx, &[], Some(path));
+        assert_eq!(runtime.current_folder_summary(path), None);
+        assert!(matches!(
+            requests.try_recv(),
+            Ok(SelectFolderSummaryWorkerCommand::SetContext { .. })
+        ));
+        assert!(matches!(requests.try_recv(), Ok(SelectFolderSummaryWorkerCommand::Load(_))));
+        runtime.invalidate_data();
+        runtime.sync_score_context(&mut [], ln, rule);
+        assert_eq!(runtime.current_folder_summary(path), None);
     }
 
     #[test]

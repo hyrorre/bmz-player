@@ -321,9 +321,14 @@ macro_rules! skin_document_render_core_resolve_methods {
                         item.id == destination.id
                     })
                 {
-                    return self
-                        .graph_render_item(graph, destination, frame, state, sources)
-                        .map(|item| vec![item]);
+                    return self.graph_render_items(
+                        graph,
+                        destination,
+                        frame,
+                        elapsed,
+                        state,
+                        sources,
+                    );
                 }
 
                 if let Some(text) =
@@ -750,10 +755,10 @@ macro_rules! skin_document_render_core_resolve_methods {
             }
 
             if let Some(graph) = self.graph.iter().find(|graph| graph.id == destination.id)
-                && let Some(item) =
-                    self.graph_render_item(graph, destination, frame, state, sources)
+                && let Some(items) =
+                    self.graph_render_items(graph, destination, frame, elapsed, state, sources)
             {
-                return Some(vec![item]);
+                return Some(items);
             }
 
             if let Some(text) = self.text.iter().find(|text| text.id == destination.id)

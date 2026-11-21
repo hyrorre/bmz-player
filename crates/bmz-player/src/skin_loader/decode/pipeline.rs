@@ -209,6 +209,13 @@ pub(crate) fn decode_beatoraja_skin_request_cancellable(
             text.font = format!("{}:{}", font_namespace, text.font);
         }
     }
+    for graph in &mut document.graph {
+        if let Some(labels) = &mut graph.labels
+            && !labels.font.is_empty()
+        {
+            labels.font = format!("{}:{}", font_namespace, labels.font);
+        }
+    }
     if let Some(songlist) = &mut document.songlist {
         for field in songlist.all_score_fields_mut() {
             if let bmz_render::skin::SongListFieldRender::Text { text, .. } = &mut field.render

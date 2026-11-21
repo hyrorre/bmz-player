@@ -1,3 +1,55 @@
+use super::super::*;
+use crate::plan::TextSegmentEnd;
+
+pub(in crate::skin::document_render) fn distribution_label_render_item(
+    label: &SkinGraphLabelDef,
+    font: &str,
+    segment: Rect,
+    canvas_size: (u32, u32),
+    vertical: bool,
+    from_right: bool,
+    alpha: i32,
+) -> Option<SkinRenderItem> {
+    let canvas_w = canvas_size.0.max(1) as f32;
+    let canvas_h = canvas_size.1.max(1) as f32;
+    let padding = 1.0;
+    let segment_w = segment.width * canvas_w;
+    let segment_h = segment.height * canvas_h;
+    let (cross, length) = if vertical { (segment_w, segment_h) } else { (segment_h, segment_w) };
+    if label.text.is_empty() || cross <= 2.0 * padding || length <= 2.0 * padding {
+        return None;
+    }
+    let (x, y, end) = if vertical {
+        (segment_w * 0.5, segment_h - padding, TextSegmentEnd::Bottom)
+    } else if from_right {
+        (padding, segment_h * 0.5, TextSegmentEnd::Left)
+    } else {
+        (segment_w - padding, segment_h * 0.5, TextSegmentEnd::Right)
+    };
+    let channel = if label.dark { 0.0 } else { 1.0 };
+    Some(SkinRenderItem::Text {
+        origin: Point { x: segment.x + x / canvas_w, y: segment.y + y / canvas_h },
+        text: label.text.clone(),
+        style: TextStyle {
+            font_id: Some(font.to_owned()),
+            size: (cross - 2.0 * padding) / canvas_h,
+            bitmap_size: None,
+            color: Color::rgba(channel, channel, channel, alpha.clamp(0, 255) as f32 / 255.0),
+            layer: TextLayer::Ui,
+            align: TextAlign::Left,
+            max_width: (length - 2.0 * padding) / canvas_w,
+            overflow: TextOverflow::FitSegment(end),
+            wrapping: false,
+            outline: None,
+            shadow: None,
+            gradient: None,
+        },
+        caret: None,
+        blend: BlendMode::Normal,
+        post_scale: Point { x: 1.0, y: 1.0 },
+    })
+}
+
 macro_rules! skin_document_render_select_graph_methods {
     () => {
         fn select_folder_distribution_graph_render_items(
@@ -10,12 +62,18 @@ macro_rules! skin_document_render_select_graph_methods {
             state: &SkinDrawState,
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Vec<SkinRenderItem> {
-            let Some(source) = sources.get(&graph.src) else {
-                return Vec::new();
-            };
-            if graph.lr2_distribution && !select_row_shows_folder_distribution(row) {
+            // This graph slot follows a songlist row; screen-wide distributions use a destination.
+            if graph.distribution.is_some() {
                 return Vec::new();
             }
+            let data = if select_row_shows_folder_distribution(row) {
+                SelectBarGraph::Distribution(&row.folder_lamp_counts)
+            } else if let Some(progress) = row.download_progress.filter(|_| !graph.lr2_distribution)
+            {
+                SelectBarGraph::Download(progress)
+            } else {
+                return Vec::new();
+            };
             if !destination_ops_match(destination, enabled_options, state)
                 || !eval_skin_draw_condition(&destination.draw, state)
             {
@@ -32,11 +90,42 @@ macro_rules! skin_document_render_select_graph_methods {
             frame.x += row_origin.0;
             frame.y += row_origin.1;
             apply_skin_offset_to_frame(destination, &mut frame, state, false);
+            self.select_bar_graph_render_items(
+                data,
+                graph,
+                destination,
+                frame,
+                elapsed,
+                state,
+                sources,
+            )
+        }
 
+        fn select_bar_graph_render_items(
+            &self,
+            data: SelectBarGraph<'_>,
+            graph: &SkinGraphDef,
+            destination: &SkinDestinationDef,
+            frame: ResolvedSkinFrame,
+            elapsed: i32,
+            state: &SkinDrawState,
+            sources: &HashMap<String, SkinDocumentTexture>,
+        ) -> Vec<SkinRenderItem> {
+            let Some(source) = sources.get(&graph.src) else {
+                return Vec::new();
+            };
+            let standalone = graph.distribution.is_some();
             let source_w = source.source_size.width.max(1.0);
             let source_h = source.source_size.height.max(1.0);
-            let columns =
-                if graph.lr2_distribution { graph.divx.max(1) } else { graph.divx.max(11) };
+            let min_columns = if graph.lr2_distribution {
+                1
+            } else {
+                match data {
+                    SelectBarGraph::Distribution(counts) => counts.len() as i32,
+                    SelectBarGraph::Download(_) => 11,
+                }
+            };
+            let columns = graph.divx.max(min_columns);
             let rows = graph.divy.max(1);
             let width =
                 if graph.lr2_distribution && graph.w == -1 { source_w as i32 } else { graph.w };
@@ -73,10 +162,10 @@ macro_rules! skin_document_render_select_graph_methods {
                 frame.b as f32 / 255.0,
                 frame.a as f32 / 255.0,
             );
-            let cell = |lamp_index: usize, rect: Rect| {
+            let cell = |bucket: usize, rect: Rect| {
                 let index = animation_frame
                     * if graph.lr2_distribution { 11 } else { i64::from(columns) }
-                    + lamp_index as i64;
+                    + bucket as i64;
                 let source_x = graph
                     .x
                     .saturating_add(cell_w.saturating_mul((index % i64::from(columns)) as i32));
@@ -93,7 +182,7 @@ macro_rules! skin_document_render_select_graph_methods {
                         height: cell_h as f32 / source_h,
                     },
                     tint,
-                    blend: if graph.lr2_distribution {
+                    blend: if graph.lr2_distribution || standalone {
                         frame.blend(skin_blend_mode(destination.blend))
                     } else {
                         BlendMode::Normal
@@ -101,55 +190,81 @@ macro_rules! skin_document_render_select_graph_methods {
                     scale: SkinImageScale::Stretch,
                     border: None,
                     source_size: Some(source.source_size),
-                    linear_filter: graph.lr2_distribution
+                    linear_filter: (graph.lr2_distribution || standalone)
                         && frame.linear_filter(destination.filter != 0),
                 }
             };
 
-            if !select_row_shows_folder_distribution(row) {
-                let Some(progress) = row.download_progress else {
-                    return Vec::new();
-                };
-                // Endless Dream: cell 0 fills the region, and the progress cell
-                // fills a 1px-inset bar from the left.
-                let mut items = vec![cell(0, normalize_skin_frame_rect(frame, self.w, self.h))];
-                let fraction = progress.fraction.clamp(0.0, 1.0);
-                if fraction > 0.0 && frame.w.abs() > 2 && frame.h.abs() > 2 {
-                    let mut inner = frame;
-                    inner.x += frame.w.signum();
-                    inner.y += frame.h.signum();
-                    inner.w -= 2 * frame.w.signum();
-                    inner.h -= 2 * frame.h.signum();
-                    let mut rect = normalize_skin_frame_rect(inner, self.w, self.h);
-                    if frame.w < 0 {
-                        rect.x += rect.width * (1.0 - fraction);
+            let dst = normalize_skin_frame_rect(frame, self.w, self.h);
+            let counts = match data {
+                SelectBarGraph::Distribution(counts) => counts,
+                SelectBarGraph::Download(progress) => {
+                    // Endless Dream: cell 0 fills the region, and the progress cell
+                    // fills a 1px-inset bar from the left.
+                    let mut items = vec![cell(0, dst)];
+                    let fraction = progress.fraction.clamp(0.0, 1.0);
+                    if fraction > 0.0 && frame.w.abs() > 2 && frame.h.abs() > 2 {
+                        let mut inner = frame;
+                        inner.x += frame.w.signum();
+                        inner.y += frame.h.signum();
+                        inner.w -= 2 * frame.w.signum();
+                        inner.h -= 2 * frame.h.signum();
+                        let mut rect = normalize_skin_frame_rect(inner, self.w, self.h);
+                        if frame.w < 0 {
+                            rect.x += rect.width * (1.0 - fraction);
+                        }
+                        rect.width *= fraction;
+                        let lamp = usize::from(progress.lamp).min(columns as usize - 1);
+                        items.push(cell(lamp, rect));
                     }
-                    rect.width *= fraction;
-                    let lamp = usize::from(progress.lamp).min(graph.divx.max(11) as usize - 1);
-                    items.push(cell(lamp, rect));
+                    return items;
                 }
-                return items;
-            }
+            };
 
-            let total: u32 = row.folder_lamp_counts.iter().sum();
+            let total: u64 = counts.iter().copied().map(u64::from).sum();
             if total == 0 {
                 return Vec::new();
             }
 
-            let dst = normalize_skin_frame_rect(frame, self.w, self.h);
+            let vertical = standalone && graph.angle == 1;
+            let from_right = standalone && frame.w < 0;
+            let labels = graph.labels.as_ref().filter(|_| standalone);
             let mut items = Vec::new();
-            let mut filled = 0.0;
-            for lamp_index in (0..row.folder_lamp_counts.len()).rev() {
-                let count = row.folder_lamp_counts[lamp_index];
+            let mut filled = 0u64;
+            for (bucket, &count) in counts.iter().enumerate().rev() {
                 if count == 0 {
                     continue;
                 }
-                let width = dst.width * (count as f32 / total as f32);
-                if width <= 0.0 {
-                    continue;
+                let start = filled as f32 / total as f32;
+                filled += u64::from(count);
+                let end = filled as f32 / total as f32;
+                let rect = if vertical {
+                    Rect {
+                        y: dst.y + dst.height * (1.0 - end),
+                        height: dst.height * (end - start),
+                        ..dst
+                    }
+                } else {
+                    let offset = if from_right { 1.0 - end } else { start };
+                    Rect { x: dst.x + dst.width * offset, width: dst.width * (end - start), ..dst }
+                };
+                if rect.width > 0.0 && rect.height > 0.0 {
+                    items.push(cell(bucket, rect));
+                    if let Some(labels) = labels
+                        && let Some(label) = labels.items.iter().find(|label| label.index == bucket)
+                        && let Some(item) = select::distribution_label_render_item(
+                            label,
+                            &labels.font,
+                            rect,
+                            (self.w, self.h),
+                            vertical,
+                            from_right,
+                            frame.a,
+                        )
+                    {
+                        items.push(item);
+                    }
                 }
-                items.push(cell(lamp_index, Rect { x: dst.x + filled, width, ..dst }));
-                filled += width;
             }
             items
         }

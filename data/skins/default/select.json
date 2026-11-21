@@ -91,6 +91,19 @@
       "divy": 2,
       "cycle": 900,
       "type": -1
+    },
+    {
+      "id": "current_folder_lamp_graph",
+      "src": "panel",
+      "x": 0,
+      "y": 0,
+      "w": 44,
+      "h": 8,
+      "divx": 11,
+      "divy": 2,
+      "cycle": 900,
+      "distribution": "currentFolderLamp",
+      "angle": 1
     }
   ],
   "text": [
@@ -1921,6 +1934,10 @@
     },
     {
       "id": "songlist"
+    },
+    {
+      "id": "current_folder_lamp_graph",
+      "dst": [{ "x": 1274, "y": 26, "w": 6, "h": 673, "a": 230 }]
     },
     {
       "id": "select_title_label",

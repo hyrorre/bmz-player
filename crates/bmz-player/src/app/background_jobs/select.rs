@@ -222,12 +222,19 @@ impl WinitApp {
         let ln_policy = self.boot.profile_config.play.ln_mode_policy;
         let rule_mode = self.boot.profile_config.play.rule_mode;
         let active_song_roots = enabled_root_paths(&self.boot.app_config);
+        let current_folder = self.select.folder_stack.last().filter(|_| {
+            !self.select.ir_battle.active
+                && self.renderer.select_skin_document().is_some_and(|document| {
+                    document.graph.iter().any(|graph| graph.distribution.is_some())
+                })
+        });
         self.select.select_folder_summaries.refresh(
             &mut self.select.select_items,
             &visible_indices,
             ln_policy,
             rule_mode,
             &active_song_roots,
+            current_folder.map(String::as_str),
         );
     }
 }

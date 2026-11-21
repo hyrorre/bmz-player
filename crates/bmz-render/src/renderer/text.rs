@@ -290,6 +290,11 @@ fn build_text_frame_commands(
         let DrawCommand::Text { origin, text, style, caret, post_scale } = command else {
             continue;
         };
+        let segment_end = match style.overflow {
+            TextOverflow::FitSegment(end) => Some(end),
+            _ => None,
+        };
+        let caret = caret.filter(|_| segment_end.is_none());
         let quads_before = builder.quads.len();
         // 位置が不正な文字は組まずに飛ばす。コマンドごとの quad 数とキャレットの対応は保つ。
         if !point_is_finite(origin) || !point_is_finite(post_scale) {
@@ -342,6 +347,14 @@ fn build_text_frame_commands(
         }
         let quads_drawn = builder.quads.len();
         drop_non_finite_quads(&mut builder.quads, quads_before);
+        if let Some(end) = segment_end {
+            if !fit_segment_label(&mut builder.quads[quads_before..], *origin, style, end, surface)
+            {
+                builder.quads.truncate(quads_before);
+            }
+            command_quad_counts.push(builder.quads.len() - quads_before);
+            continue;
+        }
         // 不正な値を除いた文字列は位置がずれるので、グラデーションを掛けない。
         if let Some(gradient) = style.gradient
             && builder.quads.len() == quads_drawn
@@ -370,6 +383,51 @@ fn build_text_frame_commands(
         command_quad_counts.push(builder.quads.len() - quads_before);
     }
     builder.finish(command_quad_counts, command_caret_rects)
+}
+
+fn fit_segment_label(
+    quads: &mut [TextQuad],
+    anchor: Point,
+    style: &TextStyle,
+    end: TextSegmentEnd,
+    surface: SurfaceSize,
+) -> bool {
+    let Some(first) = quads.first() else { return false };
+    let (mut left, mut top) = (first.x, first.y);
+    let (mut right, mut bottom) = (first.x + first.width, first.y + first.height);
+    for quad in quads.iter().skip(1) {
+        left = left.min(quad.x);
+        top = top.min(quad.y);
+        right = right.max(quad.x + quad.width);
+        bottom = bottom.max(quad.y + quad.height);
+    }
+    // Rotating in pixel space preserves the font aspect ratio on non-square canvases.
+    let aspect = surface.width.max(1) as f32 / surface.height.max(1) as f32;
+    let vertical = end == TextSegmentEnd::Bottom;
+    let length = right - left;
+    let cross = bottom - top;
+    let epsilon = 0.001 / surface.height.max(1) as f32;
+    // Bitmap glyphs round their raster dimensions up to whole pixels.
+    let scale = (style.size / cross).min(1.0);
+    if length * scale > style.max_width + epsilon {
+        return false;
+    }
+    for quad in quads {
+        if vertical {
+            let y = anchor.y + (quad.x - right) * aspect * scale;
+            quad.x = anchor.x + ((top + bottom) * 0.5 - quad.y - quad.height) / aspect * scale;
+            quad.y = y;
+            (quad.width, quad.height) = (quad.height / aspect, quad.width * aspect);
+            quad.clockwise = true;
+        } else {
+            let end_x = if end == TextSegmentEnd::Left { left } else { right };
+            quad.x = anchor.x + (quad.x - end_x) * scale;
+            quad.y = anchor.y + (quad.y - (top + bottom) * 0.5) * scale;
+        }
+        quad.width *= scale;
+        quad.height *= scale;
+    }
+    true
 }
 
 /// 1つの文字列の本体（`quads` の範囲）に掛けるグラデーション。インスタンスを書き出すときに、
@@ -576,6 +634,7 @@ pub(super) struct TextQuad {
     pub(super) color: Color,
     /// 文字色で塗るグリフ。カラーグリフは false で、グラデーションを掛けない。
     pub(super) fill: bool,
+    pub(super) clockwise: bool,
 }
 
 impl TextQuad {
@@ -1402,5 +1461,6 @@ pub(super) fn text_overflow_key(overflow: TextOverflow) -> u8 {
         TextOverflow::Shrink => 1,
         TextOverflow::Truncate => 2,
         TextOverflow::ShrinkUniform => 3,
+        TextOverflow::FitSegment(_) => 0,
     }
 }

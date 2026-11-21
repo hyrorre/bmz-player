@@ -266,13 +266,13 @@ pub(super) fn folder_summary_for_charts(
     rule_mode: RuleMode,
 ) -> Result<SelectFolderSummary> {
     let mut seen = HashSet::new();
-    let keys: Vec<ScoreKey> = charts
+    let (keys, total_notes): (Vec<_>, Vec<_>) = charts
         .iter()
         .filter_map(|chart| {
             let key = score_key_for_chart(chart, ln_policy_setting, rule_mode);
-            seen.insert(key).then_some(key)
+            seen.insert(key).then(|| (key, chart.scored_total_notes_for_setting(ln_policy_setting)))
         })
-        .collect();
+        .unzip();
     let score_map: HashMap<ScoreKey, BestScoreSummary> = score_db
         .best_scores_for_charts(&keys)?
         .into_iter()
@@ -289,15 +289,11 @@ pub(super) fn folder_summary_for_charts(
         })
         .collect();
 
-    let mut lamp_counts = [0; 11];
-    for key in keys {
-        let index = score_map
-            .get(&key)
-            .map(|score| folder_lamp_index_from_clear_type(&score.clear_type))
-            .unwrap_or(0);
-        lamp_counts[index] += 1;
+    let mut summary = SelectFolderSummary::default();
+    for (key, notes) in keys.into_iter().zip(total_notes) {
+        summary.add_chart(notes, score_map.get(&key));
     }
-    Ok(SelectFolderSummary { lamp_counts })
+    Ok(summary)
 }
 
 pub(super) fn replay_slot_map(

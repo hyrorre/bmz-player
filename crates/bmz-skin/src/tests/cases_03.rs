@@ -1,6 +1,42 @@
 use super::*;
 
 #[test]
+fn lua_skin_loads_current_folder_lamp_graphs() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("select.luaskin");
+    fs::write(
+        &path,
+        r#"
+        return {
+            type = 5, w = 1280, h = 720,
+            source = {{ id = "lamps", path = "lamps.png" }},
+            graph = {
+                { id = "vertical", src = "lamps", w = 44, h = 4, divx = 11,
+                  distribution = "currentFolderLamp", angle = 1 },
+                { id = "horizontal", src = "lamps", w = 44, h = 4, divx = 11,
+                  distribution = "currentFolderLamp", angle = 0 },
+            },
+            destination = {
+                { id = "vertical", dst = {{ x = 1230, y = 130, w = 12, h = 420 }} },
+                { id = "horizontal", dst = {{ x = 680, y = 580, w = 500, h = 8 }} },
+            },
+        }
+        "#,
+    )
+    .unwrap();
+    let loaded =
+        load_lua_skin(&path, SkinKind::Select, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    assert_eq!(loaded.document.graph.len(), 2);
+    for (graph, angle) in loaded.document.graph.iter().zip([1, 0]) {
+        assert_eq!(
+            graph.distribution,
+            Some(bmz_skin_document::SkinGraphDistribution::CurrentFolderLamp)
+        );
+        assert_eq!(graph.angle, angle);
+    }
+}
+
+#[test]
 fn lua_skin_preserves_number_ref_digit_and_padding_fields() {
     let root = TestDir::created("bmz-skin-text-number-padding");
     let path = root.join("select.luaskin");

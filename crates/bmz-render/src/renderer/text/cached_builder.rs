@@ -181,7 +181,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
         let max_width = style.max_width.max(0.0) * surface.width as f32;
         if max_width > 0.0 && text_width > max_width {
             match style.overflow {
-                TextOverflow::Overflow => {}
+                TextOverflow::Overflow | TextOverflow::FitSegment(_) => {}
                 TextOverflow::Shrink => {
                     scale.x = (scale.x * max_width / text_width).max(0.01);
                 }
@@ -320,7 +320,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
         }
         if max_width > 0.0 && text_width > max_width {
             match style.overflow {
-                TextOverflow::Overflow => {}
+                TextOverflow::Overflow | TextOverflow::FitSegment(_) => {}
                 TextOverflow::Shrink => {
                     scale.x = (scale.x * max_width / text_width).max(0.01);
                     scaled_primary = primary.font().as_scaled(scale);
@@ -506,6 +506,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             glyph_height: cached.height,
             color,
             fill,
+            clockwise: false,
         });
     }
 

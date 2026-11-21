@@ -544,14 +544,17 @@ pub fn virtual_folder_summary(
         rule_mode,
         Some(active_song_roots),
     )?;
-    let rows = items
-        .into_iter()
-        .filter_map(|item| match item {
-            SelectItem::Chart(row) => Some(row),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    Ok(SelectFolderSummary::from(rows.as_slice()))
+    let mut summary = SelectFolderSummary::default();
+    for item in items {
+        if let SelectItem::Chart(row) = item {
+            let notes = row
+                .chart
+                .as_ref()
+                .map_or(0, |chart| chart.scored_total_notes_for_setting(ln_policy_setting));
+            summary.add_chart(notes, row.best_score.as_ref());
+        }
+    }
+    Ok(summary)
 }
 
 #[cfg(test)]

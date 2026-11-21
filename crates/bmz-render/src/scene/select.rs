@@ -121,6 +121,8 @@ pub struct SelectSnapshot {
     pub key_volume: f32,
     pub bgm_volume: f32,
     pub current_folder: String,
+    pub current_folder_lamp_counts: Option<[u32; 11]>,
+    pub current_folder_score_rank_counts: Option<[u32; 9]>,
     pub key_hint: String,
     pub option_hint: String,
     /// ESC 長押しによるアプリ終了の状態。
@@ -355,6 +357,8 @@ impl Default for SelectSnapshot {
             key_volume: 0.0,
             bgm_volume: 0.0,
             current_folder: String::new(),
+            current_folder_lamp_counts: None,
+            current_folder_score_rank_counts: None,
             key_hint: String::new(),
             option_hint: String::new(),
             exit_hold: ExitHoldSnapshot::default(),

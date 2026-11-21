@@ -254,10 +254,10 @@ fn text_instances_are_transformed_into_canvas_viewport() {
         },
     );
     let mut instances = Vec::new();
-    for value in [
-        0.1_f32, 0.2, 0.3, 0.4, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0,
-        0.0, 0.0,
-    ] {
+    let mut values = [0.0_f32; TEXT_INSTANCE_FLOATS];
+    values[..4].copy_from_slice(&[0.1, 0.2, 0.3, 0.4]);
+    values[6..16].fill(1.0);
+    for value in values {
         instances.extend_from_slice(&value.to_le_bytes());
     }
 

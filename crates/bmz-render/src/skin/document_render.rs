@@ -6,6 +6,11 @@ mod songlist_fields;
 mod songlist_parts;
 pub(in crate::skin) use songlist_parts::SongListBarParts;
 
+pub(in crate::skin) enum SelectBarGraph<'a> {
+    Distribution(&'a [u32]),
+    Download(crate::scene::SelectRowDownloadProgress),
+}
+
 /// SkinDocumentの描画・hit test・レーン寸法を利用する公開API。
 /// destination解決やcache構築の詳細はskinモジュール内の評価traitに置く。
 pub trait SkinDocumentRenderExt {
@@ -415,6 +420,17 @@ pub(super) trait SkinDocumentRenderInternal {
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Vec<SkinRenderItem>;
 
+    fn select_bar_graph_render_items(
+        &self,
+        data: SelectBarGraph<'_>,
+        graph: &SkinGraphDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        elapsed: i32,
+        state: &SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem>;
+
     fn select_songlist_level_items(
         &self,
         entries: &[DestinationListEntry],
@@ -800,14 +816,15 @@ pub(super) trait SkinDocumentRenderInternal {
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem>;
 
-    fn graph_render_item(
+    fn graph_render_items(
         &self,
         graph: &SkinGraphDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
+        elapsed: i32,
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
-    ) -> Option<SkinRenderItem>;
+    ) -> Option<Vec<SkinRenderItem>>;
 }
 
 mod core;

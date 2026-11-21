@@ -330,9 +330,10 @@ pub struct CourseEntryPreview {
     pub resolved: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SelectFolderSummary {
     pub lamp_counts: [u32; 11],
+    pub score_rank_counts: [u32; 9],
 }
 
 impl SelectFolderSummary {
@@ -340,20 +341,18 @@ impl SelectFolderSummary {
         let index = self.lamp_counts.iter().position(|count| *count > 0).unwrap_or(0);
         clear_type_name_for_folder_lamp(index).to_string()
     }
-}
 
-impl From<&[SelectChartRow]> for SelectFolderSummary {
-    fn from(rows: &[SelectChartRow]) -> Self {
-        let mut lamp_counts = [0; 11];
-        for row in rows {
-            let index = row
-                .best_score
-                .as_ref()
-                .map(|score| folder_lamp_index_from_clear_type(&score.clear_type))
-                .unwrap_or(0);
-            lamp_counts[index] += 1;
-        }
-        Self { lamp_counts }
+    fn add_chart(&mut self, total_notes: u32, score: Option<&BestScoreSummary>) {
+        let lamp_index =
+            score.map(|score| folder_lamp_index_from_clear_type(&score.clear_type)).unwrap_or(0);
+        self.lamp_counts[lamp_index] += 1;
+
+        // The atlas starts with no score, followed by F through AAA.
+        let score_index = score
+            .filter(|score| score.numeric_score_available)
+            .and_then(|score| bmz_core::score::score_rank_index(score.ex_score, total_notes))
+            .map_or(0, |rank| 8 - rank);
+        self.score_rank_counts[score_index] += 1;
     }
 }
 

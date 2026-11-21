@@ -391,6 +391,7 @@ fn all_offset_post_scale_is_applied_to_text_quads_and_caret() {
         glyph_height: 1,
         color: Color::rgb(1.0, 1.0, 1.0),
         fill: true,
+        clockwise: false,
     }];
     scale_text_quads(&mut quads, origin, scale);
     assert_approx(quads[0].x, 0.35);
@@ -410,6 +411,52 @@ fn all_offset_post_scale_is_applied_to_text_quads_and_caret() {
     assert_approx(caret.rect.y, 0.4);
     assert_approx(caret.rect.width, 0.03);
     assert_approx(caret.rect.height, 0.05);
+}
+
+#[test]
+fn bitmap_segment_labels_fit_and_rotate_at_fractional_canvas_scale() {
+    let font = super::unicode_text::bitmap_font_with(&[('F', 8), ('C', 8)]);
+    let surface = SurfaceSize { width: 1600, height: 900 };
+    let anchor = Point { x: 0.9, y: 0.8 };
+    let command = |max_width, end| DrawCommand::Text {
+        origin: anchor,
+        text: "FC".into(),
+        caret: None,
+        post_scale: Point { x: 1.0, y: 1.0 },
+        style: TextStyle {
+            size: 8.0 / 1080.0,
+            max_width,
+            overflow: TextOverflow::FitSegment(end),
+            ..super::unicode_text::text_style(Some("bitmap"))
+        },
+    };
+    let plan = DrawPlan {
+        clear: Color::rgb(0.0, 0.0, 0.0),
+        commands: vec![
+            command(0.02, TextSegmentEnd::Bottom),
+            command(0.001, TextSegmentEnd::Bottom),
+            command(0.02, TextSegmentEnd::Left),
+        ],
+    };
+    let frame = build_text_frame(
+        &plan,
+        &super::unicode_text::latin(),
+        &HashMap::new(),
+        &HashMap::from([("bitmap".to_owned(), font)]),
+        surface,
+    );
+    assert_eq!(frame.command_quad_counts, [2, 0, 2]);
+    let quads = frame.instances.as_chunks::<TEXT_INSTANCE_BYTES>().0;
+    let read = |quad: usize, index: usize| {
+        f32::from_le_bytes(quads[quad][index * 4..index * 4 + 4].try_into().unwrap())
+    };
+    assert_eq!(read(0, 19), 1.0);
+    assert_eq!(read(1, 19), 1.0);
+    assert!(read(0, 1) < read(1, 1));
+    assert_approx(read(1, 1) + read(1, 3), anchor.y);
+    assert_approx(read(1, 0) + read(1, 2) / 2.0, anchor.x);
+    assert_eq!(read(2, 19), 0.0);
+    assert_approx(read(2, 0), anchor.x);
 }
 
 #[test]

@@ -907,6 +907,63 @@ JSON / Luaの`hiterrorvisualizer`は、直近100件のPGREAT / GREAT / GOOD / BA
 実スキンの配置とGPU上の影響範囲の回帰テストは
 [`hit_error.rs`](../crates/bmz-player/src/skin_loader/tests/lua/hit_error.rs)を参照してください。
 
+## 開いているフォルダのランプ分布
+
+Selectのトップレベルの `graph` に `distribution = "currentFolderLamp"` を指定し、
+同じ `id` を `destination` に置くと、[現在のフォルダのランプ分布](select-folders.md#開いているフォルダのランプ分布)を表示できます。
+表示するスキンだけが、既存のフォルダ行と共通のキャッシュを使って非同期に集計を読み込みます。
+
+| `graph.angle` | 上位ランプから未プレーへの並び |
+|---|---|
+| `1`（既定） | 下から上へ |
+| `0` | 左から右へ。`dst.w` が負の場合は右から左へ |
+
+`src` の切り出し範囲と `divx` / `divy` は `songlist.graph` と同じです。
+各行の先頭11セルに、ランプIDの0（未プレー）から10（MAX）までを左から並べます。
+`divy` と `cycle` で画像をアニメーションできます。
+位置、大きさ、表示条件、透過度は `destination` で指定します。
+集計が空の場合や読み込み中はグラフを非表示にします。
+
+Luaの例です。`lamp_parts` は `source` に登録した素材のIDです。
+
+```lua
+table.insert(skin.graph, {
+    id = "current_folder_lamps", src = "lamp_parts",
+    x = 0, y = 0, w = 44, h = 4, divx = 11,
+    distribution = "currentFolderLamp", angle = 1
+})
+table.insert(skin.destination, {
+    id = "current_folder_lamps", dst = {{ x = 1230, y = 130, w = 12, h = 420 }}
+})
+```
+
+JSONでも `graph` と `destination` に同じフィールドを指定できます。
+縦型と横型を併用する場合はそれぞれに `id` を付けます。
+
+### スコアランク分布
+
+`distribution = "currentFolderScoreRank"` を指定すると、同じフォルダのスコアランク分布を表示します。
+画像の各行は先頭から `スコアなし / F / E / D / C / B / A / AA / AAA` の9セルです。
+既存のランプ分布と同じ `angle` と `destination` を使い、上位ランクからスコアなしの順に積み上げます。
+スコアランクは選曲画面と同じ EX スコア率の境界で計算し、100%もAAAに含めます。
+クリアランプだけが保存されている譜面はスコアなし、記録済みの0点はFです。
+
+### 分布グラフのテキストラベル
+
+ランプ・スコアランク分布の `graph.labels` にスキンのフォントID `font` とラベルの配列 `items` を指定できます。
+各要素の `index` は色セルと同じ0始まりで、`text` は表示する文字列です。既定の文字色は白で、`dark = true` で黒になります。透過度はグラフ本体に従います。
+
+縦型ではラベルを時計回りに90°回転して各区間の下端に配置します。横型では積み上げ方向の末端に配置します。
+文字サイズはバーの幅に合わせて決まり、区間の長さに収まるラベルを表示します。
+
+```lua
+-- SCOREのAAA（index 8）に対応するラベル
+labels = {
+    font = "system_font",
+    items = {{index = 8, text = "AAA", dark = true}}
+}
+```
+
 ## Selectのノート分布グラフ
 
 Selectの`judgegraph`（type 0、`backTexOff=0`）は、密度10刻みの帯で背景を塗ります。

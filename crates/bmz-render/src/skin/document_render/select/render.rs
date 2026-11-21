@@ -661,6 +661,8 @@ macro_rules! skin_document_render_select_render_methods {
                 select_folder_lamp_counts: selected_row
                     .map(|row| row.folder_lamp_counts)
                     .unwrap_or([0; 11]),
+                select_current_folder_lamp_counts: snapshot.current_folder_lamp_counts,
+                select_current_folder_score_rank_counts: snapshot.current_folder_score_rank_counts,
                 select_row_kind: selected_row.map(|row| row.kind).unwrap_or(SelectRowKind::Song),
                 select_course_constraints: selected_row
                     .map(|row| row.course_constraints)

@@ -23,6 +23,28 @@ pub struct SkinQwilightVisualizerDef {
     pub opacity: Option<f32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SkinGraphDistribution {
+    CurrentFolderLamp,
+    CurrentFolderScoreRank,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinGraphLabelsDef {
+    #[serde(deserialize_with = "deserialize_skin_id")]
+    pub font: String,
+    pub items: Vec<SkinGraphLabelDef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinGraphLabelDef {
+    pub index: usize,
+    pub text: String,
+    #[serde(default, deserialize_with = "deserialize_skin_bool")]
+    pub dark: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SkinGraphDef {
     /// LR2 BAR_GRAPH: eleven lamp cells per animation frame in source-grid order.
@@ -52,6 +74,10 @@ pub struct SkinGraphDef {
     pub angle: i32,
     #[serde(default, rename = "type")]
     pub graph_type: i32,
+    #[serde(default)]
+    pub distribution: Option<SkinGraphDistribution>,
+    #[serde(default)]
+    pub labels: Option<SkinGraphLabelsDef>,
     /// Lua `value = function()` から変換した fill 比率式 (0.0–1.0)。空なら `graph_type` を使う。
     #[serde(default)]
     pub value_expr: String,

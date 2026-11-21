@@ -1113,3 +1113,97 @@ fn select_songlist_graph_draws_chart_download_progress_like_endless_dream() {
         1
     );
 }
+
+#[test]
+fn current_folder_lamp_graph_draws_both_axes_independently_of_the_selected_row() {
+    let document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "type": 5, "w": 100, "h": 100,
+        "graph": [
+            {"id": "horizontal", "src": "atlas", "w": 44, "h": 4, "divx": 11,
+                "distribution": "currentFolderLamp", "angle": 0},
+            {"id": "vertical", "src": "atlas", "w": 44, "h": 4, "divx": 11,
+                "distribution": "currentFolderLamp", "angle": 1}
+        ],
+        "destination": [
+            {"id": "horizontal", "dst": [{"x": 10, "y": 10, "w": 60, "h": 10}]},
+            {"id": "vertical", "dst": [{"x": 80, "y": 10, "w": 8, "h": 60}]}
+        ]
+    }))
+    .unwrap();
+    let sources = mock_source("atlas", 44.0, 4.0);
+    let mut counts = [0; 11];
+    counts[0] = 1;
+    counts[10] = 3;
+    let mut snapshot = SelectSnapshot {
+        current_folder_lamp_counts: Some(counts),
+        rows: vec![
+            SelectRowSnapshot::default(),
+            SelectRowSnapshot {
+                kind: SelectRowKind::Folder,
+                is_folder: true,
+                folder_lamp_counts: [9; 11],
+                index: 1,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let expected = [
+        (0.10, 0.80, 0.45, 0.10, 10.0 / 11.0),
+        (0.55, 0.80, 0.15, 0.10, 0.0),
+        (0.80, 0.45, 0.08, 0.45, 10.0 / 11.0),
+        (0.80, 0.30, 0.08, 0.15, 0.0),
+    ];
+    for selected_index in [0, 1] {
+        snapshot.selected_index = selected_index;
+        let items = document.select_render_items(&sources, &snapshot);
+        assert_eq!(items.len(), expected.len());
+        for (item, (x, y, w, h, uv_x)) in items.iter().zip(expected) {
+            let SkinRenderItem::Image { rect, uv, .. } = item else { panic!("{item:?}") };
+            assert!(approx_eq(rect.x, x) && approx_eq(rect.y, y), "{rect:?}");
+            assert!(approx_eq(rect.width, w) && approx_eq(rect.height, h), "{rect:?}");
+            assert!(approx_eq(uv.x, uv_x), "{uv:?}");
+        }
+    }
+    for counts in [None, Some([0; 11])] {
+        snapshot.current_folder_lamp_counts = counts;
+        assert!(document.select_render_items(&sources, &snapshot).is_empty());
+    }
+}
+
+#[test]
+fn current_folder_distribution_text_uses_the_lower_edge() {
+    use crate::plan::TextSegmentEnd;
+
+    let document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "type": 5, "w": 100, "h": 100,
+        "graph": [{"id": "score", "src": "colors", "w": 9, "h": 1, "divx": 9,
+            "distribution": "currentFolderScoreRank", "angle": 1,
+            "labels": {"font": "system", "items": [
+                {"index": 8, "text": "AAA", "dark": true}
+            ]}
+        }],
+        "destination": [{"id": "score", "dst": [{"x": 80, "y": 10, "w": 10, "h": 50, "a": 128}]}]
+    }))
+    .unwrap();
+    let sources = mock_source("colors", 9.0, 1.0);
+    let snapshot = SelectSnapshot {
+        current_folder_score_rank_counts: Some([4, 1, 0, 0, 0, 0, 0, 0, 5]),
+        ..Default::default()
+    };
+    let items = document.select_render_items(&sources, &snapshot);
+    let labels: Vec<_> =
+        items.iter().filter(|item| matches!(item, SkinRenderItem::Text { .. })).collect();
+    assert_eq!(items.len(), 4, "all three bands and one label");
+    let [SkinRenderItem::Text { origin, text, style, .. }] = labels.as_slice() else {
+        panic!("expected the AAA label, got {labels:?}");
+    };
+    assert_eq!(text, "AAA");
+    assert_eq!(style.font_id.as_deref(), Some("system"));
+    assert_eq!(style.overflow, TextOverflow::FitSegment(TextSegmentEnd::Bottom));
+    assert!(approx_eq(origin.x, 0.85));
+    assert!(approx_eq(origin.y, 0.89));
+    assert!(approx_eq(style.size, 0.08));
+    assert!(approx_eq(style.max_width, 0.23));
+    assert_eq!(style.color, Color::rgba(0.0, 0.0, 0.0, 128.0 / 255.0));
+}

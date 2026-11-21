@@ -147,7 +147,7 @@ pub(super) fn vector_text_caret_rect(
     let mut text_width = clusters_width_px(clusters, scale.x);
     if max_width > 0.0 && text_width > max_width {
         match style.overflow {
-            TextOverflow::Overflow => {}
+            TextOverflow::Overflow | TextOverflow::FitSegment(_) => {}
             TextOverflow::Shrink => {
                 scale.x = (scale.x * max_width / text_width).max(0.01);
                 text_width = clusters_width_px(clusters, scale.x);
@@ -203,7 +203,7 @@ pub(super) fn bitmap_text_caret_rect(
     let text_width = clusters_width_px(clusters, scale.x);
     if max_width > 0.0 && text_width > max_width {
         match style.overflow {
-            TextOverflow::Overflow => {}
+            TextOverflow::Overflow | TextOverflow::FitSegment(_) => {}
             TextOverflow::Shrink => {
                 scale.x = (scale.x * max_width / text_width).max(0.01);
             }
@@ -276,6 +276,7 @@ pub(super) fn encode_text_quads(
             t0,
             du,
             dv,
+            if quad.clockwise { 1.0 } else { 0.0 },
         ];
         // 1つのインスタンスをまとめて書く。値ごとに書くと境界の確認が値の数だけ増える。
         bytes.extend_from_slice(bytemuck::bytes_of(&values));

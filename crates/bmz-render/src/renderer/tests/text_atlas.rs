@@ -88,6 +88,7 @@ fn oversized_outline_bitmap_and_placeholder_glyphs_fit_the_atlas() {
             glyph_height: cached.height,
             color: Color::rgb(1.0, 1.0, 1.0),
             fill: true,
+            clockwise: false,
         })
         .collect();
     assert_quads_inside_atlas(&quads, &atlas);
@@ -314,6 +315,7 @@ fn new_glyph_in_an_exactly_full_atlas_is_stored_after_one_rebuild() {
             glyph_height: cached.height,
             color: Color::rgb(1.0, 1.0, 1.0),
             fill: true,
+            clockwise: false,
         })
         .collect();
     assert_quads_inside_atlas(&quads, &atlas);

@@ -219,6 +219,15 @@ pub enum TextOverflow {
     /// Shrink both axes uniformly and vertically center the result.
     ShrinkUniform,
     Truncate,
+    /// Place a whole label at a segment's trailing edge. Hide it if the ink exceeds the set width.
+    FitSegment(TextSegmentEnd),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextSegmentEnd {
+    Left,
+    Right,
+    Bottom,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -15,6 +15,100 @@ fn skin_path() -> PathBuf {
     path
 }
 
+#[test]
+fn mz_folder_distribution_options_draw_lamp_and_score_labels() {
+    use bmz_render::plan::{TextOverflow, TextSegmentEnd};
+    use bmz_render::skin::SkinGraphDistribution;
+
+    for (mode, expected) in [
+        (None, None),
+        (Some("OFF"), None),
+        (Some("LAMP"), Some(SkinGraphDistribution::CurrentFolderLamp)),
+        (Some("SCORE"), Some(SkinGraphDistribution::CurrentFolderScoreRank)),
+    ] {
+        let options = mode.into_iter().map(|mode| ("フォルダ分布".into(), mode.into())).collect();
+        let decoded = decode_beatoraja_skin_with_options(
+            &skin_path(),
+            SkinKind::Select,
+            &options,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let graphs: Vec<_> = decoded.document.graph.iter().filter_map(|g| g.distribution).collect();
+        assert_eq!(graphs, expected.into_iter().collect::<Vec<_>>(), "{mode:?}");
+
+        if !matches!(mode, Some("LAMP" | "SCORE")) {
+            continue;
+        }
+        let score_texture = if mode == Some("SCORE") {
+            let source = decoded
+                .sources
+                .iter()
+                .find(|source| source.source_id == "src-default-songlist2-score-rank-colors")
+                .unwrap();
+            let colors = image::open(&source.path).unwrap().to_rgba8();
+            assert_eq!(colors.dimensions(), (9, 1));
+            assert_eq!(colors.get_pixel(0, 0).0, [0, 0, 0, 255]);
+            assert_ne!(colors.get_pixel(0, 0), colors.get_pixel(1, 0));
+            Some(bmz_render::plan::TextureId(source.texture.0))
+        } else {
+            None
+        };
+        let version_font = decoded
+            .document
+            .text
+            .iter()
+            .find(|text| text.id == "default_version")
+            .unwrap()
+            .font
+            .clone();
+        assert!(decoded.fonts.iter().any(|font| {
+            font.stored_id == version_font && font.path.ends_with("m_select_system.fnt")
+        }));
+
+        let mut renderer = Renderer::default();
+        install_decoded_skin(&mut renderer, decoded, bmz_render::skin::default_skin_manifest())
+            .unwrap();
+        renderer.prepare_scene(AppSceneSnapshot::Select(SelectSnapshot {
+            time: TimeUs(3_000_000),
+            current_folder_lamp_counts: Some([1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0]),
+            current_folder_score_rank_counts: Some([1, 2, 0, 0, 0, 0, 0, 0, 1]),
+            ..Default::default()
+        }));
+        let commands = &renderer.last_plan().unwrap().commands;
+        if let Some(score_texture) = score_texture {
+            let segments: Vec<_> = commands
+                .iter()
+                .filter_map(|command| match command {
+                    DrawCommand::Image { texture, uv, .. } if *texture == score_texture => {
+                        Some((uv.x * 9.0).round() as u32)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(segments, [8, 1, 0]);
+        }
+        let labels: Vec<_> = commands
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, style, .. } => {
+                    let TextOverflow::FitSegment(end) = style.overflow else { return None };
+                    assert_eq!(end, TextSegmentEnd::Bottom);
+                    assert_eq!(style.font_id.as_deref(), Some(version_font.as_str()));
+                    assert_eq!(style.color, bmz_render::plan::Color::rgb(1.0, 1.0, 1.0));
+                    Some(text.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        if mode == Some("SCORE") {
+            assert_eq!(labels, ["AAA", "F"]);
+        } else {
+            assert_eq!(labels, ["PFC", "FC", "EXH", "EASY", "FAILED", "NO PLAY"]);
+        }
+    }
+}
+
 fn snapshot(locale: AppLocale, cursor: usize) -> SelectSnapshot {
     SelectSnapshot { time: TimeUs(2_000_000), ..detail_options::snapshot(locale, cursor) }
 }

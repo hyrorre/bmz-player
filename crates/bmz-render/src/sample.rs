@@ -113,6 +113,8 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         key_volume: 1.0,
         bgm_volume: 1.0,
         current_folder: String::new(),
+        current_folder_lamp_counts: None,
+        current_folder_score_rank_counts: None,
         key_hint: "UP DOWN  RIGHT/Z/X/C/V:ENTER  LEFT/S:BACK".to_string(),
         option_hint:
             "F1 SELECT  F2 RELOAD  F3 RESULT  F4 PLAY   Q+Z:ARRANGE  Q+X:GAUGE  Q+C:ASSIST"

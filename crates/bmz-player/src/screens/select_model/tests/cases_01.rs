@@ -655,8 +655,9 @@ fn load_select_items_in_folder_with_filters_hides_charts_outside_active_roots() 
 #[test]
 fn select_folder_summary_counts_recursive_folder_lamps() {
     let (mut library_db, mut score_db) = open_in_memory_dbs();
-    let normal = chart("Normal");
-    let hard = chart("Hard");
+    let normal = PlayableChart { total_notes: 1, ..chart("Normal") };
+    let hard = PlayableChart { total_notes: 1, ..chart("Hard") };
+    let clear_only = PlayableChart { total_notes: 1, ..chart("Clear only") };
     let unplayed = chart("Unplayed");
     let nested = chart("Nested");
     let outside = chart("Outside");
@@ -670,6 +671,9 @@ fn select_folder_summary_counts_recursive_folder_lamps() {
     library_db
         .upsert_chart_import(&record_for_chart("/songs/folder/pack_b/song/unplayed.bms", &unplayed))
         .unwrap();
+    library_db
+        .upsert_chart_import(&record_for_chart("/songs/folder/pack_b/song/clear.bms", &clear_only))
+        .unwrap();
     // Charts below a song folder cannot be opened from the folder, so they are not counted.
     library_db
         .upsert_chart_import(&record_for_chart(
@@ -681,7 +685,9 @@ fn select_folder_summary_counts_recursive_folder_lamps() {
     score_db.insert_score(&score_for_chart(normal.identity.file_sha256)).unwrap();
     let mut hard_score = score_for_chart(hard.identity.file_sha256);
     hard_score.clear_type = ClearType::Hard;
+    hard_score.score = ScoreState::default();
     score_db.insert_score(&hard_score).unwrap();
+    score_db.update_score_clear_only(&score_for_chart(clear_only.identity.file_sha256)).unwrap();
     score_db.insert_score(&score_for_chart(nested.identity.file_sha256)).unwrap();
     score_db.insert_score(&score_for_chart(outside.identity.file_sha256)).unwrap();
 
@@ -696,9 +702,10 @@ fn select_folder_summary_counts_recursive_folder_lamps() {
     .unwrap();
 
     assert_eq!(summary.lamp_counts[0], 1);
-    assert_eq!(summary.lamp_counts[5], 1);
+    assert_eq!(summary.lamp_counts[5], 2);
     assert_eq!(summary.lamp_counts[6], 1);
-    assert_eq!(summary.lamp_counts.iter().sum::<u32>(), 3);
+    assert_eq!(summary.lamp_counts.iter().sum::<u32>(), 4);
+    assert_eq!(summary.score_rank_counts, [2, 1, 0, 0, 0, 0, 0, 0, 1]);
     assert_eq!(summary.clear_type(), "");
 }
 

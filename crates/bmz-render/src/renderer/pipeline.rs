@@ -535,7 +535,7 @@ pub(super) fn create_text_pipeline(
                     wgpu::VertexAttribute {
                         offset: 64,
                         shader_location: 4,
-                        format: wgpu::VertexFormat::Float32x3,
+                        format: wgpu::VertexFormat::Float32x4,
                     },
                 ],
             }],
@@ -738,7 +738,7 @@ fn vs_main(
     @location(1) uv_rect: vec4<f32>,
     @location(2) color: vec4<f32>,
     @location(3) color_end: vec4<f32>,
-    @location(4) gradient: vec3<f32>,
+    @location(4) gradient_and_rotation: vec4<f32>,
 ) -> VertexOutput {
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(0.0, 0.0),
@@ -750,14 +750,16 @@ fn vs_main(
     );
     let local = corners[vertex_index];
     let pos01 = rect.xy + local * rect.zw;
+    let glyph_uv = select(local, vec2<f32>(local.y, 1.0 - local.x), gradient_and_rotation.w > 0.0);
 
     var out: VertexOutput;
     out.position = vec4<f32>(pos01.x * 2.0 - 1.0, 1.0 - pos01.y * 2.0, 0.0, 1.0);
-    out.uv = uv_rect.xy + local * uv_rect.zw;
+    out.uv = uv_rect.xy + glyph_uv * uv_rect.zw;
     out.color = color;
     out.color_end = color_end;
     // quad 内で線形なので頂点で求めて補間し、範囲外への切り詰めは画素ごとに行う。
-    out.gradient_t = gradient.x + local.x * gradient.y + local.y * gradient.z;
+    out.gradient_t = gradient_and_rotation.x
+        + glyph_uv.x * gradient_and_rotation.y + glyph_uv.y * gradient_and_rotation.z;
     return out;
 }
 
