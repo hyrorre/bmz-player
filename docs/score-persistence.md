@@ -137,17 +137,19 @@ AUTO SCRATCHとBATTLE ASは、beatoraja / LR2oraja Endless Dreamの`AutoplayModi
 - ノーツは表示だけに残し、[非表示の設定](settings.md#auto-scratchのノーツ表示)で隠せます。
   beatorajaはノーツを表示しません。LR2はAUTO用のノーツ画像で表示し、判定しません。
 
-v0.5.3までの`BATTLE AS`の記録は、スクラッチをPGREATとして数えています。score DB
-migration v40は、これらを履歴に残したまま集計から外します。
+BMZ v0.5.3までにプレイした`BATTLE AS`は、スクラッチをPGREATとして数えています。score DB
+migration v41は、これらを履歴に残したまま集計から外します。
 
-- `BattleAutoScratch` bucketの履歴を`normal_best_eligible = 0`にします。ベスト・ランプ・
+- `BattleAutoScratch` bucketのBMZでプレイした履歴を`normal_best_eligible = 0`にします。ベスト・ランプ・
   曲別のプレイ回数とクリア回数・デバイス別ベスト・LR2のクリアしたオプション
   （option 118..149）の集計に使いません。プロファイル全体の統計と日別の統計には残します。
-- `BattleAutoScratch` bucketの`score_best`を削除します。次のプレイから新しい採点で作り直します。
+- beatorajaなどから取り込んだBATTLE ASは、残る履歴からベスト・ランプ・曲別回数を再集計します。
+  開発版のv40で除外された取り込み履歴も復元します。除外済みの旧BMZ履歴を重複整理で削除した場合、
+  プロファイル全体の統計から削除分を引き、曲別回数は維持します。
 - replay slotはリプレイを残し、比較用の値（EX・BP・CB・最大コンボ・ランプ）を空にします。
   slotの規則が無効でなければ、次のプレイで更新されます。
-- IRの一括送信の候補にしません。network DB migration v9は、送信待ち・失敗のBATTLE ASの
-  jobを`ineligible`にし、自動では送りません。
+- 旧BMZ履歴はIRの一括送信から外します。network DB migration v9/v10は、旧採点の送信待ち・失敗・
+  送信中のまま残ったBATTLE ASジョブを`ineligible`にします。
 - BMZ IRに送信済みの記録は、サーバーのD1 migration 0020でbestとランキングから外します
   （[IR](ir.md)の`auto_scratch_scoring`）。BMS-IRに送信済みの記録は変えられません。
 - コースの記録（`course_scores`）は変えません。

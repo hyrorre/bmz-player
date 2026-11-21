@@ -404,8 +404,9 @@ impl WinitApp {
         let option_seeds = crate::random_option_seed::RandomOptionSeeds::fresh(true);
         let random_trainer_seed = self.select.random_trainer.arrange_seed(option_seeds.p1);
         let seed = self.boot.profile_config.cli_seed();
+        let cli_auto_scratch = self.boot.profile_config.cli_auto_scratch();
         let mut options = PlayStartOptions {
-            score_save_disabled: self.boot.profile_config.cli_auto_scratch(),
+            score_save_disabled: cli_auto_scratch,
             session_mode: self.select.session_mode,
             autoplay: self.select.session_mode.primary_autoplay(),
             assist: self.boot.profile_config.play.assist,
@@ -440,6 +441,7 @@ impl WinitApp {
             ),
             ..Default::default()
         };
+        options.assist.auto_scratch |= cli_auto_scratch;
         crate::screens::play_start::apply_freq_option(&mut options, freq_semitones);
         options
     }

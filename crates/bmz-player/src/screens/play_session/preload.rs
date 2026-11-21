@@ -456,9 +456,12 @@ pub fn load_prepared_play_session_for_chart_with_input_backend(
     library_db: &LibraryDatabase,
     chart_id: i64,
     profile: &ProfileConfig,
-    options: PlaySessionOptions,
+    mut options: PlaySessionOptions,
     input_backend: Box<dyn InputBackend>,
 ) -> Result<PreparedPlaySession> {
+    let cli_auto_scratch = profile.cli_auto_scratch();
+    options.assist.auto_scratch |= cli_auto_scratch;
+    options.score_save_disabled |= cli_auto_scratch;
     let preloaded = preload_play_session_for_chart(
         library_db,
         chart_id,
@@ -1030,8 +1033,11 @@ fn transform_chart_for_play(
         };
     // AUTO SCRATCH 併用の BATTLE は BATTLE AS として専用 bucket へ保存する
     // (LR2 も D-BATTLE 中の AUTO SCRATCH はイージー扱いにしない)。
-    if options.assist.auto_scratch {
+    if options.assist.auto_scratch && options.replay_player.is_none() {
         applied_double_option = applied_double_option.with_auto_scratch(true);
+    }
+    if applied_double_option == DoubleOption::BattleAutoScratch {
+        chart.metadata.source_note_counts = Some(crate::ir::payload::chart_note_counts(&chart));
     }
     let ln_policy = course_score_ln_policy(
         options.ln_policy_setting,
@@ -1170,12 +1176,12 @@ fn transform_chart_for_play(
     applied_arrange.seven_to_nine_rule_mode = options.seven_to_nine_rule_mode;
     applied_arrange.freq_semitones = options.freq_semitones;
     let conversion_persistence_disabled = applied_arrange.score_persistence_disabled();
-    if let Some(keys) = conditional_audio {
-        keys.apply(&mut chart);
-    }
     chart.metadata.kaleid.effective = bmz_chart::kaleid::features_for_chart(&chart);
     // Kaleidの実効機能は譜面の内容で決め、自動演奏用のダミー化を含めない。
     crate::assist::move_auto_scratch_notes_to_background(&mut chart, auto_scratch_lanes);
+    if let Some(keys) = conditional_audio {
+        keys.apply(&mut chart);
+    }
 
     TransformedPlayChart {
         archive_source: false,

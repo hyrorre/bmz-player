@@ -1,4 +1,5 @@
 use super::*;
+use crate::storage::migration::run_score_migrations;
 
 fn battle_as_key() -> ScoreKey {
     ScoreKey::with_options(
@@ -21,8 +22,7 @@ fn battle_as_record(ex_score: u32, clear_type: ClearType, played_at: i64) -> Sco
 fn database_before_battle_as_migration() -> ScoreDatabase {
     let mut conn = Connection::open_in_memory().unwrap();
     configure_connection(&conn).unwrap();
-    let before = SCORE_MIGRATIONS.iter().position(|m| m.version == 40).unwrap();
-    run_migrations(&mut conn, &SCORE_MIGRATIONS[..before]).unwrap();
+    run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
     ScoreDatabase { conn }
 }
 
@@ -40,7 +40,7 @@ fn old_battle_as_scores_stay_in_history_but_leave_bests_lamps_and_slots() {
     })
     .unwrap();
 
-    run_migrations(&mut db.conn, SCORE_MIGRATIONS).unwrap();
+    run_score_migrations(&mut db.conn).unwrap();
 
     let eligible = |id: i64| -> i64 {
         db.conn()
@@ -88,7 +88,7 @@ fn old_battle_as_scores_stay_in_history_but_leave_bests_lamps_and_slots() {
 fn clear_only_battle_as_after_migration_does_not_turn_old_history_into_a_bp_best() {
     let mut db = database_before_battle_as_migration();
     db.insert_score(&battle_as_record(100, ClearType::Hard, 1_700_000_000)).unwrap();
-    run_migrations(&mut db.conn, SCORE_MIGRATIONS).unwrap();
+    run_score_migrations(&mut db.conn).unwrap();
     // An assisted BATTLE AS clear (H-RANDOM etc.) only records the lamp.
     db.update_score_clear_only(&battle_as_record(0, ClearType::LightAssistEasy, 1_800_000_000))
         .unwrap();
@@ -116,4 +116,92 @@ fn play_with_bp(ex_score: u32, bp: u32) -> ScoreState {
         });
     }
     score
+}
+
+#[test]
+fn battle_as_migration_rebuilds_bests_from_beatoraja_history() {
+    for previous_v40 in [false, true] {
+        let mut db = database_before_battle_as_migration();
+        let old_local = db.insert_score(&battle_as_record(400, ClearType::Max, 1)).unwrap();
+        let imported = ScoreRecord {
+            source_kind: ScoreSourceKind::Beatoraja,
+            total_notes: 128,
+            score: play_with_bp(256, 0),
+            ..battle_as_record(256, ClearType::FullCombo, 2)
+        };
+        let import_id = db.insert_score(&imported).unwrap();
+        let mut import_only = imported.clone();
+        import_only.chart_sha256 = [8; 32];
+        db.insert_score(&import_only).unwrap();
+        if previous_v40 {
+            db.conn()
+                .execute_batch(
+                    "UPDATE score_history SET normal_best_eligible = 0;
+                     DELETE FROM score_best;
+                     PRAGMA user_version = 40;",
+                )
+                .unwrap();
+            db.insert_score(&battle_as_record(100, ClearType::Easy, 3)).unwrap();
+            db.update_score_clear_only(&battle_as_record(0, ClearType::Max, 4)).unwrap();
+        }
+        let stats_before = db.player_stats().unwrap();
+        for _ in 0..2 {
+            run_score_migrations(&mut db.conn).unwrap();
+        }
+        assert_eq!(db.player_stats().unwrap(), stats_before);
+        for (id, expected) in [(old_local, 0), (import_id, 1)] {
+            let eligible: i64 = db
+                .conn()
+                .query_row(
+                    "SELECT normal_best_eligible FROM score_history WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(eligible, expected);
+        }
+        let key = battle_as_key();
+        let best = db.best_scores_for_charts(&[key]).unwrap().remove(0);
+        assert_eq!(best.ex_score, 256);
+        assert_eq!(best.clear_type, if previous_v40 { "Max" } else { "FullCombo" });
+        let counts: (u32, u32) = db
+            .conn()
+            .query_row(
+                "SELECT play_count, clear_count FROM score_best WHERE chart_sha256 = ?1",
+                [crate::storage::common::hash_to_hex(&key.chart_sha256)],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(counts, if previous_v40 { (3, 3) } else { (1, 1) });
+        let import_key = ScoreKey { chart_sha256: import_only.chart_sha256, ..key };
+        assert_eq!(db.best_scores_for_charts(&[import_key]).unwrap()[0].ex_score, 256);
+        // Imported ghosts are stored on the best row. A re-import can fill a lost ghost.
+        assert_eq!(
+            db.reconcile_imported_score(&imported).unwrap(),
+            ImportedScoreReconciliation::Corrected
+        );
+        assert_eq!(
+            db.reconcile_imported_score(&imported).unwrap(),
+            ImportedScoreReconciliation::Unchanged
+        );
+    }
+}
+
+#[test]
+fn deleting_excluded_battle_as_duplicates_preserves_new_play_counts() {
+    let mut db = database_before_battle_as_migration();
+    let legacy = battle_as_record(100, ClearType::Hard, 1);
+    let old_id = db.insert_score(&legacy).unwrap();
+    db.insert_score(&legacy).unwrap();
+    run_score_migrations(&mut db.conn).unwrap();
+    db.insert_score(&battle_as_record(40, ClearType::Easy, 2)).unwrap();
+    assert_eq!(db.purge_score_history_ids_and_rebuild(&[old_id]).unwrap(), 1);
+    let counts: (u32, u32) = db.conn().query_row(
+        "SELECT play_count, clear_count FROM score_best WHERE double_option = 'BattleAutoScratch'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).unwrap();
+    assert_eq!(counts, (1, 1));
+    let stats = db.player_stats().unwrap();
+    assert_eq!((stats.play_count, stats.clear_count), (2, 2));
 }

@@ -141,19 +141,23 @@ pub fn build_score_submission(
         && let Some(mode) = DoubleOption::battle_source_key_mode(chart.metadata.key_mode)
     {
         chart_payload.mode = mode.as_str().to_string();
-        // BATTLE copies every note, LN and mine to both sides, so each count
-        // must be even before it is halved back to the source chart.
-        let notes = &mut chart_payload.notes;
-        for count in [
-            &mut notes.total,
-            &mut notes.ln,
-            &mut notes.cn,
-            &mut notes.hcn,
-            &mut notes.hln,
-            &mut notes.mine,
-        ] {
-            debug_assert!(*count % 2 == 0, "BATTLE chart count is not doubled: {count}");
-            *count /= 2;
+        if let Some(source) = chart.metadata.source_note_counts {
+            chart_payload.notes = source;
+            chart_payload.features.mine = source.mine > 0;
+        } else {
+            // Plain BATTLE copies each note, LN and mine to both sides.
+            let notes = &mut chart_payload.notes;
+            for count in [
+                &mut notes.total,
+                &mut notes.ln,
+                &mut notes.cn,
+                &mut notes.hcn,
+                &mut notes.hln,
+                &mut notes.mine,
+            ] {
+                debug_assert!(*count % 2 == 0, "BATTLE chart count is not doubled: {count}");
+                *count /= 2;
+            }
         }
         chart_payload.total =
             Some(gauge_total_for_chart(chart.metadata.total, chart_payload.notes.total));
@@ -228,23 +232,8 @@ fn build_ir_chart_payload_with_ln_profile(
     ln_profile: ChartLnProfile,
 ) -> IrChartPayload {
     let (min_bpm, max_bpm) = chart_bpm_range(chart);
-    let total_notes = scored_note_count(chart);
-    let gauge_total = gauge_total_for_chart(chart.metadata.total, total_notes);
-    let pairs: Vec<_> = chart
-        .long_notes
-        .iter()
-        .filter(|pair| !chart.is_dummy_long(pair) && !chart.is_free_zone_inner(pair.start_note_id))
-        .collect();
-    let ln_count = pairs.len() as u32;
-    let cn_count = pairs.iter().filter(|pair| pair.mode == Some(LongNoteMode::Cn)).count() as u32;
-    let hcn_count = pairs.iter().filter(|pair| pair.mode == Some(LongNoteMode::Hcn)).count() as u32;
-    let hln_count = pairs
-        .iter()
-        .filter(|pair| pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hln)
-        .count() as u32;
-    let has_mine = chart.lane_notes.iter().flatten().any(|note| note.kind == NoteKind::Mine);
-    let mine_count =
-        chart.lane_notes.iter().flatten().filter(|note| note.kind == NoteKind::Mine).count() as u32;
+    let notes = chart_note_counts(chart);
+    let gauge_total = gauge_total_for_chart(chart.metadata.total, notes.total);
 
     IrChartPayload {
         kaleid: chart.metadata.kaleid.clone(),
@@ -270,14 +259,7 @@ fn build_ir_chart_payload_with_ln_profile(
         total: Some(gauge_total),
         judge: chart.metadata.judge_rank,
         bpm: Some(IrChartBpm { min: Some(min_bpm), max: Some(max_bpm) }),
-        notes: IrChartNotes {
-            total: total_notes,
-            ln: ln_count,
-            cn: cn_count,
-            hcn: hcn_count,
-            hln: hln_count,
-            mine: mine_count,
-        },
+        notes,
         features: IrChartFeatures {
             hln: chart.metadata.kaleid.effective.hln,
             conditional: chart.metadata.kaleid.source.conditional,
@@ -292,11 +274,31 @@ fn build_ir_chart_payload_with_ln_profile(
             ln: ln_profile.has_undefined_ln || ln_profile.has_defined_ln,
             cn: ln_profile.has_defined_cn,
             hcn: ln_profile.has_defined_hcn,
-            mine: has_mine,
+            mine: notes.mine > 0,
         },
         urls: chart_registry_urls(chart),
         headers: Default::default(),
     }
+}
+
+pub(crate) fn chart_note_counts(chart: &PlayableChart) -> IrChartNotes {
+    let mut notes = IrChartNotes {
+        total: scored_note_count(chart),
+        mine: chart.lane_notes.iter().flatten().filter(|note| note.kind == NoteKind::Mine).count()
+            as u32,
+        ..Default::default()
+    };
+    for pair in &chart.long_notes {
+        if chart.is_dummy_long(pair) || chart.is_free_zone_inner(pair.start_note_id) {
+            continue;
+        }
+        notes.ln += 1;
+        notes.cn += u32::from(pair.mode == Some(LongNoteMode::Cn));
+        notes.hcn += u32::from(pair.mode == Some(LongNoteMode::Hcn));
+        notes.hln +=
+            u32::from(pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hln);
+    }
+    notes
 }
 
 fn chart_registry_urls(chart: &PlayableChart) -> Option<IrChartUrls> {
@@ -686,10 +688,10 @@ mod tests {
                 let lane = |index: usize| if side == 0 { lanes[index].0 } else { lanes[index].1 };
                 let base = side * 100;
                 chart.lane_notes[lane(0).index()].push(note(base, lane(0), NoteKind::Tap, 0));
-                chart.lane_notes[lane(1).index()].push(note(base + 1, lane(1), NoteKind::Mine, 48));
+                chart.lane_notes[lane(0).index()].push(note(base + 1, lane(0), NoteKind::Mine, 48));
                 for (offset, index, mode) in [
                     (10, 2, Some(LongNoteMode::Ln)),
-                    (20, 3, Some(LongNoteMode::Cn)),
+                    (20, 0, Some(LongNoteMode::Cn)),
                     (30, 4, Some(LongNoteMode::Hcn)),
                     (40, 5, Some(LongNoteMode::Hln)),
                 ] {
@@ -697,6 +699,7 @@ mod tests {
                     chart.lane_notes[pair.lane.index()].extend(notes);
                     chart.long_notes.push(pair);
                 }
+                chart.lane_notes[lane(0).index()].sort_by_key(|note| (note.time, note.id.0));
                 // Tap and four LN heads; CN/HCN ends are added by the scorer.
                 chart.total_notes += 5;
             }
@@ -763,9 +766,21 @@ mod tests {
                 assert_eq!(expected.chart.total, Some(gauge_total_for_chart(total, 7)));
                 assert_eq!(scored_note_count(&battle_chart), 14);
                 for double in [DoubleOption::Battle, DoubleOption::BattleAutoScratch] {
+                    let mut played_chart = battle_chart.clone();
+                    let expected_result_notes = if double == DoubleOption::BattleAutoScratch {
+                        played_chart.metadata.source_note_counts = Some(chart_note_counts(&source));
+                        crate::assist::move_auto_scratch_notes_to_background(
+                            &mut played_chart,
+                            &[Lane::Scratch, Lane::Scratch2],
+                        );
+                        8
+                    } else {
+                        14
+                    };
+                    assert_eq!(scored_note_count(&played_chart), expected_result_notes);
                     let battle = build_score_submission(
-                        &battle_chart,
-                        &PlayResult { total_notes: 14, ..source_result.clone() },
+                        &played_chart,
+                        &PlayResult { total_notes: expected_result_notes, ..source_result.clone() },
                         IrSubmissionContext {
                             double_option: double.score_bucket(),
                             applied_double_option: double,
@@ -776,7 +791,8 @@ mod tests {
                     assert_eq!(battle.chart.mode, expected.chart.mode, "{label}");
                     assert_eq!(counts(battle.chart.notes), counts(expected.chart.notes), "{label}");
                     assert_eq!(battle.chart.total, expected.chart.total, "{label}");
-                    assert_eq!(battle.result.notes, 14, "{label}");
+                    assert!(battle.chart.features.mine, "{label}");
+                    assert_eq!(battle.result.notes, expected_result_notes, "{label}");
                 }
             }
         }

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+pub use bmz_chart::model::ChartNoteCounts as IrChartNotes;
 use serde::{Deserialize, Serialize};
 
 use crate::ln_policy::LnScorePolicy;
@@ -112,17 +113,6 @@ pub struct IrChartLnProfile {
     pub has_defined_hcn: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub has_defined_hln: bool,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
-pub struct IrChartNotes {
-    pub total: u32,
-    pub ln: u32,
-    pub cn: u32,
-    pub hcn: u32,
-    #[serde(default)]
-    pub hln: u32,
-    pub mine: u32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]

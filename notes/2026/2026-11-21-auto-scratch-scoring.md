@@ -42,14 +42,15 @@ BMZはスクラッチレーンへ自動入力を作り、通常の判定でPGREA
 - AUTO SCRATCHのアシスト判定（スクラッチノーツの有無）は、変換の前の譜面で行う。
 - 自動演奏のレーンには引き続き`AutoplayController`を割り当てる。人の入力を除く処理、
   `auto_note_lanes`（LR2のAUTO画像、option 54..57、非表示の設定）がこれを参照するため。
-- CLIの`--auto-scratch`はpreloadのオプションに含まれないので、`build_game_session`でも
-  同じ変換を掛ける。変換済みの譜面では何もしない。
+- CLIの`--auto-scratch`をpreloadのオプションに反映し、Kaleidの分岐後にも同じ変換を掛ける。
+  皿のキー音をBGMへ移した後に、分岐時の再生済み判定に使うBGMキーを並べ直す。
 
 ## 影響
 
 - SP AUTO SCRATCHは実効アシストで、IRへ送らずランプ・回数だけ保存する。影響はプレイ中の表示だけ。
 - BATTLE ASは専用bucketへ保存し、BMZ IR・BMS-IRへ送る。新しい記録の総ノーツ数とEXスコアは
-  スクラッチを除いた値になる。v0.5.3までの記録はスクラッチ込みのまま残る。
+  スクラッチを除いた値になる。IRの譜面情報には複製・皿除外前の件数と既定TOTALを使う。
+  v0.5.3までのBMZの記録はスクラッチ込みのまま残る。
 - IRの一括送信は、BATTLE ASの総ノーツ数をライブラリの数から補正しない。配置で変わる
   スクラッチの数をライブラリから再現できないため。
 - 譜面に`#TOTAL`が無い場合の既定TOTALは、BMZでは変換後の採点ノーツ数から計算する。
@@ -73,10 +74,11 @@ BMZはスクラッチレーンへ自動入力を作り、通常の判定でPGREA
 ## 旧BATTLE ASの記録の移行
 
 リプレイから新しい採点で計算し直す案と、旧記録を集計から外す案を比べ、後者にした。
-SQLのmigrationだけで済み、履歴が残るので元に戻せる。旧記録のランプとベストは消える。
+履歴を残したまま、集計対象を切り替える。
 
-- score DB migration v40: `BattleAutoScratch`の履歴を`normal_best_eligible = 0`にし、
-  `score_best`を削除し、replay slotの比較値を空にする。
+- score DB migration v41: BMZ由来の旧`BattleAutoScratch`の履歴を`normal_best_eligible = 0`にする。
+  残る履歴からベストを再構築する。開発版のv40から更新する場合は、誤って除外した取り込み履歴を復元する。
+  v40未適用のDBでは、旧replay slotの比較値を空にする。
 - `normal_best_eligible`は、本番の保存経路ではこれまで0にならなかった列で、意味は
   「通常ベストの比較基準にしない履歴」。デバイス別ベストと取り込みのBP集計は既に
   この列で除外していた。集計の作り直し（`rebuild_score_aggregates`）、LR2のクリアした
@@ -85,14 +87,15 @@ SQLのmigrationだけで済み、履歴が残るので元に戻せる。旧記�
   （H-RANDOMなどのアシスト付きBATTLE AS）の後に通常プレイをすると、旧履歴があるだけで
   BPのベストが0になったため、この判定でも除外する。migrationの途中のスキーマへ直接
   書き込むテストがあるため、列がある場合だけ条件を加える。
-- network DB migration v9: 送信待ち・失敗のBATTLE ASのscore jobを`ineligible`にする。
+- network DB migration v9/v10: 旧採点の送信待ち・失敗・送信中のBATTLE ASジョブを`ineligible`にする。
+- 重複履歴の整理では、すでに対象外の旧履歴を曲別回数の減算から外す。
 
 ### 移行の検証
 
 - `storage::score_db::tests::battle_as_migration`: 履歴を残してベスト・ランプ・slotの比較値を
   外すこと、次のプレイで作り直すこと、clear-onlyの後の通常プレイでBPが0にならないこと
   （除外を外すとBPが0になり失敗することを確認）
-- `network_migration_stops_unsent_old_battle_as_jobs`: 送信待ち・失敗のjobだけを止めること
+- `network_migration_stops_unsent_old_battle_as_jobs`: 旧採点の送信待ち・失敗・送信中ジョブを止めること
 
 ## BMZ IRの旧BATTLE ASの記録
 
@@ -150,3 +153,10 @@ AUTO SCRATCHのレーンをAUTO画像で描く。LR2のoption 54..57も全体AUT
 
 - 本番のD1へmigration 0020を適用し、サーバーをデプロイする（クライアントの公開より前）。
 - BMS-IRへ送信済みのBATTLE ASの記録は、BMZからは変えられない。
+
+## PR #147のレビュー後の検証
+
+- 5K・7KのBATTLE ASで元譜面のノーツ数・長押し・地雷・既定TOTALを送り、採点結果のノーツ数とは別に保持することを確認した。
+- CLIのAUTO SCRATCHだけを有効にしてKaleidの分岐を通し、共通BGM・分岐BGM・皿のキー音が各1回スケジュールされ、分岐で追加された皿が採点されないことを確認した。
+- score DBのv39・v40からの移行、取り込み履歴からのベスト復元、除外済み履歴の削除後の曲別回数を検証した。network DBでは旧採点の`sending`が再取得されず、`unscored`のジョブは再取得されることを確認した。
+- Windowsでworkspaceのfmt・check・all-targets Clippy・testが成功した（5929件成功、144件ignored）。実機での音声確認と本番IRの確認は未実施。

@@ -227,24 +227,20 @@ pub(super) fn delete_score_history_ids(conn: &Connection, history_ids: &[i64]) -
     Ok(deleted)
 }
 
-pub(super) fn rebuild_score_aggregates(conn: &Connection) -> Result<()> {
-    // score_history は playtime_seconds を保持していないため、過去の通常プレイの
-    // 総プレイ時間は復元できない。候補は外部 import に限定し、既存値を保全する。
-    let preserved_playtime_seconds: u64 = conn
-        .query_row("SELECT playtime_seconds FROM player_stats WHERE id = 1", [], |row| row.get(0))
-        .optional()?
-        .unwrap_or(0);
-    // History excluded from normal bests (old BATTLE AS) feeds no best, lamp or count.
-    const SCORE_KEY: &str = "h.chart_sha256 = score_best.chart_sha256
-        AND h.ln_policy = score_best.ln_policy
-        AND h.double_option = score_best.double_option
-        AND CASE h.rule_mode
-            WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
-            WHEN 'Dx' THEN 'Dx'
-            ELSE 'Beatoraja'
-        END = score_best.rule_mode
-        AND h.normal_best_eligible = 1";
-    const CLEAR_RANK: &str = "CASE h.clear_type
+// History excluded from normal bests (old BATTLE AS) feeds no best, lamp or count.
+const SCORE_KEY: &str = "h.chart_sha256 = score_best.chart_sha256
+    AND h.ln_policy = score_best.ln_policy
+    AND h.double_option = score_best.double_option
+    AND CASE h.rule_mode
+        WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
+        WHEN 'Dx' THEN 'Dx'
+        ELSE 'Beatoraja'
+    END = score_best.rule_mode
+    AND h.normal_best_eligible = 1";
+
+fn clear_rank(column: &str) -> String {
+    format!(
+        "CASE {column}
         WHEN 'NoPlay' THEN 0
         WHEN 'Failed' THEN 1
         WHEN 'AssistEasy' THEN 2
@@ -257,8 +253,12 @@ pub(super) fn rebuild_score_aggregates(conn: &Connection) -> Result<()> {
         WHEN 'Perfect' THEN 9
         WHEN 'Max' THEN 10
         ELSE 0
-    END";
-    let affected = format!("EXISTS (SELECT 1 FROM cleanup_removed AS h WHERE {SCORE_KEY})");
+    END"
+    )
+}
+
+fn rebuild_chart_score_aggregates(conn: &Connection, affected: &str) -> Result<()> {
+    let clear_rank = clear_rank("h.clear_type");
     let score_source = format!(
         "SELECT h.id FROM score_history AS h
          WHERE {SCORE_KEY}
@@ -268,7 +268,7 @@ pub(super) fn rebuild_score_aggregates(conn: &Connection) -> Result<()> {
     let clear_source = format!(
         "SELECT h.id FROM score_history AS h
          WHERE {SCORE_KEY}
-         ORDER BY {CLEAR_RANK} DESC, h.id ASC
+         ORDER BY {clear_rank} DESC, h.id ASC
          LIMIT 1"
     );
     let score_value = |column: &str| {
@@ -363,6 +363,19 @@ pub(super) fn rebuild_score_aggregates(conn: &Connection) -> Result<()> {
         ),
         [],
     )?;
+    Ok(())
+}
+
+pub(super) fn rebuild_score_aggregates(conn: &Connection) -> Result<()> {
+    // score_history は playtime_seconds を保持していないため、既存値を保全する。
+    let preserved_playtime_seconds: u64 = conn
+        .query_row("SELECT playtime_seconds FROM player_stats WHERE id = 1", [], |row| row.get(0))
+        .optional()?
+        .unwrap_or(0);
+    rebuild_chart_score_aggregates(
+        conn,
+        &format!("EXISTS (SELECT 1 FROM cleanup_removed AS h WHERE {SCORE_KEY})"),
+    )?;
     conn.execute("DELETE FROM player_stats", [])?;
     conn.execute(
         "INSERT INTO player_stats (
@@ -396,6 +409,80 @@ pub(super) fn rebuild_score_aggregates(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Replace the old BATTLE AS bests using eligible history, without touching profile totals.
+pub(crate) fn migrate_battle_as_bests(conn: &Connection, previous_v40: bool) -> Result<()> {
+    const BATTLE_AS: &str = "double_option IN ('BattleAutoScratch', 'BattleAssist')";
+    let affected = if previous_v40 {
+        // The first v40 excluded imports too. Only repair keys with imports that are still excluded.
+        conn.execute_batch(&format!(
+            "CREATE TEMP TABLE battle_as_repair_keys AS
+             SELECT DISTINCT chart_sha256, ln_policy, double_option,
+                 CASE rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja' WHEN 'Dx' THEN 'Dx'
+                     ELSE 'Beatoraja' END AS rule_mode
+             FROM score_history WHERE {BATTLE_AS}
+                 AND source_kind <> 'Local' AND normal_best_eligible = 0;"
+        ))?;
+        "EXISTS (SELECT 1 FROM battle_as_repair_keys AS k
+                 WHERE (k.chart_sha256,k.ln_policy,k.double_option,k.rule_mode) =
+                       (score_best.chart_sha256,score_best.ln_policy,score_best.double_option,score_best.rule_mode))"
+    } else {
+        BATTLE_AS
+    };
+    if previous_v40 {
+        // Preserve clear-only contributions from plays made after the original v40 migration.
+        conn.execute_batch(&format!(
+            "CREATE TEMP TABLE battle_as_previous AS SELECT score_best.*,
+                MAX(0, play_count - (SELECT COUNT(*) FROM score_history h WHERE {SCORE_KEY})) AS extra_plays,
+                MAX(0, clear_count - (SELECT COUNT(*) FROM score_history h
+                    WHERE {SCORE_KEY} AND h.clear_type NOT IN ('NoPlay', 'Failed'))) AS extra_clears
+             FROM score_best WHERE {affected};
+             UPDATE score_history SET normal_best_eligible = 1 WHERE {BATTLE_AS} AND source_kind <> 'Local';"
+        ))?;
+    } else {
+        conn.execute_batch(&format!(
+            "UPDATE score_history SET normal_best_eligible = 0 WHERE {BATTLE_AS} AND source_kind = 'Local';
+             UPDATE replay_slots SET ex_score = NULL, bp = NULL, cb = NULL, max_combo = NULL, clear_rank = NULL
+             WHERE {BATTLE_AS};"
+        ))?;
+    }
+    // v40 may have removed the score_best row entirely. Seed missing rows before rebuilding.
+    conn.execute_batch(&format!(
+        "INSERT OR IGNORE INTO score_best (
+            chart_sha256, ln_policy, double_option, rule_mode, clear_type, gauge_type,
+            ex_score, bp, cb, max_combo, fast_pgreat, slow_pgreat, fast_great, slow_great,
+            fast_good, slow_good, fast_bad, slow_bad, fast_poor, slow_poor,
+            fast_empty_poor, slow_empty_poor, played_at, replay_path
+         )
+         SELECT chart_sha256, ln_policy, double_option, rule_mode, 'NoPlay', 'Normal',
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ''
+         FROM (SELECT DISTINCT chart_sha256, ln_policy, double_option,
+                CASE rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja' WHEN 'Dx' THEN 'Dx'
+                    ELSE 'Beatoraja' END AS rule_mode
+               FROM score_history WHERE {BATTLE_AS} AND normal_best_eligible = 1) AS score_best
+         WHERE {affected};"
+    ))?;
+    rebuild_chart_score_aggregates(conn, affected)?;
+    if previous_v40 {
+        let previous_lamp = clear_rank("p.clear_type");
+        let rebuilt_lamp = clear_rank("score_best.clear_type");
+        conn.execute_batch(&format!(
+            "UPDATE score_best SET play_count = score_best.play_count + p.extra_plays,
+                clear_count = score_best.clear_count + p.extra_clears
+             FROM battle_as_previous p
+             WHERE (p.chart_sha256,p.ln_policy,p.double_option,p.rule_mode) =
+                   (score_best.chart_sha256,score_best.ln_policy,score_best.double_option,score_best.rule_mode);
+             UPDATE score_best SET clear_type = p.clear_type, gauge_type = p.gauge_type, gauge_value = p.gauge_value
+             FROM battle_as_previous p
+             WHERE p.extra_plays > 0 AND {previous_lamp} > {rebuilt_lamp}
+                 AND (p.chart_sha256,p.ln_policy,p.double_option,p.rule_mode) =
+                     (score_best.chart_sha256,score_best.ln_policy,score_best.double_option,score_best.rule_mode);
+             DROP TABLE battle_as_previous;
+             DROP TABLE battle_as_repair_keys;"
+        ))?;
+    }
+    Ok(())
+}
+
 // Cleanup must not reconstruct history-less assisted plays from score_history.
 // Keep the original aggregates and subtract only the histories being removed.
 // Temporary tables live inside the caller's transaction, including on failure.
@@ -404,7 +491,8 @@ pub(super) fn preserve_cleanup_aggregates(conn: &Connection, ids: &[i64]) -> Res
         "CREATE TEMP TABLE cleanup_stats AS SELECT * FROM player_stats;
          CREATE TEMP TABLE cleanup_removed AS SELECT * FROM score_history WHERE 0;
          CREATE TEMP TABLE cleanup_history AS
-            SELECT chart_sha256, ln_policy, double_option, rule_mode, clear_type, COUNT(*) AS plays
+            SELECT chart_sha256, ln_policy, double_option, rule_mode, clear_type, COUNT(*) AS plays,
+                   SUM(normal_best_eligible) AS eligible_plays
             FROM score_history GROUP BY chart_sha256, ln_policy, double_option, rule_mode, clear_type;",
     )?;
     for ids in ids.chunks(500) {
@@ -433,9 +521,11 @@ pub(super) fn restore_cleanup_aggregates(conn: &Connection) -> Result<()> {
     const BEST_MATCH: &str = "o.chart_sha256 = score_best.chart_sha256
         AND o.ln_policy = score_best.ln_policy AND o.double_option = score_best.double_option
         AND o.rule_mode = score_best.rule_mode";
-    let affected = format!("EXISTS (SELECT 1 FROM cleanup_removed h WHERE {MATCH})");
+    let affected = format!(
+        "EXISTS (SELECT 1 FROM cleanup_removed h WHERE {MATCH} AND h.normal_best_eligible = 1)"
+    );
     let unrecorded = format!(
-        "o.play_count > (SELECT COALESCE(SUM(plays), 0) FROM cleanup_history h WHERE {MATCH})"
+        "o.play_count > (SELECT COALESCE(SUM(eligible_plays), 0) FROM cleanup_history h WHERE {MATCH})"
     );
     // Keep a neutral row when the last numeric history was removed but assisted
     // plays still exist. Unaffected keys are never rewritten.
@@ -474,7 +564,8 @@ pub(super) fn restore_cleanup_aggregates(conn: &Connection) -> Result<()> {
         conn.execute(
             &format!(
                 "UPDATE score_best SET {column} = (SELECT MAX(0, o.{column} -
-                (SELECT COUNT(*) FROM cleanup_removed h WHERE {MATCH} AND {condition}))
+                (SELECT COUNT(*) FROM cleanup_removed h WHERE {MATCH}
+                    AND h.normal_best_eligible = 1 AND {condition}))
                 FROM cleanup_best o WHERE {BEST_MATCH})
                 WHERE EXISTS (SELECT 1 FROM cleanup_best o WHERE {BEST_MATCH} AND {affected})"
             ),
@@ -487,7 +578,8 @@ pub(super) fn restore_cleanup_aggregates(conn: &Connection) -> Result<()> {
         conn.execute(
             &format!("UPDATE score_best SET {column} = (SELECT o.{column} FROM cleanup_best o WHERE {BEST_MATCH})
                 WHERE EXISTS (SELECT 1 FROM cleanup_best o WHERE {BEST_MATCH} AND {affected} AND {unrecorded}
-                    AND NOT EXISTS (SELECT 1 FROM cleanup_history h WHERE {MATCH} AND h.clear_type = o.clear_type))"),
+                    AND NOT EXISTS (SELECT 1 FROM cleanup_history h WHERE {MATCH}
+                        AND h.clear_type = o.clear_type AND h.eligible_plays > 0))"),
             [],
         )?;
     }
