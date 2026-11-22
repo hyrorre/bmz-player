@@ -105,6 +105,7 @@ impl SelectIrRanking {
         double_option: DoubleOptionScoreBucket,
         rule_mode: RuleMode,
         selected: Option<[u8; 32]>,
+        selected_md5: Option<[u8; 16]>,
         bokutachi_game: Option<crate::ir::bokutachi::Game>,
     ) {
         let context = Self::cache_context(ir_config, context, bokutachi_game);
@@ -141,6 +142,7 @@ impl SelectIrRanking {
                         double_option,
                         rule_mode,
                         sha256,
+                        selected_md5,
                         bokutachi_game,
                     );
                 }
@@ -166,6 +168,7 @@ impl SelectIrRanking {
         double_option: DoubleOptionScoreBucket,
         rule_mode: RuleMode,
         sha256: [u8; 32],
+        md5: Option<[u8; 16]>,
         bokutachi_game: Option<crate::ir::bokutachi::Game>,
     ) -> SelectIrResultLookup {
         if self.context.as_str() != Self::cache_context(ir_config, context, bokutachi_game).as_ref()
@@ -203,6 +206,7 @@ impl SelectIrRanking {
                 double_option,
                 rule_mode,
                 sha256,
+                md5,
                 bokutachi_game,
             );
         }
@@ -235,6 +239,7 @@ impl SelectIrRanking {
         double_option: DoubleOptionScoreBucket,
         rule_mode: RuleMode,
         sha256: [u8; 32],
+        md5: Option<[u8; 16]>,
         bokutachi_game: Option<crate::ir::bokutachi::Game>,
     ) {
         let requested_at = Instant::now();
@@ -245,6 +250,7 @@ impl SelectIrRanking {
                 provider: provider.0,
                 base_url: provider.1,
                 chart_sha256_hex: hash_to_hex(&sha256),
+                chart_md5_hex: md5.as_ref().map(|md5| hash_to_hex(md5)),
                 ln_policy,
                 double_option,
                 rule_mode,

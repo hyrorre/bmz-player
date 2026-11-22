@@ -586,6 +586,7 @@ impl WinitApp {
             &self.boot.profile_config.ir,
             finished.stored.score_history_id,
             crate::storage::common::hash_to_hex(&finished.result.chart_sha256),
+            finished.summary.chart_md5.as_ref().map(|md5| crate::storage::common::hash_to_hex(md5)),
             finished.ln_policy,
             finished.double_option,
             finished.rule_mode,
@@ -610,6 +611,7 @@ impl WinitApp {
             self.boot.profile_paths.root_dir.clone(),
             &self.boot.profile_config.ir,
             chart_sha256_hex,
+            finished.summary.chart_md5.as_ref().map(|md5| crate::storage::common::hash_to_hex(md5)),
             finished.ln_policy,
             finished.double_option,
             finished.rule_mode,
@@ -645,11 +647,12 @@ impl WinitApp {
             finished.double_option,
             finished.rule_mode,
         );
-        let (ln_policy, double_option, rule_mode, sha256) = (
+        let (ln_policy, double_option, rule_mode, sha256, md5) = (
             finished.ln_policy,
             finished.double_option,
             finished.rule_mode,
             finished.result.chart_sha256,
+            finished.summary.chart_md5,
         );
         Some(self.select.select_ir.result_chart_ranking(
             &self.boot.profile_config.ir,
@@ -659,6 +662,7 @@ impl WinitApp {
             double_option,
             rule_mode,
             sha256,
+            md5,
             bokutachi_game,
         ))
     }
@@ -797,14 +801,15 @@ impl WinitApp {
             return;
         }
 
-        let (selected, ln_profile, key_mode) =
+        let (selected, selected_md5, ln_profile, key_mode) =
             match self.select.select_items.get(self.select.selected_index) {
                 Some(SelectItem::Chart(row)) => (
                     self.selected_chart_ir_sha256(),
+                    row.score_md5(),
                     row.chart.as_ref().map(|chart| chart.ln_profile).unwrap_or_default(),
                     row.chart.as_ref().and_then(|chart| KeyMode::from_str_opt(&chart.mode)),
                 ),
-                _ => (None, crate::ln_policy::ChartLnProfile::default(), None),
+                _ => (None, None, crate::ln_policy::ChartLnProfile::default(), None),
             };
         let configured_ln_policy = self.boot.profile_config.play.ln_mode_policy;
         let ln_policy = crate::ln_policy::score_ln_policy(configured_ln_policy, ln_profile);
@@ -825,6 +830,7 @@ impl WinitApp {
             double_option,
             rule_mode,
             selected,
+            selected_md5,
             bokutachi_game,
         );
     }

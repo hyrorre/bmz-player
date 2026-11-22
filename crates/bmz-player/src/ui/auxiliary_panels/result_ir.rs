@@ -209,6 +209,7 @@ mod tests {
             std::path::PathBuf::new(),
             &config,
             "chart".to_string(),
+            None,
             LnScorePolicy::AutoLn,
             DoubleOptionScoreBucket::Off,
             bmz_gameplay::rule::RuleMode::Beatoraja,

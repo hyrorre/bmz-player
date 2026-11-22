@@ -13,6 +13,8 @@ pub struct ChartRankingQuery {
     pub provider: String,
     pub base_url: String,
     pub chart_sha256_hex: String,
+    /// Lowercase 32-digit MD5 of the chart file; `None` when unknown (e.g. BMSON).
+    pub chart_md5_hex: Option<String>,
     pub ln_policy: LnScorePolicy,
     pub double_option: DoubleOptionScoreBucket,
     pub rule_mode: RuleMode,
@@ -149,6 +151,7 @@ pub(crate) async fn fetch_ranking_with_limit(
         return crate::ir::bms_ir::BmsIrClient::new(&query.base_url)?
             .fetch_ranking(
                 &query.chart_sha256_hex,
+                query.chart_md5_hex.as_deref(),
                 &IrRankingRequest {
                     scope,
                     ln_policy: query.ln_policy.as_str().to_string(),

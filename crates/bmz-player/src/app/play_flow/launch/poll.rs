@@ -471,6 +471,7 @@ impl WinitApp {
                     active.running.target_option,
                     active.running.best_ex_score,
                     active.running.gameplay.session.chart.metadata.kaleid.clone(),
+                    active.running.gameplay.session.chart.identity.file_md5,
                     active
                         .running
                         .applied_arrange
@@ -489,6 +490,7 @@ impl WinitApp {
                             .ok()
                             .flatten(),
                         preloaded.preloaded.chart.metadata.kaleid.clone(),
+                        preloaded.preloaded.chart.identity.file_md5,
                         preloaded
                             .preloaded
                             .applied_arrange
@@ -497,7 +499,9 @@ impl WinitApp {
                     )
                 })
             });
-        let Some((score_key, target, local_best_ex_score, provenance, key_mode)) = source else {
+        let Some((score_key, target, local_best_ex_score, provenance, chart_md5, key_mode)) =
+            source
+        else {
             return;
         };
         if !target.uses_ir_ranking() {
@@ -527,6 +531,7 @@ impl WinitApp {
             score_key.double_option,
             score_key.rule_mode,
             Some(score_key.chart_sha256),
+            Some(chart_md5),
             bokutachi_game,
         );
         let resolved = self.select.select_ir.resolved_target_for(
