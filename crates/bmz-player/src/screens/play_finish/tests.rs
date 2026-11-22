@@ -1856,6 +1856,7 @@ fn session() -> GameSession {
         bga_stretch: 1,
         show_ln_tail_cap: false,
         show_hidden_notes: false,
+        practice_source_hidden_notes: None,
         hide_auto_scratch_notes: false,
         auto_scratch_lanes: [false; bmz_core::lane::LANE_COUNT],
         lane_hcn_timer: [None; bmz_core::lane::LANE_COUNT],

@@ -83,8 +83,7 @@ fn populate_visible_notes(
         cache.missed_notes.frame(lane_render_now, session.judge.window_set.note.empty_poor_slow_us)
     });
     for lane in Lane::ALL {
-        let hide_scratch_notes = scratch_notes_hidden(snapshot, session, lane);
-        if hide_scratch_notes && !snapshot.show_hidden_notes {
+        if scratch_notes_hidden(snapshot, session, lane) {
             continue;
         }
         let output_lane = session.output_lane(lane);
@@ -104,10 +103,7 @@ fn populate_visible_notes(
             if note.kind == NoteKind::Invisible {
                 if snapshot.show_hidden_notes
                     && note.time >= lane_render_now
-                    && cache
-                        .practice_source_hidden_notes
-                        .as_ref()
-                        .is_none_or(|ids| ids.contains(&note.id))
+                    && session.practice_source_hidden_notes.is_none_or(|ids| ids.contains(&note.id))
                     && let Some(y) = scroll.note_y(note.time, cursor_tick)
                     && let Some(alpha) = constant_object_alpha(session, lane_render_now, note.time)
                 {
@@ -121,9 +117,6 @@ fn populate_visible_notes(
                         pms_miss_fall: None,
                     });
                 }
-                continue;
-            }
-            if hide_scratch_notes {
                 continue;
             }
             let Some(alpha) = constant_object_alpha(session, lane_render_now, note.time) else {

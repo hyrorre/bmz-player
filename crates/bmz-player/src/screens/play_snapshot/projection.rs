@@ -6,6 +6,7 @@ use bmz_gameplay::judge::model::HlnBodyVisualState;
 use bmz_gameplay::judge::model::{JudgeWindows, LaneJudgeState};
 use bmz_gameplay::session::HcnLaneTimer;
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::time::Instant;
 
 pub(super) struct PlayfieldJudgeView<'a> {
@@ -29,6 +30,8 @@ pub(super) struct PlayfieldView<'a> {
     pub constant_enabled: bool,
     pub constant_fade_ms: i32,
     pub target_green_number: u32,
+    /// Practice の区間切り出し前から不可視だったノーツ。`None` ならすべてを表示対象にする。
+    pub practice_source_hidden_notes: Option<&'a HashSet<NoteId>>,
 }
 
 impl<'a> From<&'a GameSession> for PlayfieldView<'a> {
@@ -52,6 +55,7 @@ impl<'a> From<&'a GameSession> for PlayfieldView<'a> {
             constant_enabled: session.constant_enabled,
             constant_fade_ms: session.constant_fade_ms,
             target_green_number: session.target_green_number,
+            practice_source_hidden_notes: session.practice_source_hidden_notes.as_deref(),
         }
     }
 }
@@ -77,6 +81,7 @@ pub(crate) struct PlayfieldProjection {
     constant_enabled: bool,
     constant_fade_ms: i32,
     target_green_number: u32,
+    practice_source_hidden_notes: Option<Arc<HashSet<NoteId>>>,
     visual_offset_us: i64,
     published_time: TimeUs,
     duration_lane_cover: f32,
@@ -110,6 +115,7 @@ impl PlayfieldProjection {
                 constant_enabled: session.constant_enabled,
                 constant_fade_ms: session.constant_fade_ms,
                 target_green_number: session.target_green_number,
+                practice_source_hidden_notes: session.practice_source_hidden_notes.clone(),
                 visual_offset_us: session.offsets.visual_offset_us,
                 published_time: session.audio_clock.now(),
                 duration_lane_cover: 0.0,
@@ -161,6 +167,7 @@ impl PlayfieldProjection {
         self.constant_enabled = session.constant_enabled;
         self.constant_fade_ms = session.constant_fade_ms;
         self.target_green_number = session.target_green_number;
+        self.practice_source_hidden_notes.clone_from(&session.practice_source_hidden_notes);
         self.visual_offset_us = session.offsets.visual_offset_us;
         self.published_time = time;
         self.duration_lane_cover = if session.lane_cover_visible {
@@ -243,6 +250,7 @@ impl PlayfieldProjection {
             constant_enabled: self.constant_enabled,
             constant_fade_ms: self.constant_fade_ms,
             target_green_number: self.target_green_number,
+            practice_source_hidden_notes: self.practice_source_hidden_notes.as_deref(),
         };
         for notes in &mut snapshot.visible_notes {
             notes.clear();
@@ -320,6 +328,8 @@ impl PlayfieldProjection {
             let opponent_view = PlayfieldView {
                 player_two: true,
                 hide_auto_scratch_notes: false,
+                // Practice は対戦相手を持たない。相手の譜面は自分の ID 集合と対応しない。
+                practice_source_hidden_notes: None,
                 chart: &opponent.chart,
                 timing_map: &opponent.timing_map,
                 judge: PlayfieldJudgeView {

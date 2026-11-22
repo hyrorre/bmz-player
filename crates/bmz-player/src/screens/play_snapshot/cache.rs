@@ -1,7 +1,5 @@
-use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
-use bmz_core::ids::NoteId;
 use bmz_render::snapshot::{PlayNoteGraphs, ResultEarlyLateGraphBucket, ResultJudgeGraphBucket};
 
 use super::*;
@@ -42,8 +40,6 @@ pub struct PlayRenderSnapshotCache {
     pub(super) end_of_note_time: TimeUs,
     pub(super) scroll_integral: ScrollIntegralCache,
     pub(super) missed_notes: super::missed_notes::MissedNoteFallCache,
-    /// Practiceで判定対象外にしたノーツと、元から不可視のノーツを描画時に区別する。
-    pub(crate) practice_source_hidden_notes: Option<Arc<HashSet<NoteId>>>,
     /// SPEED イベントの `(time_us, factor)`。beatoraja と同じく時間で補間する。
     pub(super) speed_segments: Arc<[(f64, f64)]>,
     /// 始点 tick 順。判定の保持状態を参照するために元のペア番号を記録する。
@@ -149,7 +145,6 @@ impl PlayRenderSnapshotCache {
             end_of_note_time,
             scroll_integral,
             missed_notes,
-            practice_source_hidden_notes: None,
             speed_segments,
             long_note_index: long_note_index.into(),
             bga_events,

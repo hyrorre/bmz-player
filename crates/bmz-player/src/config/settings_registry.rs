@@ -124,11 +124,11 @@ impl SettingsEntryId {
         Self::Lift,
         Self::HiddenEnabled,
         Self::Hidden,
-        Self::ShowHiddenNotes,
         Self::Constant,
         Self::ConstantFadeMs,
         Self::HispeedTransitionMs,
         Self::InvertE2KeyGreenNumber,
+        Self::ShowHiddenNotes,
     ];
 
     pub const fn visible_for_hispeed_config(self, preset: HispeedConfigPreset) -> bool {
@@ -736,14 +736,15 @@ mod tests {
     }
 
     #[test]
-    fn display_entries_end_with_hs_animation_and_e2_key_green_inversion() {
+    fn display_entries_end_with_hs_animation_e2_key_green_inversion_and_hidden_notes() {
         let display = SettingsEntryId::DISPLAY_ENTRIES;
         assert_eq!(
-            &display[display.len() - 3..],
+            &display[display.len() - 4..],
             &[
                 SettingsEntryId::ConstantFadeMs,
                 SettingsEntryId::HispeedTransitionMs,
                 SettingsEntryId::InvertE2KeyGreenNumber,
+                SettingsEntryId::ShowHiddenNotes,
             ]
         );
 
