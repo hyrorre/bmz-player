@@ -149,10 +149,12 @@ mod import;
 mod link_tests;
 #[cfg(test)]
 mod partial_scan_tests;
+mod pause;
 
 pub use discovery::{ChartFileEntry, discover_chart_files};
 pub(crate) use discovery::{enclosing_song_folders, folder_has_document, folder_has_loose_chart};
-pub use import::{scan_song_roots, scan_song_roots_with_progress};
+pub use import::{scan_song_roots, scan_song_roots_with_pause, scan_song_roots_with_progress};
+pub use pause::ScanPause;
 
 pub fn is_chart_file(path: &Path) -> bool {
     path.file_name().is_some_and(discovery::is_chart_file_name)

@@ -15,16 +15,16 @@ pub(super) fn import_archive<'a>(
     fingerprints: &HashMap<String, super::super::library_db::ChartFileFingerprint>,
     entries: &[&str],
     expected: &song_archive::ArchiveGeneration,
+    control: &ArchiveControl,
     (encoding_revision, cache): (i64, impl FnOnce() -> &'a ChartContentCache),
 ) -> Result<ScanReport> {
-    let control = ArchiveControl::default();
     // Discovery already listed the archive. Its metadata stamp still mapping to the same
     // generation shows it is unchanged without reading the index again (the index cache
     // holds only a few archives); an unknown stamp falls back to inspecting it.
     let record = song_archive::generation_record(container);
     let current = match &record {
         Some(record) => record.generation.clone(),
-        None => song_archive::inspect(container, &control)?.generation,
+        None => song_archive::inspect(container, control)?.generation,
     };
     anyhow::ensure!(current == *expected, "archive changed after discovery");
     if let Some(record) = record.or_else(|| song_archive::generation_record(container)) {
@@ -59,7 +59,7 @@ pub(super) fn import_archive<'a>(
     }
     let allowed: HashSet<&str> = entries.iter().copied().collect();
     // Importing needs the entry list for preview lookup; it also rechecks the generation.
-    let index = song_archive::inspect(container, &control)?;
+    let index = song_archive::inspect(container, control)?;
     anyhow::ensure!(index.generation == *expected, "archive changed after discovery");
     let modified_at = std::fs::metadata(container)?
         .modified()?
@@ -70,7 +70,7 @@ pub(super) fn import_archive<'a>(
     let cache = cache();
     let previews = ArchivePreviewFiles::new(&index);
     let tx = db.conn_mut().transaction()?;
-    let scanned = song_archive::scan_charts(container, &control, |entry, bytes| {
+    let scanned = song_archive::scan_charts(container, control, |entry, bytes| {
         let path =
             ChartLocator::Archive { container: container.to_path_buf(), entry: entry.name.clone() }
                 .to_path_buf();

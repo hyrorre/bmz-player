@@ -26,6 +26,7 @@ impl WinitApp {
 
     /// network worker群へSelect実行許可を同期する。
     pub(super) fn sync_select_maintenance_gate(&self) {
+        self.jobs.song_scan.pause.set_paused(!self.select_maintenance_allowed());
         if !self.select_maintenance_allowed() {
             if let Some(progress) = &self.jobs.updates.progress {
                 progress.paused.store(true, Ordering::Relaxed);

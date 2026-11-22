@@ -792,3 +792,84 @@ fn enclosing_unc_root_does_not_block_pruning() {
     assert_eq!(removed, 1);
     assert_eq!(count(&db, "SELECT COUNT(*) FROM chart_files"), 1);
 }
+
+fn file_db(folder: &Path) -> (PathBuf, LibraryDatabase) {
+    let path = folder.join("library.db");
+    crate::storage::migration::migrate_library_db(&path).unwrap();
+    let db = LibraryDatabase::open(&path).unwrap();
+    (path, db)
+}
+
+#[test]
+fn paused_scan_writes_nothing_until_resumed() {
+    let songs = temp();
+    chart(&songs.path().join("song/a.bms"), "Loose");
+    write_zip(&songs.path().join("pack.zip"), &[("song/b.bms", &chart_text("Archived"))]);
+    let data = temp();
+    let (path, mut db) = file_db(data.path());
+    let roots = [entry(songs.path(), true)];
+    let pause = ScanPause::new();
+    pause.set_paused(true);
+    let worker = {
+        let pause = pause.clone();
+        std::thread::spawn(move || {
+            scan_song_roots_with_pause(&mut db, &roots, &config(), 1, false, &pause, |_| {})
+        })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(!worker.is_finished());
+    let observer = Connection::open(&path).unwrap();
+    let rows = |table: &str| -> i64 {
+        observer.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0)).unwrap()
+    };
+    assert_eq!((rows("roots"), rows("chart_files")), (0, 0));
+
+    pause.set_paused(false);
+    let report = worker.join().unwrap().unwrap();
+    assert_eq!((report.summary.imported, report.summary.failed), (2, 0));
+    assert_eq!(rows("chart_files"), 2);
+}
+
+#[test]
+fn scan_paused_repeatedly_still_imports_and_prunes_everything_once() {
+    let songs = temp();
+    for index in 0..600 {
+        chart(&songs.path().join(format!("song{}/{index}.bms", index % 40)), &format!("C{index}"));
+    }
+    for index in 0..6 {
+        let text = chart_text(&format!("Z{index}"));
+        write_zip(&songs.path().join(format!("packs/{index}.zip")), &[("song/z.bms", &text)]);
+    }
+    let mut db = db();
+    let roots = [entry(songs.path(), true)];
+    let pause = ScanPause::new();
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let toggler = {
+        let (pause, done) = (pause.clone(), std::sync::Arc::clone(&done));
+        std::thread::spawn(move || {
+            let mut paused = false;
+            let mut pauses = 0;
+            while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                paused = !paused;
+                pauses += usize::from(paused);
+                pause.set_paused(paused);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            pause.set_paused(false);
+            pauses
+        })
+    };
+    let report = scan_song_roots_with_pause(&mut db, &roots, &config(), 1, false, &pause, |_| {});
+    done.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(toggler.join().unwrap() > 0);
+    let report = report.unwrap();
+    assert_eq!((report.summary.imported, report.summary.failed), (606, 0));
+    assert!(report.discovery_issues.is_empty());
+    assert_consistent(&db);
+
+    std::fs::remove_file(songs.path().join("song0/0.bms")).unwrap();
+    std::fs::remove_file(songs.path().join("packs/0.zip")).unwrap();
+    let again =
+        scan_song_roots_with_pause(&mut db, &roots, &config(), 2, false, &pause, |_| {}).unwrap();
+    assert_eq!((again.summary.skipped, again.summary.removed_files), (604, 2));
+}

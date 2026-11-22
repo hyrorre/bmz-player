@@ -159,6 +159,14 @@ impl WinitApp {
         };
         let library_db_path = self.boot.app_paths.library_db.clone();
         let scan_config = self.boot.app_config.scan.clone();
+        // The startup rescan waits outside Select, so it never competes with Play.
+        let pause = if scope == SongScanScope::Startup {
+            crate::storage::scan::ScanPause::new()
+        } else {
+            crate::storage::scan::ScanPause::default()
+        };
+        pause.set_paused(!self.select_maintenance_allowed());
+        self.jobs.song_scan.pause = pause.clone();
         let (tx, rx) = mpsc::channel();
         let progress = Arc::new(AtomicU64::new(pack_scan_progress(ScanProgress::default())));
         let worker_progress = Arc::clone(&progress);
@@ -201,12 +209,13 @@ impl WinitApp {
                     let result = (|| -> Result<SongScanResult> {
                         migrate_library_db(&library_db_path)?;
                         let mut library_db = LibraryDatabase::open(&library_db_path)?;
-                        let report = scan_songs_with_progress(
+                        let report = scan_songs_with_pause(
                             &mut library_db,
                             &roots,
                             &scan_config,
                             now_unix_seconds(),
                             force,
+                            &pause,
                             |progress| {
                                 worker_progress
                                     .store(pack_scan_progress(progress), Ordering::Relaxed);

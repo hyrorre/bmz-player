@@ -257,6 +257,8 @@ impl WinitApp {
         chart_id: i64,
         mut options: PlayStartOptions,
     ) -> u64 {
+        // Every play entry starts here, a frame before the view leaves Select.
+        self.jobs.song_scan.pause.set_paused(true);
         self.normalize_key_mode_conversion_options(chart_id, &mut options);
         self.resolve_play_target_from_cache(chart_id, &mut options);
         let play_config_key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);

@@ -161,7 +161,7 @@ use crate::skin_loader::{decode_beatoraja_skin_request, install_decoded_skin};
 use crate::song_download::{
     ChartDownloadRequest, MissingChartAction, choose_missing_chart_action, open_browser_urls,
 };
-use crate::songs_cmd::scan_songs_with_progress;
+use crate::songs_cmd::scan_songs_with_pause;
 use crate::storage::collection_db::FavoriteHints;
 use crate::storage::common::hash_to_hex;
 use crate::storage::difficulty_table_db::DifficultyTableRecord;
