@@ -252,6 +252,7 @@ impl WinitApp {
         match pending.finished.try_recv() {
             Ok(Ok(result)) => {
                 let mut report = result.report;
+                let mut roots_reconciled = false;
                 if let Some(roots) = &pending.library_roots {
                     let current = crate::songs_cmd::configured_library_roots(
                         &self.boot.app_config,
@@ -273,7 +274,10 @@ impl WinitApp {
                         self.boot.library_db.reconcile_configured_song_roots(roots)
                     })();
                     match cleanup {
-                        Ok(removed) => report.summary.removed_files += removed,
+                        Ok(removed) => {
+                            report.summary.removed_files += removed;
+                            roots_reconciled = true;
+                        }
                         Err(error) => self.song_scan_error(&error),
                     }
                 }
@@ -345,7 +349,9 @@ impl WinitApp {
                             .format("toast-everything-fallback", &args),
                     );
                 }
-                if !startup_scan_left_library_unchanged(pending.scope, &report.summary) {
+                if !roots_reconciled
+                    || !startup_scan_left_library_unchanged(pending.scope, &report.summary)
+                {
                     self.select.select_assets.invalidate_library();
                     self.invalidate_select_folder_summaries();
                     if pending.download_ids.is_empty() {

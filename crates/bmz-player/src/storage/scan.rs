@@ -630,14 +630,14 @@ mod tests {
 
     #[test]
     fn scan_song_roots_counts_only_changed_document_flags() {
-        let root = make_temp_dir("scan-document-flags");
-        write_file(&root.join("a.bms"), "#TITLE A\n#BPM 120\n#00111:01\n");
+        let root = tempfile::tempdir().unwrap();
+        write_file(&root.path().join("a.bms"), "#TITLE A\n#BPM 120\n#00111:01\n");
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
         let mut db = LibraryDatabase::from_connection(conn);
         let roots = vec![PathEntry {
-            path: root.to_string_lossy().into_owned(),
+            path: root.path().to_string_lossy().into_owned(),
             enabled: true,
             recursive: true,
         }];
@@ -646,7 +646,7 @@ mod tests {
         let unchanged =
             scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_061, false).unwrap();
         assert_eq!((unchanged.summary.skipped, unchanged.summary.document_flags_updated), (1, 0));
-        write_file(&root.join("readme.txt"), "document");
+        write_file(&root.path().join("readme.txt"), "document");
         let added = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_062, false).unwrap();
         assert_eq!((added.summary.skipped, added.summary.document_flags_updated), (1, 1));
     }
