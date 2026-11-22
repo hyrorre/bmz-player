@@ -464,7 +464,10 @@ fn build_game_session_initializes_floating_hispeed_for_hsfix_base_bpm() {
 
 #[test]
 fn practice_displays_source_hidden_notes_without_revealing_masked_notes() {
-    use crate::screens::play_snapshot::build_render_snapshot_with_target_and_bga_frames_cached;
+    use crate::screens::play_snapshot::{
+        PlayfieldProjection, ProjectionClock,
+        build_render_snapshot_with_target_and_bga_frames_cached,
+    };
     use bmz_render::snapshot::NoteVisualKind;
 
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
@@ -475,17 +478,23 @@ fn practice_displays_source_hidden_notes_without_revealing_masked_notes() {
     source.lane_notes[Lane::Key1.index()].push(hidden);
     source.lane_notes[Lane::Key2.index()].push(note(2, Lane::Key2, 1_750_000));
     source.lane_notes[Lane::Key3.index()].push(note(3, Lane::Key3, 2_200_000));
+    let preloaded = preloaded_play_session(source);
+    let source_session =
+        build_game_session(Arc::clone(&preloaded.chart), &profile, PlaySessionOptions::default());
+    let mut projections =
+        PlayfieldProjection::pool(&source_session, &preloaded.render_snapshot_cache);
     let prepared = build_practice_prepared_from_preloaded(
-        preloaded_play_session(source),
+        preloaded,
         &profile,
         &PracticeProperty { start_time_ms: 2_000, end_time_ms: 3_000, ..Default::default() },
         PlaySessionOptions::default(),
         Box::new(NullInputBackend),
     );
 
+    let now = TimeUs(1_500_000);
     let snapshot = build_render_snapshot_with_target_and_bga_frames_cached(
         &prepared.session,
-        TimeUs(1_500_000),
+        now,
         &[],
         None,
         None,
@@ -498,20 +507,13 @@ fn practice_displays_source_hidden_notes_without_revealing_masked_notes() {
     assert!(snapshot.visible_notes[Lane::Key2.index()].is_empty());
     assert_eq!(snapshot.visible_notes[Lane::Key3.index()][0].kind, NoteVisualKind::Tap);
 
-    // A chart swap rebuilds the render cache; the source hidden-note IDs must survive it.
-    let rebuilt =
-        crate::screens::play_snapshot::PlayRenderSnapshotCache::from_chart(&prepared.session.chart);
-    let rebuilt_snapshot = build_render_snapshot_with_target_and_bga_frames_cached(
-        &prepared.session,
-        TimeUs(1_500_000),
-        &[],
-        None,
-        None,
-        None,
-        &Default::default(),
-        &rebuilt,
-    );
-    assert_eq!(rebuilt_snapshot.visible_notes, snapshot.visible_notes);
+    // Updating a slot that still holds the source chart rebuilds its cache and
+    // copies the hidden-note IDs from the prepared practice session.
+    let projection = Arc::get_mut(&mut projections[0]).unwrap();
+    projection.update(&prepared.session, now);
+    let mut projected = snapshot.clone();
+    projection.project(&mut projected, now, &mut ProjectionClock::default());
+    assert_eq!(projected.visible_notes, snapshot.visible_notes);
 }
 
 #[test]

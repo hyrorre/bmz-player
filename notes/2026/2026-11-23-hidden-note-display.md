@@ -15,3 +15,7 @@ AUTO SCRATCH のノーツを隠す設定では、スクラッチレーンの不�
 - `origin/main` の `71509d807` を起点に、Windows で `cargo fmt --check`、`cargo check --workspace --locked --offline`、`cargo clippy --workspace --all-targets --locked --offline -- -D warnings`、`cargo test --workspace --locked --offline --no-fail-fast` が成功した。
 - 既存プロファイルの既定値、設定の再読み込み、オレンジ色の枠、判定ライン通過後の消去、プラクティスの表示範囲、空打ち時の判定とキー音要求を回帰テストで確認した。
 - ウィンドウ上での目視と実機試聴は未実施。
+
+## PR #156 のレビュー対応
+
+区間切り出し前の譜面を持つ `PlayfieldProjection` をプラクティス用の譜面で更新する回帰テストに変更した。実プレイと同じ更新経路でキャッシュを再生成し、元の不可視ノーツと区間内の通常ノーツが表示され、区間外の通常ノーツが表示されないことを確認した。設定ガイドでは「不可視ノーツ表示」を「表示」セクションの末尾として案内する。
