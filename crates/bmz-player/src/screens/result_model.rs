@@ -17,6 +17,9 @@ use bmz_render::snapshot::{
 
 use crate::storage::play_result::StoredPlayResult;
 
+mod lanes;
+pub use lanes::{ResultLaneDetails, ResultLaneSource};
+
 const RESULT_GAUGE_GRAPH_SAMPLE_MS: i32 = 500;
 
 #[derive(Debug, Clone, PartialEq)]

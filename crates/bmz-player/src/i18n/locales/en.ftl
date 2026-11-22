@@ -215,6 +215,17 @@ random-trainer-mirror = Mirror
 random-trainer-shift-left = Shift left
 random-trainer-shift-right = Shift right
 
+result-panel-title = Result
+result-panel-details = Details
+result-panel-ranking-unavailable = IR rankings are unavailable for this result.
+result-panel-lanes-unavailable = Lane results are unavailable.
+result-panel-lanes = Lane results
+result-panel-lane = Lane
+result-panel-source-lane = Source
+result-panel-source-per-note = Varies per note
+result-panel-lane-rank = Rank
+result-panel-ex-rate = EX Rate
+
 result-ir-title = IR Rankings
 result-ir-primary = Primary
 result-ir-submitting = Submitting score...

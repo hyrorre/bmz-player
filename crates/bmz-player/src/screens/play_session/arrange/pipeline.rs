@@ -60,13 +60,7 @@ pub(crate) fn preview_arrange_pattern(
     if is_double && arrangement.double_option == DoubleOption::Flip {
         // FLIP is applied before the per-side arrangement during launch.
         for lane in &mut pattern {
-            *lane = match *lane {
-                0 => 15,
-                15 => 0,
-                1..=7 => *lane + 7,
-                8..=14 => *lane - 7,
-                _ => unreachable!(),
-            };
+            *lane = flipped_dp_lane(Lane::ALL[*lane]).index();
         }
     } else if !matches!(arrangement.double_option, DoubleOption::Off | DoubleOption::Flip) {
         return None;
@@ -472,23 +466,17 @@ pub(super) fn apply_double_option(chart: &mut PlayableChart, double_option: Doub
         }
     }
 
-    let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-    for (left, right) in [
-        (Lane::Scratch, Lane::Scratch2),
-        (Lane::Key1, Lane::Key8),
-        (Lane::Key2, Lane::Key9),
-        (Lane::Key3, Lane::Key10),
-        (Lane::Key4, Lane::Key11),
-        (Lane::Key5, Lane::Key12),
-        (Lane::Key6, Lane::Key13),
-        (Lane::Key7, Lane::Key14),
-    ] {
-        let left = left.index();
-        let right = right.index();
-        perm[left] = right;
-        perm[right] = left;
-    }
+    let perm = Lane::ALL.map(|lane| flipped_dp_lane(lane).index());
     apply_lane_permutation(chart, &perm);
+}
+
+pub(crate) fn flipped_dp_lane(lane: Lane) -> Lane {
+    Lane::ALL[match lane.index() {
+        0 => Lane::Scratch2.index(),
+        15 => Lane::Scratch.index(),
+        1..=7 => lane.index() + 7,
+        _ => lane.index() - 7,
+    }]
 }
 
 pub(super) fn apply_battle_double_option(chart: &mut PlayableChart) {

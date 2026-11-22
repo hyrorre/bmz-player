@@ -215,6 +215,17 @@ random-trainer-mirror = 미러
 random-trainer-shift-left = 왼쪽 시프트
 random-trainer-shift-right = 오른쪽 시프트
 
+result-panel-title = 결과
+result-panel-details = 상세
+result-panel-ranking-unavailable = 이 결과의 IR 랭킹을 볼 수 없습니다
+result-panel-lanes-unavailable = 레인별 성적을 볼 수 없습니다
+result-panel-lanes = 레인별 성적
+result-panel-lane = 레인
+result-panel-source-lane = 원래 레인
+result-panel-source-per-note = 노트마다 변경
+result-panel-lane-rank = 랭크
+result-panel-ex-rate = EX 비율
+
 result-ir-title = IR 랭킹
 result-ir-primary = 기본
 result-ir-submitting = 점수 전송 중...

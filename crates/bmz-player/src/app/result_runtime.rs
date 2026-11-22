@@ -278,12 +278,14 @@ pub(super) fn debug_boot_finished_play_session() -> FinishedPlaySession {
             past_notes: summary.total_notes,
             ghost: Vec::new(),
             empty_poor_breaks_combo: false,
+            ..Default::default()
         },
         autoplay: false,
     };
     let course_max_combo = result.score.max_combo;
     FinishedPlaySession {
         conditional_reference_total: None,
+        lane_details: None,
         kaleid: Default::default(),
         result,
         stored: StoredPlayResult {

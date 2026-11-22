@@ -215,6 +215,17 @@ random-trainer-mirror = 镜像
 random-trainer-shift-left = 左移
 random-trainer-shift-right = 右移
 
+result-panel-title = 结算
+result-panel-details = 详情
+result-panel-ranking-unavailable = 此成绩的 IR 排名不可用
+result-panel-lanes-unavailable = 分轨成绩不可用
+result-panel-lanes = 分轨成绩
+result-panel-lane = 轨道
+result-panel-source-lane = 来源轨道
+result-panel-source-per-note = 每个音符可能不同
+result-panel-lane-rank = 评级
+result-panel-ex-rate = EX 得分率
+
 result-ir-title = IR 排名
 result-ir-primary = 主 IR
 result-ir-submitting = 正在提交成绩...

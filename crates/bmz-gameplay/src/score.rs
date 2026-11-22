@@ -1,7 +1,7 @@
 use bmz_chart::model::{LongNoteMode, PlayableChart};
 use bmz_core::clear::ClearType;
 use bmz_core::judge::{Judge, TimingSide};
-use bmz_core::lane::{KeyMode, LANE_COUNT};
+use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 
 use crate::gauge::GaugeState;
 use crate::judge::model::JudgementEvent;
@@ -30,27 +30,44 @@ pub fn scored_note_count_excluding_lanes(
         // whose relationship to `total_notes` differs by construction path.
         // Count the included resolved notes directly only when lanes are
         // actually excluded.
-        chart
-            .lane_notes
-            .iter()
-            .enumerate()
-            .filter(|(lane, _)| !excluded_lanes[*lane])
-            .flat_map(|(_, notes)| notes)
-            .filter(|note| note.kind.is_scored_head() && !chart.is_free_zone_inner(note.id))
-            .count() as u32
+        Lane::ALL
+            .into_iter()
+            .filter(|lane| !excluded_lanes[lane.index()])
+            .map(|lane| scored_heads_in_lane(chart, lane))
+            .sum()
     } else {
         // `total_notes` is the authoritative semantic count for an ordinary
         // resolved chart, including callers that do not retain every note.
         chart.total_notes
     };
-    chart.long_notes.iter().fold(base_notes, |count, pair| {
+    let long_ends = scored_long_end_lanes(chart).filter(|lane| !excluded_lanes[lane.index()]);
+    base_notes.saturating_add(long_ends.count() as u32)
+}
+
+/// Score denominator by physical lane in an already-resolved chart.
+pub fn scored_notes_by_lane(chart: &PlayableChart) -> [u32; LANE_COUNT] {
+    let mut counts = Lane::ALL.map(|lane| scored_heads_in_lane(chart, lane));
+    for lane in scored_long_end_lanes(chart) {
+        counts[lane.index()] = counts[lane.index()].saturating_add(1);
+    }
+    counts
+}
+
+fn scored_heads_in_lane(chart: &PlayableChart, lane: Lane) -> u32 {
+    chart
+        .notes_for_lane(lane)
+        .iter()
+        .filter(|note| note.kind.is_scored_head() && !chart.is_free_zone_inner(note.id))
+        .count() as u32
+}
+
+fn scored_long_end_lanes(chart: &PlayableChart) -> impl Iterator<Item = Lane> + '_ {
+    chart.long_notes.iter().filter_map(|pair| {
         let mode = pair.mode.unwrap_or(chart.metadata.long_note_mode);
-        count.saturating_add(u32::from(
-            !excluded_lanes[pair.lane.index()]
-                && !chart.is_dummy_long(pair)
-                && !chart.is_free_zone_inner(pair.start_note_id)
-                && matches!(mode, LongNoteMode::Cn | LongNoteMode::Hcn),
-        ))
+        (matches!(mode, LongNoteMode::Cn | LongNoteMode::Hcn)
+            && !chart.is_dummy_long(pair)
+            && !chart.is_free_zone_inner(pair.start_note_id))
+        .then_some(pair.lane)
     })
 }
 
@@ -79,23 +96,45 @@ pub struct ScoreState {
     /// beatoraja 互換 ghost。各スコア対象ノーツの判定 bucket を 1 byte で保持する。
     pub ghost: Vec<u8>,
     pub empty_poor_breaks_combo: bool,
+    /// In-memory breakdown for a played attempt. Imported scores have no lane data.
+    pub lane_scores: Option<Box<[LaneScore; LANE_COUNT]>>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LaneScore {
+    pub ex_score: u32,
+    pub bp: u32,
+    pub past_notes: u32,
 }
 
 impl ScoreState {
     pub fn for_rule_mode(key_mode: KeyMode, rule_mode: RuleMode) -> Self {
         Self {
             empty_poor_breaks_combo: empty_poor_breaks_combo_for_rule_mode(key_mode, rule_mode),
+            lane_scores: Some(Box::default()),
             ..Default::default()
         }
     }
 
+    pub fn lane_score(&self, lane: Lane) -> LaneScore {
+        self.lane_scores.as_deref().map_or(LaneScore::default(), |scores| scores[lane.index()])
+    }
+
     pub fn apply(&mut self, event: &JudgementEvent) {
+        let lane = &mut self.lane_scores.get_or_insert_with(Box::default)[event.lane.index()];
         if event.advances_score {
             self.past_notes += 1;
+            lane.past_notes += 1;
             self.ghost.push(ghost_judge_code(event.judge));
         }
         if !event.affects_score {
             return;
+        }
+        match event.judge {
+            Judge::PGreat => lane.ex_score += 2,
+            Judge::Great => lane.ex_score += 1,
+            Judge::Good => {}
+            Judge::Bad | Judge::Poor | Judge::EmptyPoor => lane.bp += 1,
         }
 
         let side = if event.delta.0 == 0 { TimingSide::Fast } else { event.side };

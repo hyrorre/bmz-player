@@ -9,7 +9,7 @@ use bmz_chart::model::PlayableChart;
 use bmz_core::clear::ClearType;
 use bmz_core::ids::NoteId;
 use bmz_core::input::InputDeviceKind;
-use bmz_core::lane::KeyMode;
+use bmz_core::lane::{KeyMode, LANE_COUNT};
 use bmz_core::replay::ReplayEvent;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::gauge::{GaugeCarryValue, GaugeState};
@@ -26,7 +26,7 @@ use crate::ir::payload::{IrSubmissionContext, build_score_submission};
 use crate::ln_policy::ChartLnProfile;
 use crate::paths::ProfilePaths;
 use crate::screens::play_session::AppliedArrange;
-use crate::screens::result_model::{ResultGraphCollector, ResultSummary};
+use crate::screens::result_model::{ResultGraphCollector, ResultLaneDetails, ResultSummary};
 use crate::storage::network_db::{IrJobKind, NetworkDatabase, NewIrScoreJob};
 use crate::storage::play_result::{
     StorePlayResultMode, StorePlayResultRequest, StoredPlayResult, course_stage_clear_type,
@@ -43,6 +43,7 @@ pub struct FinishedPlaySession {
     pub result: PlayResult,
     pub stored: StoredPlayResult,
     pub summary: ResultSummary,
+    pub lane_details: Option<Arc<ResultLaneDetails>>,
     pub gauge_carry: Vec<GaugeCarryValue>,
     pub course_combo: u32,
     pub course_max_combo: u32,
@@ -253,6 +254,8 @@ pub struct FinishSessionSnapshot {
     chart: Arc<PlayableChart>,
     skin_attempt: bmz_render::snapshot::SkinAttemptState,
     result: PlayResult,
+    result_lane_key_mode: KeyMode,
+    auto_scratch_lanes: [bool; LANE_COUNT],
     primary_key_mode: KeyMode,
     replay_events: Vec<ReplayEvent>,
     judge_algorithm: JudgeAlgorithm,
@@ -394,6 +397,14 @@ impl FinishSessionSnapshot {
                 }
             },
             result: play_result_from_session(session),
+            // Battle presentation only scores the SP side of a DP-shaped chart.
+            // 7K-to-9K can keep 7K rules on nine physical lanes.
+            result_lane_key_mode: if session.display_only_lane_mask.iter().any(|&masked| masked) {
+                session.primary_key_mode
+            } else {
+                session.chart.metadata.key_mode
+            },
+            auto_scratch_lanes: session.auto_scratch_lanes,
             primary_key_mode: session.primary_key_mode,
             replay_events: session.replay_recorder.events.clone(),
             judge_algorithm: session.judge.algorithm,
@@ -687,6 +698,13 @@ fn finish_session_snapshot_result(
         );
     }
 
+    let lane_details = ResultLaneDetails::new(
+        &snapshot.chart,
+        &result,
+        applied_arrange,
+        snapshot.result_lane_key_mode,
+        &snapshot.auto_scratch_lanes,
+    );
     Ok(FinishedPlaySession {
         conditional_reference_total: snapshot.reference_total,
         kaleid: snapshot.kaleid.provenance.clone(),
@@ -722,6 +740,7 @@ fn finish_session_snapshot_result(
         result,
         stored,
         summary,
+        lane_details: Some(Arc::new(lane_details)),
         gauge_carry: snapshot.gauge_carry.clone(),
         course_combo: snapshot.course_combo,
         course_max_combo: snapshot.course_max_combo,

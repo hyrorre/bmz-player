@@ -215,6 +215,17 @@ random-trainer-mirror = 鏡
 random-trainer-shift-left = 左シフト
 random-trainer-shift-right = 右シフト
 
+result-panel-title = リザルト
+result-panel-details = 詳細
+result-panel-ranking-unavailable = このリザルトのIRランキングは利用できません
+result-panel-lanes-unavailable = レーン別成績を表示できません
+result-panel-lanes = レーン別成績
+result-panel-lane = レーン
+result-panel-source-lane = 配置元
+result-panel-source-per-note = ノーツごとに変動
+result-panel-lane-rank = ランク
+result-panel-ex-rate = EX率
+
 result-ir-title = IR ランキング
 result-ir-primary = プライマリ
 result-ir-submitting = スコア送信中...

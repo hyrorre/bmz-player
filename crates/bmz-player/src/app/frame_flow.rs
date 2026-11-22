@@ -242,7 +242,8 @@ impl WinitApp {
 
         // コース graph は egui を Option から取り出した後、clone せず参照で渡す。
         let download_scope = self.bulk_download_scope();
-        let course_result = self.result.finished_course.as_ref();
+        let course_result = self.result.finished_course.as_ref().filter(|_| is_result);
+        let play_result = self.result.finished_play.as_ref().filter(|_| is_result);
         let course_preview = self.egui_course_preview(scene_kind);
         let course_editor = &self.course_editor_cache.data;
         let practice_media_ready = self.practice_media_ready();
@@ -292,6 +293,8 @@ impl WinitApp {
                 skin_meta: &skin_meta,
                 skin_catalog: self.skin.skin_catalog.get(),
                 course_result,
+                play_result,
+                result_started_at: self.result.result_scene_started_at,
                 course_stage_result,
                 course_preview: course_preview.as_ref(),
                 course_editor,
