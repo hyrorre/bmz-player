@@ -223,7 +223,8 @@ pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
 }
 
 pub(super) fn uses_ordered_inputs(session: &GameSession) -> bool {
-    super::conditional::uses_ordered_timeline(&session.chart)
+    session.rule_mode == RuleMode::Legacy
+        || super::conditional::uses_ordered_timeline(&session.chart)
         || !session.timing_map.bpm_reflections().is_empty()
 }
 

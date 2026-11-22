@@ -111,9 +111,8 @@ fn judge_counts(session: &GameSession) -> [u32; 6] {
     ]
 }
 
-/// 通常プレイは「入力 → 見逃し」の順に更新する。押下の直前の更新で先頭ノートが
-/// まだ期限切れでなくても、押下時刻には BAD 窓を過ぎている。OpenLR2 と同じく
-/// 同じ押下で後続ノートを判定できること、そしてリプレイと結果が一致することを見る。
+/// BMZ uses timestamp-ordered maintenance for both live input and replay.
+/// A miss before the next input is settled before evaluating that input.
 #[test]
 fn legacy_human_press_after_the_head_expired_matches_the_replay() {
     // A=1000ms は BAD 窓 200ms を過ぎた 1201.5ms で見逃し。
@@ -183,11 +182,10 @@ fn missed_and_pressed_chart(missed: TimeUs, pressed: TimeUs) -> PlayableChart {
     chart
 }
 
-/// HAZARD は見逃し POOR で即閉店する。同じ更新に入っている押下 (PGREAT) は
-/// 閉店より先に採点されるため、リプレイでも入力と見逃しを同じ 1ms ティックで
-/// 処理しないと結果が変わる。
+/// A miss preceding an input closes HAZARD before the input is scored,
+/// independently of the live update cadence or replay update cadence.
 #[test]
-fn legacy_hazard_scores_the_input_in_the_same_update_before_closing() {
+fn legacy_hazard_closes_before_a_later_input_in_live_play_and_replay() {
     let missed = TimeUs(1_000_000);
     let pressed = TimeUs(1_201_100);
     let press = 1_201_500;
@@ -201,8 +199,8 @@ fn legacy_hazard_scores_the_input_in_the_same_update_before_closing() {
     advance_at(&mut human, &mut audio, 1_200_000);
     keys.press();
     advance_at(&mut human, &mut audio, press);
-    assert_eq!(judge_counts(&human), [1, 0, 0, 0, 1, 0]);
-    assert_eq!(human.score.ex_score(), 2);
+    assert_eq!(judge_counts(&human), [0, 0, 0, 0, 1, 0]);
+    assert_eq!(human.score.ex_score(), 0);
     assert_eq!(human.state, PlayState::Failed);
 
     let mut replay = legacy_session(missed_and_pressed_chart(missed, pressed));
@@ -213,7 +211,7 @@ fn legacy_hazard_scores_the_input_in_the_same_update_before_closing() {
             ReplayEvent {
                 lane: Lane::Key1,
                 kind: InputKind::Press,
-                time: pressed,
+                time: TimeUs(press),
                 device_kind: Default::default(),
                 scratch_direction: None,
             },
@@ -231,6 +229,38 @@ fn legacy_hazard_scores_the_input_in_the_same_update_before_closing() {
     advance_at(&mut replay, &mut audio, release);
 
     assert_eq!(judge_counts(&replay), judge_counts(&human));
+    assert_eq!(replay.state, human.state);
+}
+
+#[test]
+fn legacy_hazard_keeps_the_same_press_bad_chain_in_live_play_and_replay() {
+    let chart = two_tap_chart(TimeUs(1_000_000), TimeUs(1_150_000));
+    let (mut human, keys) = legacy_human_session(chart.clone());
+    human.gauge = GaugeState::new(bmz_core::clear::GaugeType::Hazard, 160.0, 2);
+    let mut audio = TestAudio::default();
+    advance_at(&mut human, &mut audio, 1_000_000);
+    keys.press();
+    advance_at(&mut human, &mut audio, 1_150_000);
+    assert_eq!(judge_counts(&human), [1, 0, 0, 1, 0, 0]);
+    assert_eq!(human.score.ex_score(), 2);
+    assert_eq!(human.state, PlayState::Failed);
+
+    let mut replay = legacy_session(chart);
+    replay.gauge = GaugeState::new(bmz_core::clear::GaugeType::Hazard, 160.0, 2);
+    replay.replay_player = Some(ReplayPlayer {
+        events: vec![ReplayEvent {
+            lane: Lane::Key1,
+            kind: InputKind::Press,
+            time: TimeUs(1_150_000),
+            device_kind: Default::default(),
+            scratch_direction: None,
+        }],
+        ..Default::default()
+    });
+    replay.replay_judge_rate_percent = 100;
+    advance_at(&mut replay, &mut audio, 1_200_000);
+    assert_eq!(judge_counts(&replay), judge_counts(&human));
+    assert_eq!(replay.score.ex_score(), human.score.ex_score());
     assert_eq!(replay.state, human.state);
 }
 

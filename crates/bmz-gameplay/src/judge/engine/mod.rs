@@ -237,10 +237,9 @@ impl JudgeEngine {
         self.process_misses_at(chart, now, |_| now, play_keysound)
     }
 
-    /// Settle press-reference notes in `lane` that are already past the late
-    /// window at `judge_time`. OpenLR2's `ProcSinglenote` settles expired notes
-    /// before judging the press itself, so a press that arrives after the head
-    /// expired can still reach the following note.
+    /// Settle expired press-reference notes. A LEGACY press settles only the
+    /// first expired note and consumes that press; frame maintenance settles
+    /// every due note.
     ///
     /// LEGACY の HLN 始点はここで確定しない。`advance_hln()` が
     /// `bad_slow_us + 1µs` で保持状態を初期化するため、先に POOR を入れると
@@ -252,6 +251,7 @@ impl JudgeEngine {
         now: TimeUs,
         judge_time: TimeUs,
         play_keysound: bool,
+        stop_after_first: bool,
         outcome: &mut JudgeOutcome,
     ) {
         let lane_state = &mut self.lanes[lane.index()];
@@ -312,6 +312,9 @@ impl JudgeEngine {
                     advances_score: true,
                 });
             }
+            if stop_after_first {
+                break;
+            }
         }
         advance_press_cursor(chart, lane, &mut lane_state.next_note_index, &self.judged_notes);
     }
@@ -333,6 +336,7 @@ impl JudgeEngine {
                 now,
                 judge_time,
                 play_keysound,
+                false,
                 &mut outcome,
             );
             let lane_state = &mut self.lanes[lane.index()];
@@ -555,17 +559,21 @@ impl JudgeEngine {
     ) -> JudgeOutcome {
         let mut outcome = JudgeOutcome::default();
         if self.rule_mode == RuleMode::Legacy {
-            // OpenLR2 judges the same lane's misses before comparing this press
-            // against the next note. Without this, an expired head would return
-            // no candidate and swallow a press aimed at the following note.
+            // OpenLR2 consumes this invocation after one expired POOR.
+            // Only a tap BAD continues to the next note with the same press.
             self.settle_missed_notes_in_lane(
                 chart,
                 input.lane,
                 input.time,
                 input.time,
                 play_miss_keysound,
+                true,
                 &mut outcome,
             );
+            if !outcome.events.is_empty() {
+                outcome.consumed_input = true;
+                return outcome;
+            }
         }
         let first = self.process_press_once(chart, input, event_time);
         append_outcome(&mut outcome, first);

@@ -1138,22 +1138,34 @@ fn legacy_ln_release_preserves_head_grade_inside_the_good_window() {
 }
 
 #[test]
-fn legacy_press_after_an_expired_head_still_reaches_the_next_note() {
+fn legacy_press_after_an_expired_head_consumes_only_one_poor() {
     let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_201_100));
     let window =
         crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
     let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
 
-    // 通常プレイは入力 -> 見逃しの順。入力時刻で先頭ノートが期限切れでも、
-    // 同じ押下で後続ノートを判定できなければならない。
     let outcome = engine.process_input(&chart, press_at(TimeUs(1_201_500)));
-
-    assert_eq!(outcome.events.len(), 2);
+    assert_eq!(outcome.events.len(), 1);
     assert_eq!(outcome.events[0].note_id, Some(NoteId(1)));
     assert_eq!(outcome.events[0].judge, Judge::Poor);
-    assert_eq!(outcome.events[1].note_id, Some(NoteId(2)));
-    assert_eq!(outcome.events[1].judge, Judge::PGreat);
-    assert!(engine.process_misses(&chart, TimeUs(1_500_000)).events.is_empty());
+    assert!(outcome.consumed_input);
+
+    // The following note remains available for a separate press.
+    let next = engine.process_input(&chart, press_at(TimeUs(1_202_500)));
+    assert_eq!(next.events.len(), 1);
+    assert_eq!(next.events[0].note_id, Some(NoteId(2)));
+    assert_eq!(next.events[0].judge, Judge::PGreat);
+
+    // Several expired notes still consume only one note per press invocation.
+    let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_001_000));
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    let outcome = engine.process_input(&chart, press_at(TimeUs(1_300_000)));
+    assert_eq!(outcome.events.len(), 1);
+    assert_eq!(outcome.events[0].note_id, Some(NoteId(1)));
+    let next = engine.process_input(&chart, press_at(TimeUs(1_301_000)));
+    assert_eq!(next.events.len(), 1);
+    assert_eq!(next.events[0].note_id, Some(NoteId(2)));
+    assert_eq!(next.events[0].judge, Judge::Poor);
 }
 
 #[test]
