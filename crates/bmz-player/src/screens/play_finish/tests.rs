@@ -1651,6 +1651,117 @@ fn directly_owned_session_saves_its_settled_gauge_end_points() {
 }
 
 #[test]
+fn early_finish_round_trips_saved_gauge_and_lamp_before_later_mine() {
+    use bmz_core::{clear::GaugeType, input::InputEvent};
+    use bmz_gameplay::{gauge::GaugeState, session::PlayEndRequest};
+
+    let mine_time = TimeUs(1_000_000);
+    let finish_time = TimeUs(250_500);
+    let mut live = session();
+    let chart = Arc::make_mut(&mut live.chart);
+    chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+        id: NoteId(2),
+        kind: NoteKind::Mine,
+        time: mine_time,
+        damage: Some(200.0),
+        ..chart.lane_notes[Lane::Key1.index()][0].clone()
+    });
+    chart.end_time = mine_time;
+    live.gauge = GaugeState::new(GaugeType::Hard, 160.0, chart.total_notes);
+    live.state = PlayState::Playing;
+    live.conditional.pending_inputs.push(InputEvent {
+        lane: Lane::Key1,
+        kind: InputKind::Press,
+        time: TimeUs(0),
+        source: InputSource::Human,
+        device_kind: InputDeviceKind::Keyboard,
+        scratch_direction: None,
+    });
+
+    let mut audio = bmz_audio::queue::ScheduledSoundQueue::new();
+    live.audio_clock.pause_at(TimeUs(0));
+    bmz_gameplay::session::advance_session_frame(&mut live, &mut audio);
+    assert!(live.judge.is_exhausted(&live.chart));
+    live.play_end.request(PlayEndRequest::Finish);
+    live.audio_clock.pause_at(finish_time);
+    bmz_gameplay::session::advance_session_frame(&mut live, &mut audio);
+    assert_eq!(live.state, PlayState::Finished);
+
+    let root = tempfile::tempdir().unwrap();
+    let paths = profile_paths(root.path());
+    let mut score_db = open_score_db();
+    let finished = finish_session_result_once(
+        &mut None,
+        &mut score_db,
+        &mut open_network_db(),
+        FinishSessionResultOnceRequest {
+            profile_paths: &paths,
+            replay_config: &ReplayConfig {
+                auto_save: true,
+                slot_rules: crate::config::profile_config::default_slot_rules(),
+            },
+            ir_config: &IrConfig::default(),
+            session: &live,
+            source_ln_profile: ChartLnProfile::from_chart(&live.chart),
+            chart_length_ms: None,
+            play_duration_ms: None,
+            played_at: 1_700_000_114,
+            applied_arrange: &AppliedArrange::default(),
+            target_ex_score: None,
+            target_name: "",
+            target: Default::default(),
+            score_key: score_key(&live),
+            practice_mode: false,
+            finish_mode: FinishResultMode::Normal,
+        },
+    )
+    .unwrap();
+    let history = score_db.recent_history(1, 0).unwrap().pop().unwrap();
+    assert_eq!(history.id, finished.stored.score_history_id);
+    assert_eq!(history.gauge_value, Some(100.0));
+    assert_eq!(history.clear_type, ClearType::Max.as_str());
+
+    let mut replay = session();
+    replay.chart = Arc::clone(&live.chart);
+    replay.gauge = GaugeState::new(GaugeType::Hard, 160.0, replay.chart.total_notes);
+    replay.state = PlayState::Playing;
+    replay.replay_player = Some(
+        crate::storage::replay::load_replay_player(&root.path().join(&history.replay_path))
+            .unwrap(),
+    );
+    replay.audio_clock.pause_at(TimeUs(mine_time.0 + 20_000));
+    let frame = bmz_gameplay::session::advance_session_frame(&mut replay, &mut audio);
+    assert!(frame.mine_hits.is_empty());
+    assert_eq!(replay.scoring_closed_at, Some(finish_time));
+    let replayed = play_result_from_session(&replay);
+    assert_eq!(Some(replayed.gauge_value), history.gauge_value);
+    assert_eq!(replayed.clear_type.as_str(), history.clear_type);
+}
+
+#[test]
+fn early_finish_snapshot_includes_inputs_scored_ahead_of_the_audio_clock() {
+    let mut live = session();
+    live.audio_clock.pause_at(TimeUs(80_000));
+    live.scoring_closed_at = Some(TimeUs(80_000));
+    live.finished_early = true;
+    live.replay_recorder.events.push(ReplayEvent {
+        lane: Lane::Key1,
+        kind: InputKind::Press,
+        time: TimeUs(100_000),
+        device_kind: InputDeviceKind::Keyboard,
+        scratch_direction: None,
+    });
+    let snapshot = FinishSessionSnapshot::from_session(
+        &live,
+        ChartLnProfile::default(),
+        &AppliedArrange::default(),
+        live.scoring_closed_at,
+    );
+    assert_eq!(snapshot.kaleid.ended_at, TimeUs(100_000));
+    assert!(snapshot.kaleid.finished_early);
+}
+
+#[test]
 fn finish_snapshot_preserves_the_started_session_mode() {
     let mut session = session();
     session.session_mode_index = 1;
@@ -1866,6 +1977,7 @@ fn session() -> GameSession {
         pending_mine_hits: Vec::new(),
         state: PlayState::Finished,
         manually_stopped: false,
+        finished_early: false,
         scoring_closed_at: None,
         natural_result_settled_at: None,
         last_hcn_gauge_at: None,

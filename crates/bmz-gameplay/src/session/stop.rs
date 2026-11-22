@@ -27,15 +27,20 @@ impl GameSession {
     pub(super) fn play_end_reached(&mut self) -> bool {
         self.manually_stopped
             || self.state == super::PlayState::Finished
-            || self.apply_play_end_request()
+            || self.apply_play_end_request(false)
     }
 
-    /// Apply an exit request at a scoring boundary on the session owner.
-    pub(crate) fn apply_play_end_request(&mut self) -> bool {
-        if !self.play_end.is_pending() {
+    /// Finish uses a completed scoring update as its replay cutoff. Manual stops can interrupt it.
+    pub(crate) fn apply_play_end_request(&mut self, allow_finish: bool) -> bool {
+        let Ok(request) =
+            self.play_end.0.try_update(Ordering::AcqRel, Ordering::Acquire, |request| {
+                (request != 0 && (allow_finish || request != PlayEndRequest::Finish as u8))
+                    .then_some(0)
+            })
+        else {
             return false;
-        }
-        match self.play_end.0.swap(0, Ordering::AcqRel) {
+        };
+        match request {
             request if request == PlayEndRequest::ManualStop as u8 => self.request_manual_stop(),
             request if request == PlayEndRequest::PracticeRoundEnd as u8 => {
                 self.request_practice_round_end()

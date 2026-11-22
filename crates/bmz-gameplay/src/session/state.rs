@@ -320,6 +320,8 @@ pub struct GameSession {
     /// プレイヤーの操作 (Esc / START+SELECT 長押しなど) で曲の途中に止めたか。
     /// `state` はゲージ落ちと同じ `Failed` になるため、完走判定にはこちらを使う。
     pub manually_stopped: bool,
+    /// Explicit completion that closed scoring before natural settlement.
+    pub finished_early: bool,
     /// 採用する結果を確定し、採点を閉じた譜面時刻。
     ///
     /// 自然確定 ([`super::natural_result_settled`]) か、`Finished` / `Failed` への
@@ -374,8 +376,20 @@ impl GameSession {
         if self.state != PlayState::Playing {
             return false;
         }
+        self.finished_early = self.scoring_closed_at.is_none();
         self.state = PlayState::Finished;
         true
+    }
+
+    pub(super) fn recorded_replay_end(&self) -> Option<&bmz_chart::kaleid::KaleidPlayEvidence> {
+        if self.replay_lane_mask.is_some() {
+            return None;
+        }
+        self.replay_player
+            .as_ref()?
+            .kaleid
+            .as_ref()
+            .filter(|evidence| evidence.manually_stopped || evidence.finished_early)
     }
 }
 
@@ -689,13 +703,7 @@ pub fn compute_frame_times(session: &GameSession) -> FrameTimes {
     let audio_now = session.audio_clock.now();
     let schedule_ahead = schedule_ahead_us(&session.audio_clock);
     let audio_schedule_until = TimeUs(audio_now.0.saturating_add(schedule_ahead));
-    if let Some(end) = session
-        .replay_player
-        .as_ref()
-        .and_then(|p| p.kaleid.as_ref())
-        .filter(|evidence| evidence.manually_stopped && session.replay_lane_mask.is_none())
-        .map(|evidence| evidence.ended_at)
-    {
+    if let Some(end) = session.recorded_replay_end().map(|evidence| evidence.ended_at) {
         return FrameTimes {
             audio_now: audio_now.min(end),
             audio_schedule_until: audio_schedule_until.min(end),

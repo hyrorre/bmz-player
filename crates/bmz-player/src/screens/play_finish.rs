@@ -326,6 +326,16 @@ impl FinishSessionSnapshot {
         } else {
             Arc::clone(&session.chart)
         };
+        let mut ended_at = session.audio_clock.now().max(TimeUs(0));
+        if session.finished_early {
+            let scoring_closed_at = session.result_settled_at().unwrap_or(ended_at);
+            // Untimed input can already have been scored ahead of the audio clock by an offset.
+            ended_at = session
+                .replay_recorder
+                .events
+                .iter()
+                .fold(scoring_closed_at, |end, event| end.max(event.time));
+        }
         Self {
             completed: !session.manually_stopped
                 && (session.state == PlayState::Finished
@@ -426,8 +436,9 @@ impl FinishSessionSnapshot {
                 preplay_lamp: session.conditional.best_lamp,
                 branches: session.conditional.decisions.clone(),
                 evaluations: session.conditional.evaluations.clone(),
-                ended_at: session.audio_clock.now().max(TimeUs(0)),
+                ended_at,
                 manually_stopped: session.manually_stopped,
+                finished_early: session.finished_early,
                 options: std::collections::BTreeMap::from([
                     ("judge_windows".into(), serde_json::json!(session.base_judge_windows)),
                     ("rule_mode".into(), serde_json::json!(session.rule_mode.as_str())),

@@ -59,17 +59,33 @@ impl WinitApp {
             SkinKind::Select => AppSceneKind::Select,
             SkinKind::Decide | SkinKind::Play => return Some(upload),
         };
-        if self.current_scene_kind() == target {
+        let kind = upload.kind;
+        let entering = self.current_scene_kind() == target;
+        let generation = upload.generation;
+        if entering
+            && (kind != SkinKind::Result || generation != self.skin.skin_pipeline.generation(kind))
+        {
             return Some(upload);
         }
-        let generation = upload.generation;
-        match self.skin_prewarm_slot(upload.kind) {
-            Some(Some(prewarm)) if prewarm.generation == generation => {
-                prewarm.upload = Some(upload);
-                None
-            }
-            _ => Some(upload),
+        let Some(prewarm) = self
+            .skin_prewarm_slot(kind)
+            .and_then(Option::as_mut)
+            .filter(|prewarm| prewarm.generation == generation)
+        else {
+            return Some(upload);
+        };
+        prewarm.upload = Some(upload);
+        if !entering {
+            return None;
         }
+
+        // Result entered while this prewarm was in flight. Check its file-store
+        // dependencies at completion just as for an upload held before entry.
+        let upload = self.take_prewarmed_upload(kind);
+        if upload.is_none() {
+            self.ensure_result_skin_ready_for_entry(ResultSkinSlot::Normal);
+        }
+        upload
     }
 
     /// The held upload of `kind`'s prewarm when it can stand in for this entry.
@@ -141,14 +157,25 @@ impl WinitApp {
             self.skin.result_skin_prewarm = None;
             return false;
         }
-        let Some(upload) = self.take_prewarmed_upload(SkinKind::Result) else {
-            return false;
-        };
-        tracing::info!("result skin entry reuses the decode started at score finalization");
-        self.apply_uploaded_skin(upload);
+        let kind = SkinKind::Result;
+        let in_flight = self.skin.skin_pipeline.is_pending(kind)
+            && self.skin.result_skin_prewarm.as_ref().is_some_and(|prewarm| {
+                prewarm.generation == self.skin.skin_pipeline.generation(kind)
+                    && prewarm.upload.is_none()
+            });
+        if !in_flight {
+            let Some(upload) = self.take_prewarmed_upload(kind) else {
+                return false;
+            };
+            self.apply_uploaded_skin(upload);
+        }
+        tracing::info!(
+            in_flight,
+            "result skin entry reuses the decode started at score finalization"
+        );
         self.refresh_result_favorites();
-        self.request_scene_skin(SkinKind::Result);
-        if !self.scene_skin_entry_waiting(SkinKind::Result) {
+        self.request_scene_skin(kind);
+        if !self.scene_skin_entry_waiting(kind) {
             self.finish_result_skin_entry();
         }
         true

@@ -43,6 +43,13 @@ pub struct ReplayPlayer {
 }
 
 impl ReplayPlayer {
+    pub(crate) fn explicit_finish_at(&self) -> Option<TimeUs> {
+        self.kaleid
+            .as_ref()
+            .filter(|evidence| evidence.finished_early)
+            .map(|evidence| evidence.ended_at)
+    }
+
     /// Use a fixed chart-time cadence for replay misses and HCN integration, so
     /// batching inputs into different audio/render frames cannot change scoring.
     ///
@@ -50,12 +57,20 @@ impl ReplayPlayer {
     /// [`Self::complete_scoring_tick`] only after its processing has finished,
     /// so an interrupted batch never reports unprocessed ticks as scored.
     pub(crate) fn scoring_times_until(&self, now: TimeUs) -> Vec<TimeUs> {
+        let finish = self.explicit_finish_at().filter(|end| *end <= now);
+        let now = finish.unwrap_or(now);
         // READY does not score before chart zero, including negative recorded inputs.
         let mut time = self.next_scoring_time.unwrap_or(TimeUs(0));
         let mut times = Vec::new();
         while time <= now {
             times.push(time);
             time = TimeUs(time.0.saturating_add(REPLAY_SCORING_STEP_US));
+        }
+        // An explicit exit can fall between the usual 1 ms scoring ticks.
+        if let Some(end) = finish
+            && times.last().copied().or_else(|| self.scored_until()).is_none_or(|last| last < end)
+        {
+            times.push(end);
         }
         times
     }
@@ -112,6 +127,26 @@ mod tests {
     use bmz_core::lane::Lane;
 
     use super::*;
+
+    #[test]
+    fn explicit_finish_scores_the_last_partial_tick_once() {
+        let end = TimeUs(2_500);
+        let mut replay = ReplayPlayer {
+            kaleid: Some(bmz_chart::kaleid::KaleidPlayEvidence {
+                ended_at: end,
+                finished_early: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            replay.scoring_times_until(TimeUs(4_000)),
+            [TimeUs(0), TimeUs(1_000), TimeUs(2_000), end]
+        );
+        replay.complete_scoring_tick(end);
+        assert!(replay.scoring_times_until(TimeUs(5_000)).is_empty());
+    }
 
     #[test]
     fn scoring_cursor_does_not_repeat_ticks_and_resumes_after_seek() {

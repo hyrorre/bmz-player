@@ -57,7 +57,7 @@ pub fn advance_session_frame(
         schedule_chart_audio(session, times.audio_schedule_until, audio);
     }
 
-    session.apply_play_end_request();
+    session.apply_play_end_request(false);
     if session.state == PlayState::Playing {
         sync_judge_windows(session, times.audio_now);
         let ordered_timeline = super::input::uses_ordered_inputs(session);
@@ -173,15 +173,18 @@ pub fn advance_session_frame(
         update_full_combo_timer(session, &judgements);
         if !session.play_end_reached() {
             advance_battle_opponent(session, times.audio_now);
-            session.apply_play_end_request();
+            session.apply_play_end_request(true);
         }
 
-        if session.replay_player.as_ref().and_then(|p| p.kaleid.as_ref()).is_some_and(|evidence| {
-            evidence.manually_stopped && times.audio_now >= evidence.ended_at
-        }) && session.replay_lane_mask.is_none()
+        if let Some(end) =
+            session.recorded_replay_end().filter(|evidence| times.audio_now >= evidence.ended_at)
         {
-            session.manually_stopped = true;
-            session.state = PlayState::Failed;
+            if end.manually_stopped {
+                session.manually_stopped = true;
+                session.state = PlayState::Failed;
+            } else {
+                session.request_finish();
+            }
         }
 
         // この更新で取得した入力・見逃し・地雷・LN処理を終えた後に採点を閉じる。
@@ -983,6 +986,11 @@ fn human_input_settle_margin_us(session: &GameSession) -> i64 {
 }
 
 fn battle_opponent_result_settled(opponent: &BattleOpponentSession, audio_now: TimeUs) -> bool {
+    if let Some(replay) = &opponent.replay_player
+        && let Some(end) = replay.explicit_finish_at()
+    {
+        return replay.scored_until().is_some_and(|scored| scored >= end);
+    }
     if super::conditional::next_evaluation_for(&opponent.chart, &opponent.conditional).is_some() {
         return false;
     }

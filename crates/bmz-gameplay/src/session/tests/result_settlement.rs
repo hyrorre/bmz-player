@@ -815,6 +815,53 @@ fn trailing_invisible_does_not_skip_a_late_mine_or_its_input_window() {
 }
 
 #[test]
+fn early_finish_replay_preserves_result_before_a_later_mine() {
+    use crate::result::PlayResult;
+    use bmz_core::clear::GaugeType;
+
+    let mine_time = TimeUs(1_000_000);
+    let mut chart = tap_chart(TimeUs(0));
+    chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+        id: NoteId(2),
+        kind: NoteKind::Mine,
+        time: mine_time,
+        damage: Some(200.0),
+        ..chart.lane_notes[Lane::Key1.index()][0].clone()
+    });
+    chart.end_time = mine_time;
+
+    let (mut live, keys) = dx_human_session(chart.clone(), 0);
+    live.gauge = GaugeState::new(GaugeType::Hard, 160.0, chart.total_notes);
+    let mut audio = TestAudio::default();
+    keys.press();
+    advance_at(&mut live, &mut audio, 0);
+    assert!(live.judge.is_exhausted(&live.chart));
+    live.play_end.request(PlayEndRequest::Finish);
+    let ended = advance_at(&mut live, &mut audio, 250_500);
+    assert_eq!(ended.state, PlayState::Finished);
+    assert!(ended.mine_hits.is_empty());
+    let saved = PlayResult::from_states(&chart, &live.score, &live.gauge, live.state, false);
+
+    let (mut replay, _) = dx_human_session(chart.clone(), 0);
+    replay.gauge = GaugeState::new(GaugeType::Hard, 160.0, chart.total_notes);
+    replay.replay_player = Some(ReplayPlayer {
+        kaleid: Some(bmz_chart::kaleid::KaleidPlayEvidence {
+            ended_at: live.result_settled_at().unwrap(),
+            manually_stopped: live.manually_stopped,
+            finished_early: live.finished_early,
+            ..Default::default()
+        }),
+        events: live.replay_recorder.events,
+        ..Default::default()
+    });
+    advance_at(&mut replay, &mut audio, mine_time.0 + 20_000);
+    let played = PlayResult::from_states(&chart, &replay.score, &replay.gauge, replay.state, false);
+    assert_eq!((played.gauge_value, played.clear_type), (saved.gauge_value, saved.clear_type));
+    assert_eq!(replay.state, PlayState::Finished);
+    assert_eq!(replay.scoring_closed_at, live.scoring_closed_at);
+}
+
+#[test]
 fn missed_long_notes_keep_settlement_past_the_tail_in_every_mode() {
     for mode in [LongNoteMode::Ln, LongNoteMode::Cn, LongNoteMode::Hcn] {
         let mut chart = chart_with_hcn_long_note();

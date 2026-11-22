@@ -1583,6 +1583,7 @@ fn result_and_select_entries_reuse_skin_decodes_started_ahead() {
     .unwrap();
     app.viewer_mode = false;
     app.viewer_waiting = false;
+    app.skin.default_skin_manifest = Some(bmz_render::skin::default_skin_manifest());
     let finished = debug_boot_finished_play_session();
     let upload = |kind: SkinKind, generation: u64| {
         let now = Instant::now();
@@ -1595,7 +1596,20 @@ fn result_and_select_entries_reuse_skin_decodes_started_ahead() {
             decode_finished_at: now,
             upload_started_at: now,
             upload_finished_at: now,
-            uploaded: Err(anyhow::anyhow!("injected completion")),
+            uploaded: Ok(crate::skin_loader::UploadedSkin {
+                load_dependencies: Default::default(),
+                kind,
+                document: serde_json::from_value(serde_json::json!({
+                    "type": if kind == SkinKind::Result { 7 } else { 5 },
+                }))
+                .unwrap(),
+                lua_runtime: None,
+                fonts: Vec::new(),
+                prepared: Vec::new(),
+                audio_assets: Vec::new(),
+                decode_stats: Default::default(),
+                upload_stats: Default::default(),
+            }),
         }
     };
 
@@ -1639,13 +1653,32 @@ fn result_and_select_entries_reuse_skin_decodes_started_ahead() {
     assert!(app.skin.skin_pipeline.generation(SkinKind::Select) > select);
     assert!(!app.skin.skin_pipeline.is_pending(SkinKind::Select));
 
-    // A Result upload that has not arrived by entry is not waited for.
+    // Entering Result while the upload is in flight keeps the existing request.
     app.result.finished_play = None;
     app.prewarm_result_skin_for_finished_play(&finished);
     let prewarmed = app.skin.skin_pipeline.generation(SkinKind::Result);
     app.result.finished_play = Some(finished.clone());
     app.ensure_result_skin_ready_for_entry(ResultSkinSlot::Normal);
+    assert_eq!(app.skin.skin_pipeline.generation(SkinKind::Result), prewarmed);
+    assert!(app.scene_skin_entry_waiting(SkinKind::Result));
+    let arrived = app.hold_prewarmed_upload(upload(SkinKind::Result, prewarmed)).unwrap();
+    assert!(app.apply_uploaded_skin(arrived));
+    app.poll_scene_skin_entries();
+    assert_eq!(app.skin.skin_pipeline.generation(SkinKind::Result), prewarmed);
+    assert!(app.skin.result_skin_prewarm.is_none());
+    assert!(!app.scene_skin_entry_waiting(SkinKind::Result));
+
+    // An in-flight failure is retried as the entry's load once.
+    app.result.finished_play = None;
+    app.prewarm_result_skin_for_finished_play(&finished);
+    let prewarmed = app.skin.skin_pipeline.generation(SkinKind::Result);
+    app.result.finished_play = Some(finished.clone());
+    app.ensure_result_skin_ready_for_entry(ResultSkinSlot::Normal);
+    let mut failed = upload(SkinKind::Result, prewarmed);
+    failed.uploaded = Err(anyhow::anyhow!("injected failure"));
+    assert!(app.hold_prewarmed_upload(failed).is_none());
     assert!(app.skin.skin_pipeline.generation(SkinKind::Result) > prewarmed);
+    assert!(app.scene_skin_entry_waiting(SkinKind::Result));
 
     // A skin setting change during the ending drops the prewarmed load.
     app.result.finished_play = None;
