@@ -43,6 +43,10 @@ impl PlayOverrides {
                         | "bga"
                         | "guide-se"
                         | "show-invisible-notes"
+                        | "mark-note"
+                        | "judge-area"
+                        | "show-ln-tail-cap"
+                        | "green-number"
                 )
             })
     }
@@ -53,7 +57,9 @@ impl PlayOverrides {
             "gas" => play.gauge_auto_shift, "gas-bottom" => play.bottom_shiftable_gauge,
             "hs-fix" => play.hs_fix, "hispeed" => lane.hispeed,
             "base-hispeed" => lane.base_hispeed, "floating-policy" => lane.floating_policy, "bga" => play.bga,
-            "guide-se" => play.guide_se, "show-invisible-notes" => play.show_hidden_notes
+            "guide-se" => play.guide_se, "show-invisible-notes" => play.show_hidden_notes,
+            "mark-note" => play.assist.mark_note, "judge-area" => play.assist.judge_area,
+            "show-ln-tail-cap" => play.show_ln_tail_cap, "green-number" => lane.target_green_number
         );
     }
     pub fn apply(&self, profile: &mut ProfileConfig) {
@@ -62,6 +68,11 @@ impl PlayOverrides {
     fn capture(&self, profile: &mut ProfileConfig) -> Self {
         let mut result = self.clone();
         result.transfer(profile, true);
+        if self.values.contains_key("green-number") {
+            // Lane updates can copy the multiplier computed from the temporary green number
+            // into the profile. Restore the original Classic multiplier as well.
+            result.values.insert("hispeed".into(), json!(profile.lane.hispeed));
+        }
         result
     }
     pub fn validate(&self) -> Result<()> {
@@ -81,7 +92,13 @@ impl PlayOverrides {
                 "gas-bottom" => check!(BottomShiftableGaugeConfig),
                 "hs-fix" => check!(HsFixConfig),
                 "bga" => check!(BgaModeConfig),
-                "guide-se" | "auto-scratch" | "show-invisible-notes" => check!(bool),
+                "guide-se"
+                | "auto-scratch"
+                | "show-invisible-notes"
+                | "mark-note"
+                | "judge-area"
+                | "show-ln-tail-cap" => check!(bool),
+                "green-number" => validate_green_number(serde_json::from_value(value.clone())?)?,
                 "base-hispeed" => check!(BaseHispeedConfig),
                 "floating-policy" => check!(FloatingPolicyConfig),
                 "hispeed" => {
@@ -93,6 +110,15 @@ impl PlayOverrides {
         }
         Ok(())
     }
+}
+
+fn validate_green_number(number: u32) -> Result<()> {
+    use crate::config::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
+    ensure!(
+        (TARGET_GREEN_NUMBER_MIN..=TARGET_GREEN_NUMBER_MAX).contains(&number),
+        "--green-number must be {TARGET_GREEN_NUMBER_MIN}..{TARGET_GREEN_NUMBER_MAX}"
+    );
+    Ok(())
 }
 
 impl ProfileConfig {
@@ -284,6 +310,10 @@ pub(super) fn extract(
                 | "bga"
                 | "guide-se"
                 | "show-invisible-notes"
+                | "mark-note"
+                | "judge-area"
+                | "show-ln-tail-cap"
+                | "green-number"
                 | "seed"
                 | "auto-scratch"
         ) {
@@ -328,10 +358,24 @@ pub(super) fn extract(
                     "--hispeed must be 0.01..20.0"
                 );
                 play.values.insert(key.into(), json!(hs));
+                play.values.remove("green-number");
                 play.values.insert("base-hispeed".into(), json!("Classic"));
                 play.values.insert("floating-policy".into(), json!("Disabled"));
             }
-            "guide-se" | "auto-scratch" | "show-invisible-notes" => {
+            "green-number" => {
+                let number: u32 = value.parse().context("--green-number requires an integer")?;
+                validate_green_number(number)?;
+                play.values.remove("hispeed");
+                play.values.insert(key.into(), json!(number));
+                play.values.insert("base-hispeed".into(), json!("Classic"));
+                play.values.insert("floating-policy".into(), json!("Locked"));
+            }
+            "guide-se"
+            | "auto-scratch"
+            | "show-invisible-notes"
+            | "mark-note"
+            | "judge-area"
+            | "show-ln-tail-cap" => {
                 ensure!(lower == "on" || lower == "off", "{flag} requires on/off");
                 play.values.insert(key.into(), json!(lower == "on"));
             }
@@ -465,6 +509,80 @@ mod tests {
             assert!(parse_cli_command(args.split_whitespace()).is_err());
         }
     }
+    #[test]
+    fn floating_target_and_fixed_hispeed_use_last_option_and_restore_profile() {
+        use crate::config::profile_config::{BaseHispeedConfig, FloatingPolicyConfig};
+        use bmz_core::lane::KeyMode;
+
+        let mut profile = ProfileConfig::new_default("default", "Tester", 0);
+        profile.lane.base_hispeed = BaseHispeedConfig::Lr2;
+        profile.lane.floating_policy = FloatingPolicyConfig::Disabled;
+        profile.lane.hispeed = 1.75;
+        profile.lane.target_green_number = 350;
+        profile.play.assist.mark_note = true;
+        profile.play.show_ln_tail_cap = true;
+        let k7 = profile.play_mode_config(KeyMode::K7);
+        let k14 = profile.play_mode_config(KeyMode::K14);
+
+        let Command::Run(o) = parse("chart.bms -P --hispeed 3 --green-number=250 --mark-note off --judge-area on --show-ln-tail-cap off").command else { panic!() };
+        assert!(!o.play_overrides.values.contains_key("hispeed"));
+        profile.set_cli_play(o.play_overrides);
+        assert_eq!(profile.lane.floating_policy, FloatingPolicyConfig::Locked);
+        assert_eq!(profile.lane.target_green_number, 250);
+        assert!(
+            !profile.play.assist.mark_note
+                && profile.play.assist.judge_area
+                && !profile.play.show_ln_tail_cap
+        );
+        profile.lane.hispeed = 4.75; // Multiplier copied back from the active Floating session.
+        profile.activate_play_mode(KeyMode::K14);
+        assert_eq!(profile.lane.target_green_number, 250);
+        profile.lane.hispeed = 5.5;
+        let dir = TestDir::new();
+        let path = dir.path().join("profile.toml");
+        crate::config::save::save_profile_config(&path, &profile).unwrap();
+        let saved = crate::config::load::load_profile_config(&path).unwrap();
+        assert_eq!(saved.play_mode_config(KeyMode::K7), k7);
+        assert_eq!(saved.play_mode_config(KeyMode::K14), k14);
+        assert!(
+            saved.play.assist.mark_note
+                && !saved.play.assist.judge_area
+                && saved.play.show_ln_tail_cap
+        );
+
+        let Command::Run(o) = parse("chart.bms -P --green-number 480 --hispeed 2").command else {
+            panic!()
+        };
+        assert!(!o.play_overrides.values.contains_key("green-number"));
+        profile.set_cli_play(o.play_overrides);
+        assert_eq!(profile.lane.hispeed, 2.0);
+        assert_eq!(profile.lane.target_green_number, k14.target_green_number);
+        assert_eq!(profile.lane.floating_policy, FloatingPolicyConfig::Disabled);
+        profile.clear_cli_play();
+        assert_eq!(profile.play_mode_config(KeyMode::K14), k14);
+    }
+
+    #[test]
+    fn display_options_validate_cli_and_viewer_values() {
+        for flag in ["mark-note", "judge-area", "show-ln-tail-cap"] {
+            assert!(parse_cli_command(["chart.bms", &format!("--{flag}"), "yes"]).is_err());
+            let mut ipc = PlayOverrides::default();
+            ipc.values.insert(flag.into(), json!("on"));
+            assert!(ipc.validate().is_err());
+        }
+        for value in ["0", "6001", "-1", "1.5", "high"] {
+            assert!(parse_cli_command(["chart.bms", "--green-number", value]).is_err());
+        }
+        for value in [json!(0), json!(6001), json!("300"), json!(12.5)] {
+            let mut ipc = PlayOverrides::default();
+            ipc.values.insert("green-number".into(), value);
+            assert!(ipc.validate().is_err());
+        }
+        for value in ["1", "6000"] {
+            assert!(parse_cli_command(["chart.bms", "-r1", "--green-number", value]).is_ok());
+        }
+    }
+
     #[test]
     fn shared_flags_apply_to_modes_and_export() {
         for mode in ["", "-a", "-P"] {
