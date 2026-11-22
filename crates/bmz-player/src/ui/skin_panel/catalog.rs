@@ -306,6 +306,44 @@ use super::*;
 mod tests {
     use super::*;
 
+    #[test]
+    fn dotted_roots_restore_options_files_and_offsets_from_legacy_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        for data_dir in [temp.path().join("staging/../data"), PathBuf::from("./data")] {
+            let paths = AppPaths::from_dirs(
+                temp.path().join("staging/../resources"),
+                data_dir,
+                temp.path().join("cache"),
+                temp.path().join("logs"),
+            );
+            for (old, selected) in [
+                ("data/skins/B/play.lua", "data:skins/B/play.lua"),
+                ("resource:skins/B/play.lua", "resource:skins/B/play.lua"),
+            ] {
+                let original = SkinHistoryEntryConfig {
+                    options: BTreeMap::from([("Layout".into(), "Saved".into())]),
+                    files: BTreeMap::from([("Notes".into(), "saved.png".into())]),
+                    offsets: vec![SkinOffsetConfig { id: 30, x: 12, ..Default::default() }],
+                };
+                let mut skin = SkinConfig {
+                    play7: old.into(),
+                    play7_options: original.options.clone(),
+                    play7_files: original.files.clone(),
+                    play7_offsets: original.offsets.clone(),
+                    ..Default::default()
+                };
+                assert!(switch_skin_slot(&mut skin, SkinSlot::Play7, &paths, String::new()));
+                assert!(switch_skin_slot(&mut skin, SkinSlot::Play7, &paths, selected.into()));
+                assert_eq!(skin.play7_options, original.options);
+                assert_eq!(skin.play7_files, original.files);
+                assert_eq!(skin.play7_offsets, original.offsets);
+                assert!(
+                    skin.history.contains_key(&skin_slot_history_key(SkinSlot::Play7, selected))
+                );
+            }
+        }
+    }
+
     fn app_paths(temp: &tempfile::TempDir) -> AppPaths {
         let root = temp.path().join("app");
         AppPaths::from_dirs(

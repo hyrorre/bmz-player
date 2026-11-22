@@ -261,14 +261,14 @@ impl AppPaths {
 
     pub fn resource_path_ref(&self, path: &Path) -> Option<String> {
         normalize_path_lexically(path)
-            .strip_prefix(&self.resource_dir)
+            .strip_prefix(normalize_path_lexically(&self.resource_dir))
             .ok()
             .map(|relative| format!("{RESOURCE_PATH_PREFIX}{}", path_to_slash(relative)))
     }
 
     pub fn data_path_ref(&self, path: &Path) -> Option<String> {
         normalize_path_lexically(path)
-            .strip_prefix(&self.data_dir)
+            .strip_prefix(normalize_path_lexically(&self.data_dir))
             .ok()
             .map(|relative| format!("{DATA_PATH_PREFIX}{}", path_to_slash(relative)))
     }
@@ -616,6 +616,26 @@ mod tests {
             paths.resource_path_ref(Path::new("/app/resources/skins/A/../B/play.lua")).as_deref(),
             Some("resource:skins/B/play.lua")
         );
+    }
+
+    #[test]
+    fn path_refs_normalize_both_the_path_and_its_root() {
+        for (resources, data) in
+            [("/app/staging/../resources", "/app/staging/../data"), ("./resources", "./data")]
+        {
+            let paths =
+                AppPaths::from_dirs(resources.into(), data.into(), "cache".into(), "logs".into());
+            let normalized_data = normalize_path_lexically(Path::new(data));
+            let normalized_resources = normalize_path_lexically(Path::new(resources));
+            assert_eq!(
+                paths.data_path_ref(&normalized_data.join("skins/B/play.lua")).as_deref(),
+                Some("data:skins/B/play.lua")
+            );
+            assert_eq!(
+                paths.resource_path_ref(&normalized_resources.join("skins/B/play.lua")).as_deref(),
+                Some("resource:skins/B/play.lua")
+            );
+        }
     }
 
     /// A not-yet-created root inside a directory the returned TempDir owns and removes.
