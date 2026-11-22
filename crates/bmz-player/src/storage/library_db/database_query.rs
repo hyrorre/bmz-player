@@ -219,9 +219,13 @@ impl LibraryDatabase {
         Ok(())
     }
 
-    pub fn update_folder_document_flags(&mut self, folder_flags: &[(PathBuf, bool)]) -> Result<()> {
+    /// Returns how many chart rows changed their document flag.
+    pub fn update_folder_document_flags(
+        &mut self,
+        folder_flags: &[(PathBuf, bool)],
+    ) -> Result<usize> {
         if folder_flags.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
 
         // Visit neighboring folder index entries together during large rescans.
@@ -230,6 +234,7 @@ impl LibraryDatabase {
             folder_flags.iter().map(|(folder, flag)| (library_path_key(folder), flag)).collect();
         ordered.sort_by(|a, b| a.0.cmp(&b.0));
         let tx = self.conn.transaction()?;
+        let mut changed = 0;
         {
             // Unchanged rows are not rewritten, so a rescan adds nothing to the WAL.
             let mut stmt = tx.prepare_cached(
@@ -237,11 +242,11 @@ impl LibraryDatabase {
                  WHERE folder_path = ?2 AND has_document IS NOT ?1",
             )?;
             for (folder, has_document) in ordered {
-                stmt.execute(params![has_document, folder])?;
+                changed += stmt.execute(params![has_document, folder])?;
             }
         }
         tx.commit()?;
-        Ok(())
+        Ok(changed)
     }
 
     /// トランザクションを管理せずに失敗チャートを記録する。戻り値は `chart_file_id`。
