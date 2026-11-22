@@ -134,33 +134,30 @@ fn push_document_lane(
                 }
                 // beatoraja は見逃しノーツを markprocessednote によらず通常画像で描く。
                 let processed = snapshot.mark_processed_note
-                    && note.kind != NoteVisualKind::Invisible
                     && note.processed_judge.is_some()
                     && note.pms_miss_fall.is_none();
                 let item = match note.kind {
                     NoteVisualKind::LnStart => notes.cap_item(lane, rect, LongNoteMode::Ln, false),
                     NoteVisualKind::LnEnd => notes.cap_item(lane, rect, LongNoteMode::Ln, true),
                     NoteVisualKind::Tap => notes.tap_item(lane, rect, processed),
-                    NoteVisualKind::Invisible => {
-                        for rect in note_outline_borders(rect) {
-                            append_document_item(
-                                commands,
-                                skin,
-                                skin_state,
-                                SkinRenderItem::Rect {
-                                    rect,
-                                    color: HIDDEN_NOTE_OUTLINE,
-                                    blend: BlendMode::Normal,
-                                },
-                            );
-                        }
-                        None
-                    }
+                    NoteVisualKind::Invisible => None,
                 };
                 if let Some(item) = item {
                     append_document_item(commands, skin, skin_state, item);
-                } else if processed {
-                    push_note_outline(commands, rect, PROCESSED_NOTE_OUTLINE);
+                } else {
+                    let color = match note.kind {
+                        NoteVisualKind::Invisible => HIDDEN_NOTE_OUTLINE,
+                        _ if processed => PROCESSED_NOTE_OUTLINE,
+                        _ => continue,
+                    };
+                    for rect in note_outline_borders(rect) {
+                        append_document_item(
+                            commands,
+                            skin,
+                            skin_state,
+                            SkinRenderItem::Rect { rect, color, blend: BlendMode::Normal },
+                        );
+                    }
                 }
                 note.alpha
             }

@@ -97,6 +97,38 @@ fn hidden_note_follows_global_translation_and_scale() {
 }
 
 #[test]
+fn processed_fallback_and_hidden_note_share_global_translation_and_scale() {
+    let mut snapshot = coincident_hidden_note_and_mine();
+    let notes = &mut snapshot.visible_notes[Lane::Key1.index()];
+    let processed = VisibleNote {
+        kind: NoteVisualKind::Tap,
+        processed_judge: Some(Judge::Great),
+        ..notes[0].clone()
+    };
+    notes.insert(0, processed);
+    snapshot.mark_processed_note = true;
+    snapshot
+        .skin_offsets
+        .set(10, SkinOffsetValue { x: 10, y: 5, w: 50, h: -25, ..Default::default() });
+    let plan = DrawPlan::from_scene_with_skin(
+        &AppSceneSnapshot::Play(snapshot),
+        &document_skin(),
+        &mut crate::skin::DynamicTimerRuntime::default(),
+    );
+    let cyan = Color::rgba(0.0, 1.0, 1.0, 0.5);
+    let processed_edges: Vec<_> = plan
+        .commands
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Rect { rect, color } if *color == cyan => Some(*rect),
+            _ => None,
+        })
+        .collect();
+    let hidden_edges: Vec<_> = borders(&plan).into_iter().map(|(_, rect)| rect).collect();
+    assert_eq!(processed_edges, hidden_edges);
+}
+
+#[test]
 fn hidden_note_keeps_lane_geometry_under_notes_destination_offset() {
     let baseline = document_plan(Default::default(), Default::default());
     let offset = document_plan(
@@ -145,7 +177,7 @@ fn hidden_note_fade_covers_each_border_pixel_once() {
 
 #[test]
 #[ignore = "requires an offscreen GPU adapter"]
-fn hidden_note_gpu_blends_the_translated_outline_once_over_an_opaque_mine() {
+fn note_outlines_gpu_follow_global_offset_and_blend_once() {
     use crate::renderer::{InternalResolutionMode, Renderer, SurfaceSize};
     let mut renderer = Renderer::default();
     renderer.set_skin_context(document_skin());
@@ -153,6 +185,19 @@ fn hidden_note_gpu_blends_the_translated_outline_once_over_an_opaque_mine() {
     renderer.attach_offscreen(SurfaceSize { width: 1000, height: 1000 }).unwrap();
     renderer.upsert_rgba_texture_ref(DEFAULT_MINE_NOTE_TEXTURE, 1, 1, &[0, 0, 255, 255]).unwrap();
     let mut snapshot = coincident_hidden_note_and_mine();
+    snapshot.mark_processed_note = true;
+    snapshot.visible_notes[Lane::Key1.index()].insert(
+        0,
+        VisibleNote {
+            lane: Lane::Key1,
+            time: TimeUs(1_000_000),
+            y: 0.25,
+            alpha: 1.0,
+            kind: NoteVisualKind::Tap,
+            processed_judge: Some(Judge::Great),
+            pms_miss_fall: None,
+        },
+    );
     snapshot.skin_offsets.set(10, SkinOffsetValue { x: 10, ..Default::default() });
     renderer.render_scene(AppSceneSnapshot::Play(snapshot)).unwrap();
     let pixels = renderer.read_offscreen_rgba().unwrap();
@@ -167,4 +212,6 @@ fn hidden_note_gpu_blends_the_translated_outline_once_over_an_opaque_mine() {
     assert_eq!(pixel(201, 483), top, "corner");
     assert_eq!(pixel(201, 490), top, "left edge");
     assert_eq!(pixel(225, 490), &[0, 0, 255, 255], "mine inside outline");
+    assert_eq!(pixel(201, 640), &[0, 255, 255, 255], "translated processed note");
+    assert_eq!(pixel(101, 640), &[0, 0, 0, 255], "former position");
 }
