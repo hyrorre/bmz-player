@@ -173,12 +173,12 @@ pub const SKIN_OPTION_BMZ_SCORE_GRADE_AVAILABLE: i32 = 1985;
 /// BMZ extension: no persisted best existed for the current score key when
 /// the play attempt started. Result keeps the value captured by that attempt.
 pub const SKIN_OPTION_BMZ_FIRST_PLAY: i32 = 1986;
-/// BMZ extension: scoring rule mode (`0=BEATORAJA`, `1=LR2ORAJA`, `2=DX`).
+/// BMZ extension: scoring rule mode (`0=BEATORAJA`, `1=LR2ORAJA`, `2=DX`, `3=LEGACY`).
 pub const SKIN_REF_BMZ_RULE_MODE: i32 = 1987;
-/// BMZ extension: exact scoring rule mode options in BEATORAJA/LR2ORAJA/DX order.
+/// BMZ extension: exact scoring rule mode options in BEATORAJA/LR2ORAJA/DX/LEGACY order.
 pub const SKIN_OPTION_BMZ_RULE_MODE_BASE: i32 = 1988;
-pub const SKIN_OPTION_BMZ_RULE_MODE_COUNT: usize = 3;
-pub const SKIN_OPTION_BMZ_RULE_MODE_LAST: i32 = 1990;
+pub const SKIN_OPTION_BMZ_RULE_MODE_COUNT: usize = 4;
+pub const SKIN_OPTION_BMZ_RULE_MODE_LAST: i32 = 1991;
 /// BMZ LR2 conversion bridge: built-in Judge Detail selection.
 /// Keep 1997..=1999 reserved so public BMZ extensions cannot shadow generated LR2 ops.
 pub const SKIN_OPTION_BMZ_LR2_JUDGE_DETAIL_OFF: i32 = 1997;

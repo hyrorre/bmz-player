@@ -17,6 +17,7 @@ use bmz_gameplay::judge::model::JudgeAlgorithm;
 #[cfg(test)]
 use bmz_gameplay::judge::model::JudgeWindows;
 use bmz_gameplay::result::PlayResult;
+use bmz_gameplay::rule::RuleMode;
 use bmz_gameplay::session::{
     AssistLevel, AssistRuntime, GameSession, PlayState, ResultJudgementDetail,
 };
@@ -792,7 +793,7 @@ fn enqueue_ir_jobs(
         summary,
         previous_best,
     } = request;
-    if stored.score_history_id <= 0 {
+    if stored.score_history_id <= 0 || snapshot.rule_mode == RuleMode::Legacy {
         return;
     }
     let enabled: Vec<_> = ir_config

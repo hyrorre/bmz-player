@@ -637,6 +637,12 @@ fn misses_before_input(session: &mut GameSession, time: TimeUs) -> Vec<Judgement
     if session.state != PlayState::Playing {
         return Vec::new();
     }
+    // LEGACY は押下と同じレーンの期限切れノートを `process_press` が同じ
+    // outcome で確定する。ここで先に見逃しを確定させると、閉店するゲージでは
+    // 押下が打ち切られ、実プレイとリプレイの判定がずれる。
+    if session.rule_mode == RuleMode::Legacy {
+        return Vec::new();
+    }
     process_misses(session, TimeUs(time.0.saturating_sub(1)))
 }
 
@@ -655,7 +661,12 @@ fn evaluate_session_input(session: &mut GameSession, input: InputEvent) -> Judge
     } else {
         session.timing_map.reflected_judge_time(input.time)
     };
-    let mut outcome = session.judge.process_input_at(&session.chart, input, judge_time);
+    let mut outcome = session.judge.process_input_at(
+        &session.chart,
+        input,
+        judge_time,
+        session.play_keysound_on_miss,
+    );
     if input.kind == InputKind::Press {
         let hcn_passing = hold_note_passing_at(session, input.lane, input.time, LongNoteMode::Hcn);
         let hln_passing = hold_note_passing_at(session, input.lane, input.time, LongNoteMode::Hln);

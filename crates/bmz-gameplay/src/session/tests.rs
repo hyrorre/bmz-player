@@ -372,6 +372,8 @@ mod hln_tests;
 mod judgement_display_time;
 #[path = "tests/kaleid.rs"]
 mod kaleid_tests;
+#[path = "tests/legacy.rs"]
+mod legacy;
 #[path = "tests/long_end.rs"]
 mod long_end_tests;
 #[path = "tests/optional_play_behaviors.rs"]

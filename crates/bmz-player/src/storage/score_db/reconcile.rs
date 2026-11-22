@@ -234,6 +234,7 @@ const SCORE_KEY: &str = "h.chart_sha256 = score_best.chart_sha256
     AND CASE h.rule_mode
         WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
         WHEN 'Dx' THEN 'Dx'
+        WHEN 'Legacy' THEN 'Legacy'
         ELSE 'Beatoraja'
     END = score_best.rule_mode
     AND h.normal_best_eligible = 1";
@@ -418,7 +419,7 @@ pub(crate) fn migrate_battle_as_bests(conn: &Connection, previous_v40: bool) -> 
             "CREATE TEMP TABLE battle_as_repair_keys AS
              SELECT DISTINCT chart_sha256, ln_policy, double_option,
                  CASE rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja' WHEN 'Dx' THEN 'Dx'
-                     ELSE 'Beatoraja' END AS rule_mode
+                     WHEN 'Legacy' THEN 'Legacy' ELSE 'Beatoraja' END AS rule_mode
              FROM score_history WHERE {BATTLE_AS}
                  AND source_kind <> 'Local' AND normal_best_eligible = 0;"
         ))?;
@@ -457,7 +458,7 @@ pub(crate) fn migrate_battle_as_bests(conn: &Connection, previous_v40: bool) -> 
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ''
          FROM (SELECT DISTINCT chart_sha256, ln_policy, double_option,
                 CASE rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja' WHEN 'Dx' THEN 'Dx'
-                    ELSE 'Beatoraja' END AS rule_mode
+                    WHEN 'Legacy' THEN 'Legacy' ELSE 'Beatoraja' END AS rule_mode
                FROM score_history WHERE {BATTLE_AS} AND normal_best_eligible = 1) AS score_best
          WHERE {affected};"
     ))?;
@@ -508,7 +509,7 @@ pub(super) fn preserve_cleanup_aggregates(conn: &Connection, ids: &[i64]) -> Res
              WHERE h.chart_sha256 = o.chart_sha256 AND h.ln_policy = o.ln_policy
              AND h.double_option = o.double_option
              AND CASE h.rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja' WHEN 'Dx' THEN 'Dx'
-                 ELSE 'Beatoraja' END = o.rule_mode);",
+                 WHEN 'Legacy' THEN 'Legacy' ELSE 'Beatoraja' END = o.rule_mode);",
     )?;
     Ok(())
 }
@@ -517,7 +518,7 @@ pub(super) fn restore_cleanup_aggregates(conn: &Connection) -> Result<()> {
     const MATCH: &str = "h.chart_sha256 = o.chart_sha256 AND h.ln_policy = o.ln_policy
         AND h.double_option = o.double_option
         AND CASE h.rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja' WHEN 'Dx' THEN 'Dx'
-            ELSE 'Beatoraja' END = o.rule_mode";
+            WHEN 'Legacy' THEN 'Legacy' ELSE 'Beatoraja' END = o.rule_mode";
     const BEST_MATCH: &str = "o.chart_sha256 = score_best.chart_sha256
         AND o.ln_policy = score_best.ln_policy AND o.double_option = score_best.double_option
         AND o.rule_mode = score_best.rule_mode";

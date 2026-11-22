@@ -1,13 +1,21 @@
 use super::*;
 
+/// Stop the long start keysound when the release itself failed.
+///
+/// `release_delta` is the offset of the release from the long end, and
+/// `early_release_limit_us` is the early-release tolerance. Comparing the
+/// release against the tolerance (rather than the reported delta or the final
+/// judgement) keeps a start-BAD long note from being silenced when it was held
+/// to the end, and an early-release BAD from staying audible.
 pub(super) fn push_early_bad_long_start_mute(
     chart: &PlayableChart,
     active: ActiveLongNote,
     judge: Judge,
-    end_delta: TimeUs,
+    release_delta: TimeUs,
+    early_release_limit_us: i64,
     outcome: &mut JudgeOutcome,
 ) {
-    if end_delta.0 < 0 && matches!(judge, Judge::Bad | Judge::Poor) {
+    if release_delta.0 < -early_release_limit_us && matches!(judge, Judge::Bad | Judge::Poor) {
         let Some(pair) = chart.long_notes.get(active.pair_index) else {
             return;
         };
@@ -19,12 +27,20 @@ pub(super) fn push_early_bad_long_start_mute(
     }
 }
 
+/// Finalize a released long note.
+///
+/// `delta` is the timing offset reported with the judgement (LR2 reports the
+/// head offset for an early BAD on a LEGACY LN). `release_delta` is compared
+/// against the long end and its tolerance only to decide whether the release
+/// failed early; the two must not be conflated.
 pub(super) fn finalize_long_release(
     chart: &PlayableChart,
     lane: Lane,
     active: ActiveLongNote,
     judge: Judge,
     delta: TimeUs,
+    release_delta: TimeUs,
+    early_release_limit_us: i64,
     time: TimeUs,
 ) -> JudgeOutcome {
     let mut outcome = match active.mode {
@@ -64,7 +80,14 @@ pub(super) fn finalize_long_release(
         },
     };
     if matches!(active.mode, LongNoteMode::Ln | LongNoteMode::Cn) {
-        push_early_bad_long_start_mute(chart, active, judge, delta, &mut outcome);
+        push_early_bad_long_start_mute(
+            chart,
+            active,
+            judge,
+            release_delta,
+            early_release_limit_us,
+            &mut outcome,
+        );
     }
     outcome
 }
@@ -188,6 +211,45 @@ pub(super) fn select_press_candidate(
     }
 
     selected
+}
+
+/// LEGACY compares the integer millisecond positions of input and note.
+pub(super) fn legacy_offset(input: TimeUs, note: TimeUs) -> i64 {
+    (input.0 / 1_000 - note.0 / 1_000) * 1_000
+}
+
+/// LEGACY の LN 始点見逃し期限と終端早離し許容に使う幅。
+///
+/// OpenLR2 はどちらも GOOD 幅を使うが、BMZ の NO GOOD / NO GREAT はタップの
+/// GOOD / GREAT 帯だけを 0 にする。0 をそのまま LN へ流用すると、有効な
+/// PGREAT / GREAT 帯の入力まで LN で失敗するため、有効な帯の最大幅を使う。
+pub(super) fn legacy_ln_margin_us(windows: JudgeWindow) -> i64 {
+    let [pgreat, great, good] = windows.bands(false);
+    pgreat.max(great).max(good)
+}
+
+pub(super) fn legacy_note_expired(note: &NoteEvent, now: TimeUs, windows: JudgeWindow) -> bool {
+    let late_limit = match note.kind {
+        NoteKind::LongStart => legacy_ln_margin_us(windows),
+        _ => windows.bad_slow_us,
+    };
+    now.0 / 1_000 * 1_000 - note.time.0 > late_limit
+}
+
+pub(super) fn legacy_press_candidate(
+    note: &NoteEvent,
+    input: TimeUs,
+    windows: JudgeWindow,
+) -> Option<PressCandidate> {
+    if legacy_note_expired(note, input, windows) {
+        return None;
+    }
+
+    let delta = legacy_offset(input, note.time);
+    let judge = classify_normal_delta(delta, windows).or_else(|| {
+        (delta > -windows.empty_poor_fast_us && delta < 0).then_some(Judge::EmptyPoor)
+    })?;
+    Some(PressCandidate { note_id: note.id, judge, delta: TimeUs(delta) })
 }
 
 pub(super) fn judge_algorithm_prefers_new_candidate(

@@ -99,7 +99,15 @@ pub fn advance_session_frame(
                 if session.judge.has_mines(&session.chart) {
                     judgements.extend(super::input::process_timed_inputs(session, now));
                 } else {
-                    judgements.extend(process_replay_inputs(session, now));
+                    // LEGACY は入力と見逃しを同じ更新で処理する実プレイの順序に
+                    // 合わせるため、その 1ms ティックに収まる入力 (now + 999µs
+                    // まで) をティック末尾の見逃し・閉店判定より先に処理する。
+                    let tick_input_until = if session.rule_mode == RuleMode::Legacy {
+                        TimeUs(now.0.saturating_add(crate::replay::REPLAY_SCORING_STEP_US - 1))
+                    } else {
+                        now
+                    };
+                    judgements.extend(process_replay_inputs(session, tick_input_until));
                     // Partial autoplay (D-BATTLE AS) is not recorded in the human
                     // input log. Run it on the same scoring clock as the replay.
                     judgements.extend(process_autoplay_inputs(session, now));
@@ -632,7 +640,12 @@ fn score_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
             } else if !held.is_held() {
                 opponent.lane_keyon_started_at[lane] = None;
             }
-            outcomes.push(opponent.judge.process_input_at(&opponent.chart, input, judge_time));
+            outcomes.push(opponent.judge.process_input_at(
+                &opponent.chart,
+                input,
+                judge_time,
+                false,
+            ));
         }
         if has_mines {
             let outcome = battle_opponent_passes(opponent, time);

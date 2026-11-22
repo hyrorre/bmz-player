@@ -446,7 +446,7 @@ pub(super) fn upsert_score_best(
                       AND prior.double_option = b.double_option
                       AND CASE prior.rule_mode
                           WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
-                          WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = b.rule_mode
+                          WHEN 'Dx' THEN 'Dx' WHEN 'Legacy' THEN 'Legacy' ELSE 'Beatoraja' END = b.rule_mode
                       AND prior.id != ?5 {eligible_prior}
                 )
          FROM score_best AS b
@@ -454,7 +454,7 @@ pub(super) fn upsert_score_best(
            AND h.chart_sha256 = b.chart_sha256 AND h.ln_policy = b.ln_policy
            AND h.double_option = b.double_option
            AND CASE h.rule_mode WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
-               WHEN 'Dx' THEN 'Dx' ELSE 'Beatoraja' END = b.rule_mode
+               WHEN 'Dx' THEN 'Dx' WHEN 'Legacy' THEN 'Legacy' ELSE 'Beatoraja' END = b.rule_mode
          WHERE b.chart_sha256 = ?1 AND b.ln_policy = ?2 AND b.double_option = ?3
            AND b.rule_mode = ?4"
         ),

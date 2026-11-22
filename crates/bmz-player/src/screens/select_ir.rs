@@ -132,6 +132,9 @@ impl SelectRivalFetchTarget {
 }
 
 fn select_rival_provider(profile: &ProfileConfig) -> Option<&IrProviderConfig> {
+    if profile.play.rule_mode == RuleMode::Legacy {
+        return None;
+    }
     let provider = crate::ir::provider_key::primary_provider_config(&profile.ir)?;
     let supported = if crate::ir::bms_ir::is_bms_ir_config(provider) {
         profile.play.rule_mode != RuleMode::Dx
