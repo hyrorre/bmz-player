@@ -119,6 +119,24 @@ pub(super) fn pre_play_abort_ending(
     }
 }
 
+pub(super) fn result_play_ending(
+    started_at: Instant,
+    failed: bool,
+    finish_requested: bool,
+    completion: PlayEndingCompletion,
+) -> PlayEndingTransition {
+    PlayEndingTransition {
+        started_at,
+        music_end_started_at: (!failed).then_some(started_at),
+        fadeout_started_at: (!failed && finish_requested).then_some(started_at),
+        finished: None,
+        failed,
+        completion,
+        completion_remaining_ms: 0,
+        result_settled_elapsed_at_finish_ms: None,
+    }
+}
+
 pub(super) fn practice_natural_finish_ending(started_at: Instant) -> PlayEndingTransition {
     PlayEndingTransition {
         started_at,

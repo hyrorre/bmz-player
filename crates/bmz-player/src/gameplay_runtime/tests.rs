@@ -394,7 +394,7 @@ fn runtime_rebuilds_play_graphs_when_a_branch_changes_note_times_and_ids() {
 }
 
 #[test]
-fn final_note_state_reaches_input_path_without_render_poll() {
+fn final_note_finish_request_reaches_terminal_result_without_prior_render_poll() {
     let session = prepared(SharedInputBackend::default());
     let audio = AudioEngineHandle::new(AudioEngine::new(1_000_000));
     let config = config(&session, Arc::new(RuntimeProbe::default()));
@@ -412,7 +412,16 @@ fn final_note_state_reaches_input_path_without_render_poll() {
 
     wait_until(|| client.final_notes_processed());
     assert!(!client.session.exhausted, "detached render observation must not be required");
+    assert!(!client.finish_requested());
+    assert!(client.request_play_end(PlayEndRequest::Finish));
+    wait_until(|| {
+        client.poll();
+        client.session.state == PlayState::Finished
+    });
+    assert!(client.result.is_some());
+    assert!(client.finish_requested());
     client.shutdown();
+    assert!(!client.finish_requested());
 }
 
 fn run_mode_with_render_stall(stall_ms: u64, mode: u8) -> (String, u64) {

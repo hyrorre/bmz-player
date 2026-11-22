@@ -542,6 +542,22 @@ fn viewer_app_exit_uses_the_pre_ready_fade_route() {
 }
 
 #[test]
+fn requested_play_finish_starts_fadeout_with_completion_time_remaining() {
+    let started_at = Instant::now();
+    for (failed, requested, expected_fadeout) in
+        [(false, true, Some(started_at)), (false, false, None), (true, true, None)]
+    {
+        let ending = PlayEndingTransition {
+            completion_remaining_ms: 5000,
+            ..result_play_ending(started_at, failed, requested, PlayEndingCompletion::Result)
+        };
+        assert_eq!(ending.fadeout_started_at, expected_fadeout);
+        assert_eq!(ending.music_end_started_at, (!failed).then_some(started_at));
+        assert_eq!(ending.failed, failed);
+    }
+}
+
+#[test]
 fn practice_endings_match_beatoraja_timer_routes() {
     let started_at = Instant::now();
 

@@ -150,6 +150,7 @@ impl WinitApp {
                 };
                 let chart_length_ms = active_play.running.chart_length_ms;
                 let play_duration_ms = active_play.running.finish_play_duration_ms();
+                let finish_requested = active_play.running.gameplay.finish_requested();
                 let early_finished = if active_play.running.pending_finished.is_some() {
                     None
                 } else if let Some(finished) = active_play.running.finished.clone() {
@@ -222,17 +223,18 @@ impl WinitApp {
                 let now = Instant::now();
                 let failed = frame.state == bmz_gameplay::session::PlayState::Failed;
                 self.play.play_ending = Some(PlayEndingTransition {
-                    started_at: now,
-                    music_end_started_at: (!failed).then_some(now),
-                    fadeout_started_at: None,
-                    failed,
-                    completion: crate::app::result_flow_ending::play_ending_completion(
-                        self.viewer_mode,
-                        self.skip_result,
-                    ),
                     completion_remaining_ms,
                     result_settled_elapsed_at_finish_ms,
                     finished: early_finished,
+                    ..result_play_ending(
+                        now,
+                        failed,
+                        finish_requested,
+                        crate::app::result_flow_ending::play_ending_completion(
+                            self.viewer_mode,
+                            self.skip_result,
+                        ),
+                    )
                 });
                 self.update_play_ending_snapshot();
             }

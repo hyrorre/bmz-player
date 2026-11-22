@@ -283,8 +283,10 @@ Play画面の退出は従来どおり5秒の余白・BGMスケジューリング
 
 手動中断（`request_manual_stop`）と全ノーツ処理後の退出（`request_finish`）は、UIの観測が古い場合に備えて
 gameplayの所有スレッドで再確認します。全ノーツ処理後・確定後の中断要求は無視し、
-途中FAILEDの後に届いた退出要求で`Finished`へ書き換えません。Practiceは要求の直後に時計を止めて
-終了演出へ進むため、`request_practice_round_end`を使います。ノーツが残る間は手動中断、
+途中FAILEDの後に届いた退出要求で`Finished`へ書き換えません。通常プレイでは、UIが退出要求を送った
+プレイの`Finished`を受け取った時点で、`finishmargin`や完走演出を待たずにフェードを開始します。
+Practiceは要求の直後に時計を止めて終了演出へ進むため、`request_practice_round_end`を使います。
+ノーツが残る間は手動中断、
 所有スレッドで既に全ノーツを処理していた場合は明示的な退出として`Finished`にし、
 そのラウンドの結果を停止境界で取得できるようにします。
 
