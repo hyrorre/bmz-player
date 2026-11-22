@@ -73,7 +73,6 @@ fn push_lane(
     display_index: usize,
     lane: Lane,
 ) {
-    let lane_index = lane.index();
     let x = layout.board.x + display_index as f32 * layout.lane_width;
     let color = if display_index.is_multiple_of(2) {
         Color::rgb(0.07, 0.075, 0.08)
@@ -105,42 +104,42 @@ fn push_lane(
     }
 
     push_long_notes(commands, snapshot, manifest, layout, x, lane);
-    for note in &snapshot.visible_notes[lane_index] {
-        let Some(rect) = visible_note_rect(layout, snapshot.lift, x, note) else {
-            continue;
-        };
-        let start = commands.len();
-        match note.kind {
-            NoteVisualKind::LnStart => push_ln_start_skin(manifest, commands, lane, rect),
-            NoteVisualKind::LnEnd => push_ln_end_skin(manifest, commands, lane, rect),
-            NoteVisualKind::Invisible => push_note_outline(commands, rect, HIDDEN_NOTE_OUTLINE),
-            NoteVisualKind::Tap => {
-                if snapshot.mark_processed_note
-                    && note.processed_judge.is_some()
-                    && note.pms_miss_fall.is_none()
-                {
-                    push_note_outline(commands, rect, PROCESSED_NOTE_OUTLINE);
-                } else {
-                    push_default_note_skin(manifest, commands, lane, rect);
+    for object in lane_objects(snapshot, lane) {
+        match object {
+            LaneObject::Note(note) => {
+                let Some(rect) = visible_note_rect(layout, snapshot.lift, x, note) else {
+                    continue;
+                };
+                let start = commands.len();
+                match note.kind {
+                    NoteVisualKind::LnStart => push_ln_start_skin(manifest, commands, lane, rect),
+                    NoteVisualKind::LnEnd => push_ln_end_skin(manifest, commands, lane, rect),
+                    NoteVisualKind::Invisible => {
+                        push_note_outline(commands, rect, HIDDEN_NOTE_OUTLINE)
+                    }
+                    NoteVisualKind::Tap => {
+                        if snapshot.mark_processed_note
+                            && note.processed_judge.is_some()
+                            && note.pms_miss_fall.is_none()
+                        {
+                            push_note_outline(commands, rect, PROCESSED_NOTE_OUTLINE);
+                        } else {
+                            push_default_note_skin(manifest, commands, lane, rect);
+                        }
+                    }
                 }
+                apply_draw_command_alpha(&mut commands[start..], note.alpha);
             }
+            LaneObject::Mine { note, potion } => commands.push(DrawCommand::Image {
+                rect: note_rect(layout, snapshot.lift, x, note.y),
+                uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                source_size: None,
+                texture: DEFAULT_MINE_NOTE_TEXTURE,
+                tint: Color::rgba(1.0, 1.0, 1.0, note.alpha),
+                blend: if potion { BlendMode::InvertRgb } else { BlendMode::Normal },
+                linear_filter: false,
+            }),
         }
-        apply_draw_command_alpha(&mut commands[start..], note.alpha);
-    }
-    for (mine, potion) in snapshot.visible_mines[lane_index]
-        .iter()
-        .map(|n| (n, false))
-        .chain(snapshot.visible_potions[lane_index].iter().map(|n| (n, true)))
-    {
-        commands.push(DrawCommand::Image {
-            rect: note_rect(layout, snapshot.lift, x, mine.y),
-            uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
-            source_size: None,
-            texture: DEFAULT_MINE_NOTE_TEXTURE,
-            tint: Color::rgba(1.0, 1.0, 1.0, mine.alpha),
-            blend: if potion { BlendMode::InvertRgb } else { BlendMode::Normal },
-            linear_filter: false,
-        });
     }
 }
 

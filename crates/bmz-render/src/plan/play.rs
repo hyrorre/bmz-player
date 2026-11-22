@@ -1,4 +1,5 @@
 use super::*;
+use crate::snapshot::{VisibleMine, VisibleNote};
 
 mod default;
 mod document;
@@ -14,6 +15,36 @@ struct PlayfieldLayout<'a> {
     board: Rect,
     lane_width: f32,
     active_lanes: &'a [Lane],
+}
+
+enum LaneObject<'a> {
+    Note(&'a VisibleNote),
+    Mine { note: &'a VisibleMine, potion: bool },
+}
+
+/// Keep the normal note pass followed by the mine pass. A hidden marker must
+/// follow mines at its timestamp, while later mines still draw over that marker.
+fn lane_objects(snapshot: &RenderSnapshot, lane: Lane) -> impl Iterator<Item = LaneObject<'_>> {
+    let index = lane.index();
+    let mut notes = snapshot.visible_notes[index].iter().peekable();
+    let mut mines = snapshot.visible_mines[index].iter().peekable();
+    let mut potions = snapshot.visible_potions[index].iter().peekable();
+    std::iter::from_fn(move || {
+        let through = match notes.peek() {
+            Some(note) if note.kind != NoteVisualKind::Invisible => {
+                return notes.next().map(LaneObject::Note);
+            }
+            Some(hidden) => hidden.time,
+            None => TimeUs(i64::MAX),
+        };
+        if let Some(note) = mines.next_if(|mine| mine.time <= through) {
+            return Some(LaneObject::Mine { note, potion: false });
+        }
+        if let Some(note) = potions.next_if(|potion| potion.time <= through) {
+            return Some(LaneObject::Mine { note, potion: true });
+        }
+        notes.next().map(LaneObject::Note)
+    })
 }
 
 fn play_judge_region_count(snapshot: &RenderSnapshot, skin: &SkinContext) -> usize {

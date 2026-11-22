@@ -118,74 +118,80 @@ fn push_document_lane(
     lane: Lane,
     notes: &PreparedNoteLayout<'_>,
 ) {
-    let lane_index = lane.index();
     let note_height = notes.note_height(lane).unwrap_or(NOTE_HEIGHT);
-    for note in &snapshot.visible_notes[lane_index] {
+    for object in lane_objects(snapshot, lane) {
         let start = commands.len();
-        if hidden_by_missed_note_target(notes, note) {
-            continue;
-        }
-        let Some(mut rect) = document_note_rect(notes, lane, note, note_height) else {
-            continue;
-        };
-        if snapshot.key_mode == KeyMode::K9 && note.kind != NoteVisualKind::Invisible {
-            apply_note_expansion(&mut rect, skin.document_note_expansion_scale(skin_state));
-        }
-        // beatoraja は見逃しノーツを markprocessednote によらず通常画像で描く。
-        let processed = snapshot.mark_processed_note
-            && note.kind != NoteVisualKind::Invisible
-            && note.processed_judge.is_some()
-            && note.pms_miss_fall.is_none();
-        let item = match note.kind {
-            NoteVisualKind::LnStart => notes.cap_item(lane, rect, LongNoteMode::Ln, false),
-            NoteVisualKind::LnEnd => notes.cap_item(lane, rect, LongNoteMode::Ln, true),
-            NoteVisualKind::Tap => notes.tap_item(lane, rect, processed),
-            NoteVisualKind::Invisible => {
-                push_note_outline(commands, rect, HIDDEN_NOTE_OUTLINE);
-                None
+        let alpha = match object {
+            LaneObject::Note(note) => {
+                if hidden_by_missed_note_target(notes, note) {
+                    continue;
+                }
+                let Some(mut rect) = document_note_rect(notes, lane, note, note_height) else {
+                    continue;
+                };
+                if snapshot.key_mode == KeyMode::K9 && note.kind != NoteVisualKind::Invisible {
+                    apply_note_expansion(&mut rect, skin.document_note_expansion_scale(skin_state));
+                }
+                // beatoraja は見逃しノーツを markprocessednote によらず通常画像で描く。
+                let processed = snapshot.mark_processed_note
+                    && note.kind != NoteVisualKind::Invisible
+                    && note.processed_judge.is_some()
+                    && note.pms_miss_fall.is_none();
+                let item = match note.kind {
+                    NoteVisualKind::LnStart => notes.cap_item(lane, rect, LongNoteMode::Ln, false),
+                    NoteVisualKind::LnEnd => notes.cap_item(lane, rect, LongNoteMode::Ln, true),
+                    NoteVisualKind::Tap => notes.tap_item(lane, rect, processed),
+                    NoteVisualKind::Invisible => {
+                        for rect in note_outline_borders(rect) {
+                            append_document_item(
+                                commands,
+                                skin,
+                                skin_state,
+                                SkinRenderItem::Rect {
+                                    rect,
+                                    color: HIDDEN_NOTE_OUTLINE,
+                                    blend: BlendMode::Normal,
+                                },
+                            );
+                        }
+                        None
+                    }
+                };
+                if let Some(item) = item {
+                    append_document_item(commands, skin, skin_state, item);
+                } else if processed {
+                    push_note_outline(commands, rect, PROCESSED_NOTE_OUTLINE);
+                }
+                note.alpha
+            }
+            LaneObject::Mine { note, potion } => {
+                let Some(rect) = notes.note_rect(lane, note.y, note_height) else { continue };
+                let item = if potion {
+                    notes.potion_item(lane, rect)
+                } else {
+                    notes.mine_item(lane, rect)
+                };
+                append_document_item(
+                    commands,
+                    skin,
+                    skin_state,
+                    item.unwrap_or(SkinRenderItem::Image {
+                        rect,
+                        uv: TextureRegion { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                        source_size: None,
+                        texture: SkinTextureId(DEFAULT_MINE_NOTE_TEXTURE.0),
+                        tint: Color::rgb(1.0, 1.0, 1.0),
+                        blend: if potion { BlendMode::InvertRgb } else { BlendMode::Normal },
+                        scale: SkinImageScale::Stretch,
+                        border: None,
+                        linear_filter: false,
+                    }),
+                );
+                note.alpha
             }
         };
-        if let Some(item) = item {
-            append_document_item(commands, skin, skin_state, item);
-        } else if processed {
-            push_note_outline(commands, rect, PROCESSED_NOTE_OUTLINE);
-        }
         apply_draw_command_alpha_offset(&mut commands[start..], notes.alpha_offset());
-        apply_draw_command_alpha(&mut commands[start..], note.alpha);
-    }
-
-    for (mine, potion) in snapshot.visible_mines[lane_index]
-        .iter()
-        .map(|n| (n, false))
-        .chain(snapshot.visible_potions[lane_index].iter().map(|n| (n, true)))
-    {
-        let start = commands.len();
-        let Some(rect) = notes.note_rect(lane, mine.y, note_height) else {
-            continue;
-        };
-        let item = if potion { notes.potion_item(lane, rect) } else { notes.mine_item(lane, rect) };
-        if let Some(item) = item {
-            append_document_item(commands, skin, skin_state, item);
-        } else {
-            append_document_item(
-                commands,
-                skin,
-                skin_state,
-                SkinRenderItem::Image {
-                    rect,
-                    uv: TextureRegion { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
-                    source_size: None,
-                    texture: SkinTextureId(DEFAULT_MINE_NOTE_TEXTURE.0),
-                    tint: Color::rgba(1.0, 1.0, 1.0, 1.0),
-                    blend: if potion { BlendMode::InvertRgb } else { BlendMode::Normal },
-                    scale: SkinImageScale::Stretch,
-                    border: None,
-                    linear_filter: false,
-                },
-            );
-        }
-        apply_draw_command_alpha_offset(&mut commands[start..], notes.alpha_offset());
-        apply_draw_command_alpha(&mut commands[start..], mine.alpha);
+        apply_draw_command_alpha(&mut commands[start..], alpha);
     }
 }
 
@@ -204,6 +210,9 @@ fn document_note_rect(
     note: &VisibleNote,
     note_height: f32,
 ) -> Option<Rect> {
+    if note.kind == NoteVisualKind::Invisible {
+        return notes.hidden_note_rect(lane, note.y, note_height);
+    }
     match note.pms_miss_fall {
         Some(fall) => notes.missed_rect(lane, fall, note_height),
         None => notes.note_rect(lane, note.y, note_height),

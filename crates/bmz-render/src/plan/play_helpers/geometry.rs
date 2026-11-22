@@ -211,16 +211,20 @@ pub(super) const PROCESSED_NOTE_OUTLINE: Color = Color::rgb(0.0, 1.0, 1.0);
 
 /// beatoraja `SkinNote` が生成する 32×8 の枠をノーツ矩形に合わせる。
 pub(super) fn push_note_outline(commands: &mut Vec<DrawCommand>, rect: Rect, color: Color) {
+    commands.extend(note_outline_borders(rect).map(|rect| DrawCommand::Rect { rect, color }));
+}
+
+pub(super) fn note_outline_borders(rect: Rect) -> [Rect; 4] {
     let border_x = (rect.width / 16.0).min(rect.width * 0.5);
     let border_y = (rect.height / 4.0).min(rect.height * 0.5);
-    for border in [
+    let horizontal =
+        Rect { x: rect.x + border_x, width: rect.width - 2.0 * border_x, height: border_y, ..rect };
+    [
         Rect { width: border_x, ..rect },
         Rect { x: rect.x + rect.width - border_x, width: border_x, ..rect },
-        Rect { width: rect.width, height: border_y, ..rect },
-        Rect { y: rect.y + rect.height - border_y, width: rect.width, height: border_y, ..rect },
-    ] {
-        commands.push(DrawCommand::Rect { rect: border, color });
-    }
+        horizontal,
+        Rect { y: rect.y + rect.height - border_y, ..horizontal },
+    ]
 }
 
 pub(super) fn push_play_aux_line(
