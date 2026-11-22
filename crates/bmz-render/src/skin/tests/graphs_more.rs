@@ -213,6 +213,41 @@ fn target_score_value_text_and_lua_paths_follow_target_updates() {
 }
 
 #[test]
+fn target_difference_refs_follow_progress_in_values_text_and_lua() {
+    let mut state =
+        SkinDrawState { play_screen: true, ex_score: 450, total_notes: 1000, ..Default::default() };
+    for ref_id in [108, 128, 153] {
+        let value = SkinValueDef { ref_id, ..Default::default() };
+        let text = SkinTextDef {
+            number_ref: Some(ref_id),
+            show_plus: true,
+            prefix: "DIFF ".to_string(),
+            ..Default::default()
+        };
+        for (past_notes, target, expected, expected_text) in [
+            (250, Some(1600), Some(50), "DIFF +50"),
+            (250, Some(1800), Some(0), "DIFF +0"),
+            (500, Some(1800), Some(-450), "DIFF -450"),
+            (500, None, None, ""),
+        ] {
+            state.past_notes = past_notes;
+            state.target_ex_score = target;
+            assert_eq!(skin_value_number_for_destination(&value, &state), expected, "ref={ref_id}");
+            assert_eq!(
+                skin_state_text_with_draw_state(&text, Some(&state), &SkinTextState::default()),
+                expected_text,
+                "ref={ref_id}"
+            );
+            assert_eq!(
+                lua_main_state_number(ref_id, &state),
+                expected.unwrap_or(0),
+                "ref={ref_id}"
+            );
+        }
+    }
+}
+
+#[test]
 fn target_score_timer_and_ops_follow_current_ex_score() {
     let below = SkinDrawState {
         elapsed_ms: 1234,

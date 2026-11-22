@@ -102,10 +102,16 @@ pub(super) fn skin_state_text_with_draw_state(
             return String::new();
         };
         let width = text.digit.clamp(0, 64) as usize;
-        return match NumberPadding::from_skin_fields(text.zeropadding, text.padding) {
-            NumberPadding::None => format!("{}{value}{}", text.prefix, text.suffix),
-            NumberPadding::Zero => format!("{}{value:0width$}{}", text.prefix, text.suffix),
-            NumberPadding::Blank => format!("{}{value:>width$}{}", text.prefix, text.suffix),
+        let padding = NumberPadding::from_skin_fields(text.zeropadding, text.padding);
+        let prefix = &text.prefix;
+        let suffix = &text.suffix;
+        return match (padding, text.show_plus) {
+            (NumberPadding::None, false) => format!("{prefix}{value}{suffix}"),
+            (NumberPadding::None, true) => format!("{prefix}{value:+}{suffix}"),
+            (NumberPadding::Zero, false) => format!("{prefix}{value:0width$}{suffix}"),
+            (NumberPadding::Zero, true) => format!("{prefix}{value:+0width$}{suffix}"),
+            (NumberPadding::Blank, false) => format!("{prefix}{value:>width$}{suffix}"),
+            (NumberPadding::Blank, true) => format!("{prefix}{value:>+width$}{suffix}"),
         };
     }
     if let Some(region) = text.judge_region {
