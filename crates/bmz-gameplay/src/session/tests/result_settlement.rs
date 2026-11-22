@@ -862,6 +862,52 @@ fn early_finish_replay_preserves_result_before_a_later_mine() {
 }
 
 #[test]
+fn recorded_replay_end_bounds_scoring_but_not_the_ending_clock() {
+    let end = TimeUs(250_500);
+    for manually_stopped in [false, true] {
+        let (mut replay, _) = dx_human_session(tap_chart(TimeUs(0)), 0);
+        replay.replay_player = Some(ReplayPlayer {
+            kaleid: Some(bmz_chart::kaleid::KaleidPlayEvidence {
+                ended_at: end,
+                manually_stopped,
+                finished_early: !manually_stopped,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let mut audio = TestAudio::default();
+        // The update crossing the recorded stop scores and ends there.
+        let ended = advance_at(&mut replay, &mut audio, 400_000);
+        assert_eq!(ended.times.audio_now, end);
+        let state = if manually_stopped { PlayState::Failed } else { PlayState::Finished };
+        assert_eq!(ended.state, state);
+        assert_eq!(replay.scoring_closed_at, Some(end));
+
+        // The ending keeps following the clock like the recorded play.
+        let ending = advance_at(&mut replay, &mut audio, 600_000);
+        assert_eq!(ending.times.audio_now, TimeUs(600_000));
+        assert_eq!(compute_frame_times(&replay).audio_now, TimeUs(600_000));
+        assert_eq!(replay.state, state);
+        assert_eq!(replay.scoring_closed_at, Some(end));
+    }
+}
+
+#[test]
+fn finish_request_reaching_an_ended_session_is_discarded() {
+    for ended in [PlayState::Finished, PlayState::Failed] {
+        let (mut session, _) = dx_human_session(tap_chart(TimeUs(0)), 0);
+        session.state = ended;
+        // A stale UI observation sends Finish after the owner already ended.
+        session.play_end.request(PlayEndRequest::Finish);
+        let mut audio = TestAudio::default();
+        advance_at(&mut session, &mut audio, 300_000);
+        assert!(!session.play_end.is_pending());
+        assert_eq!(session.state, ended);
+        assert!(!session.finished_early);
+    }
+}
+
+#[test]
 fn missed_long_notes_keep_settlement_past_the_tail_in_every_mode() {
     for mode in [LongNoteMode::Ln, LongNoteMode::Cn, LongNoteMode::Hcn] {
         let mut chart = chart_with_hcn_long_note();

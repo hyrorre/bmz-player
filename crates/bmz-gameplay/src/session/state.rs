@@ -703,7 +703,11 @@ pub fn compute_frame_times(session: &GameSession) -> FrameTimes {
     let audio_now = session.audio_clock.now();
     let schedule_ahead = schedule_ahead_us(&session.audio_clock);
     let audio_schedule_until = TimeUs(audio_now.0.saturating_add(schedule_ahead));
-    if let Some(end) = session.recorded_replay_end().map(|evidence| evidence.ended_at) {
+    // A recorded stop bounds only the updates that can still score or end the
+    // replay. The ending after it follows the clock, as it did in the recorded play.
+    if matches!(session.state, PlayState::Ready | PlayState::Playing)
+        && let Some(end) = session.recorded_replay_end().map(|evidence| evidence.ended_at)
+    {
         return FrameTimes {
             audio_now: audio_now.min(end),
             audio_schedule_until: audio_schedule_until.min(end),

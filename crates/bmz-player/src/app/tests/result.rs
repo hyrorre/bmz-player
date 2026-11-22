@@ -558,6 +558,24 @@ fn requested_play_finish_starts_fadeout_with_completion_time_remaining() {
 }
 
 #[test]
+fn replay_ending_at_its_recorded_exit_waits_for_e1_or_e2_to_fade() {
+    let started_at = Instant::now();
+    // The replay ended without a finish request from the UI.
+    let mut ending = result_play_ending(started_at, false, false, PlayEndingCompletion::Result);
+    assert_eq!(ending.fadeout_started_at, None);
+    let pressed_at = started_at + Duration::from_millis(400);
+    assert_eq!(ending.request_fadeout(pressed_at), Some(true));
+    assert_eq!(ending.fadeout_started_at, Some(pressed_at));
+    // A started fade is not restarted.
+    assert_eq!(ending.request_fadeout(pressed_at + Duration::from_millis(100)), Some(false));
+    assert_eq!(ending.fadeout_started_at, Some(pressed_at));
+
+    let mut failed = result_play_ending(started_at, true, false, PlayEndingCompletion::Result);
+    assert_eq!(failed.request_fadeout(pressed_at), None);
+    assert_eq!(failed.fadeout_started_at, None);
+}
+
+#[test]
 fn practice_endings_match_beatoraja_timer_routes() {
     let started_at = Instant::now();
 

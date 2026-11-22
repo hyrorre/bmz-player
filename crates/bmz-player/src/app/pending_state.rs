@@ -75,6 +75,23 @@ pub(super) struct PlayEndingTransition {
     pub(super) result_settled_elapsed_at_finish_ms: Option<i32>,
 }
 
+impl PlayEndingTransition {
+    /// E1 / E2 / Escape during the ending start the exit fade at once. A replay that
+    /// reached its recorded exit waits for this, as it never requested the fade itself.
+    ///
+    /// `None` keeps a FAILED close animation; otherwise whether this call started the fade.
+    pub(super) fn request_fadeout(&mut self, now: Instant) -> Option<bool> {
+        if self.failed {
+            return None;
+        }
+        let started = self.fadeout_started_at.is_none();
+        if started {
+            self.fadeout_started_at = Some(now);
+        }
+        Some(started)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PlayEndingCompletion {
     Result,

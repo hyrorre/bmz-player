@@ -32,6 +32,8 @@ impl GameSession {
 
     /// Finish uses a completed scoring update as its replay cutoff. Manual stops can interrupt it.
     pub(crate) fn apply_play_end_request(&mut self, allow_finish: bool) -> bool {
+        // Outside Playing a Finish can never apply. Consume it so it is not left pending.
+        let allow_finish = allow_finish || self.state != super::PlayState::Playing;
         let Ok(request) =
             self.play_end.0.try_update(Ordering::AcqRel, Ordering::Acquire, |request| {
                 (request != 0 && (allow_finish || request != PlayEndRequest::Finish as u8))

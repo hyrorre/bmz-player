@@ -245,11 +245,10 @@ impl WinitApp {
             return false;
         }
         if let Some(ending) = &mut self.play.play_ending {
-            if ending.failed {
+            let Some(started) = ending.request_fadeout(Instant::now()) else {
                 return false;
-            }
-            if ending.fadeout_started_at.is_none() {
-                ending.fadeout_started_at = Some(Instant::now());
+            };
+            if started {
                 self.update_play_ending_snapshot();
                 tracing::info!(source = ?input.source(), "started pending play fadeout");
             }

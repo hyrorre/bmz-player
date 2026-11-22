@@ -424,6 +424,35 @@ fn final_note_finish_request_reaches_terminal_result_without_prior_render_poll()
     assert!(!client.finish_requested());
 }
 
+#[test]
+fn replay_reaching_its_recorded_finish_does_not_request_the_exit_fade() {
+    let mut session = prepared(SharedInputBackend::default());
+    session.replay_player = Some(bmz_gameplay::replay::ReplayPlayer {
+        kaleid: Some(bmz_chart::kaleid::KaleidPlayEvidence {
+            ended_at: TimeUs(700_000),
+            finished_early: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let audio = AudioEngineHandle::new(AudioEngine::new(1_000_000));
+    let config = config(&session, Arc::new(RuntimeProbe::default()));
+    let mut client = GameplayClient::new(session);
+    client.start(audio, config).unwrap();
+    assert!(client.edit(|session| {
+        session.audio_clock.current_frame.store(1_300_000, Ordering::Release);
+    }));
+
+    wait_until(|| {
+        client.poll();
+        client.session.state == PlayState::Finished
+    });
+    assert!(client.result.is_some());
+    // Only E1 / E2 / Escape from the UI start the fade without the ending wait.
+    assert!(!client.finish_requested());
+    client.shutdown();
+}
+
 fn run_mode_with_render_stall(stall_ms: u64, mode: u8) -> (String, u64) {
     let input = SharedInputBackend::default();
     let mut session = prepared(input.clone());
