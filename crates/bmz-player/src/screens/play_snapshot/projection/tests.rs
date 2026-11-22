@@ -299,6 +299,10 @@ fn auto_scratch_visibility_matches_live_projection_and_direct_snapshots() {
             }
             chart.lane_notes[lane.index()].extend(notes);
         }
+        let mut hidden = chart.lane_notes[lane.index()][0].clone();
+        hidden.id.0 += 100;
+        hidden.kind = NoteKind::Invisible;
+        chart.lane_notes[lane.index()].push(hidden);
         chart.lane_notes[lane.index()].sort_by_key(|note| note.time);
         let mut long = chart.long_notes[0].clone();
         long.lane = lane;
@@ -309,6 +313,7 @@ fn auto_scratch_visibility_matches_live_projection_and_direct_snapshots() {
     chart.long_notes.sort_by_key(|long| long.start_time);
     let chart = Arc::new(chart);
     let mut profile = ProfileConfig::new_default("test", "Test", 1);
+    profile.play.show_hidden_notes = true;
     let with_auto_scratch = PlaySessionOptions {
         assist: AssistOptionConfig { auto_scratch: true, ..Default::default() },
         ..Default::default()
@@ -362,6 +367,12 @@ fn auto_scratch_visibility_matches_live_projection_and_direct_snapshots() {
         assert_playfield_eq(&projected, &direct);
         for lane in [Lane::Scratch, Lane::Scratch2] {
             assert_eq!(direct.visible_notes[lane.index()].is_empty(), hidden);
+            assert_eq!(
+                direct.visible_notes[lane.index()]
+                    .iter()
+                    .any(|note| note.kind == NoteVisualKind::Invisible),
+                !hidden
+            );
             assert_eq!(direct.visible_mines[lane.index()].is_empty(), hidden);
             assert_eq!(direct.visible_long_notes.iter().all(|long| long.lane != lane), hidden);
         }

@@ -497,6 +497,21 @@ fn practice_displays_source_hidden_notes_without_revealing_masked_notes() {
     assert_eq!(snapshot.visible_notes[Lane::Key1.index()][0].kind, NoteVisualKind::Invisible);
     assert!(snapshot.visible_notes[Lane::Key2.index()].is_empty());
     assert_eq!(snapshot.visible_notes[Lane::Key3.index()][0].kind, NoteVisualKind::Tap);
+
+    // A chart swap rebuilds the render cache; the source hidden-note IDs must survive it.
+    let rebuilt =
+        crate::screens::play_snapshot::PlayRenderSnapshotCache::from_chart(&prepared.session.chart);
+    let rebuilt_snapshot = build_render_snapshot_with_target_and_bga_frames_cached(
+        &prepared.session,
+        TimeUs(1_500_000),
+        &[],
+        None,
+        None,
+        None,
+        &Default::default(),
+        &rebuilt,
+    );
+    assert_eq!(rebuilt_snapshot.visible_notes, snapshot.visible_notes);
 }
 
 #[test]

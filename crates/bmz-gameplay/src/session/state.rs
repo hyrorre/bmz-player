@@ -297,6 +297,9 @@ pub struct GameSession {
     pub show_ln_tail_cap: bool,
     /// レーン上に不可視ノーツの位置を表示する。判定・音声処理は参照しない。
     pub show_hidden_notes: bool,
+    /// Practice の区間切り出し前から不可視だったノーツ。`None` ならすべての不可視ノーツが表示対象。
+    /// 描画キャッシュは譜面の差し替えで作り直すため、ここで保持する。
+    pub practice_source_hidden_notes: Option<Arc<HashSet<NoteId>>>,
     pub hide_auto_scratch_notes: bool,
     /// Scratch lanes AUTO SCRATCH / BATTLE AS took out of scoring. Their notes
     /// are display-only even under full autoplay, which never presses them.

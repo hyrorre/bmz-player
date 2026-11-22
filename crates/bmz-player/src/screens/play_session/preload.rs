@@ -1340,7 +1340,7 @@ pub fn build_practice_prepared_from_preloaded(
         crate::screens::play_snapshot::PlayRenderSnapshotCache::from_chart(&session.chart);
     render_snapshot_cache.skin_chart = Arc::clone(&preloaded.render_snapshot_cache.skin_chart);
     if session.show_hidden_notes {
-        render_snapshot_cache.practice_source_hidden_notes = Some(Arc::new(
+        session.practice_source_hidden_notes = Some(Arc::new(
             preloaded
                 .chart
                 .lane_notes

@@ -730,6 +730,7 @@ pub fn build_game_session_with_input_backend(
         bga_stretch: bga_stretch_from_profile(profile),
         show_ln_tail_cap: profile.play.show_ln_tail_cap,
         show_hidden_notes: profile.play.show_hidden_notes,
+        practice_source_hidden_notes: None,
         hide_auto_scratch_notes: profile.play.hide_auto_scratch_notes,
         auto_scratch_lanes,
         lane_hcn_timer: [None; bmz_core::lane::LANE_COUNT],

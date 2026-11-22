@@ -922,11 +922,11 @@ mod tests {
             SettingsEntryId::Lift,
             SettingsEntryId::HiddenEnabled,
             SettingsEntryId::Hidden,
-            SettingsEntryId::ShowHiddenNotes,
             SettingsEntryId::Constant,
             SettingsEntryId::ConstantFadeMs,
             SettingsEntryId::HispeedTransitionMs,
             SettingsEntryId::InvertE2KeyGreenNumber,
+            SettingsEntryId::ShowHiddenNotes,
         ];
         let cases = [
             (
