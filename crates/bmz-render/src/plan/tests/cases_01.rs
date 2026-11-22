@@ -226,6 +226,15 @@ fn play_plan_renders_judge_area_and_processed_note_fallback() {
         processed_judge: Some(Judge::PGreat),
         pms_miss_fall: None,
     });
+    snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
+        lane: Lane::Key1,
+        time: TimeUs(2_000),
+        y: 0.6,
+        alpha: 0.5,
+        kind: NoteVisualKind::Invisible,
+        processed_judge: None,
+        pms_miss_fall: None,
+    });
 
     let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
 
@@ -237,6 +246,13 @@ fn play_plan_renders_judge_area_and_processed_note_fallback() {
         command,
         DrawCommand::Rect { color, .. } if *color == Color::rgb(0.0, 1.0, 1.0)
     )));
+    assert_eq!(
+        plan.commands.iter().filter(|command| matches!(
+            command,
+            DrawCommand::Rect { color, .. } if *color == Color::rgba(1.0, 165.0 / 255.0, 0.0, 0.5)
+        )).count(),
+        4
+    );
 }
 
 #[test]

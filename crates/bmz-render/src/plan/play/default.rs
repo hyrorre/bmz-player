@@ -113,12 +113,13 @@ fn push_lane(
         match note.kind {
             NoteVisualKind::LnStart => push_ln_start_skin(manifest, commands, lane, rect),
             NoteVisualKind::LnEnd => push_ln_end_skin(manifest, commands, lane, rect),
+            NoteVisualKind::Invisible => push_note_outline(commands, rect, HIDDEN_NOTE_OUTLINE),
             NoteVisualKind::Tap => {
                 if snapshot.mark_processed_note
                     && note.processed_judge.is_some()
                     && note.pms_miss_fall.is_none()
                 {
-                    push_processed_note_fallback(commands, rect);
+                    push_note_outline(commands, rect, PROCESSED_NOTE_OUTLINE);
                 } else {
                     push_default_note_skin(manifest, commands, lane, rect);
                 }

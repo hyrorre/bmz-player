@@ -206,11 +206,13 @@ pub(super) fn push_judge_area(
     }
 }
 
-/// beatoraja `SkinNote` が processed sprite 未指定時に生成する cyan 枠。
-pub(super) fn push_processed_note_fallback(commands: &mut Vec<DrawCommand>, rect: Rect) {
+pub(super) const HIDDEN_NOTE_OUTLINE: Color = Color::rgb(1.0, 165.0 / 255.0, 0.0);
+pub(super) const PROCESSED_NOTE_OUTLINE: Color = Color::rgb(0.0, 1.0, 1.0);
+
+/// beatoraja `SkinNote` が生成する 32×8 の枠をノーツ矩形に合わせる。
+pub(super) fn push_note_outline(commands: &mut Vec<DrawCommand>, rect: Rect, color: Color) {
     let border_x = (rect.width / 16.0).min(rect.width * 0.5);
     let border_y = (rect.height / 4.0).min(rect.height * 0.5);
-    let color = Color::rgb(0.0, 1.0, 1.0);
     for border in [
         Rect { width: border_x, ..rect },
         Rect { x: rect.x + rect.width - border_x, width: border_x, ..rect },

@@ -352,6 +352,15 @@ fn play_skin_document_applies_notes_alpha_to_long_mine_and_processed_fallbacks()
         processed_judge: Some(Judge::PGreat),
         pms_miss_fall: None,
     });
+    snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
+        lane: Lane::Key1,
+        time: TimeUs(2_000),
+        y: 0.6,
+        alpha: 0.8,
+        kind: NoteVisualKind::Invisible,
+        processed_judge: None,
+        pms_miss_fall: None,
+    });
 
     let plan = DrawPlan::from_scene_with_skin(
         &AppSceneSnapshot::Play(snapshot),
@@ -385,6 +394,16 @@ fn play_skin_document_applies_notes_alpha_to_long_mine_and_processed_fallbacks()
         )
     });
     assert_eq!(processed_fallback_borders.count(), 4);
+    let hidden_note_borders = plan.commands.iter().filter(|command| {
+        matches!(
+            command,
+            DrawCommand::Rect { rect, color }
+                if rect.x >= 0.1 && rect.x + rect.width <= 0.150_001
+                    && color.r == 1.0 && approx_eq(color.g, 165.0 / 255.0)
+                    && color.b == 0.0 && approx_eq(color.a, (127.0 / 255.0) * 0.8)
+        )
+    });
+    assert_eq!(hidden_note_borders.count(), 4);
 }
 
 fn pms_missed_note_plan(dst2: Option<i32>) -> DrawPlan {

@@ -558,16 +558,19 @@ fn suppressed_bss_reverse_press_does_not_play_fallback_keysound() {
 
 #[test]
 fn unjudged_press_after_empty_poor_window_prefers_previous_invisible_keysound() {
-    let mut session = session_with_autoplay(chart_with_invisible_keysound());
-    session.autoplay = None;
-    let mut audio = TestAudio::default();
+    for show_hidden_notes in [false, true] {
+        let mut session = session_with_autoplay(chart_with_invisible_keysound());
+        session.autoplay = None;
+        session.show_hidden_notes = show_hidden_notes;
+        let mut audio = TestAudio::default();
 
-    let judgements = process_session_input(&mut session, human_press(TimeUs(800_000)));
-    schedule_keysounds(&mut session, &mut audio);
+        let judgements = process_session_input(&mut session, human_press(TimeUs(800_000)));
+        schedule_keysounds(&mut session, &mut audio);
 
-    assert!(judgements.is_empty());
-    assert_eq!(audio.scheduled.len(), 1);
-    assert_eq!(audio.scheduled[0].sound_id, SoundId(8));
+        assert!(judgements.is_empty());
+        assert_eq!(audio.scheduled.len(), 1);
+        assert_eq!(audio.scheduled[0].sound_id, SoundId(8));
+    }
 }
 
 #[test]

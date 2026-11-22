@@ -128,22 +128,27 @@ fn push_document_lane(
         let Some(mut rect) = document_note_rect(notes, lane, note, note_height) else {
             continue;
         };
-        if snapshot.key_mode == KeyMode::K9 {
+        if snapshot.key_mode == KeyMode::K9 && note.kind != NoteVisualKind::Invisible {
             apply_note_expansion(&mut rect, skin.document_note_expansion_scale(skin_state));
         }
         // beatoraja は見逃しノーツを markprocessednote によらず通常画像で描く。
         let processed = snapshot.mark_processed_note
+            && note.kind != NoteVisualKind::Invisible
             && note.processed_judge.is_some()
             && note.pms_miss_fall.is_none();
         let item = match note.kind {
             NoteVisualKind::LnStart => notes.cap_item(lane, rect, LongNoteMode::Ln, false),
             NoteVisualKind::LnEnd => notes.cap_item(lane, rect, LongNoteMode::Ln, true),
             NoteVisualKind::Tap => notes.tap_item(lane, rect, processed),
+            NoteVisualKind::Invisible => {
+                push_note_outline(commands, rect, HIDDEN_NOTE_OUTLINE);
+                None
+            }
         };
         if let Some(item) = item {
             append_document_item(commands, skin, skin_state, item);
         } else if processed {
-            push_processed_note_fallback(commands, rect);
+            push_note_outline(commands, rect, PROCESSED_NOTE_OUTLINE);
         }
         apply_draw_command_alpha_offset(&mut commands[start..], notes.alpha_offset());
         apply_draw_command_alpha(&mut commands[start..], note.alpha);

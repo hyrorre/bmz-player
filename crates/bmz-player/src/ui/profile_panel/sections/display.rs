@@ -10,6 +10,11 @@ pub(in crate::ui::profile_panel) fn build_profile_display_section(
         .scope(tr!(text, "settings-scope-profile"))
         .id_salt("profile_display")
         .show(ui, |ui| {
+            ui.checkbox(
+                &mut profile.play.show_hidden_notes,
+                tr!(text, "profile-display-show-hidden-notes"),
+            )
+            .on_hover_text(tr!(text, "settings-entry-description-show-hidden-notes"));
             let mut preset = profile.lane.hispeed_config();
             egui::ComboBox::new("profile_hispeed_mode", tr!(text, "profile-display-hispeed-mode"))
                 .selected_text(hispeed_mode_label(preset))

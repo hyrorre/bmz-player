@@ -295,6 +295,8 @@ pub struct GameSession {
     pub bga_stretch: i32,
     /// LN モードでも終端 (tail) キャップを描画するか。既定 OFF (beatoraja 準拠)。
     pub show_ln_tail_cap: bool,
+    /// レーン上に不可視ノーツの位置を表示する。判定・音声処理は参照しない。
+    pub show_hidden_notes: bool,
     pub hide_auto_scratch_notes: bool,
     /// Scratch lanes AUTO SCRATCH / BATTLE AS took out of scoring. Their notes
     /// are display-only even under full autoplay, which never presses them.
