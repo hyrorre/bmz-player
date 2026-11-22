@@ -44,6 +44,10 @@ impl WinitApp {
                     repaired_entries = run.repaired_entries,
                     "course link repair worker complete"
                 );
+                if run.repaired_entries > 0 {
+                    self.invalidate_select_folder_summaries();
+                    self.reload_select_items();
+                }
             }
             Ok(Err(error)) => {
                 tracing::warn!(%error, "course link repair worker failed");

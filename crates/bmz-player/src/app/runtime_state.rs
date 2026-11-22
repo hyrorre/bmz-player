@@ -438,6 +438,8 @@ pub(super) struct SongScanRuntime {
     pub(super) progress: Option<ScanProgress>,
     /// Survives a request reaching its attempt limit; cleared only after a worker starts.
     pub(super) retry_at: Option<Instant>,
+    /// Holds the running startup rescan outside Select. Other scans get an inert handle.
+    pub(super) pause: crate::storage::scan::ScanPause,
 }
 
 impl SongScanRuntime {

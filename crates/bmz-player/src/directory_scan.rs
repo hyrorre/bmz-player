@@ -31,6 +31,17 @@ impl DirectoryScan {
     }
 
     pub(crate) fn read_dir_once(&mut self, dir: &Path, depth: usize) -> Option<Vec<PathBuf>> {
+        self.read_dir_matching(dir, depth, |_| true)
+    }
+
+    /// Skip ordinary files the caller will never open. Directories, links and
+    /// candidates still go through the same root policy before use.
+    pub(crate) fn read_dir_matching(
+        &mut self,
+        dir: &Path,
+        depth: usize,
+        keep_file: impl Fn(&Path) -> bool,
+    ) -> Option<Vec<PathBuf>> {
         if depth > MAX_SCAN_DEPTH || self.entries >= MAX_SCAN_ENTRIES {
             self.limited = true;
             return None;
@@ -60,18 +71,22 @@ impl DirectoryScan {
                 self.skipped += 1;
                 continue;
             };
-            let real = match self.policy.resolve(&entry.path()) {
+            let name = entry.file_name();
+            if !keep_file(Path::new(&name)) && entry.file_type().is_ok_and(|ty| ty.is_file()) {
+                continue;
+            }
+            let path = entry.path();
+            let real = match self.policy.resolve(&path) {
                 Ok(path) => path,
                 Err(error) => {
                     self.reject(error);
                     continue;
                 }
             };
-            let is_alias = entry.path() != real;
-            candidates.push((is_alias, entry.file_name(), real));
+            candidates.push((path != real, name));
         }
-        candidates.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
-        Some(candidates.into_iter().map(|(_, name, _)| dir.join(name)).collect())
+        candidates.sort();
+        Some(candidates.into_iter().map(|(_, name)| dir.join(name)).collect())
     }
 
     /// Deduplicate after the caller recognizes a candidate's logical name.
@@ -233,6 +248,24 @@ mod tests {
         assert_eq!(scan.visited.len(), 3);
         assert!(scan.rejected > 0);
         assert!(scan.skipped > 0);
+    }
+
+    #[test]
+    fn matching_files_keep_subdirectories_and_charge_skipped_entries() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("theme.png");
+        let skin = root.path().join("select.json");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(&skin, "{}").unwrap();
+        std::fs::write(root.path().join("image.png"), []).unwrap();
+        let mut scan = DirectoryScan::new([root.path().to_owned()]).unwrap();
+        let found = scan
+            .read_dir_matching(root.path(), 0, |name| {
+                name.extension().is_some_and(|ext| ext == "json")
+            })
+            .unwrap();
+        assert_eq!(found, [skin, dir]);
+        assert_eq!(scan.entries, 3);
     }
 
     #[test]

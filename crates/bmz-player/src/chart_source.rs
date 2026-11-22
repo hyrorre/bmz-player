@@ -18,12 +18,11 @@ impl ChartLocator {
     /// Accept archive!/entry and archive! directory roots. Entries may also name assets.
     pub fn parse(path: &Path) -> Result<Self> {
         let text = crate::paths::normalize_library_path(&path.to_string_lossy());
-        let lower = text.to_ascii_lowercase();
         for (index, _) in text.match_indices('!') {
             if !text[index + 1..].is_empty() && !text[index + 1..].starts_with('/') {
                 continue;
             }
-            if bmz_song_resource::archive_extension(&lower[..index]).is_none() {
+            if bmz_song_resource::archive_extension(&text[..index]).is_none() {
                 continue;
             }
             let entry = text[index + 1..].strip_prefix('/').unwrap_or("");
@@ -234,57 +233,59 @@ pub(crate) fn archive_folder_has_document(index: &song_archive::ArchiveIndex, en
         .any(|candidate| candidate.is_document() && Path::new(&candidate.name).parent() == folder)
 }
 
-pub(crate) fn archive_preview_file(
-    index: &song_archive::ArchiveIndex,
-    entry: &str,
-    preview: &str,
-) -> String {
-    let folder = Path::new(entry).parent().unwrap_or(Path::new(""));
-    let find = |relative: &str| -> Option<String> {
-        let joined = folder.join(relative.replace('\\', "/"));
-        let name = normalize_entry(&joined.to_string_lossy()).ok()?;
-        index
-            .entries
-            .iter()
-            .any(|candidate| !candidate.is_directory && candidate.name == name)
-            .then(|| relative.to_string())
-    };
-    if !preview.trim().is_empty() {
-        if let Some(found) = find(preview.trim()) {
-            return found;
+pub(crate) struct ArchivePreviewFiles<'a> {
+    files: std::collections::HashSet<&'a str>,
+    first_in_folder: std::collections::HashMap<&'a Path, &'a std::ffi::OsStr>,
+}
+
+impl<'a> ArchivePreviewFiles<'a> {
+    pub(crate) fn new(index: &'a song_archive::ArchiveIndex) -> Self {
+        let mut files = std::collections::HashSet::new();
+        let mut first_in_folder = std::collections::HashMap::new();
+        for entry in index.entries.iter().filter(|entry| !entry.is_directory) {
+            files.insert(entry.name.as_str());
+            let path = Path::new(&entry.name);
+            if let (Some(folder), Some(name)) = (path.parent(), path.file_name())
+                && name
+                    .as_encoded_bytes()
+                    .get(..7)
+                    .is_some_and(|s| s.eq_ignore_ascii_case(b"preview"))
+                && path.extension().is_some_and(|ext| {
+                    ["wav", "ogg", "mp3", "flac"]
+                        .iter()
+                        .any(|suffix| ext.eq_ignore_ascii_case(suffix))
+                })
+            {
+                let first = first_in_folder.entry(folder).or_insert(name);
+                *first = name.min(*first);
+            }
         }
-        let path = Path::new(preview.trim());
-        for ext in ["wav", "ogg", "mp3", "flac"] {
-            for extension in [ext.to_string(), ext.to_uppercase()] {
-                if let Some(found) = find(&path.with_extension(extension).to_string_lossy()) {
+        Self { files, first_in_folder }
+    }
+
+    pub(crate) fn resolve(&self, entry: &str, preview: &str) -> String {
+        let folder = Path::new(entry).parent().unwrap_or(Path::new(""));
+        let find = |relative: &str| -> Option<String> {
+            let joined = folder.join(relative.replace('\\', "/"));
+            let name = normalize_entry(&joined.to_string_lossy()).ok()?;
+            self.files.contains(name.as_str()).then(|| relative.to_string())
+        };
+        let preview = preview.trim();
+        if !preview.is_empty() {
+            if let Some(found) = find(preview) {
+                return found;
+            }
+            for ext in ["wav", "WAV", "ogg", "OGG", "mp3", "MP3", "flac", "FLAC"] {
+                if let Some(found) = find(&Path::new(preview).with_extension(ext).to_string_lossy())
+                {
                     return found;
                 }
             }
         }
+        self.first_in_folder
+            .get(folder)
+            .map_or_else(|| preview.to_owned(), |name| name.to_string_lossy().into_owned())
     }
-    let mut candidates = index
-        .entries
-        .iter()
-        .filter(|candidate| {
-            let path = Path::new(&candidate.name);
-            !candidate.is_directory
-                && path.parent() == Some(folder)
-                && path.file_name().is_some_and(|name| {
-                    name.to_string_lossy().to_ascii_lowercase().starts_with("preview")
-                })
-                && path.extension().is_some_and(|ext| {
-                    ["wav", "ogg", "mp3", "flac"]
-                        .iter()
-                        .any(|candidate| ext.eq_ignore_ascii_case(candidate))
-                })
-        })
-        .filter_map(|candidate| Path::new(&candidate.name).file_name())
-        .collect::<Vec<_>>();
-    candidates.sort();
-    candidates
-        .first()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| preview.trim().to_string())
 }
 
 pub(crate) fn normalize_entry(entry: &str) -> Result<String> {

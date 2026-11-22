@@ -253,7 +253,7 @@ fn profile_select_list_dispatch_and_install() -> anyhow::Result<()> {
 }
 
 #[cfg(windows)]
-fn wait_for_select_list(app: &mut WinitApp) {
+pub(super) fn wait_for_select_list(app: &mut WinitApp) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while app.select.list_loader.loading() {
         app.poll_select_list();

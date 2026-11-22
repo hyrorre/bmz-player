@@ -9,6 +9,19 @@ enum SongScanStart {
     Failed { error: anyhow::Error },
 }
 
+/// The startup rescan usually finds nothing. Keep the playing preview, banner
+/// caches and list position when it changed no registration Select reads.
+fn startup_scan_left_library_unchanged(
+    scope: SongScanScope,
+    summary: &crate::storage::scan::ScanSummary,
+) -> bool {
+    scope == SongScanScope::Startup
+        && summary.imported == 0
+        && summary.failed == 0
+        && summary.removed_files == 0
+        && summary.document_flags_updated == 0
+}
+
 impl SongScanRuntime {
     fn start_worker(
         &mut self,
@@ -120,23 +133,40 @@ impl WinitApp {
 
     pub(in crate::app) fn start_song_scan(&mut self, request: QueuedSongScan) {
         let QueuedSongScan { mut roots, force, label, scope, .. } = request.clone();
-        let library_roots = if scope == SongScanScope::Library {
-            // A full sync is authoritative only after the settings were saved.
-            if let Err(error) = self.save_app_config_now().and_then(|()| self.publish_song_scope())
-            {
-                self.song_scan_error(&error);
-                return;
+        let configured_roots = || {
+            crate::songs_cmd::configured_library_roots(&self.boot.app_config, &self.boot.app_paths)
+        };
+        let library_roots = match scope {
+            SongScanScope::Paths => None,
+            SongScanScope::Library => {
+                if let Err(error) =
+                    self.save_app_config_now().and_then(|()| self.publish_song_scope())
+                {
+                    self.song_scan_error(&error);
+                    return;
+                }
+                roots = configured_roots();
+                Some(roots.clone())
             }
-            roots = crate::songs_cmd::configured_library_roots(
-                &self.boot.app_config,
-                &self.boot.app_paths,
-            );
-            Some(roots.clone())
-        } else {
-            None
+            SongScanScope::Startup => {
+                if !self.boot.app_config.scan.auto_rescan_on_startup {
+                    return;
+                }
+                // Bootstrap added the bundled sample to the scan list only if it exists.
+                roots = self.boot.app_config.songs.roots.clone();
+                Some(configured_roots())
+            }
         };
         let library_db_path = self.boot.app_paths.library_db.clone();
         let scan_config = self.boot.app_config.scan.clone();
+        // The startup rescan waits outside Select, so it never competes with Play.
+        let pause = if scope == SongScanScope::Startup {
+            crate::storage::scan::ScanPause::new()
+        } else {
+            crate::storage::scan::ScanPause::default()
+        };
+        pause.set_paused(!self.select_maintenance_allowed());
+        self.jobs.song_scan.pause = pause.clone();
         let (tx, rx) = mpsc::channel();
         let progress = Arc::new(AtomicU64::new(pack_scan_progress(ScanProgress::default())));
         let worker_progress = Arc::clone(&progress);
@@ -160,8 +190,14 @@ impl WinitApp {
         {
             tracing::error!(%error, "failed to publish downloaded song roots");
         }
-        let pending =
-            PendingSongScan { finished: rx, progress, library_roots, download_ids, download_dirs };
+        let pending = PendingSongScan {
+            finished: rx,
+            progress,
+            library_roots,
+            scope,
+            download_ids,
+            download_dirs,
+        };
         let started = self.jobs.song_scan.start_worker(
             pending,
             request,
@@ -173,12 +209,13 @@ impl WinitApp {
                     let result = (|| -> Result<SongScanResult> {
                         migrate_library_db(&library_db_path)?;
                         let mut library_db = LibraryDatabase::open(&library_db_path)?;
-                        let report = scan_songs_with_progress(
+                        let report = scan_songs_with_pause(
                             &mut library_db,
                             &roots,
                             &scan_config,
                             now_unix_seconds(),
                             force,
+                            &pause,
                             |progress| {
                                 worker_progress
                                     .store(pack_scan_progress(progress), Ordering::Relaxed);
@@ -224,6 +261,7 @@ impl WinitApp {
         match pending.finished.try_recv() {
             Ok(Ok(result)) => {
                 let mut report = result.report;
+                let mut roots_reconciled = false;
                 if let Some(roots) = &pending.library_roots {
                     let current = crate::songs_cmd::configured_library_roots(
                         &self.boot.app_config,
@@ -245,7 +283,10 @@ impl WinitApp {
                         self.boot.library_db.reconcile_configured_song_roots(roots)
                     })();
                     match cleanup {
-                        Ok(removed) => report.summary.removed_files += removed,
+                        Ok(removed) => {
+                            report.summary.removed_files += removed;
+                            roots_reconciled = true;
+                        }
                         Err(error) => self.song_scan_error(&error),
                     }
                 }
@@ -317,12 +358,16 @@ impl WinitApp {
                             .format("toast-everything-fallback", &args),
                     );
                 }
-                self.select.select_assets.invalidate_library();
-                self.invalidate_select_folder_summaries();
-                if pending.download_ids.is_empty() {
-                    self.reload_select_items();
-                } else {
-                    self.change_select_list(SelectListAction::RefreshDownloads);
+                if !roots_reconciled
+                    || !startup_scan_left_library_unchanged(pending.scope, &report.summary)
+                {
+                    self.select.select_assets.invalidate_library();
+                    self.invalidate_select_folder_summaries();
+                    if pending.download_ids.is_empty() {
+                        self.reload_select_items();
+                    } else {
+                        self.change_select_list(SelectListAction::RefreshDownloads);
+                    }
                 }
                 let mut download_failed = false;
                 for mut registration in result.downloaded {
@@ -414,12 +459,31 @@ mod tests {
         id
     }
 
+    #[test]
+    fn only_an_unchanged_startup_rescan_keeps_select_assets() {
+        use crate::storage::scan::ScanSummary;
+        let unchanged = ScanSummary { skipped: 3, ..Default::default() };
+        assert!(startup_scan_left_library_unchanged(SongScanScope::Startup, &unchanged));
+        for scope in [SongScanScope::Paths, SongScanScope::Library] {
+            assert!(!startup_scan_left_library_unchanged(scope, &unchanged));
+        }
+        for changed in [
+            ScanSummary { imported: 1, ..Default::default() },
+            ScanSummary { failed: 1, ..Default::default() },
+            ScanSummary { removed_files: 1, ..Default::default() },
+            ScanSummary { document_flags_updated: 1, ..Default::default() },
+        ] {
+            assert!(!startup_scan_left_library_unchanged(SongScanScope::Startup, &changed));
+        }
+    }
+
     fn pending(download_ids: Vec<u64>) -> PendingSongScan {
         let (_, finished) = mpsc::channel();
         PendingSongScan {
             finished,
             progress: Arc::new(AtomicU64::new(pack_scan_progress(ScanProgress::default()))),
             library_roots: None,
+            scope: SongScanScope::Paths,
             download_ids,
             download_dirs: Vec::new(),
         }

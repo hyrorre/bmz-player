@@ -8,6 +8,7 @@ fn download_scan_coalescing_tracks_running_and_queued_directories() {
         finished: rx,
         progress: Arc::new(AtomicU64::new(0)),
         library_roots: None,
+        scope: SongScanScope::Paths,
         download_ids: vec![1],
         download_dirs: vec![PathBuf::from("shared")],
     });

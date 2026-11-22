@@ -6,13 +6,38 @@ impl LibraryDatabase {
     pub(crate) fn chart_paths_not_discovered(
         &self,
         discovered: &HashSet<&str>,
+        only_root: Option<&Path>,
     ) -> Result<ChartPathIndex> {
-        let mut stmt = self.conn.prepare("SELECT id, path FROM chart_files")?;
-        let mut query = stmt.query([])?;
+        let prefix = only_root.map(library_path_key);
+        let prefix = prefix.as_deref().map(|root| root.trim_end_matches('/'));
+        let mut stmt;
+        let mut query = if let Some([drive, b':', ..]) = prefix.map(str::as_bytes)
+            && drive.is_ascii_alphabetic()
+        {
+            // These disjoint ranges all use the existing binary path index. Keep
+            // namespace-prefixed paths and non-ASCII initials for the full scope check.
+            stmt = self.conn.prepare_cached(
+                r"SELECT id, path FROM chart_files WHERE path GLOB ?1
+                  UNION ALL SELECT id, path FROM chart_files WHERE path GLOB ?2
+                  UNION ALL SELECT id, path FROM chart_files WHERE path GLOB '/*'
+                  UNION ALL SELECT id, path FROM chart_files WHERE path GLOB '\*'
+                  UNION ALL SELECT id, path FROM chart_files WHERE path >= char(128)",
+            )?;
+            let drive = char::from(*drive);
+            stmt.query([
+                format!("{}:*", drive.to_ascii_lowercase()),
+                format!("{}:*", drive.to_ascii_uppercase()),
+            ])?
+        } else {
+            stmt = self.conn.prepare_cached("SELECT id, path FROM chart_files")?;
+            stmt.query([])?
+        };
         let mut rows = Vec::new();
         while let Some(row) = query.next()? {
             let path = row.get_ref(1)?.as_str()?;
-            if !discovered.contains(path) {
+            if prefix.is_none_or(|root| may_start_with_root(path, root))
+                && !discovered.contains(path)
+            {
                 rows.push(IndexedChartPath {
                     id: row.get(0)?,
                     path: path.to_owned(),
@@ -260,6 +285,24 @@ impl LibraryDatabase {
             .optional()
             .map_err(Into::into)
     }
+}
+
+/// Cheap rejection before allocating a scope key for every unrelated registration.
+/// Unicode case folding and extended Windows namespaces use the full scope check.
+fn may_start_with_root(path: &str, root: &str) -> bool {
+    let separator = |byte| if byte == b'\\' { b'/' } else { byte };
+    if path.as_bytes().get(2) == Some(&b'?') {
+        return true;
+    }
+    for (candidate, expected) in path.bytes().zip(root.bytes()) {
+        if !candidate.is_ascii() || !expected.is_ascii() {
+            return true;
+        }
+        if !separator(candidate).eq_ignore_ascii_case(&separator(expected)) {
+            return false;
+        }
+    }
+    true
 }
 
 fn hidden_by_song_folder(

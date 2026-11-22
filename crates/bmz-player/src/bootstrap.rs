@@ -35,6 +35,7 @@ pub struct BootstrappedApp {
     pub score_db: ScoreDatabase,
     pub network_db: NetworkDatabase,
     pub startup_scan: Option<ScanReport>,
+    pub(crate) deferred_startup_scan: bool,
 }
 
 /// 切り替え先を現在のprofileに触れずに準備する。library DBや曲スキャンは共有する。
@@ -173,7 +174,7 @@ pub fn bootstrap() -> Result<BootstrappedApp> {
 
 /// 起動前loggerと同じ解決済みpathを使って通常bootstrapを行う。
 pub fn bootstrap_with_paths(app_paths: AppPaths) -> Result<BootstrappedApp> {
-    bootstrap_with_paths_mode(app_paths, true, None)
+    bootstrap_with_paths_mode(app_paths, StartupScan::Synchronous, None)
 }
 
 /// `active_profile`を書き換えず、指定profileで通常起動する。
@@ -181,7 +182,7 @@ pub fn bootstrap_with_paths_profile(
     app_paths: AppPaths,
     profile_id: Option<&str>,
 ) -> Result<BootstrappedApp> {
-    bootstrap_with_paths_mode(app_paths, true, profile_id)
+    bootstrap_with_paths_mode(app_paths, StartupScan::Synchronous, profile_id)
 }
 
 pub fn bootstrap_viewer_with_paths(
@@ -195,7 +196,7 @@ pub fn bootstrap_viewer_with_paths(
     let library_path = viewer_library_path();
     let cleanup = ViewerLibraryCleanup { path: library_path.clone() };
     let encoding_source = std::mem::replace(&mut app_paths.library_db, library_path);
-    let mut app = bootstrap_with_paths_mode(app_paths, false, profile_id)?;
+    let mut app = bootstrap_with_paths_mode(app_paths, StartupScan::Disabled, profile_id)?;
     app.chart_encoding_source = Some(encoding_source);
     let imported = crate::storage::import::import_chart_file_with_encoding_source(
         &mut app.library_db,
@@ -209,9 +210,17 @@ pub fn bootstrap_viewer_with_paths(
     Ok(ViewerBootstrap { app, chart_path, chart_id: imported.chart_id, start_time, cleanup })
 }
 
-fn bootstrap_with_paths_mode(
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StartupScan {
+    Disabled,
+    Synchronous,
+    /// Show an existing library before running the configured automatic rescan.
+    Select,
+}
+
+pub(crate) fn bootstrap_with_paths_mode(
     app_paths: AppPaths,
-    startup_scan_enabled: bool,
+    scan_mode: StartupScan,
     profile_id_override: Option<&str>,
 ) -> Result<BootstrappedApp> {
     let bootstrap_started_at = Instant::now();
@@ -255,7 +264,11 @@ fn bootstrap_with_paths_mode(
     );
 
     let migration_started_at = Instant::now();
-    crate::storage::migration::migrate_library_db(&app_paths.library_db)?;
+    if scan_mode == StartupScan::Select {
+        crate::storage::migration::migrate_library_db_for_select(&app_paths.library_db)?;
+    } else {
+        crate::storage::migration::migrate_library_db(&app_paths.library_db)?;
+    }
     let library_migration_ms = migration_started_at.elapsed().as_millis();
     let profile_started_at = Instant::now();
     let profile = PreparedProfile::open(profile_config, profile_paths)?;
@@ -270,7 +283,16 @@ fn bootstrap_with_paths_mode(
     library_db.set_configured_song_roots(&library_roots)?;
     let bundled_sample_root = bundled_sample_song_root(&app_paths);
     let scan_started_at = Instant::now();
-    let scan_roots = if startup_scan_enabled {
+    let deferred_startup_scan = scan_mode == StartupScan::Select
+        && had_saved_config
+        && app_config.scan.auto_rescan_on_startup
+        && library_db.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM chart_file_links)",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+    let synchronous_scan = scan_mode != StartupScan::Disabled && !deferred_startup_scan;
+    let scan_roots = if synchronous_scan {
         startup_scan_roots(&app_config, bundled_sample_root.as_deref())
     } else {
         Vec::new()
@@ -286,12 +308,13 @@ fn bootstrap_with_paths_mode(
             false,
         )?)
     };
-    if startup_scan_enabled && app_config.scan.auto_rescan_on_startup && had_saved_config {
+    if synchronous_scan && app_config.scan.auto_rescan_on_startup && had_saved_config {
         let removed = library_db.reconcile_configured_song_roots(&library_roots)?;
         startup_scan.get_or_insert_with(Default::default).summary.removed_files += removed;
     }
     tracing::info!(
         scan_root_count = scan_roots.len(),
+        deferred_startup_scan,
         scan_ms = scan_started_at.elapsed().as_millis(),
         "startup song scan complete"
     );
@@ -306,6 +329,7 @@ fn bootstrap_with_paths_mode(
         score_db: profile.score_db,
         network_db: profile.network_db,
         startup_scan,
+        deferred_startup_scan,
     };
     tracing::info!(
         bootstrap_total_ms = bootstrap_started_at.elapsed().as_millis(),
@@ -477,6 +501,42 @@ mod tests {
     }
 
     #[test]
+    fn select_defers_automatic_rescan_only_after_the_first_import() {
+        let data = profile_tests::ProfileTestDir::new();
+        data.paths.ensure_required_dirs().unwrap();
+        let folder = data.paths.data_dir.join("songs");
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut config = AppConfig::default();
+        config.scan.auto_rescan_on_startup = true;
+        config.songs.roots = vec![PathEntry {
+            path: folder.to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+        save_app_config(&data.paths.config_toml, &config).unwrap();
+        std::fs::write(folder.join("first.bms"), "#TITLE First\n#BPM 120\n#00111:01\n").unwrap();
+        let first =
+            bootstrap_with_paths_mode(data.paths.clone(), StartupScan::Select, None).unwrap();
+        assert!(!first.deferred_startup_scan);
+        assert_eq!(first.startup_scan.as_ref().unwrap().summary.imported, 1);
+        drop(first);
+
+        std::fs::write(folder.join("new.bms"), "#TITLE New\n#BPM 120\n#00111:01\n").unwrap();
+        let next =
+            bootstrap_with_paths_mode(data.paths.clone(), StartupScan::Select, None).unwrap();
+        assert!(next.deferred_startup_scan);
+        assert!(next.startup_scan.is_none());
+        assert!(next.library_db.chart_id_by_title("First").unwrap().is_some());
+        assert!(next.library_db.chart_id_by_title("New").unwrap().is_none());
+        drop(next);
+
+        let direct = bootstrap_with_paths(data.paths.clone()).unwrap();
+        assert!(!direct.deferred_startup_scan);
+        assert_eq!(direct.startup_scan.unwrap().summary.imported, 1);
+        assert!(direct.library_db.chart_id_by_title("New").unwrap().is_some());
+    }
+
+    #[test]
     fn bundled_sample_root_imports_playable_chart() {
         let app_paths = test_app_paths();
         let sample_root =
@@ -550,14 +610,18 @@ mod tests {
         save_profile_config(&alt_paths.profile_toml, &ProfileConfig::new_default("alt", "Alt", 1))
             .unwrap();
 
-        let boot = bootstrap_with_paths_mode(app_paths.clone(), false, Some("alt")).unwrap();
+        let boot = bootstrap_with_paths_mode(app_paths.clone(), StartupScan::Disabled, Some("alt"))
+            .unwrap();
         assert_eq!(boot.profile_config.id, "alt");
         assert_eq!(boot.profile_paths.root_dir, alt_paths.root_dir);
         drop(boot);
 
         let saved = load_app_config(&app_paths.config_toml).unwrap();
         assert_eq!(saved.active_profile, "default");
-        assert!(bootstrap_with_paths_mode(app_paths.clone(), false, Some("missing")).is_err());
+        assert!(
+            bootstrap_with_paths_mode(app_paths.clone(), StartupScan::Disabled, Some("missing"))
+                .is_err()
+        );
         assert!(!app_paths.profiles_dir.join("missing").exists());
 
         let _ = std::fs::remove_dir_all(root);

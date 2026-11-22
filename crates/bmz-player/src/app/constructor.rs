@@ -169,7 +169,7 @@ impl WinitApp {
         ) = load_initial_skin_textures(
             renderer.as_mut(),
             &boot.app_paths,
-            &skin_pipeline,
+            &mut skin_pipeline,
             0,
             FrontendLuaLoadInputs {
                 player_name: &boot.profile_config.display_name,

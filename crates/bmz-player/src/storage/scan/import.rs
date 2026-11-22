@@ -24,6 +24,21 @@ pub fn scan_song_roots_with_progress(
     scan: &ScanConfig,
     scanned_at: i64,
     force: bool,
+    on_progress: impl FnMut(ScanProgress),
+) -> Result<ScanReport> {
+    let pause = ScanPause::default();
+    scan_song_roots_with_pause(db, roots, scan, scanned_at, force, &pause, on_progress)
+}
+
+/// Like [`scan_song_roots_with_progress`], but `pause` can hold the scan. It waits only
+/// between write transactions, so other library.db writers are not blocked meanwhile.
+pub fn scan_song_roots_with_pause(
+    db: &mut LibraryDatabase,
+    roots: &[PathEntry],
+    scan: &ScanConfig,
+    scanned_at: i64,
+    force: bool,
+    pause: &ScanPause,
     mut on_progress: impl FnMut(ScanProgress),
 ) -> Result<ScanReport> {
     struct DiscoveredRoot {
@@ -71,11 +86,12 @@ pub fn scan_song_roots_with_progress(
     for (root_index, root) in enabled_roots.into_iter().enumerate() {
         report.summary.roots_seen = report.summary.roots_seen.saturating_add(1);
         let root_path = Path::new(&root.path);
+        pause.wait();
         let root_id = db.upsert_root(root_path, root.enabled, root.recursive)?;
         let discovery_start = Instant::now();
         let files_before_root = files_total;
         let discovery =
-            discover_chart_files_with_progress(root_path, root.recursive, scan, |root_total| {
+            discover_chart_files_with_pause(root_path, root.recursive, scan, pause, |root_total| {
                 on_progress(ScanProgress {
                     done: 0,
                     total: files_before_root.saturating_add(root_total),
@@ -202,15 +218,18 @@ pub fn scan_song_roots_with_progress(
             .map(|(folder, flag)| (folder.to_path_buf(), flag))
             .collect();
 
-        // Phase 2: skip判定（1クエリでrootの全fingerprintsをロードしてHashMap lookup）
+        pause.wait();
+        // Partial scans share fingerprints with overlapping roots.
         let fingerprint_start = Instant::now();
-        let fingerprints = db.load_fingerprints_for_root(root.root_id)?;
-        let fingerprint_ms = fingerprint_start.elapsed().as_millis();
-        report.timing.fingerprint_ms += fingerprint_ms;
+        let mut fingerprints =
+            if force { HashMap::new() } else { db.load_fingerprints_for_root(root.root_id)? };
+        let mut fingerprint_ms = fingerprint_start.elapsed().as_millis();
         let skip_start = Instant::now();
         let mut to_import: Vec<FileTodo> = Vec::new();
         let mut preview_fallbacks = HashMap::new();
         let mut unchanged_count = 0_u32;
+        let mut missing = Vec::new();
+        let mut candidates = Vec::new();
         let mut archives: HashMap<PathBuf, (&crate::song_archive::ArchiveGeneration, Vec<&str>)> =
             root.archives
                 .iter()
@@ -224,36 +243,50 @@ pub fn scan_song_roots_with_progress(
                 })
                 .collect();
         for (key, entry) in entries {
-            if let Ok(crate::chart_source::ChartLocator::Archive { container, .. }) =
-                crate::chart_source::ChartLocator::parse(&entry.path)
+            let stored = fingerprints.get(key);
+            if !force && stored.is_none() {
+                missing.push(key.as_str());
+            }
+            if key.contains('!')
+                && let Ok(crate::chart_source::ChartLocator::Archive { container, .. }) =
+                    crate::chart_source::ChartLocator::parse(&entry.path)
             {
                 if let Some((_, entries)) = archives.get_mut(&container) {
                     entries.push(key);
                 }
                 continue;
             }
-            let unchanged = !force
-                && fingerprints.get(key).is_some_and(|fp| {
-                    fp.file_size == entry.file_size
-                        && fp.modified_at == entry.modified_at
-                        && fp.import_version == CHART_IMPORT_VERSION
-                });
-            if unchanged {
-                report.summary.skipped = report.summary.skipped.saturating_add(1);
+            if stored.is_some_and(|fp| unchanged_file(fp, entry)) {
                 unchanged_count = unchanged_count.saturating_add(1);
             } else {
-                let preview_fallback = preview_fallbacks
-                    .entry(entry.path.parent().unwrap_or(Path::new("")))
-                    .or_insert_with(|| Arc::new(OnceLock::new()));
-                to_import.push(FileTodo {
-                    path: entry.path.clone(),
-                    file_size: entry.file_size,
-                    modified_at: entry.modified_at,
-                    preview_fallback: Arc::clone(preview_fallback),
-                });
+                candidates.push((key, entry));
             }
         }
-        let skip_check_ms = skip_start.elapsed().as_millis();
+        // Only candidates that missed the root lookup can gain a matching fingerprint.
+        let other_roots_started = Instant::now();
+        db.extend_scan_fingerprints(&mut fingerprints, &missing)?;
+        let other_roots_ms = other_roots_started.elapsed().as_millis();
+        fingerprint_ms += other_roots_ms;
+        report.timing.fingerprint_ms += fingerprint_ms;
+        for (key, entry) in candidates {
+            if !missing.is_empty()
+                && fingerprints.get(key).is_some_and(|fp| unchanged_file(fp, entry))
+            {
+                unchanged_count = unchanged_count.saturating_add(1);
+                continue;
+            }
+            let preview_fallback = preview_fallbacks
+                .entry(entry.path.parent().unwrap_or(Path::new("")))
+                .or_insert_with(|| Arc::new(OnceLock::new()));
+            to_import.push(FileTodo {
+                path: entry.path.clone(),
+                file_size: entry.file_size,
+                modified_at: entry.modified_at,
+                preview_fallback: Arc::clone(preview_fallback),
+            });
+        }
+        report.summary.skipped = report.summary.skipped.saturating_add(unchanged_count);
+        let skip_check_ms = skip_start.elapsed().as_millis().saturating_sub(other_roots_ms);
         report.timing.skip_check_ms += skip_check_ms;
         progress_done = progress_done.saturating_add(unchanged_count).min(files_total);
         on_progress(ScanProgress { done: progress_done, total: files_total });
@@ -262,17 +295,22 @@ pub fn scan_song_roots_with_progress(
         let mut failed_archives = std::collections::HashSet::new();
         for (container, (generation, archive_entries)) in archives {
             let count = usize_to_u32(archive_entries.len());
-            match super::archive::import_archive(
-                db,
-                &container,
-                root.root_id,
-                scanned_at,
-                force,
-                &fingerprints,
-                &archive_entries,
-                generation,
-                (encoding_revision, cache_for_import),
-            ) {
+            // A pause rolls the archive's transaction back; it is imported again after.
+            let imported = pause.retry_archive(|control| {
+                super::archive::import_archive(
+                    db,
+                    &container,
+                    root.root_id,
+                    scanned_at,
+                    force,
+                    &fingerprints,
+                    &archive_entries,
+                    generation,
+                    control,
+                    (encoding_revision, cache_for_import),
+                )
+            });
+            match imported {
                 Ok(archive) => {
                     report.summary.imported += archive.summary.imported;
                     report.summary.skipped += archive.summary.skipped;
@@ -325,55 +363,78 @@ pub fn scan_song_roots_with_progress(
         let parse_ms = std::thread::scope(|scope| -> Result<u128> {
             let to_import = &to_import;
             let cache_for_import = &cache_for_import;
+            let import_one = move |todo: &FileTodo| {
+                if todo.file_size >= 1024 * 1024 {
+                    tracing::debug!(path = %todo.path.display(), file_size = todo.file_size, "reading large chart");
+                }
+                let started = Instant::now();
+                let bytes = bmz_song_resource::read_file(&todo.path);
+                let read_time = started.elapsed();
+                let mut work = ImportWork::default();
+                let result = match bytes {
+                    Ok(bytes) => {
+                        cache_for_import().import(&todo.path, &bytes, &mut work).map(|chart| {
+                            let preview = crate::chart_asset::normalize_preview_file_with_fallback(
+                                &todo.path,
+                                chart.prepared.declared_preview_file(),
+                                &todo.preview_fallback,
+                            );
+                            (chart, preview)
+                        })
+                    }
+                    Err(source) => Err(ScanImportError::Chart(ImportError::Io {
+                        path: todo.path.clone(),
+                        source,
+                    })),
+                };
+                let elapsed = started.elapsed();
+                if elapsed >= Duration::from_millis(500) {
+                    tracing::info!(
+                        path = %todo.path.display(),
+                        elapsed_ms = elapsed.as_millis(),
+                        read_ms = read_time.as_millis(),
+                        parse_ms = work.parse.as_millis(),
+                        analysis_ms = work.analysis.as_millis(),
+                        encode_ms = work.encode.as_millis(),
+                        "slow chart import"
+                    );
+                }
+                ParsedFile {
+                    path: todo.path.clone(),
+                    file_size: todo.file_size,
+                    modified_at: todo.modified_at,
+                    result,
+                    work,
+                }
+            };
             let parser = scope.spawn(move || {
                 let parse_start = std::time::Instant::now();
-                // A closed receiver means the writer failed; stop parsing.
-                let _ = to_import.par_iter().try_for_each_with(parsed_tx, |tx, todo| {
-                    if todo.file_size >= 1024 * 1024 {
-                        tracing::debug!(path = %todo.path.display(), file_size = todo.file_size, "reading large chart");
+                // A pause hands charts not yet read back to this thread, which waits
+                // here instead of blocking rayon workers. Only charts in progress finish.
+                let mut pending: Vec<&FileTodo> = to_import.iter().collect();
+                while !pending.is_empty() {
+                    let deferred = std::sync::Mutex::new(Vec::new());
+                    // A closed receiver means the writer failed; stop parsing.
+                    let sent =
+                        pending.par_iter().try_for_each_with(parsed_tx.clone(), |tx, &todo| {
+                            if pause.is_paused() {
+                                deferred
+                                    .lock()
+                                    .unwrap_or_else(|error| error.into_inner())
+                                    .push(todo);
+                                return Ok(());
+                            }
+                            tx.send(import_one(todo)).map_err(drop)
+                        });
+                    pending = deferred.into_inner().unwrap_or_else(|error| error.into_inner());
+                    if sent.is_err() {
+                        break;
                     }
-                    let started = Instant::now();
-                    let bytes = bmz_song_resource::read_file(&todo.path);
-                    let read_time = started.elapsed();
-                    let mut work = ImportWork::default();
-                    let result = match bytes {
-                        Ok(bytes) => cache_for_import()
-                            .import(&todo.path, &bytes, &mut work)
-                            .map(|chart| {
-                                let preview =
-                                    crate::chart_asset::normalize_preview_file_with_fallback(
-                                        &todo.path,
-                                        chart.prepared.declared_preview_file(),
-                                        &todo.preview_fallback,
-                                    );
-                                (chart, preview)
-                            }),
-                        Err(source) => Err(ScanImportError::Chart(ImportError::Io {
-                            path: todo.path.clone(),
-                            source,
-                        })),
-                    };
-                    let elapsed = started.elapsed();
-                    if elapsed >= Duration::from_millis(500) {
-                        tracing::info!(
-                            path = %todo.path.display(),
-                            elapsed_ms = elapsed.as_millis(),
-                            read_ms = read_time.as_millis(),
-                            parse_ms = work.parse.as_millis(),
-                            analysis_ms = work.analysis.as_millis(),
-                            encode_ms = work.encode.as_millis(),
-                            "slow chart import"
-                        );
+                    if !pending.is_empty() {
+                        pause.wait();
                     }
-                    tx.send(ParsedFile {
-                        path: todo.path.clone(),
-                        file_size: todo.file_size,
-                        modified_at: todo.modified_at,
-                        result,
-                        work,
-                    })
-                    .map_err(drop)
-                });
+                }
+                drop(parsed_tx);
                 parse_start.elapsed().as_millis()
             });
             // Owned here, so an early return drops it and stops the parser.
@@ -407,6 +468,8 @@ pub fn scan_song_roots_with_progress(
                     );
                 }
 
+                // Never hold the write transaction through a pause.
+                pause.wait();
                 // 1トランザクションでバッチ書き込み
                 let mut batch_reused = 0;
                 for file in &parsed {
@@ -524,13 +587,17 @@ pub fn scan_song_roots_with_progress(
         report.timing.parse_ms += parse_ms;
         // Discovery already enumerated every song directory. Persist the shared
         // folder flag even when every chart was skipped as unchanged.
-        folder_document_flags.retain(|(folder, _)| {
-            !matches!(crate::chart_source::ChartLocator::parse(folder),
-                Ok(crate::chart_source::ChartLocator::Archive { container, .. })
-                if failed_archives.contains(&container))
-        });
+        if !failed_archives.is_empty() {
+            folder_document_flags.retain(|(folder, _)| {
+                !matches!(crate::chart_source::ChartLocator::parse(folder),
+                    Ok(crate::chart_source::ChartLocator::Archive { container, .. })
+                    if failed_archives.contains(&container))
+            });
+        }
+        pause.wait();
         let folder_flags_start = Instant::now();
-        db.update_folder_document_flags(&folder_document_flags)?;
+        report.summary.document_flags_updated +=
+            db.update_folder_document_flags(&folder_document_flags)?;
         report.timing.folder_flags_ms += folder_flags_start.elapsed().as_millis();
 
         tracing::info!(
@@ -575,6 +642,7 @@ pub fn scan_song_roots_with_progress(
     let prune_start = Instant::now();
     let mut validated = Vec::new();
     for (root_path, root_id, recursive, backend, archives) in pending_prune {
+        pause.wait();
         let mut valid = true;
         for archive in archives {
             // An unchanged metadata stamp keeps the discovered generation; only an
@@ -616,7 +684,11 @@ pub fn scan_song_roots_with_progress(
         validated.push((root_path, root_id, recursive, backend));
     }
     if !validated.is_empty() {
-        let mut index = db.chart_paths_not_discovered(&discovered_any)?;
+        let only_root = match validated.as_slice() {
+            [(path, ..)] => Some(path.as_path()),
+            _ => None,
+        };
+        let mut index = db.chart_paths_not_discovered(&discovered_any, only_root)?;
         for (root_path, root_id, recursive, backend) in validated {
             let request = crate::storage::library_db::PruneRequest {
                 root: &root_path,
@@ -625,6 +697,7 @@ pub fn scan_song_roots_with_progress(
                 omission_proves_absence: backend != ScanDiscoveryBackend::Everything,
                 protected_roots: &protected_roots,
             };
+            pause.wait();
             report.summary.removed_files += db.prune_missing_chart_files(&mut index, &request)?;
             db.update_root_scanned_at(root_id, scanned_at)?;
         }
@@ -636,6 +709,15 @@ pub fn scan_song_roots_with_progress(
     on_progress(ScanProgress { done: files_total, total: files_total });
     report.timing.total_ms = total_start.elapsed().as_millis();
     Ok(report)
+}
+
+fn unchanged_file(
+    fp: &crate::storage::library_db::ChartFileFingerprint,
+    entry: &ChartFileEntry,
+) -> bool {
+    fp.file_size == entry.file_size
+        && fp.modified_at == entry.modified_at
+        && fp.import_version == CHART_IMPORT_VERSION
 }
 
 /// The importer version to record for a failure. Bytes that failed to parse fail the

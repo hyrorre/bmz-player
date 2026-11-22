@@ -1,6 +1,6 @@
 use super::content_cache::{ChartContentCache, ImportWork, ScanImportError};
 use super::*;
-use crate::chart_source::{ChartLocator, archive_preview_file};
+use crate::chart_source::{ArchivePreviewFiles, ChartLocator};
 use crate::song_archive::{self, ArchiveControl};
 use crate::storage::library_db::{ChartImportSource, encoding_revision_matches};
 use rusqlite::OptionalExtension;
@@ -15,16 +15,16 @@ pub(super) fn import_archive<'a>(
     fingerprints: &HashMap<String, super::super::library_db::ChartFileFingerprint>,
     entries: &[&str],
     expected: &song_archive::ArchiveGeneration,
+    control: &ArchiveControl,
     (encoding_revision, cache): (i64, impl FnOnce() -> &'a ChartContentCache),
 ) -> Result<ScanReport> {
-    let control = ArchiveControl::default();
     // Discovery already listed the archive. Its metadata stamp still mapping to the same
     // generation shows it is unchanged without reading the index again (the index cache
     // holds only a few archives); an unknown stamp falls back to inspecting it.
     let record = song_archive::generation_record(container);
     let current = match &record {
         Some(record) => record.generation.clone(),
-        None => song_archive::inspect(container, &control)?.generation,
+        None => song_archive::inspect(container, control)?.generation,
     };
     anyhow::ensure!(current == *expected, "archive changed after discovery");
     if let Some(record) = record.or_else(|| song_archive::generation_record(container)) {
@@ -59,7 +59,7 @@ pub(super) fn import_archive<'a>(
     }
     let allowed: HashSet<&str> = entries.iter().copied().collect();
     // Importing needs the entry list for preview lookup; it also rechecks the generation.
-    let index = song_archive::inspect(container, &control)?;
+    let index = song_archive::inspect(container, control)?;
     anyhow::ensure!(index.generation == *expected, "archive changed after discovery");
     let modified_at = std::fs::metadata(container)?
         .modified()?
@@ -68,8 +68,9 @@ pub(super) fn import_archive<'a>(
         .unwrap_or(0);
     let started = Instant::now();
     let cache = cache();
+    let previews = ArchivePreviewFiles::new(&index);
     let tx = db.conn_mut().transaction()?;
-    let scanned = song_archive::scan_charts(container, &control, |entry, bytes| {
+    let scanned = song_archive::scan_charts(container, control, |entry, bytes| {
         let path =
             ChartLocator::Archive { container: container.to_path_buf(), entry: entry.name.clone() }
                 .to_path_buf();
@@ -80,11 +81,8 @@ pub(super) fn import_archive<'a>(
         let result = cache.import(&path, bytes, &mut work);
         match result {
             Ok(chart) => {
-                let preview_file = archive_preview_file(
-                    &index,
-                    &entry.name,
-                    chart.prepared.declared_preview_file(),
-                );
+                let preview_file =
+                    previews.resolve(&entry.name, chart.prepared.declared_preview_file());
                 let record = ChartImportSource {
                     root_id: Some(root_id),
                     file_path: &path,

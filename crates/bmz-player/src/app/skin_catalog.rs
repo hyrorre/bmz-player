@@ -1,10 +1,11 @@
 use super::*;
 use rayon::prelude::*;
 
-/// The skin list, scanned off the window thread. Startup does not wait for it; the settings
-/// UI and LR2 skin switching join the scan when they first need the list.
+/// Start scanning after first present. An earlier settings or LR2 request starts
+/// the worker on demand and joins it before reading the list.
 pub(super) struct SkinCatalogState {
     ready: OnceLock<SkinCatalog>,
+    start: Option<mpsc::SyncSender<()>>,
     worker: std::sync::Mutex<Option<thread::JoinHandle<(SkinCatalog, u128)>>>,
 }
 
@@ -12,13 +13,17 @@ impl SkinCatalogState {
     pub(super) fn ready(catalog: SkinCatalog) -> Self {
         let ready = OnceLock::new();
         let _ = ready.set(catalog);
-        Self { ready, worker: std::sync::Mutex::new(None) }
+        Self { ready, start: None, worker: std::sync::Mutex::new(None) }
     }
 
     pub(super) fn scan(app_paths: crate::paths::AppPaths) -> Result<Self> {
+        let (start, wait) = mpsc::sync_channel(1);
         let worker = thread::Builder::new()
             .name("skin-catalog".into())
             .spawn(move || {
+                if wait.recv().is_err() {
+                    return (SkinCatalog::default(), 0);
+                }
                 let started_at = Instant::now();
                 let catalog = scan_skin_catalog(&app_paths);
                 let catalog_ms = started_at.elapsed().as_millis();
@@ -26,11 +31,22 @@ impl SkinCatalogState {
                 (catalog, catalog_ms)
             })
             .context("failed to spawn skin catalog worker")?;
-        Ok(Self { ready: OnceLock::new(), worker: std::sync::Mutex::new(Some(worker)) })
+        Ok(Self {
+            ready: OnceLock::new(),
+            start: Some(start),
+            worker: std::sync::Mutex::new(Some(worker)),
+        })
+    }
+
+    pub(super) fn start(&self) {
+        if let Some(start) = &self.start {
+            let _ = start.try_send(());
+        }
     }
 
     pub(super) fn get(&self) -> &SkinCatalog {
         self.ready.get_or_init(|| {
+            self.start();
             let started_at = Instant::now();
             let worker = self.worker.lock().unwrap_or_else(|e| e.into_inner()).take();
             let (catalog, catalog_ms) = match worker.map(thread::JoinHandle::join) {
@@ -135,7 +151,10 @@ pub(super) fn collect_skin_candidate_files(
     scan: &mut crate::directory_scan::DirectoryScan,
     depth: usize,
 ) {
-    let Some(entries) = scan.read_dir_once(dir, depth) else {
+    let Some(entries) = scan.read_dir_matching(dir, depth, |name| {
+        is_skin_candidate_file(name)
+            || name.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
+    }) else {
         return;
     };
     // A Qwilight play skin reads its images from a ZIP next to the YAML. Other
@@ -209,16 +228,10 @@ pub(super) fn is_skin_candidate_file(path: &Path) -> bool {
 #[cfg(test)]
 pub(super) fn load_skin_header_document(path: &Path) -> Option<SkinDocument> {
     let context = bmz_skin::SkinPathContext::for_entry(path).ok()?;
-    load_skin_header_document_with_library_roots(path, &context.policy().root_paths())
+    read_skin_header_document_with_context(&context).ok()
 }
 
-pub(super) fn load_skin_header_document_with_library_roots(
-    path: &Path,
-    library_roots: &[PathBuf],
-) -> Option<SkinDocument> {
-    read_skin_header_document(path, library_roots).ok()
-}
-
+#[cfg(test)]
 pub(super) fn read_skin_header_document(
     path: &Path,
     library_roots: &[PathBuf],
@@ -284,7 +297,7 @@ pub(super) fn load_skin_candidate_with_library_roots(
         let info = bmz_skin::load_lr2_csv_skin_info_with_context(&context).ok()?;
         (info.skin_type, info.name)
     } else {
-        let document = load_skin_header_document_with_library_roots(path, library_roots)?;
+        let document = read_skin_header_document_with_context(&context).ok()?;
         (document.skin_type, document.name)
     };
     let relative = path.strip_prefix(root).unwrap_or(path);

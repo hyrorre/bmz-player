@@ -115,6 +115,12 @@ fn song_root_path_contains_file(root_path: &str, recursive: bool, path: &str) ->
 /// The spelling [`RootScope`] compares: the archive container for a virtual entry,
 /// normalized, and case-folded on Windows. Compute it once per registered path.
 pub(crate) fn scope_key(path: &str) -> String {
+    if !path.contains(['!', '\\']) && !path.starts_with("//?/") {
+        #[cfg(windows)]
+        return path.to_lowercase();
+        #[cfg(not(windows))]
+        return path.to_owned();
+    }
     let path = crate::chart_source::ChartLocator::parse(Path::new(path))
         .map(|locator| normalize_library_path(&locator.container_path().to_string_lossy()))
         .unwrap_or_else(|_| normalize_library_path(path));
@@ -254,12 +260,6 @@ impl LibraryDatabase {
         let configured = previous.retained_roots(roots);
         store_scope_roots(&tx, &configured)?;
         let scope = SongRootScope { roots: Some(configured) };
-        let candidates = {
-            let mut stmt =
-                tx.prepare("SELECT id, path FROM chart_files WHERE root_id IS NOT NULL")?;
-            stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
-                .collect::<rusqlite::Result<Vec<_>>>()?
-        };
         // Same membership as `scope.contains_file`, with each root normalized once.
         let scopes: Vec<RootScope> = scope
             .roots
@@ -274,14 +274,18 @@ impl LibraryDatabase {
                 std::iter::once(RootScope::of(&root.entry)).chain(canonical)
             })
             .collect();
-        let removed: Vec<i64> = candidates
-            .into_iter()
-            .filter(|(_, path)| {
-                let key = scope_key(path);
-                !scopes.iter().any(|scope| scope.contains_key(&key))
-            })
-            .map(|(id, _)| id)
-            .collect();
+        let mut removed = Vec::new();
+        {
+            let mut stmt =
+                tx.prepare("SELECT id, path FROM chart_files WHERE root_id IS NOT NULL")?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                let key = scope_key(row.get_ref(1)?.as_str()?);
+                if !scopes.iter().any(|scope| scope.contains_key(&key)) {
+                    removed.push(row.get(0)?);
+                }
+            }
+        }
         super::database_write::delete_chart_files(&tx, &removed)?;
         tx.execute("DELETE FROM roots WHERE NOT EXISTS (SELECT 1 FROM chart_files WHERE root_id = roots.id)", [])?;
         tx.commit()?;
@@ -334,6 +338,9 @@ mod tests {
         assert!(!song_root_contains_file(&root, "C:/BMS/"));
         root.recursive = true;
         assert!(song_root_contains_file(&root, r"\\?\C:\BMS\sub\song.bms"));
+        assert!(song_root_contains_file(&root, "C:/BMS/曲.TAR.GZ!/song/a.bms"));
+        assert!(!song_root_contains_file(&root, "C:/other/曲.ZIP!/C:/BMS/a.bms"));
+        assert!(song_root_contains_file(&root, "C:/BMS/non!archive/song.bms"));
         #[cfg(windows)]
         assert!(song_root_contains_file(&root, "c:/bms/sub/song.bms"));
     }

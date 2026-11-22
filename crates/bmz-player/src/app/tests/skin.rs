@@ -651,7 +651,10 @@ fn skin_catalog_refresh_finds_restored_skin_and_reports_invalid_headers() {
     assert!(read_skin_header_document(&path, &paths.skin_library_roots()).is_err());
     std::fs::write(&path, r#"{"type":5,"name":"Restored"}"#).unwrap();
     assert!(read_skin_header_document(&path, &paths.skin_library_roots()).is_ok());
-    let catalog = scan_skin_catalog(&paths);
+    // Settings can be opened before the first present releases the worker.
+    let state = SkinCatalogState::scan(paths.clone()).unwrap();
+    let catalog = state.get();
+    state.start();
     assert_eq!(catalog.select.len(), 1);
     assert_eq!(catalog.select[0].path, "data:skins/restored.json");
     assert_eq!(catalog.select[0].origin, SkinCandidateOrigin::User);

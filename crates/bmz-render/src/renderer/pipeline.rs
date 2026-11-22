@@ -210,31 +210,15 @@ pub(super) fn write_rgba_texture(
 pub(super) fn create_image_pipeline(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
-    bind_group_layout: &wgpu::BindGroupLayout,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
     blend_mode: BlendMode,
 ) -> wgpu::RenderPipeline {
-    let inverted_source;
-    let shader_source = match blend_mode {
-        BlendMode::InvertRgb => {
-            inverted_source = IMAGE_SHADER.replace(
-                "return textureSample(image_texture, image_sampler, input.uv) * input.tint;",
-                "let pixel = textureSample(image_texture, image_sampler, input.uv);\n    return vec4<f32>(vec3<f32>(1.0) - pixel.rgb, pixel.a) * input.tint;",
-            );
-            inverted_source.as_str()
-        }
-        BlendMode::LayerMask => IMAGE_SHADER_LAYER,
-        BlendMode::Normal
-        | BlendMode::Add
-        | BlendMode::Subtract
-        | BlendMode::Multiply
-        | BlendMode::InvertDestination
-        | BlendMode::Premultiplied
-        | BlendMode::Composite(_) => IMAGE_SHADER,
+    let fragment_entry = match blend_mode {
+        BlendMode::Composite(_) => "fs_composite",
+        BlendMode::InvertRgb => "fs_invert",
+        _ => "fs_main",
     };
-    // Porter-Duff factors expect premultiplied color; straight-alpha skins are
-    // converted in the fragment shader rather than by the blend state.
-    let fragment_entry =
-        if matches!(blend_mode, BlendMode::Composite(_)) { "fs_composite" } else { "fs_main" };
     let label = match blend_mode {
         BlendMode::Normal => "bmz-render image pipeline",
         BlendMode::InvertRgb => "bmz-render inverted RGB image pipeline",
@@ -249,54 +233,46 @@ pub(super) fn create_image_pipeline(
     create_image_quad_pipeline(
         device,
         format,
-        bind_group_layout,
-        shader_source,
+        layout,
+        shader,
         fragment_entry,
         label,
         Some(image_blend_state(blend_mode)),
     )
 }
 
-pub(super) fn create_upscale_pipeline(
+pub(super) fn image_quad_shader(device: &wgpu::Device, source: &str) -> wgpu::ShaderModule {
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("bmz-render image shader"),
+        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(source)),
+    })
+}
+
+pub(super) fn image_quad_layout(
     device: &wgpu::Device,
-    format: wgpu::TextureFormat,
-    bind_group_layout: &wgpu::BindGroupLayout,
-) -> wgpu::RenderPipeline {
-    create_image_quad_pipeline(
-        device,
-        format,
-        bind_group_layout,
-        IMAGE_SHADER,
-        "fs_main",
-        "bmz-render internal upscale pipeline",
-        None,
-    )
+    bindings: &wgpu::BindGroupLayout,
+) -> wgpu::PipelineLayout {
+    device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("bmz-render image pipeline layout"),
+        bind_group_layouts: &[Some(bindings)],
+        immediate_size: 0,
+    })
 }
 
 pub(super) fn create_image_quad_pipeline(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
-    bind_group_layout: &wgpu::BindGroupLayout,
-    shader_source: &str,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
     fragment_entry: &'static str,
     label: &'static str,
     blend: Option<wgpu::BlendState>,
 ) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("bmz-render image shader"),
-        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader_source)),
-    });
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("bmz-render image pipeline layout"),
-        bind_group_layouts: &[Some(bind_group_layout)],
-        immediate_size: 0,
-    });
-
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
-        layout: Some(&layout),
+        layout: Some(layout),
         vertex: wgpu::VertexState {
-            module: &shader,
+            module: shader,
             entry_point: Some("vs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             buffers: &[wgpu::VertexBufferLayout {
@@ -332,7 +308,7 @@ pub(super) fn create_image_quad_pipeline(
             }],
         },
         fragment: Some(wgpu::FragmentState {
-            module: &shader,
+            module: shader,
             entry_point: Some(fragment_entry),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
@@ -646,6 +622,12 @@ fn vs_main(
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     return textureSample(image_texture, image_sampler, input.uv) * input.tint;
+}
+
+@fragment
+fn fs_invert(input: VertexOutput) -> @location(0) vec4<f32> {
+    let pixel = textureSample(image_texture, image_sampler, input.uv);
+    return vec4<f32>(vec3<f32>(1.0) - pixel.rgb, pixel.a) * input.tint;
 }
 
 // CanvasComposite pipelines blend premultiplied color.

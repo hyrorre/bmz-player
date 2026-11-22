@@ -12,7 +12,7 @@ use crate::paths::{AppPaths, normalize_library_path, resolve_app_paths};
 use crate::storage::library_db::LibraryDatabase;
 use crate::storage::migration::migrate_library_db;
 use crate::storage::scan::{
-    ScanProgress, ScanReport, scan_song_roots, scan_song_roots_with_progress,
+    ScanPause, ScanProgress, ScanReport, scan_song_roots, scan_song_roots_with_pause,
 };
 
 pub fn run_songs_command(cmd: SongsCommand) -> Result<()> {
@@ -210,15 +210,17 @@ pub fn scan_songs(
     scan_song_roots(db, roots, scan, scanned_at, force)
 }
 
-pub fn scan_songs_with_progress(
+/// `pause` can hold the scan between write transactions; see [`ScanPause`].
+pub fn scan_songs_with_pause(
     db: &mut LibraryDatabase,
     roots: &[PathEntry],
     scan: &crate::config::app_config::ScanConfig,
     scanned_at: i64,
     force: bool,
+    pause: &ScanPause,
     on_progress: impl FnMut(ScanProgress),
 ) -> Result<ScanReport> {
-    scan_song_roots_with_progress(db, roots, scan, scanned_at, force, on_progress)
+    scan_song_roots_with_pause(db, roots, scan, scanned_at, force, pause, on_progress)
 }
 
 fn looks_like_path(s: &str) -> bool {
