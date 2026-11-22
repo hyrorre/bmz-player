@@ -33,7 +33,7 @@ bmz-player "chart.bms" --gauge hard --print-effective-options
 | 画面設定 | 適用 | 適用 | 維持 |
 | プレイ設定 | 警告して無視 | 指定譜面へ適用 | 破棄してprofile値へ戻す |
 
-`--boot-play-sample`と`--boot-course`も再生対象の明示として扱います。
+`--boot-play-sample`、`--boot-course`、`--boot-replay-file`、`--boot-course-replay`も再生対象の明示として扱います。
 リトライとResultでは維持し、コースでは全ステージで維持します。Decideキャンセルやプレイ開始失敗でSelectへ戻った場合も破棄します。
 Viewerの再生要求はプレイ設定を毎回置き換えます。停止・同じ要求の再開では維持します。
 画面設定はそのプロセスで維持し、後のViewer要求で明示した画面設定だけ変更します。
@@ -56,6 +56,7 @@ Viewer IPCはv3です。更新前の常駐Viewerは終了してから新版を�
 | `--auto-scratch` | `on` / `off`です。onはスクラッチレーンを自動演奏し、スコア・リプレイ保存を無効化 |
 | `--bga` | `on` / `auto` / `off` |
 | `--guide-se` | `on` / `off` |
+| `--show-invisible-notes` | `on` / `off`。その再生だけ不可視ノーツの枠を表示・非表示にします。未指定時はプロファイルの「不可視ノーツ表示」に従います。Viewer・リプレイ・動画出力でも使えます。 |
 | `--seed` | 符号なし64bit整数です。P1は下位24bit、P2は次の24bit、BMS分岐seedは指定値 |
 
 P1配置はP2にコピーしません。`-B`のG-BATTLEと`--double-option battle`は別の設定です。
