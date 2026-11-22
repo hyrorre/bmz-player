@@ -9,6 +9,19 @@ enum SongScanStart {
     Failed { error: anyhow::Error },
 }
 
+/// The startup rescan usually finds nothing. Keep the playing preview, banner
+/// caches and list position when it changed no registration Select reads.
+fn startup_scan_left_library_unchanged(
+    scope: SongScanScope,
+    summary: &crate::storage::scan::ScanSummary,
+) -> bool {
+    scope == SongScanScope::Startup
+        && summary.imported == 0
+        && summary.failed == 0
+        && summary.removed_files == 0
+        && summary.document_flags_updated == 0
+}
+
 impl SongScanRuntime {
     fn start_worker(
         &mut self,
@@ -169,8 +182,14 @@ impl WinitApp {
         {
             tracing::error!(%error, "failed to publish downloaded song roots");
         }
-        let pending =
-            PendingSongScan { finished: rx, progress, library_roots, download_ids, download_dirs };
+        let pending = PendingSongScan {
+            finished: rx,
+            progress,
+            library_roots,
+            scope,
+            download_ids,
+            download_dirs,
+        };
         let started = self.jobs.song_scan.start_worker(
             pending,
             request,
@@ -326,12 +345,14 @@ impl WinitApp {
                             .format("toast-everything-fallback", &args),
                     );
                 }
-                self.select.select_assets.invalidate_library();
-                self.invalidate_select_folder_summaries();
-                if pending.download_ids.is_empty() {
-                    self.reload_select_items();
-                } else {
-                    self.change_select_list(SelectListAction::RefreshDownloads);
+                if !startup_scan_left_library_unchanged(pending.scope, &report.summary) {
+                    self.select.select_assets.invalidate_library();
+                    self.invalidate_select_folder_summaries();
+                    if pending.download_ids.is_empty() {
+                        self.reload_select_items();
+                    } else {
+                        self.change_select_list(SelectListAction::RefreshDownloads);
+                    }
                 }
                 let mut download_failed = false;
                 for mut registration in result.downloaded {
@@ -423,12 +444,31 @@ mod tests {
         id
     }
 
+    #[test]
+    fn only_an_unchanged_startup_rescan_keeps_select_assets() {
+        use crate::storage::scan::ScanSummary;
+        let unchanged = ScanSummary { skipped: 3, ..Default::default() };
+        assert!(startup_scan_left_library_unchanged(SongScanScope::Startup, &unchanged));
+        for scope in [SongScanScope::Paths, SongScanScope::Library] {
+            assert!(!startup_scan_left_library_unchanged(scope, &unchanged));
+        }
+        for changed in [
+            ScanSummary { imported: 1, ..Default::default() },
+            ScanSummary { failed: 1, ..Default::default() },
+            ScanSummary { removed_files: 1, ..Default::default() },
+            ScanSummary { document_flags_updated: 1, ..Default::default() },
+        ] {
+            assert!(!startup_scan_left_library_unchanged(SongScanScope::Startup, &changed));
+        }
+    }
+
     fn pending(download_ids: Vec<u64>) -> PendingSongScan {
         let (_, finished) = mpsc::channel();
         PendingSongScan {
             finished,
             progress: Arc::new(AtomicU64::new(pack_scan_progress(ScanProgress::default()))),
             library_roots: None,
+            scope: SongScanScope::Paths,
             download_ids,
             download_dirs: Vec::new(),
         }

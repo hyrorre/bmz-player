@@ -34,6 +34,8 @@ pub struct ScanSummary {
     /// being decoded. Their previous registrations stay as they were.
     pub deferred: u32,
     pub removed_files: usize,
+    /// Chart rows whose shared folder document flag changed.
+    pub document_flags_updated: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -624,6 +626,29 @@ mod tests {
         assert_eq!(report.summary.files_seen, 2);
         assert_eq!(report.summary.imported, 1);
         assert_eq!(report.summary.failed, 1);
+    }
+
+    #[test]
+    fn scan_song_roots_counts_only_changed_document_flags() {
+        let root = make_temp_dir("scan-document-flags");
+        write_file(&root.join("a.bms"), "#TITLE A\n#BPM 120\n#00111:01\n");
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let roots = vec![PathEntry {
+            path: root.to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+
+        scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_060, false).unwrap();
+        let unchanged =
+            scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_061, false).unwrap();
+        assert_eq!((unchanged.summary.skipped, unchanged.summary.document_flags_updated), (1, 0));
+        write_file(&root.join("readme.txt"), "document");
+        let added = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_062, false).unwrap();
+        assert_eq!((added.summary.skipped, added.summary.document_flags_updated), (1, 1));
     }
 
     #[test]

@@ -548,7 +548,8 @@ pub fn scan_song_roots_with_progress(
             });
         }
         let folder_flags_start = Instant::now();
-        db.update_folder_document_flags(&folder_document_flags)?;
+        report.summary.document_flags_updated +=
+            db.update_folder_document_flags(&folder_document_flags)?;
         report.timing.folder_flags_ms += folder_flags_start.elapsed().as_millis();
 
         tracing::info!(

@@ -15,6 +15,7 @@ pub(super) struct PendingSongScan {
     pub(super) finished: Receiver<Result<SongScanResult>>,
     pub(super) progress: Arc<AtomicU64>,
     pub(super) library_roots: Option<Vec<PathEntry>>,
+    pub(super) scope: SongScanScope,
     pub(super) download_ids: Vec<u64>,
     pub(super) download_dirs: Vec<PathBuf>,
 }
