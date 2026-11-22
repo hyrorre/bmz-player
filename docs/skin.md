@@ -2081,16 +2081,20 @@ BMZ default JSONでは、digit atlasを同梱せずに既存フォントで数�
 `judgeTimingColor`, `prefix`, `suffix`を使えます。
 `numberRef`は既存の`value.ref`と同じ`SkinDrawState` number refを文字列化し、
 未取得時は空文字として扱います。外部beatoraja JSON skinの`value` sprite表示には影響しません。
-`numberRef`にはLuaとJSONの両方で`digit`、`zeropadding`、その別名の`padding`を指定できます。
+`numberRef`にはLuaとJSONの両方で`showPlus`、`digit`、`zeropadding`、その別名の`padding`を指定できます。
+`showPlus`の既定値は`false`です。`true`にすると正数とゼロに`+`が付き、負数には常に`-`が付きます。
 `digit`は符号を含む最小文字数です。幅は0〜64に収め、指定幅を超える数値は全桁を表示します。
 `zeropadding`の既定値は`0`で、埋め文字を付けません。`1`ならゼロ、`2`なら半角空白で左側を埋めます。
 両方のフィールドを指定した場合、数値スプライトと同じく`2`が優先されます。
-負数のゼロ埋めは符号の後ろに入り、`digit = 3, zeropadding = 1`の`-7`は`-07`になります。
+ゼロ埋めは符号の後ろに入ります。`showPlus = true, digit = 3, zeropadding = 1`では
+`7`は`+07`、`0`は`+00`、`-7`は`-07`になります。空白埋めは符号を含む数値の左に入ります。
 `prefix`と`suffix`は整形した数値の前後に付きます。欠損値はパディングを指定しても空文字です。
 
 ```lua
 { id = "dur_sec", font = 1, size = 38, align = 2,
   numberRef = 1164, digit = 2, zeropadding = 1 },
+{ id = "target_diff", font = 1, size = 38, align = 2,
+  numberRef = 153, showPlus = true },
 ```
 
 Lua skinの`text`で`value = function() return main_state.number(id) end`のように
@@ -2108,15 +2112,18 @@ beatoraja互換のターゲット数値とグラフは、最終値と進行値�
 | 種類 | ID | 値 |
 | --- | --- | --- |
 | 数値 | `121` / `151` | 曲全体の最終ターゲットEX SCORE |
-| 数値 | `153` | 現在EX SCORE − 現在のノート位置に対応するターゲット |
+| 数値 | `108` / `128` / `153` | 現在EX SCORE − 現在のノート位置に対応するターゲット |
 | グラフ | `114` | 現在のノート位置に対応するターゲット / 曲全体の最大EX SCORE |
 | グラフ | `115` | 最終ターゲット / 曲全体の最大EX SCORE |
 
 `121` / `151`は`value.ref`、`text.numberRef`、Luaの`main_state.number()`で同じ値を参照します。
 ノート進行では変化しないが、IR取得等でターゲット自体が更新されれば新しい値を返します。
 0点は有効な値です。未設定時は数値画像を非表示、`text.numberRef`を空文字、Luaを`0`とします。
+`108` / `128` / `153`もターゲット未設定時は同じ扱いです。
 総ノーツ0でも設定済みの最終ターゲットを返します。デフォルトスキンのTARGET表示は`numberRef: 121`を使います。
 LR2 CSVのPlay ref `120..136`は読込時に2P専用内部refへ変換されるため、その`121`は2Pの現在EX SCOREを維持します。
+LR2 CSVのPlayでは`108`は1P−2P、`128`は2P−1PのEX SCORE差を返し、
+シングルプレイの2Pにはターゲットゴーストを使います。
 
 ### BMZ Arrange Refs
 

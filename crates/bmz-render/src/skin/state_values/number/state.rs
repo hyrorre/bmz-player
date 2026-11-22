@@ -491,8 +491,8 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         152 | 172 => {
             projected_best_score_at_progress(state).map(|best| state.ex_score as i64 - best as i64)
         }
-        // NUMBER_DIFF_TARGETSCORE=153 (符号付き、ex_score - 現在ノート位置までのtarget)
-        153 => state.target_ex_score.map(|target| {
+        // NUMBER_DIFF_EXSCORE / NUMBER_DIFF_EXSCORE2 / NUMBER_DIFF_TARGETSCORE.
+        108 | 128 | 153 => state.target_ex_score.map(|target| {
             state.ex_score as i64 - projected_score_at_progress(target, state) as i64
         }),
         // NUMBER_TARGET_MAXCOMBO=173 is the old/my-best score on Result.

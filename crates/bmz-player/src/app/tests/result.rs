@@ -615,7 +615,10 @@ fn result_lua_runtime_values_cover_load_time_result_decisions() {
     assert_eq!(values.get(&121), Some(&1_056));
     assert_eq!(values.get(&151), Some(&1_056));
     assert_eq!(values.get(&152), Some(&((summary.ex_score as i32).saturating_sub(760))));
-    assert_eq!(values.get(&153), Some(&((summary.ex_score as i32).saturating_sub(1_056))));
+    let target_diff = (summary.ex_score as i32).saturating_sub(1_056);
+    for ref_id in [108, 128, 153] {
+        assert_eq!(values.get(&ref_id), Some(&target_diff), "ref={ref_id}");
+    }
     assert_eq!(values.get(&370), Some(&(ClearType::Failed as i32)));
     assert_eq!(values.get(&371), Some(&(ClearType::Normal as i32)));
     assert_eq!(values.get(&374), Some(&-12));
@@ -624,6 +627,12 @@ fn result_lua_runtime_values_cover_load_time_result_decisions() {
     assert_eq!(values.get(&422), Some(&2));
     assert_eq!(values.get(&423), Some(&46));
     assert_eq!(values.get(&424), Some(&104));
+
+    summary.target_ex_score = None;
+    let values = result_lua_runtime_number_values_for_summary(&summary);
+    for ref_id in [108, 128, 153] {
+        assert!(!values.contains_key(&ref_id), "ref={ref_id}");
+    }
 }
 
 #[test]

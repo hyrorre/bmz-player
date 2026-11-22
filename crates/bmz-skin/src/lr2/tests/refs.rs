@@ -1,5 +1,5 @@
 use super::*;
-use bmz_skin_document::{LR2_NUMBER_BASE, LR2_OPTION_BASE};
+use bmz_skin_document::{LR2_NUMBER_BASE, LR2_OPTION_BASE, SKIN_REF_BMZ_LR2_2P_BASE};
 
 #[test]
 fn lr2_bar_classification_if_conditions_are_evaluated_at_runtime() {
@@ -33,11 +33,20 @@ fn number_refs(document: &JsonValue) -> Vec<JsonValue> {
 #[test]
 fn lr2_numbers_with_other_meanings_use_the_lr2_namespace() {
     // Play: 1P score / gauge / target diff / next rank / POOR with empty POOR.
-    let play = load(0, &[100, 107, 108, 109, 114, 101, 290].map(number).concat());
+    let play = load(0, &[100, 107, 108, 109, 114, 101, 128, 290].map(number).concat());
     let lr2 = |id: i32| json!(LR2_NUMBER_BASE + id);
     assert_eq!(
         number_refs(&play),
-        vec![lr2(100), lr2(107), lr2(108), lr2(109), lr2(114), json!(101), json!(90)]
+        vec![
+            lr2(100),
+            lr2(107),
+            lr2(108),
+            lr2(109),
+            lr2(114),
+            json!(101),
+            json!(SKIN_REF_BMZ_LR2_2P_BASE + 8),
+            json!(90),
+        ]
     );
     // Select: IR rank / players / clear rate / rival diff, and the 290/291 BPM alias.
     let select = load(5, &[92, 93, 94, 95, 291, 96].map(number).concat());
@@ -46,8 +55,9 @@ fn lr2_numbers_with_other_meanings_use_the_lr2_namespace() {
         vec![lr2(92), lr2(93), lr2(94), lr2(95), json!(91), json!(96)]
     );
     // Result 1P numbers keep the flip namespace; the renderer applies LR2's definitions.
-    let result = load(7, &number(114));
-    assert_eq!(number_refs(&result), vec![json!(bmz_skin_document::LR2_RESULT_NUMBER_BASE + 14)]);
+    let result = load(7, &[108, 114, 128].map(number).concat());
+    let lr2_result = |id: i32| json!(bmz_skin_document::LR2_RESULT_NUMBER_BASE + id - 100);
+    assert_eq!(number_refs(&result), vec![lr2_result(108), lr2_result(114), lr2_result(128)]);
 }
 
 #[test]

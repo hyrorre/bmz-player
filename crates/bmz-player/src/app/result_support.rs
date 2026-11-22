@@ -192,7 +192,8 @@ pub(super) fn result_lua_runtime_number_values_for_summary(
     if let Some(target_ex_score) = summary.target_ex_score {
         number_values.insert(121, value(target_ex_score));
         number_values.insert(151, value(target_ex_score));
-        number_values.insert(153, difference(summary.ex_score, target_ex_score));
+        let target_diff = difference(summary.ex_score, target_ex_score);
+        number_values.extend([(108, target_diff), (128, target_diff), (153, target_diff)]);
     }
     number_values.insert(177, value(summary.bp));
     let counts = summary.fast_slow_counts;

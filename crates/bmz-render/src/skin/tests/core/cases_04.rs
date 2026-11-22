@@ -341,21 +341,28 @@ fn skin_state_text_formats_bmz_number_ref_extension() {
 
 #[test]
 fn number_ref_text_uses_minimum_width_and_sprite_padding_options() {
-    for (value, digit, zeropadding, padding, expected) in [
-        (7, 2, 0, 0, "7"),
-        (7, 2, 1, 0, "07"),
-        (7, 2, 0, 1, "07"),
-        (7, 2, 2, 1, " 7"),
-        (7, 2, 1, 2, " 7"),
-        (-7, 3, 1, 0, "-07"),
-        (-7, 3, 2, 0, " -7"),
-        (0, 2, 1, 0, "00"),
-        (123, 2, 1, 0, "123"),
-        (7, -2, 1, 0, "7"),
+    for (value, digit, zeropadding, padding, show_plus, expected) in [
+        (7, 2, 0, 0, false, "7"),
+        (7, 2, 1, 0, false, "07"),
+        (7, 2, 0, 1, false, "07"),
+        (7, 2, 2, 1, false, " 7"),
+        (7, 2, 1, 2, false, " 7"),
+        (-7, 3, 1, 0, false, "-07"),
+        (-7, 3, 2, 0, false, " -7"),
+        (0, 2, 1, 0, false, "00"),
+        (123, 2, 1, 0, false, "123"),
+        (7, -2, 1, 0, false, "7"),
+        (7, 3, 0, 0, true, "+7"),
+        (7, 3, 1, 0, true, "+07"),
+        (7, 3, 1, 2, true, " +7"),
+        (0, 3, 1, 0, true, "+00"),
+        (-7, 3, 1, 0, true, "-07"),
+        (-7, 3, 2, 0, true, " -7"),
+        (123, 2, 1, 0, true, "+123"),
     ] {
         let document = SkinDocument::from_json_value(&serde_json::json!({
             "text": [{ "id": "offset", "numberRef": 12, "digit": digit,
-                       "zeropadding": zeropadding, "padding": padding,
+                       "zeropadding": zeropadding, "padding": padding, "showPlus": show_plus,
                        "prefix": "[", "suffix": "]" }],
         }))
         .unwrap();
