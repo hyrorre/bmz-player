@@ -228,6 +228,16 @@ pub(super) fn uses_ordered_inputs(session: &GameSession) -> bool {
         || !session.timing_map.bpm_reflections().is_empty()
 }
 
+pub(super) fn uses_legacy_frame_clock(session: &GameSession) -> bool {
+    session.rule_mode == RuleMode::Legacy
+        && !super::conditional::uses_ordered_timeline(&session.chart)
+        && session.timing_map.bpm_reflections().is_empty()
+        && !session.judge.has_mines(&session.chart)
+        && session.chart.long_notes.iter().all(|pair| {
+            pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Ln
+        })
+}
+
 /// 採点を閉じた後の入力を、判定・リプレイ記録・ゲージへ渡さずに表示とキー音へ反映する。
 ///
 /// 自然確定後の入力は判定窓の外にあるため、通常の処理でも対象ノーツを持たない。
@@ -576,6 +586,9 @@ pub(super) fn process_timed_inputs(session: &mut GameSession, now: TimeUs) -> Ve
         inputs.extend(auto.poll_until(&session.chart, now).into_iter().map(|input| (input, false)));
     }
     inputs.sort_by_key(|(input, _)| input.time);
+    if uses_legacy_frame_clock(session) {
+        return process_legacy_timed_inputs(session, &inputs, now);
+    }
     let mut events = Vec::new();
     for group in inputs.chunk_by(|(left, _), (right, _)| left.time == right.time) {
         if session.state == PlayState::Failed || session.play_end_reached() {
@@ -627,6 +640,75 @@ pub(super) fn process_timed_inputs(session: &mut GameSession, now: TimeUs) -> Ve
             }
             session.conditional.processed_time = Some(time);
         }
+    }
+    if session.autoplay.is_some() {
+        apply_auto_key_release(session, now);
+    }
+    events
+}
+
+fn process_legacy_timed_inputs(
+    session: &mut GameSession,
+    inputs: &[(InputEvent, bool)],
+    now: TimeUs,
+) -> Vec<JudgementEvent> {
+    let previous = session.conditional.processed_time.unwrap_or(TimeUs(-1000));
+    let mut tick = (previous.0 / 1000 + 1) * 1000;
+    if previous.0 < 0 {
+        tick = 0;
+    } else if inputs.first().is_some_and(|(input, _)| input.time.0 / 1000 * 1000 <= previous.0) {
+        // A new hardware edge can arrive after an earlier update in the same
+        // integer millisecond. OpenLR2 polls it again; never drop that edge.
+        tick = previous.0;
+    }
+    let mut cursor = 0;
+    let mut events = Vec::new();
+    while tick <= now.0 && session.state == PlayState::Playing && !session.play_end_reached() {
+        let start = cursor;
+        while cursor < inputs.len() && inputs[cursor].0.time.0 / 1000 * 1000 <= tick {
+            cursor += 1;
+        }
+        let group = &inputs[start..cursor];
+        let time = TimeUs(tick);
+        super::frame::sync_judge_windows(session, time);
+        let mut combined = JudgeOutcome::default();
+        let mut human_events = Vec::new();
+        let projected: Vec<_> = group
+            .iter()
+            .map(|&(mut input, human)| {
+                if input.source == InputSource::Replay {
+                    input = project_replay_input(session, input);
+                }
+                (input, human)
+            })
+            .collect();
+        for lane in crate::judge::engine::LEGACY_LANE_ORDER {
+            let mut has_input = false;
+            for &(input, human) in projected.iter().filter(|(input, _)| input.lane == lane) {
+                has_input = true;
+                update_recent_inputs(session, &[input], now);
+                update_lane_key_states(session, &[input]);
+                let outcome = evaluate_session_input(session, input);
+                if human {
+                    human_events.extend(outcome.events.iter().cloned());
+                }
+                combined.append(outcome);
+            }
+            if !has_input {
+                combined.append(session.judge.process_legacy_idle_lane(
+                    &session.chart,
+                    lane,
+                    time,
+                    session.play_keysound_on_miss,
+                ));
+            }
+        }
+        // LR2 checks gauge failure after polling all lanes. BAD recursion is
+        // similarly part of one poll, so apply the full batch before closing.
+        events.extend(apply_judge_outcome(session, combined));
+        apply_input_offset_auto_adjust(session, &human_events);
+        session.conditional.processed_time = Some(time);
+        tick += 1000;
     }
     if session.autoplay.is_some() {
         apply_auto_key_release(session, now);

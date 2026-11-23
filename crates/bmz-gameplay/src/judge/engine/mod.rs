@@ -19,6 +19,26 @@ use chart_index::ChartIndex;
 
 const BSS_REVERSE_PRESS_SUPPRESSION_US: i64 = 30_000;
 
+/// OpenLR2 polls P1 scratch/keys, then P2 scratch/keys.
+pub const LEGACY_LANE_ORDER: [Lane; LANE_COUNT] = [
+    Lane::Scratch,
+    Lane::Key1,
+    Lane::Key2,
+    Lane::Key3,
+    Lane::Key4,
+    Lane::Key5,
+    Lane::Key6,
+    Lane::Key7,
+    Lane::Scratch2,
+    Lane::Key8,
+    Lane::Key9,
+    Lane::Key10,
+    Lane::Key11,
+    Lane::Key12,
+    Lane::Key13,
+    Lane::Key14,
+];
+
 fn press_window(window_set: JudgeWindows, scratch: bool) -> JudgeWindow {
     if scratch { window_set.scratch } else { window_set.note }
 }
@@ -210,7 +230,26 @@ impl JudgeEngine {
             InputKind::Press => {
                 self.process_press(chart, timed_input, input.time, play_miss_keysound)
             }
-            InputKind::Release => self.process_release(chart, timed_input, input.time),
+            InputKind::Release => {
+                let mut expired = JudgeOutcome::default();
+                if self.rule_mode == RuleMode::Legacy {
+                    self.settle_missed_notes_in_lane(
+                        chart,
+                        input.lane,
+                        input.time,
+                        judge_time,
+                        play_miss_keysound,
+                        true,
+                        &mut expired,
+                    );
+                }
+                if expired.events.is_empty() {
+                    self.process_release(chart, timed_input, input.time)
+                } else {
+                    expired.consumed_input = true;
+                    expired
+                }
+            }
         };
         if judge_time != input.time {
             input_outcome.stamp_judgement_time(input.time);
@@ -326,9 +365,35 @@ impl JudgeEngine {
         lane_judge_time: impl Fn(Lane) -> TimeUs,
         play_keysound: bool,
     ) -> JudgeOutcome {
+        self.process_misses_at_filtered(chart, now, lane_judge_time, play_keysound, None)
+    }
+
+    /// One idle-lane poll, as ProcNoteOnTiming does when there is no key edge.
+    pub fn process_legacy_idle_lane(
+        &mut self,
+        chart: &PlayableChart,
+        lane: Lane,
+        now: TimeUs,
+        play_keysound: bool,
+    ) -> JudgeOutcome {
+        if chart.notes_for_lane(lane).is_empty() {
+            return JudgeOutcome::default();
+        }
+        self.process_misses_at_filtered(chart, now, |_| now, play_keysound, Some(lane))
+    }
+
+    fn process_misses_at_filtered(
+        &mut self,
+        chart: &PlayableChart,
+        now: TimeUs,
+        lane_judge_time: impl Fn(Lane) -> TimeUs,
+        play_keysound: bool,
+        lane_filter: Option<Lane>,
+    ) -> JudgeOutcome {
         let mut outcome = self.advance_hln(chart, now);
 
-        for lane in Lane::ALL {
+        let lanes = lane_filter.as_ref().map_or(Lane::ALL.as_slice(), std::slice::from_ref);
+        for &lane in lanes {
             let judge_time = lane_judge_time(lane);
             self.settle_missed_notes_in_lane(
                 chart,
@@ -336,7 +401,7 @@ impl JudgeEngine {
                 now,
                 judge_time,
                 play_keysound,
-                false,
+                self.rule_mode == RuleMode::Legacy && lane_filter.is_some(),
                 &mut outcome,
             );
             let lane_state = &mut self.lanes[lane.index()];
@@ -582,37 +647,68 @@ impl JudgeEngine {
         }
 
         // A consumed tap BAD can expose another note within the same press window.
-        let windows = press_window(self.window_set, self.scratch_lane_mask[input.lane.index()]);
-        loop {
-            let consumed_tap_bad = outcome.events.last().is_some_and(|event| {
-                event.judge == Judge::Bad
-                    && event
-                        .note_id
-                        .and_then(|id| self.note_by_id(chart, id))
-                        .is_some_and(|note| note.kind == NoteKind::Tap)
-            });
-            if !consumed_tap_bad
-                || !next_unjudged_press_reference_note(
-                    chart,
-                    input.lane,
-                    self.lanes[input.lane.index()].next_note_index,
-                    &self.judged_notes,
-                )
-                .is_some_and(|(_, note)| {
-                    legacy_press_candidate(note, input.time, windows)
-                        .is_some_and(|candidate| candidate.judge != Judge::EmptyPoor)
-                })
-            {
-                break;
-            }
-            let next = self.process_press_once(chart, input, event_time);
-            let judged = !next.events.is_empty();
+        let mut recurse = outcome.events.last().is_some_and(|event| {
+            event.judge == Judge::Bad
+                && event
+                    .note_id
+                    .and_then(|id| self.note_by_id(chart, id))
+                    .is_some_and(|note| note.kind == NoteKind::Tap)
+        });
+        while recurse {
+            let next = self.process_legacy_recursive_single(chart, input, event_time);
+            recurse = next.events.last().is_some_and(|event| event.judge == Judge::Bad);
             append_outcome(&mut outcome, next);
-            if !judged {
-                break;
-            }
         }
         outcome
+    }
+
+    /// ProcSinglenote recurses directly into itself after BAD. It does not
+    /// redispatch through ProcNoteOnTiming, even when the next object is an LN.
+    fn process_legacy_recursive_single(
+        &mut self,
+        chart: &PlayableChart,
+        input: InputEvent,
+        event_time: TimeUs,
+    ) -> JudgeOutcome {
+        let state = &self.lanes[input.lane.index()];
+        let Some((index, note)) = next_unjudged_press_reference_note(
+            chart,
+            input.lane,
+            state.next_note_index,
+            &self.judged_notes,
+        ) else {
+            return JudgeOutcome::default();
+        };
+        let mut single = note.clone();
+        single.kind = NoteKind::Tap;
+        let windows = press_window(self.window_set, self.scratch_lane_mask[input.lane.index()]);
+        let Some(candidate) = legacy_press_candidate(&single, input.time, windows)
+            .filter(|candidate| candidate.judge != Judge::EmptyPoor)
+        else {
+            return JudgeOutcome::default();
+        };
+        self.judged_notes.insert(note.id, candidate.judge);
+        self.lanes[input.lane.index()].next_note_index = index + 1;
+        self.lanes[input.lane.index()].last_press_time = Some(note.time);
+        JudgeOutcome {
+            consumed_input: true,
+            events: vec![JudgementEvent {
+                note_id: Some(note.id),
+                lane: input.lane,
+                judge: candidate.judge,
+                side: side_from_delta(candidate.delta.0),
+                delta: candidate.delta,
+                time: event_time,
+                affects_score: true,
+                advances_score: true,
+            }],
+            keysounds: vec![KeySoundEvent {
+                note_id: note.id,
+                time: event_time,
+                trigger: KeySoundTrigger::NoteJudged,
+            }],
+            ..Default::default()
+        }
     }
 
     /// LEGACY の LN 始点見逃し期限と早離し許容に使う幅。それ以外のルールでは
@@ -643,6 +739,50 @@ impl JudgeEngine {
         self.lanes[input.lane.index()].scratch_press_absorbed_at = None;
 
         if let Some(mut active) = self.lanes[input.lane.index()].active_long {
+            if self.rule_mode == RuleMode::Legacy && active.mode == LongNoteMode::Ln {
+                let head_time = chart.long_notes[active.pair_index].start_time;
+                let delta = TimeUs(legacy_offset(input.time, head_time));
+                let windows =
+                    press_window(self.window_set, self.scratch_lane_mask[input.lane.index()]);
+                if let Some(grade) = classify_normal_delta(delta.0, windows) {
+                    // ProcLongnote evaluates a new key edge even while active;
+                    // it overwrites the provisional head grade, not the score.
+                    active.start_judge = grade;
+                    active.start_delta = delta;
+                    self.judged_notes.insert(active.start_note_id, grade);
+                    self.lanes[input.lane.index()].active_long = Some(active);
+                    return JudgeOutcome {
+                        consumed_input: true,
+                        events: vec![JudgementEvent {
+                            note_id: Some(active.start_note_id),
+                            lane: input.lane,
+                            judge: grade,
+                            side: side_from_delta(delta.0),
+                            delta,
+                            time: event_time,
+                            affects_score: false,
+                            advances_score: false,
+                        }],
+                        keysounds: vec![KeySoundEvent {
+                            note_id: active.start_note_id,
+                            time: event_time,
+                            trigger: KeySoundTrigger::NoteJudged,
+                        }],
+                        ..Default::default()
+                    };
+                }
+                if -delta.0 < windows.empty_poor_fast_us {
+                    return empty_poor(
+                        input.lane,
+                        TimingSide::Fast,
+                        delta,
+                        event_time,
+                        active.start_note_id,
+                        Vec::new(),
+                    );
+                }
+                return JudgeOutcome::default();
+            }
             if matches!(input.lane, Lane::Scratch | Lane::Scratch2)
                 && matches!(active.mode, LongNoteMode::Cn | LongNoteMode::Hcn)
                 && input.scratch_direction.is_some()

@@ -1,6 +1,74 @@
 use super::*;
 
 #[test]
+fn legacy_same_input_can_score_differently_when_an_idle_poll_precedes_it() {
+    let chart = chart_with_two_taps(TimeUs(1_000_100), TimeUs(1_201_100));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut fine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    let mut coarse = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    let idle = fine.process_legacy_idle_lane(&chart, Lane::Key1, TimeUs(1_201_000), false);
+    assert_eq!(idle.events[0].judge, Judge::Poor);
+    // Same chart, input, judge engine and input time; only the idle poll differs.
+    let input = press_at(TimeUs(1_202_000));
+    let fine_result = fine.process_input(&chart, input);
+    let coarse_result = coarse.process_input(&chart, input);
+    assert_eq!(fine_result.events[0].note_id, Some(NoteId(2)));
+    assert_eq!(fine_result.events[0].judge, Judge::PGreat);
+    assert_eq!(coarse_result.events[0].note_id, Some(NoteId(1)));
+    assert_eq!(coarse_result.events[0].judge, Judge::Poor);
+}
+
+#[test]
+fn legacy_bad_recursion_scores_the_next_ln_as_a_single_note() {
+    let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+    let mut tap = chart.lane_notes[Lane::Key1.index()][0].clone();
+    tap.kind = NoteKind::Tap;
+    tap.id = NoteId(3);
+    tap.time = TimeUs(860_000);
+    chart.lane_notes[Lane::Key1.index()].insert(0, tap);
+    chart.total_notes = 2;
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    let outcome = engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+    let scored: Vec<_> =
+        outcome.events.iter().filter(|e| e.affects_score).map(|e| e.judge).collect();
+    assert_eq!(scored, [Judge::Bad, Judge::PGreat]);
+    assert!(engine.lanes[Lane::Key1.index()].active_long.is_none());
+    assert!(engine.process_input(&chart, release_at(TimeUs(1_100_000))).events.is_empty());
+    assert!(
+        engine
+            .process_legacy_idle_lane(&chart, Lane::Key1, TimeUs(2_001_000), false)
+            .events
+            .is_empty()
+    );
+}
+
+#[test]
+fn legacy_recursive_ln_bad_uses_the_tap_window_and_continues_recursion() {
+    let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+    let mut first = chart.lane_notes[Lane::Key1.index()][0].clone();
+    first.kind = NoteKind::Tap;
+    first.id = NoteId(3);
+    first.time = TimeUs(950_000);
+    let mut last = first.clone();
+    last.id = NoteId(4);
+    last.time = TimeUs(1_150_000);
+    chart.lane_notes[Lane::Key1.index()].insert(0, first);
+    chart.lane_notes[Lane::Key1.index()].insert(2, last);
+    chart.total_notes = 3;
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    let outcome = engine.process_input(&chart, press_at(TimeUs(1_150_000)));
+    let scored: Vec<_> =
+        outcome.events.iter().filter(|e| e.affects_score).map(|e| e.judge).collect();
+    assert_eq!(scored, [Judge::Bad, Judge::Bad, Judge::PGreat]);
+    assert!(engine.lanes[Lane::Key1.index()].active_long.is_none());
+}
+
+#[test]
 fn chart_index_preserves_hcn_overlap_order_and_falls_back_after_chart_replacement() {
     let mut chart = chart_with_long_start(TimeUs(0), TimeUs(1000));
     chart.metadata.long_note_mode = LongNoteMode::Hcn;
@@ -1122,6 +1190,59 @@ fn legacy_matches_openlr2_recorded_judgement_of_air_god() {
         ),
         (3106, 261, 22, 10, 15, 4)
     );
+}
+
+#[test]
+fn legacy_idle_lane_consumes_only_one_expired_note_per_poll() {
+    let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_001_000));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    let first = engine.process_legacy_idle_lane(&chart, Lane::Key1, TimeUs(1_500_000), false);
+    assert_eq!(first.events.len(), 1);
+    assert_eq!(first.events[0].note_id, Some(NoteId(1)));
+    let second = engine.process_legacy_idle_lane(&chart, Lane::Key1, TimeUs(1_501_000), false);
+    assert_eq!(second.events.len(), 1);
+    assert_eq!(second.events[0].note_id, Some(NoteId(2)));
+}
+
+#[test]
+fn legacy_active_ln_repress_overwrites_the_provisional_head_grade() {
+    let chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+    let head = engine.process_input(&chart, press_at(TimeUs(1_040_000)));
+    assert!(head.events.iter().all(|event| !event.affects_score));
+    let tail = engine.process_input(&chart, release_at(TimeUs(2_000_000)));
+    assert_eq!(tail.events.len(), 1);
+    assert_eq!(tail.events[0].judge, Judge::Great);
+}
+
+#[test]
+fn legacy_late_repress_of_an_active_ln_scores_empty_poor() {
+    let chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+    let extra = engine.process_input(&chart, press_at(TimeUs(1_500_000)));
+    assert_eq!(extra.events[0].judge, Judge::EmptyPoor);
+    let tail = engine.process_input(&chart, release_at(TimeUs(2_000_000)));
+    assert_eq!(tail.events[0].judge, Judge::PGreat);
+}
+
+#[test]
+fn legacy_release_poll_settles_an_expired_head_before_handling_the_edge() {
+    let chart = chart_with_tap(TimeUs(1_000_000));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    let outcome = engine.process_input(&chart, release_at(TimeUs(1_201_000)));
+    assert_eq!(outcome.events.len(), 1);
+    assert_eq!(outcome.events[0].judge, Judge::Poor);
+    assert!(outcome.consumed_input);
 }
 
 #[test]

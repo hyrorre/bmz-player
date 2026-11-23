@@ -6,6 +6,7 @@ pub mod error;
 pub mod intermediate;
 pub mod long_note;
 pub mod normalize;
+pub mod openlr2;
 
 use std::path::Path;
 

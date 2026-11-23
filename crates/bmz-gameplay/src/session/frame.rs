@@ -65,6 +65,8 @@ pub fn advance_session_frame(
         if session.scoring_closed_at.is_some() {
             // 採点確定後も、キー表示・キー音・skin入力イベントは従来どおり進める。
             present_inputs_after_scoring_closed(session, times.audio_now);
+        } else if super::input::uses_legacy_frame_clock(session) {
+            judgements.extend(super::input::process_timed_inputs(session, times.audio_now));
         } else if ordered_timeline {
             while let Some(at) =
                 super::conditional::next_evaluation(session).filter(|at| *at <= times.audio_now)

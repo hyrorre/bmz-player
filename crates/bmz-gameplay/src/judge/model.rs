@@ -248,6 +248,16 @@ pub struct JudgeOutcome {
 }
 
 impl JudgeOutcome {
+    pub(crate) fn append(&mut self, mut other: Self) {
+        self.hold_ticks.append(&mut other.hold_ticks);
+        self.hold_sounds.append(&mut other.hold_sounds);
+        self.events.append(&mut other.events);
+        self.mine_hits.append(&mut other.mine_hits);
+        self.potion_hits.append(&mut other.potion_hits);
+        self.keysounds.append(&mut other.keysounds);
+        self.keysound_volumes.append(&mut other.keysound_volumes);
+        self.consumed_input |= other.consumed_input;
+    }
     pub(crate) fn stamp_judgement_time(&mut self, time: TimeUs) {
         for event in &mut self.events {
             event.time = time;

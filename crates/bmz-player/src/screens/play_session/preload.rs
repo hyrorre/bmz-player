@@ -133,6 +133,20 @@ mod lr2_tests {
     }
 
     #[test]
+    fn fresh_legacy_play_uses_the_lr2_branch_rng_and_saves_its_seed() {
+        let options = PlaySessionOptions {
+            rule_mode: RuleMode::Legacy,
+            arrange: ArrangeOption::Random,
+            bms_random_seed: Some(2179),
+            ..Default::default()
+        };
+        assert_eq!(bms_random_source_for_chart(&options), BmsRandomSource::Lr2Seed(2179));
+        let result = transform("", &options);
+        assert_eq!(lr2_table(&result.chart), [1, 5, 2, 6, 3, 7, 4]);
+        assert_eq!(result.applied_arrange.lr2_seed, Some(2179));
+    }
+
+    #[test]
     fn lr2_random_lanes_continue_the_sequence_after_the_chart_random() {
         let options = opponent_options(ArrangeOption::Random);
         assert_eq!(bms_random_source_for_chart(&options), BmsRandomSource::Lr2Seed(2179));
@@ -350,8 +364,9 @@ pub fn load_game_session_for_chart_with_input_backend(
     options: PlaySessionOptions,
     input_backend: Box<dyn InputBackend>,
 ) -> Result<GameSession> {
-    let (_, import) =
+    let (source, mut import) =
         library_db.load_chart_source_bytes(chart_id, bms_random_source_for_chart(&options))?;
+    apply_legacy_source_timing(library_db, &source, &mut import, &options)?;
     Ok(build_game_session_with_input_backend(
         Arc::new(import.chart),
         profile,
@@ -369,6 +384,11 @@ pub(super) fn bms_random_source_for_chart(options: &PlaySessionOptions) -> BmsRa
             random: options.bms_random_choices.clone().unwrap_or_default(),
             switches: options.bms_switch_choices.clone().unwrap_or_default(),
         }
+    } else if options.rule_mode == RuleMode::Legacy && !options.legacy_arrange_seed {
+        BmsRandomSource::Lr2Seed(
+            (options.bms_random_seed.unwrap_or(0)
+                % (u64::from(bmz_chart::lr2_random::LR2_SEED_MAX) + 1)) as u32,
+        )
     } else if options.legacy_arrange_seed {
         // Replay v3 and older derived `#RANDOM` from the shared arrange seed.
         BmsRandomSource::Seed(options.arrange_seed.map(|seed| seed as u64))
@@ -775,6 +795,26 @@ pub(super) struct PlayChartImport {
     pub(super) archive_resources: Option<Arc<bmz_song_resource::SongResourceSet>>,
 }
 
+fn apply_legacy_source_timing(
+    library_db: &LibraryDatabase,
+    source: &crate::storage::library_db::ChartSource,
+    import: &mut ImportResult,
+    options: &PlaySessionOptions,
+) -> Result<()> {
+    if options.rule_mode == RuleMode::Legacy {
+        let bytes = source.locator()?.read_bytes()?;
+        let (_, encoding) = library_db.chart_encoding(&source.chart.sha256)?;
+        bmz_chart::import::openlr2::apply_from_bytes(
+            &mut import.chart,
+            &source.path,
+            &bytes,
+            &bms_random_source_for_chart(options),
+            encoding,
+        )?;
+    }
+    Ok(())
+}
+
 pub(super) fn load_source_chart_import_for_play(
     library_db: &LibraryDatabase,
     chart_id: i64,
@@ -782,7 +822,7 @@ pub(super) fn load_source_chart_import_for_play(
 ) -> Result<PlayChartImport> {
     let random = bms_random_source_for_chart(options);
     let mut archive_resources = None;
-    let (source, import) = if options.read_archive_assets {
+    let (source, mut import) = if options.read_archive_assets {
         let (source, resolved, mut import) =
             library_db.load_chart_source_with_assets(chart_id, random)?;
         if let Some(resources) = resolved.resources() {
@@ -811,6 +851,7 @@ pub(super) fn load_source_chart_import_for_play(
         "chart source changed during preload; retry to use {}",
         source.path.display()
     );
+    apply_legacy_source_timing(library_db, &source, &mut import, options)?;
     Ok(PlayChartImport {
         import,
         archive_source: source.locator()?.is_archive(),
@@ -835,7 +876,10 @@ fn transform_chart_import(
     options: &PlaySessionOptions,
 ) -> Result<TransformedPlayChart> {
     let mut import = import;
-    let lr2_seed = options.lr2_seed.filter(|_| import.lr2_random_state.is_some());
+    let lr2_seed = match bms_random_source_for_chart(options) {
+        BmsRandomSource::Lr2Seed(seed) if import.lr2_random_state.is_some() => Some(seed),
+        _ => None,
+    };
     let lr2_options = resolve_lr2_arrangement(&mut import, options);
     let options = lr2_options.as_ref().unwrap_or(options);
     if import.chart.metadata.conditional.is_some()
@@ -997,7 +1041,10 @@ fn transform_chart_for_play(
     let source_ln_profile = ChartLnProfile::from_chart(&chart);
     // beatoraja BMSModelUtils.setStartNoteTime(model, 1000) 相当。
     // LN / arrange より前に適用し、practice 切出しもシフト後時刻を使う。
-    if add_margin {
+    if add_margin
+        && (options.rule_mode != RuleMode::Legacy
+            || chart.metadata.source_format != bmz_chart::model::ChartSourceFormat::Bms)
+    {
         apply_start_note_margin(&mut chart);
     }
     let conditional_audio = (chart.metadata.conditional.is_some()
@@ -1261,13 +1308,14 @@ pub fn scored_chart_metrics_for_chart(
     chart_id: i64,
     options: &PlaySessionOptions,
 ) -> Result<ScoredChartMetrics> {
-    let (source, import) =
+    let (source, mut import) =
         library_db.load_chart_source_bytes(chart_id, bms_random_source_for_chart(options))?;
     anyhow::ensure!(
         source.chart.chart_id == chart_id,
         "chart source changed during metrics load; retry to use {}",
         source.path.display()
     );
+    apply_legacy_source_timing(library_db, &source, &mut import, options)?;
     let imported = transform_chart_import(import, options)?;
     Ok(ScoredChartMetrics {
         total_notes: scored_note_count(&imported.chart),

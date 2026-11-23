@@ -111,8 +111,45 @@ fn judge_counts(session: &GameSession) -> [u32; 6] {
     ]
 }
 
-/// BMZ uses timestamp-ordered maintenance for both live input and replay.
-/// A miss before the next input is settled before evaluating that input.
+#[test]
+fn legacy_frame_polls_lower_lane_miss_before_higher_lane_hit() {
+    let mut chart = two_tap_chart(TimeUs(1_000_000), TimeUs(1_201_100));
+    let mut second = chart.lane_notes[Lane::Key1.index()].pop().unwrap();
+    second.lane = Lane::Key2;
+    chart.lane_notes[Lane::Key2.index()].push(second);
+    let mut session = legacy_session(chart);
+    session.replay_player = Some(ReplayPlayer {
+        events: vec![ReplayEvent {
+            lane: Lane::Key2,
+            kind: InputKind::Press,
+            time: TimeUs(1_201_500),
+            device_kind: Default::default(),
+            scratch_direction: None,
+        }],
+        ..Default::default()
+    });
+    let frame = advance_at(&mut session, &mut TestAudio::default(), 1_202_000);
+    assert_eq!(
+        frame.judgements.iter().map(|e| e.judge).collect::<Vec<_>>(),
+        vec![Judge::Poor, Judge::PGreat]
+    );
+    assert_eq!(session.score.ex_score(), 2);
+}
+
+#[test]
+fn legacy_new_input_after_a_poll_in_the_same_millisecond_is_not_lost() {
+    let (mut human, keys) =
+        legacy_human_session(two_tap_chart(TimeUs(1_000_000), TimeUs(1_201_100)));
+    let mut audio = TestAudio::default();
+    advance_at(&mut human, &mut audio, 1_201_100);
+    assert_eq!(judge_counts(&human), [0, 0, 0, 0, 1, 0]);
+    keys.press();
+    advance_at(&mut human, &mut audio, 1_201_500);
+    assert_eq!(judge_counts(&human), [1, 0, 0, 0, 1, 0]);
+}
+
+/// LR2 polls integer-ms ticks. An expired head consumes the lane's press;
+/// it cannot also hit the next note during that invocation.
 #[test]
 fn legacy_human_press_after_the_head_expired_matches_the_replay() {
     // A=1000ms は BAD 窓 200ms を過ぎた 1201.5ms で見逃し。
@@ -131,7 +168,7 @@ fn legacy_human_press_after_the_head_expired_matches_the_replay() {
     keys.release();
     advance_at(&mut human, &mut audio, release);
 
-    assert_eq!(judge_counts(&human), [1, 0, 0, 0, 1, 0]);
+    assert_eq!(judge_counts(&human), [0, 0, 0, 0, 1, 0]);
 
     let mut replay = legacy_session(two_tap_chart(first, second));
     replay.replay_player = Some(ReplayPlayer {
@@ -182,10 +219,10 @@ fn missed_and_pressed_chart(missed: TimeUs, pressed: TimeUs) -> PlayableChart {
     chart
 }
 
-/// A miss preceding an input closes HAZARD before the input is scored,
-/// independently of the live update cadence or replay update cadence.
+/// LR2 polls every lane before checking failure. A Key1 hit and a Key2
+/// miss in the same integer-ms poll are both scored before HAZARD closes.
 #[test]
-fn legacy_hazard_closes_before_a_later_input_in_live_play_and_replay() {
+fn legacy_hazard_checks_failure_after_the_lane_poll_in_live_play_and_replay() {
     let missed = TimeUs(1_000_000);
     let pressed = TimeUs(1_201_100);
     let press = 1_201_500;
@@ -199,8 +236,8 @@ fn legacy_hazard_closes_before_a_later_input_in_live_play_and_replay() {
     advance_at(&mut human, &mut audio, 1_200_000);
     keys.press();
     advance_at(&mut human, &mut audio, press);
-    assert_eq!(judge_counts(&human), [0, 0, 0, 0, 1, 0]);
-    assert_eq!(human.score.ex_score(), 0);
+    assert_eq!(judge_counts(&human), [1, 0, 0, 0, 1, 0]);
+    assert_eq!(human.score.ex_score(), 2);
     assert_eq!(human.state, PlayState::Failed);
 
     let mut replay = legacy_session(missed_and_pressed_chart(missed, pressed));
