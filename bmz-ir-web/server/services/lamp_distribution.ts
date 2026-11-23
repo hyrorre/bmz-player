@@ -80,19 +80,18 @@ export async function loadDistributionCharts(
   if (!(await isPublicPlayer(playerId))) return null
   const { mode, table, level, rank, limit, offset } = options
   const ranks = chartRanks(playerId, mode, table, level)
-  const charts = schema.charts
   const [items, counts] = await Promise.all([
     db
       .select({
-        sha256: charts.sha256,
-        title: charts.title,
-        subtitle: charts.subtitle,
-        artist: charts.artist,
+        id: ranks.id,
+        sha256: ranks.sha256,
+        title: ranks.title,
+        subtitle: ranks.subtitle,
+        artist: ranks.artist,
       })
       .from(ranks)
-      .innerJoin(charts, eq(charts.sha256, ranks.sha256))
       .where(eq(ranks.rank, rank))
-      .orderBy(sql`${charts.title} collate nocase`, charts.subtitle, charts.sha256)
+      .orderBy(sql`${ranks.title} collate nocase`, ranks.subtitle, sql`${ranks.id}`)
       .limit(limit)
       .offset(offset),
     db.select({ total: count() }).from(ranks).where(eq(ranks.rank, rank)),
@@ -109,8 +108,12 @@ function chartRanks(playerId: string, mode: IrDistributionMode, tableId: string,
       : highestLamp(playerId, members.sha256)
   return db
     .select({
+      id: members.id,
       sha256: members.sha256,
       level: members.level,
+      title: members.title,
+      subtitle: members.subtitle,
+      artist: members.artist,
       rank: sql<number>`coalesce((${highestRank}), 0)`.as('rank_index'),
     })
     .from(members)

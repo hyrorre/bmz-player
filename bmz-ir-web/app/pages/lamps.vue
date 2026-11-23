@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { NuxtLink } from '#components'
 import { IR_CLEAR_LABELS, IR_SCORE_RANK_LABELS } from '../../shared/constants/ir'
 import type {
   IrDifficultyDistribution,
@@ -289,14 +290,20 @@ useSeoMeta({ title: () => t('lamps.title') })
             {{ t('lamps.noCharts') }}
           </p>
           <ul v-else class="divide-y divide-default">
-            <li v-for="chart in chartList.charts" :key="chart.sha256">
-              <NuxtLink
-                :to="localePath(`/charts/${chart.sha256}`)"
-                class="flex items-center justify-between gap-3 px-5 py-3 hover:bg-elevated focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary"
+            <li v-for="chart in chartList.charts" :key="chart.id">
+              <component
+                :is="chart.sha256 ? NuxtLink : 'div'"
+                :to="chart.sha256 ? localePath(`/charts/${chart.sha256}`) : undefined"
+                class="flex items-center justify-between gap-3 px-5 py-3"
+                :class="
+                  chart.sha256
+                    ? 'hover:bg-elevated focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary'
+                    : undefined
+                "
               >
                 <span class="min-w-0">
                   <span class="block font-medium wrap-anywhere text-highlighted">
-                    {{ chart.title || chart.sha256.slice(0, 12) }}
+                    {{ chart.title || chart.sha256?.slice(0, 12) }}
                     <span v-if="chart.subtitle" class="font-normal text-muted">{{
                       chart.subtitle
                     }}</span>
@@ -305,8 +312,15 @@ useSeoMeta({ title: () => t('lamps.title') })
                     chart.artist
                   }}</span>
                 </span>
-                <UIcon name="i-lucide-chevron-right" class="size-4 shrink-0 text-muted" />
-              </NuxtLink>
+                <UIcon
+                  v-if="chart.sha256"
+                  name="i-lucide-chevron-right"
+                  class="size-4 shrink-0 text-muted"
+                />
+                <UBadge v-else color="neutral" variant="subtle" size="sm" class="shrink-0">{{
+                  t('lamps.unregistered')
+                }}</UBadge>
+              </component>
             </li>
           </ul>
         </template>

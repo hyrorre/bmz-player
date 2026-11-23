@@ -160,7 +160,8 @@ const ja = {
     lamps: {
       nav: '成績分布',
       title: '難易度表の成績分布',
-      description: 'IRに登録された公開譜面のベストを、難易度ごとに集計します。',
+      description: '難易度表の譜面を集計します。IR未登録の譜面も NO PLAY に含みます。',
+      unregistered: 'IR未登録',
       choosePlayer: 'ログインして自分の分布を見るか、プレイヤー一覧から対象を選んでください。',
       table: '難易度表',
       mode: '表示する成績',
@@ -370,7 +371,9 @@ const en = {
     lamps: {
       nav: 'Distributions',
       title: 'Difficulty table distributions',
-      description: 'See a player’s best results by level for public charts registered in the IR.',
+      description:
+        'See results by difficulty level, including charts not registered in the IR as NO PLAY.',
+      unregistered: 'Not in IR',
       choosePlayer: 'Sign in to see your distribution, or choose a player from the player list.',
       table: 'Difficulty table',
       mode: 'Result type',
@@ -576,7 +579,8 @@ const ko = {
     lamps: {
       nav: '성적 분포',
       title: '난이도표 성적 분포',
-      description: 'IR에 등록된 공개 채보의 최고 성적을 난이도별로 집계합니다.',
+      description: '난이도표의 채보를 집계합니다. IR에 등록되지 않은 채보도 NO PLAY에 포함됩니다.',
+      unregistered: 'IR 미등록',
       choosePlayer: '로그인하여 내 분포를 보거나 플레이어 목록에서 대상을 선택하세요.',
       table: '난이도표',
       mode: '성적 유형',
@@ -781,7 +785,8 @@ const zhCN = {
     lamps: {
       nav: '成绩分布',
       title: '难度表成绩分布',
-      description: '按难度统计已登记在 IR 的公开谱面的最佳成绩。',
+      description: '按难度统计表内谱面，未登记在 IR 的谱面也计入 NO PLAY。',
+      unregistered: '未登记至 IR',
       choosePlayer: '登录查看自己的分布，或从玩家列表选择一位玩家。',
       table: '难度表',
       mode: '成绩类型',
@@ -986,7 +991,8 @@ const zhTW = {
     lamps: {
       nav: '成績分布',
       title: '難度表成績分布',
-      description: '依難度統計已登錄於 IR 的公開譜面最佳成績。',
+      description: '依難度統計表內譜面，未登錄於 IR 的譜面也計入 NO PLAY。',
+      unregistered: '未登錄於 IR',
       choosePlayer: '登入查看自己的分布，或從玩家清單選擇一位玩家。',
       table: '難度表',
       mode: '成績類型',

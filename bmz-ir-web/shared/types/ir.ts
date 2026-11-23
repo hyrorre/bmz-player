@@ -437,7 +437,14 @@ export interface IrDifficultyDistribution {
 }
 
 export interface IrDistributionCharts {
-  charts: { sha256: string; title: string; subtitle: string | null; artist: string | null }[]
+  charts: {
+    id: string
+    /** Null when the chart is only present in the synced difficulty table. */
+    sha256: string | null
+    title: string
+    subtitle: string | null
+    artist: string | null
+  }[]
   pagination: IrRanking['ranking']['pagination']
 }
 

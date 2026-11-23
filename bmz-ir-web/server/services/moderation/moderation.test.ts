@@ -1572,6 +1572,76 @@ describe('rankings, courses, and aggregates', () => {
     await expectHttpError(lampChartsHandler(event({ path: `${url}&level=2&rank=5` })), 404)
   })
 
+  test('unregistered difficulty entries are counted once in both distributions until a matching chart is registered', async () => {
+    const pairedMd5 = 'd'.repeat(32)
+    const pairedSha256 = 'd'.repeat(64)
+    const shaOnly = 'f'.repeat(64)
+    const blockedMd5 = 'c'.repeat(32)
+    const blockedSha256 = 'c'.repeat(64)
+    const registeredMd5 = 'a'.repeat(32)
+    await submitScore({ id: 'bob' }, submission({ md5: registeredMd5 }), [], 10)
+    await setChartStatus(blockedSha256, 'blocked')
+    await db.insert(schema.difficultyTables).values({
+      id: 'fixture',
+      sourceUrl: 'https://example.invalid/table',
+      symbol: 'st',
+      name: 'Fixture',
+      activeGeneration: 'current',
+    })
+    const entry = { tableId: 'fixture', generation: 'current', level: '1' }
+    await db.insert(schema.difficultyTableEntries).values([
+      { ...entry, md5: registeredMd5 },
+      { ...entry, md5: pairedMd5, title: 'Paired chart' },
+      { ...entry, md5: pairedMd5, sha256: pairedSha256, artist: 'Table artist' },
+      { ...entry, sha256: pairedSha256 },
+      { ...entry, sha256: shaOnly, title: 'SHA-only chart' },
+      { ...entry, level: '2', md5: 'e'.repeat(32), title: 'MD5-only chart' },
+      { ...entry, md5: blockedMd5, sha256: blockedSha256 },
+      { ...entry, md5: blockedMd5 },
+      { ...entry, md5: MD5_B, generation: 'old' },
+    ])
+
+    const base = '/api/v1/lamps?player=alice&table=fixture'
+    const detail = '/api/v1/lamps/charts?player=alice&table=fixture&rank=0'
+    for (const mode of ['lamp', 'score']) {
+      const summary = await lampsHandler(event({ path: `${base}&mode=${mode}` }))
+      expect(summary.levels).toEqual([
+        { level: '1', total: 3, segments: [{ rank: 0, count: 3 }] },
+        { level: '2', total: 1, segments: [{ rank: 0, count: 1 }] },
+      ])
+      const result = await lampChartsHandler(
+        event({ path: `${detail}&level=1&mode=${mode}&limit=2&offset=1` }),
+      )
+      expect(result.charts).toEqual([
+        {
+          id: `table:${pairedMd5}`,
+          sha256: null,
+          title: 'Paired chart',
+          artist: 'Table artist',
+          subtitle: null,
+        },
+        {
+          id: `table:${shaOnly}`,
+          sha256: null,
+          title: 'SHA-only chart',
+          artist: null,
+          subtitle: null,
+        },
+      ])
+      expect(result.pagination).toEqual({ limit: 2, offset: 1, total: 3, has_more: false })
+    }
+
+    // The already-synced SHA-256 links the MD5-only row as soon as a chart appears in the IR.
+    await submitScore({ id: 'bob' }, submission({ sha256: pairedSha256 }), [], 10)
+    const after = await lampChartsHandler(event({ path: `${detail}&level=1` }))
+    expect(after.charts.map((chart: { sha256: string | null }) => chart.sha256)).toEqual([
+      CHART_A,
+      pairedSha256,
+      null,
+    ])
+    expect(after.pagination.total).toBe(3)
+  })
+
   test('course ranking pages keep ties and the signed-in player outside the page', async () => {
     for (const [i, id] of ['alice', 'bob', 'carol'].entries()) {
       const payload = coursePayload([CHART_A], 'course-page', i === 2 ? 90 : 100)

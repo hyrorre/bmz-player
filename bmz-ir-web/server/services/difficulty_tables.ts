@@ -1,6 +1,19 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { BatchItem } from 'drizzle-orm/batch'
-import { and, eq, exists, inArray, ne, notExists, or, sql, type SQL } from 'drizzle-orm'
+import {
+  and,
+  eq,
+  exists,
+  inArray,
+  isNotNull,
+  ne,
+  notExists,
+  notInArray,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm'
+import { alias } from 'drizzle-orm/sqlite-core'
 import { db, schema } from 'hub:db'
 import type { IrDifficultyLabel } from '../../shared/types/ir'
 import type { DifficultyFilter } from '../../shared/utils/difficulty_filter'
@@ -262,26 +275,112 @@ export function chartDifficultyCondition(filter: DifficultyFilter): SQL {
   )!
 }
 
-/** One row per public chart and level, using the same hash precedence as difficulty badges. */
+/** One row per registered public chart or unresolved table entry at each level. */
 export function difficultyTableCharts(tableId: string, level?: string) {
   const { charts, difficultyTableEntries: entries, difficultyTables: tables } = schema
   const md5Match = chartMd5Match()
-  return db
-    .selectDistinct({ sha256: charts.sha256, level: entries.level })
-    .from(charts)
-    .innerJoin(
-      entries,
-      or(md5Match, and(chartSha256Match(), notExists(activeDifficultyEntries(md5Match))))!,
-    )
+  function registered(match: SQL, fallback?: SQL) {
+    return db
+      .selectDistinct({
+        id: sql<string>`${charts.sha256}`.as('chart_key'),
+        sha256: sql<string | null>`${charts.sha256}`.as('sha256'),
+        level: entries.level,
+        title: charts.title,
+        subtitle: charts.subtitle,
+        artist: charts.artist,
+      })
+      .from(charts)
+      .innerJoin(entries, match)
+      .innerJoin(tables, activeDifficultyGeneration())
+      .where(
+        and(
+          eq(entries.tableId, tableId),
+          level === undefined ? undefined : eq(entries.level, level),
+          publicChartCondition(charts.sha256),
+          fallback,
+        ),
+      )
+  }
+
+  // Separate equality joins let SQLite use the digest indexes for both branches.
+  return registered(md5Match)
+    .unionAll(registered(chartSha256Match(), notExists(activeDifficultyEntries(md5Match))))
+    .unionAll(unregisteredDifficultyCharts(tableId, level))
+    .as('difficulty_charts')
+}
+
+function unregisteredDifficultyCharts(tableId: string, level?: string) {
+  const { charts, difficultyTableEntries: entries, difficultyTables: tables } = schema
+  const pairedName = 'paired_entry'
+  const paired = alias(entries, pairedName)
+  function pairedHash(field: 'md5' | 'sha256', shared: 'md5' | 'sha256') {
+    const index = sql.identifier(`idx_difficulty_table_entries_${shared}`)
+    return db
+      .select({ hash: sql<string>`${paired[field]}` })
+      .from(sql`${entries} as ${sql.identifier(pairedName)} indexed by ${index}`)
+      .where(
+        and(
+          eq(paired.tableId, entries.tableId),
+          eq(paired.generation, entries.generation),
+          ne(entries[shared], ''),
+          eq(paired[shared], entries[shared]),
+          ne(paired[field], ''),
+        ),
+      )
+      .orderBy(paired.id)
+      .limit(1)
+  }
+
+  // Rows with both digests can resolve hash-only duplicates from the same generation.
+  const resolved = db
+    .select({
+      md5: sql<string>`coalesce(nullif(${entries.md5}, ''), (${pairedHash('md5', 'sha256')}), '')`.as(
+        'md5',
+      ),
+      sha256:
+        sql<string>`coalesce(nullif(${entries.sha256}, ''), (${pairedHash('sha256', 'md5')}), '')`.as(
+          'sha256',
+        ),
+      level: entries.level,
+      title: entries.title,
+      artist: entries.artist,
+    })
+    .from(entries)
     .innerJoin(tables, activeDifficultyGeneration())
     .where(
+      and(eq(entries.tableId, tableId), level === undefined ? undefined : eq(entries.level, level)),
+    )
+    .as('resolved_table_entries')
+  const knownMd5s = db
+    .select({ hash: sql`lower(${charts.md5})` })
+    .from(charts)
+    .where(and(isNotNull(charts.md5), ne(charts.md5, '')))
+  const knownSha256s = db.select({ hash: charts.sha256 }).from(charts)
+  const identity = sql`coalesce(nullif(${resolved.md5}, ''), ${resolved.sha256})`
+
+  return db
+    .select({
+      id: sql<string>`'table:' || ${identity}`.as('chart_key'),
+      sha256: sql<string | null>`null`.as('sha256'),
+      level: resolved.level,
+      title:
+        sql<string>`coalesce(min(nullif(${resolved.title}, '')), substr(${identity}, 1, 12))`.as(
+          'title',
+        ),
+      subtitle: sql<string | null>`null`.as('subtitle'),
+      artist: sql<string | null>`min(nullif(${resolved.artist}, ''))`.as('artist'),
+    })
+    .from(resolved)
+    .where(
       and(
-        eq(entries.tableId, tableId),
-        level === undefined ? undefined : eq(entries.level, level),
-        publicChartCondition(charts.sha256),
+        sql`${identity} <> ''`,
+        // Registered charts with hidden or suppressed labels must not reappear as unregistered.
+        notInArray(resolved.md5, knownMd5s),
+        notInArray(resolved.sha256, knownSha256s),
+        publicChartCondition(sql`${resolved.sha256}`),
       ),
     )
-    .as('difficulty_charts')
+    .groupBy(resolved.level, identity)
 }
 
 export async function difficultyFilterLabel(
