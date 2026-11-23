@@ -47,13 +47,20 @@ pub fn apply_from_bytes(
         });
     }
     let text = bms_rs_adapter::openlr2_resolved_text(path, bytes, encoding, random_source)?;
-    apply(chart, &intermediate, &text)
+    // LR2 remaps channels for .pms files and #FP/DSC charts; only the plain BMS
+    // channel layout is rebuilt with LR2's lane construction.
+    let pms = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pms"));
+    let dsc = text
+        .lines()
+        .any(|l| l.trim_start().get(..7).is_some_and(|h| h.eq_ignore_ascii_case("#FP/DSC")));
+    apply(chart, &intermediate, &text, !pms && !dsc)
 }
 
 fn apply(
     chart: &mut PlayableChart,
     source: &IntermediateChart,
     text: &str,
+    rebuild_lanes: bool,
 ) -> Result<(), ImportError> {
     let raw = raw_objects(text, source)?;
     let origin_shift = raw.iter().any(|p| p.0 == 0.0 && matches!(p.1, 11..=29 | 31..=49));
@@ -77,6 +84,7 @@ fn apply(
     let mut length = source.measures.first().map_or(1.0, |m| m.length);
     let mut stop_units = 0.0;
     let mut times = BTreeMap::new();
+    let mut times_ms = BTreeMap::new();
     for (position, _, tick, action) in points {
         if position != previous {
             // Keep LR2's operation order: these floating-point roundoff errors
@@ -90,6 +98,8 @@ fn apply(
         }
         // Preserve which side of the integer-ms boundary the double lies on.
         times.insert(tick, TimeUs((realtime_ms * 1000.0).floor() as i64));
+        // Keyed by the exact position: distinct positions can share a tick.
+        times_ms.insert(position.to_bits(), realtime_ms);
         match action {
             Action::None => {}
             Action::Measure(value) => length = value,
@@ -140,6 +150,19 @@ fn apply(
             .bar_lines
             .insert(0, crate::model::BarLine { measure: 0, tick: ChartTick(0), time: TimeUs(0) });
         chart.metadata.start_note_margin = times.get(&0).copied().unwrap_or(TimeUs(0));
+    }
+    if rebuild_lanes {
+        let lnobj = text
+            .lines()
+            .filter_map(|line| {
+                let bytes = line.trim_start().as_bytes();
+                (bytes.len() >= 9 && bytes[..7].eq_ignore_ascii_case(b"#LNOBJ "))
+                    .then(|| slot_key(&bytes[7..9], source.metadata.base62_obj_ids))
+                    .flatten()
+            })
+            .next_back();
+        let raw = super::openlr2_lanes::raw_notes(text, source);
+        super::openlr2_lanes::rebuild(chart, source, &raw, lnobj, &times_ms, shift, shift_ticks);
     }
     chart.end_time =
         chart.lane_notes.iter().flatten().map(|n| n.time).max().unwrap_or(chart.end_time);
@@ -204,7 +227,7 @@ struct Slots {
     stop: std::collections::HashMap<u16, f64>,
 }
 
-fn slot_key(token: &[u8], base62: bool) -> Option<u16> {
+pub(super) fn slot_key(token: &[u8], base62: bool) -> Option<u16> {
     let digit = |b: u8| -> Option<u16> {
         let n = match b {
             b'0'..=b'9' => b - b'0',
@@ -469,6 +492,70 @@ mod tests {
             .find(|n| n.kind == crate::model::NoteKind::Mine)
             .unwrap();
         assert_eq!(mine.damage, Some(1295.0));
+    }
+
+    /// (kind, time ms) of a lane after the LEGACY rebuild.
+    fn lane(chart: &PlayableChart, lane: Lane) -> Vec<(crate::model::NoteKind, i64)> {
+        chart.lane_notes[lane.index()]
+            .iter()
+            .filter(|n| n.kind != crate::model::NoteKind::Invisible)
+            .map(|n| (n.kind, n.time.0 / 1000))
+            .collect()
+    }
+
+    use crate::model::NoteKind::{LongEnd, LongStart, Mine, Tap};
+
+    /// An #LNOBJ note with nothing pending stays a normal note (`//CHECK: haha`).
+    #[test]
+    fn rebuild_keeps_an_orphan_lnobj_as_a_tap() {
+        // 120 BPM: 2 s per measure. 01 @4/12, ZZ @8/12 (end), ZZ @10/12 (orphan).
+        let chart = load("#BPM 120\n#LNOBJ ZZ\n#00111:0000000001000000ZZ00ZZ00\n#00211:01\n");
+        assert_eq!(
+            lane(&chart, Lane::Key1),
+            [(LongStart, 2666), (LongEnd, 3333), (Tap, 3666), (Tap, 4000)]
+        );
+        assert_eq!(chart.total_notes, 3);
+    }
+
+    /// LN channels and #LNOBJ candidates share LR2's pending slot: the first
+    /// LN-channel object closes a normal note waiting for an #LNOBJ end.
+    #[test]
+    fn rebuild_lets_an_ln_channel_close_a_pending_normal_note() {
+        let chart = load("#BPM 120\n#LNOBJ 05\n#00111:01\n#00251:0101\n#00311:01\n");
+        // 01 @2 s becomes an LN to 4 s; the second 51 object starts an LN
+        // with no end, which plays as a single note.
+        assert_eq!(
+            lane(&chart, Lane::Key1),
+            [(LongStart, 2000), (LongEnd, 4000), (Tap, 5000), (Tap, 6000)]
+        );
+        assert_eq!(chart.total_notes, 3);
+    }
+
+    /// Objects inside an LN, including its end time, are dropped; an LN start
+    /// replaces a single note at the same time.
+    #[test]
+    fn rebuild_drops_notes_inside_ln_and_lets_ln_replace_a_tap() {
+        let chart = load("#BPM 120\n#00111:01010101\n#00151:01000001\n#00211:01\n");
+        assert_eq!(lane(&chart, Lane::Key1), [(LongStart, 2000), (LongEnd, 3500), (Tap, 4000)]);
+        assert_eq!(chart.total_notes, 2);
+    }
+
+    /// A mine at the time of a note is dropped; mines are not counted.
+    #[test]
+    fn rebuild_places_mines_after_notes_and_does_not_count_them() {
+        let chart = load("#BPM 120\n#00111:0100\n#001D1:0505\n#00211:01\n");
+        assert_eq!(lane(&chart, Lane::Key1), [(Tap, 2000), (Mine, 3000), (Tap, 4000)]);
+        assert_eq!(chart.total_notes, 2);
+    }
+
+    /// `channelConvert`: 16 is the scratch, 17 is dropped, 18/19 are keys 6/7.
+    #[test]
+    fn rebuild_uses_lr2_channel_mapping() {
+        let chart = load("#BPM 120\n#00116:01\n#00117:01\n#00118:01\n#00119:01\n");
+        assert_eq!(lane(&chart, Lane::Scratch), [(Tap, 2000)]);
+        assert_eq!(lane(&chart, Lane::Key6), [(Tap, 2000)]);
+        assert_eq!(lane(&chart, Lane::Key7), [(Tap, 2000)]);
+        assert_eq!(chart.total_notes, 3);
     }
 
     #[test]
