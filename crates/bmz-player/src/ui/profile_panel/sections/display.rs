@@ -183,5 +183,10 @@ pub(in crate::ui::profile_panel) fn build_profile_display_section(
                 tr!(text, "profile-display-invert-e2-key-green-number"),
             )
             .on_hover_text(tr!(text, "profile-display-invert-e2-key-green-number-help"));
+            ui.checkbox(
+                &mut profile.play.show_hidden_notes,
+                tr!(text, "profile-display-show-hidden-notes"),
+            )
+            .on_hover_text(tr!(text, "settings-entry-description-show-hidden-notes"));
         });
 }

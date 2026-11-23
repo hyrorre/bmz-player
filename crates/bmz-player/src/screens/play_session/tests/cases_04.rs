@@ -464,6 +464,60 @@ fn build_game_session_initializes_floating_hispeed_for_hsfix_base_bpm() {
 }
 
 #[test]
+fn practice_displays_source_hidden_notes_without_revealing_masked_notes() {
+    use crate::screens::play_snapshot::{
+        PlayfieldProjection, ProjectionClock,
+        build_render_snapshot_with_target_and_bga_frames_cached,
+    };
+    use bmz_render::snapshot::NoteVisualKind;
+
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.play.show_hidden_notes = true;
+    let mut source = chart();
+    let mut hidden = note(1, Lane::Key1, 1_750_000);
+    hidden.kind = NoteKind::Invisible;
+    source.lane_notes[Lane::Key1.index()].push(hidden);
+    source.lane_notes[Lane::Key2.index()].push(note(2, Lane::Key2, 1_750_000));
+    source.lane_notes[Lane::Key3.index()].push(note(3, Lane::Key3, 2_200_000));
+    let preloaded = preloaded_play_session(source);
+    let source_session =
+        build_game_session(Arc::clone(&preloaded.chart), &profile, PlaySessionOptions::default());
+    let mut projections =
+        PlayfieldProjection::pool(&source_session, &preloaded.render_snapshot_cache);
+    let prepared = build_practice_prepared_from_preloaded(
+        preloaded,
+        &profile,
+        &PracticeProperty { start_time_ms: 2_000, end_time_ms: 3_000, ..Default::default() },
+        PlaySessionOptions::default(),
+        Box::new(NullInputBackend),
+    );
+
+    let now = TimeUs(1_500_000);
+    let snapshot = build_render_snapshot_with_target_and_bga_frames_cached(
+        &prepared.session,
+        now,
+        &[],
+        None,
+        None,
+        None,
+        &Default::default(),
+        &prepared.render_snapshot_cache,
+    );
+    assert_eq!(prepared.session.chart.notes_for_lane(Lane::Key2)[0].kind, NoteKind::Invisible);
+    assert_eq!(snapshot.visible_notes[Lane::Key1.index()][0].kind, NoteVisualKind::Invisible);
+    assert!(snapshot.visible_notes[Lane::Key2.index()].is_empty());
+    assert_eq!(snapshot.visible_notes[Lane::Key3.index()][0].kind, NoteVisualKind::Tap);
+
+    // Updating a slot that still holds the source chart rebuilds its cache and
+    // copies the hidden-note IDs from the prepared practice session.
+    let projection = Arc::get_mut(&mut projections[0]).unwrap();
+    projection.update(&prepared.session, now);
+    let mut projected = snapshot.clone();
+    projection.project(&mut projected, now, &mut ProjectionClock::default());
+    assert_eq!(projected.visible_notes, snapshot.visible_notes);
+}
+
+#[test]
 fn build_practice_session_preserves_preloaded_hsfix_and_rule_mode() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
     profile.lane.target_green_number = 300;

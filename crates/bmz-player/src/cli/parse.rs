@@ -159,6 +159,7 @@ where
                 bail!("viewer stop does not accept playback or window overrides");
             }
             let target = options.boot_play_path.is_some()
+                || options.boot_replay_file.is_some()
                 || options.boot_play_sample
                 || options.boot_course_id.is_some()
                 || options.boot_course_replay_id.is_some();

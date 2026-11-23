@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn show_hidden_notes_defaults_off_and_roundtrips() {
+    let mut profile = ProfileConfig::new_default("default", "Player", 0);
+    assert!(!profile.play.show_hidden_notes);
+    let mut legacy = toml::Value::try_from(&profile).unwrap();
+    legacy.get_mut("play").unwrap().as_table_mut().unwrap().remove("show_hidden_notes");
+    let decoded: ProfileConfig = legacy.try_into().unwrap();
+    assert!(!decoded.play.show_hidden_notes);
+
+    profile.play.show_hidden_notes = true;
+    let decoded: ProfileConfig = toml::from_str(&toml::to_string(&profile).unwrap()).unwrap();
+    assert!(decoded.play.show_hidden_notes);
+}
+
+#[test]
 fn hispeed_transition_defaults_for_old_profiles_and_preserves_zero() {
     let mut profile = ProfileConfig::new_default("default", "Player", 0);
     assert_eq!(profile.lane.hispeed_transition_ms, 150);

@@ -86,6 +86,7 @@ Launch overrides (never saved):
   --auto-scratch on|off        Scratch autoplay; on disables score saving
   --bga on|auto|off
   --guide-se on|off
+  --show-invisible-notes on|off  Show or hide invisible note outlines
   --seed N                     Fixed arrangement and BMS branch seed
   --print-effective-options    Print settings without starting playback
   Without a chart, play overrides are ignored. Returning to Select discards them.

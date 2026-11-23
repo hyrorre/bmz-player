@@ -289,14 +289,29 @@ impl PreparedNoteLayout<'_> {
     }
 
     pub(crate) fn note_rect(&self, lane: Lane, progress: f32, height: f32) -> Option<Rect> {
+        self.scrolling_note_rect(lane, progress, height, self.offset)
+    }
+
+    /// beatoraja draws hidden notes at the lane's own position and scale.
+    pub(crate) fn hidden_note_rect(&self, lane: Lane, progress: f32, height: f32) -> Option<Rect> {
+        self.scrolling_note_rect(lane, progress, height, SkinOffsetValue::default())
+    }
+
+    fn scrolling_note_rect(
+        &self,
+        lane: Lane,
+        progress: f32,
+        height: f32,
+        offset: SkinOffsetValue,
+    ) -> Option<Rect> {
         let area = self.areas[lane.index()]?;
         if self.horizontal {
-            let mut rect = self.rect_at_bottom(area, area.y + area.height, height);
+            let mut rect = self.rect_at_bottom(area, area.y + area.height, height, offset);
             rect.x += self.horizontal_scroll_px(lane, progress) / self.canvas_w;
             return Some(rect);
         }
         let bottom = self.scrolling_bottom(area, progress);
-        Some(self.rect_at_bottom(area, bottom, height))
+        Some(self.rect_at_bottom(area, bottom, height, offset))
     }
 
     pub(crate) fn has_missed_note_target(&self) -> bool {
@@ -322,15 +337,21 @@ impl PreparedNoteLayout<'_> {
         let judge = note_judge_bottom_y(area, self.state, self.canvas_h);
         let bottom = missed_note_bottom_y(area, judge, fall);
         (bottom <= missed_note_target_bottom_y(area, judge, self.dst2, self.canvas_h))
-            .then(|| self.rect_at_bottom(area, bottom, height))
+            .then(|| self.rect_at_bottom(area, bottom, height, self.offset))
     }
 
-    fn rect_at_bottom(&self, area: Rect, bottom: f32, height: f32) -> Rect {
-        let offset_h = self.offset.h as f32 / self.canvas_h;
+    fn rect_at_bottom(
+        &self,
+        area: Rect,
+        bottom: f32,
+        height: f32,
+        offset: SkinOffsetValue,
+    ) -> Rect {
+        let offset_h = offset.h as f32 / self.canvas_h;
         Rect {
-            x: area.x + self.offset.x as f32 / self.canvas_w,
-            y: bottom - height - self.offset.y as f32 / self.canvas_h - offset_h,
-            width: area.width + self.offset.w as f32 / self.canvas_w,
+            x: area.x + offset.x as f32 / self.canvas_w,
+            y: bottom - height - offset.y as f32 / self.canvas_h - offset_h,
+            width: area.width + offset.w as f32 / self.canvas_w,
             height: height + offset_h,
         }
     }

@@ -524,6 +524,7 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
         keyon_started_at: session.lane_keyon_started_at,
         keyoff_started_at: session.lane_keyoff_started_at,
         show_ln_tail_cap: session.show_ln_tail_cap,
+        show_hidden_notes: session.show_hidden_notes,
         // beatoraja の TIMER_HCN_ACTIVE / TIMER_HCN_DAMAGE: HCN passing 中のみアクティブ。
         hcn_active_ms: std::array::from_fn(|lane_index| {
             session.lane_hcn_timer[lane_index].filter(|t| t.inclease).map(|t| {

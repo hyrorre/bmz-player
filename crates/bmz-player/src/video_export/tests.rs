@@ -3,6 +3,25 @@ use crate::config::profile_config::ProfileConfig;
 use std::fs;
 
 #[test]
+fn invisible_note_override_reaches_autoplay_and_replay_export_sessions() {
+    let mut fixture = Fixture::new();
+    fixture.save_replay();
+    for slot in [None, Some(1)] {
+        fixture.options.replay_slot = slot;
+        for visible in [true, false] {
+            fixture
+                .options
+                .play_overrides
+                .values
+                .insert("show-invisible-notes".into(), visible.into());
+            let prepared =
+                prepare::prepare(&fixture.options, &fixture.paths, Some("default")).unwrap();
+            assert_eq!(prepared.play.session.show_hidden_notes, visible);
+        }
+    }
+}
+
+#[test]
 fn archive_export_prepare_resolves_media_and_replay_by_internal_chart_hash() {
     let archive = crate::chart_asset::archive_tests::ArchiveFixture::new();
     let mut fixture = Fixture::new();

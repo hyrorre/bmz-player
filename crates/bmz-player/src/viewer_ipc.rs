@@ -363,8 +363,12 @@ mod tests {
                 .unwrap();
         let request = |command: &ViewerCommand| platform::request_command(&endpoint, command);
 
+        let mut first = play(r"C:\譜面\_temp.bms", 12, true);
+        if let ViewerCommand::Play { play_overrides, .. } = &mut first {
+            play_overrides.values.insert("show-invisible-notes".into(), true.into());
+        }
         for command in [
-            play(r"C:\譜面\_temp.bms", 12, true),
+            first,
             ViewerCommand::Stop,
             play(r"C:\譜面\replacement.bms", 3, false),
             ViewerCommand::Quit,

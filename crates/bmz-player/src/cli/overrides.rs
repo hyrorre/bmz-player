@@ -36,7 +36,13 @@ impl PlayOverrides {
             || self.values.keys().any(|key| {
                 !matches!(
                     key.as_str(),
-                    "hispeed" | "base-hispeed" | "floating-policy" | "hs-fix" | "bga" | "guide-se"
+                    "hispeed"
+                        | "base-hispeed"
+                        | "floating-policy"
+                        | "hs-fix"
+                        | "bga"
+                        | "guide-se"
+                        | "show-invisible-notes"
                 )
             })
     }
@@ -47,7 +53,7 @@ impl PlayOverrides {
             "gas" => play.gauge_auto_shift, "gas-bottom" => play.bottom_shiftable_gauge,
             "hs-fix" => play.hs_fix, "hispeed" => lane.hispeed,
             "base-hispeed" => lane.base_hispeed, "floating-policy" => lane.floating_policy, "bga" => play.bga,
-            "guide-se" => play.guide_se
+            "guide-se" => play.guide_se, "show-invisible-notes" => play.show_hidden_notes
         );
     }
     pub fn apply(&self, profile: &mut ProfileConfig) {
@@ -75,7 +81,7 @@ impl PlayOverrides {
                 "gas-bottom" => check!(BottomShiftableGaugeConfig),
                 "hs-fix" => check!(HsFixConfig),
                 "bga" => check!(BgaModeConfig),
-                "guide-se" | "auto-scratch" => check!(bool),
+                "guide-se" | "auto-scratch" | "show-invisible-notes" => check!(bool),
                 "base-hispeed" => check!(BaseHispeedConfig),
                 "floating-policy" => check!(FloatingPolicyConfig),
                 "hispeed" => {
@@ -277,6 +283,7 @@ pub(super) fn extract(
                 | "hispeed"
                 | "bga"
                 | "guide-se"
+                | "show-invisible-notes"
                 | "seed"
                 | "auto-scratch"
         ) {
@@ -324,7 +331,7 @@ pub(super) fn extract(
                 play.values.insert("base-hispeed".into(), json!("Classic"));
                 play.values.insert("floating-policy".into(), json!("Disabled"));
             }
-            "guide-se" | "auto-scratch" => {
+            "guide-se" | "auto-scratch" | "show-invisible-notes" => {
                 ensure!(lower == "on" || lower == "off", "{flag} requires on/off");
                 play.values.insert(key.into(), json!(lower == "on"));
             }
@@ -424,6 +431,41 @@ mod tests {
         }
     }
     #[test]
+    fn invisible_note_override_is_local_to_each_playback() {
+        for target in [
+            "chart.bms",
+            "chart.bms -a",
+            "chart.bms -P",
+            "chart.bms -r1",
+            "--boot-replay-file chart.replay",
+            "--boot-course-replay 1",
+            "export video chart.bms -o out.mp4",
+            "export video chart.bms -o out.mp4 --replay-slot 1",
+        ] {
+            let mut profile = ProfileConfig::new_default("default", "Tester", 0);
+            for (arg, baseline, expected) in [
+                ("", false, false),
+                ("--show-invisible-notes on", false, true),
+                ("", true, true),
+                ("--show-invisible-notes=off", true, false),
+            ] {
+                profile.play.show_hidden_notes = baseline;
+                let options = match parse(&format!("{target} {arg}")).command {
+                    Command::Run(o) => o.play_overrides,
+                    Command::Export(o) => o.play_overrides,
+                    _ => unreachable!(),
+                };
+                profile.set_cli_play(options);
+                assert_eq!(profile.play.show_hidden_notes, expected, "{target} {arg}");
+                profile.clear_cli_play();
+                assert_eq!(profile.play.show_hidden_notes, baseline);
+            }
+        }
+        for args in ["chart.bms --show-invisible-notes", "chart.bms --show-invisible-notes yes"] {
+            assert!(parse_cli_command(args.split_whitespace()).is_err());
+        }
+    }
+    #[test]
     fn shared_flags_apply_to_modes_and_export() {
         for mode in ["", "-a", "-P"] {
             let invocation = parse(&format!(
@@ -473,8 +515,10 @@ mod tests {
         profile.sync_active_play_mode();
         profile.activate_play_mode(KeyMode::K7);
         let original_gauge = profile.play.gauge;
-        let Command::Run(o) =
-            parse("chart.bms --hispeed 3 --gauge hard --gas off --seed 42").command
+        let Command::Run(o) = parse(
+            "chart.bms --hispeed 3 --gauge hard --gas off --seed 42 --show-invisible-notes on",
+        )
+        .command
         else {
             panic!()
         };
@@ -489,6 +533,7 @@ mod tests {
         crate::config::save::save_profile_config(&path, &profile).unwrap();
         let mut saved = crate::config::load::load_profile_config(&path).unwrap();
         assert_eq!(saved.play.gauge, original_gauge);
+        assert!(!saved.play.show_hidden_notes);
         assert_eq!(saved.display_name, "Unrelated edit");
         assert_eq!(saved.lane.hispeed, 1.25);
         saved.activate_play_mode(KeyMode::K14);
@@ -505,10 +550,13 @@ mod tests {
     fn viewer_request_replaces_previous_overrides() {
         let mut profile = ProfileConfig::new_default("default", "Tester", 0);
         let original = profile.play.gauge;
-        let Command::Run(o) = parse("chart.bms -P --gauge hard --seed 42").command else {
+        let Command::Run(o) =
+            parse("chart.bms -P --gauge hard --seed 42 --show-invisible-notes on").command
+        else {
             panic!()
         };
         profile.set_cli_play(o.play_overrides);
+        assert!(profile.play.show_hidden_notes);
         let request = crate::viewer_ipc::ViewerCommand::Play {
             path: "chart.bms".into(),
             measure: 0,
@@ -522,6 +570,7 @@ mod tests {
             panic!()
         };
         profile.set_cli_play(play_overrides);
+        assert!(!profile.play.show_hidden_notes);
         assert_eq!(profile.play.gauge, original);
         assert_eq!(profile.cli_seed(), None);
     }
