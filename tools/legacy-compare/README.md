@@ -82,3 +82,17 @@ python tools/legacy-compare/compare.py --poll-trace .local/openlr2-parity-trace/
 ### 初版のハッシュ未記録CSV
 
 初版の計測実行ファイルにMD5取得箇所の誤りがあり、MD5列が空のCSVが生成される場合がありました。自動的に別譜面を選ぶことはせず、`--md5 <別の記録から確認した譜面MD5>`を必須とします。指定したファイル自体のMD5と、計測ノート時刻・配置seedを照合し、`trace_hash_present=false`を結果に残します。現行計測版はスコア保存と同じ選曲リストのhashを記録します。
+
+## OpenLR2判定オラクルとの直接比較
+
+保存リプレイの記録時刻は時計41で、OpenLR2が実際に判定に使った時刻ではありません。そのため、記録との差だけではBMZの誤りか記録の限界かを区別できません。`openlr2_oracle.cpp`は、ビルド済みの未改変`OpenLR2Lib`をリンクし、画面・音声なしで`ParseBmsFile`と`ProcNoteOnTiming`を1msごとに呼びます。同じキー入力をオラクルとBMZに与えれば、両プログラムの挙動だけを比べられます。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/legacy-compare/build_openlr2_oracle.ps1
+python tools/legacy-compare/oracle_vs_bmz.py --results .local/legacy-compare --oracle .local/openlr2-oracle/openlr2_oracle.exe --output .local/oracle-vs-bmz
+```
+
+- 入力はテキストで、譜面・鍵数・配置（RANDOM、seed、固定キー、皿配置、DPフリップ）・ゲージ・キーの押下/解放です。`replay_to_oracle.py`が`.lr2rep`から作ります。
+- 出力は判定（`J`）、地雷（`M`）、ポーリング後のゲージ6種・EX・コンボ・判定数（`S`）、全ノートの倍精度時刻（`N`）、閉店（`E`）です。判定は`ApplyJudgeNote` / `ApplyJudgeMine`のリプレイ記録フックから取るので、OpenLR2自身が記録する順序と同じです。
+- ゲージ確認と閉店はScene04_Playと同じく各ポーリングの前に行います。
+- `oracle_vs_bmz.py`は、compare.pyで比較したプレイごとに、BMZとオラクルの判定列、オラクルと記録の判定列、地雷の被弾数を比べます。現時点で比べているのは判定値の列と地雷の回数です。ゲージ・時刻・レーンの照合はまだです。
