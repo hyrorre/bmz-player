@@ -545,11 +545,7 @@ fn run(
             || last_publication.elapsed() >= Duration::from_millis(8)
             || previous_state != frame.state;
         if !publish {
-            let remaining =
-                runtime.next_wake_after(SAFETY_WAKE.saturating_sub(iteration_started.elapsed()));
-            if !remaining.is_zero() {
-                thread::park_timeout(remaining);
-            }
+            wait_for_next_update(&runtime, iteration_started);
             continue;
         }
         last_publication = Instant::now();
@@ -557,7 +553,7 @@ fn run(
         // an observed buffer and never wait for the rendering thread to release it.
         let Some(projection) = projection_pool.iter_mut().find(|slot| Arc::strong_count(slot) == 1)
         else {
-            thread::park_timeout(SAFETY_WAKE.saturating_sub(iteration_started.elapsed()));
+            wait_for_next_update(&runtime, iteration_started);
             continue;
         };
         let projection_state = Arc::get_mut(projection).expect("unobserved projection");
@@ -607,11 +603,15 @@ fn run(
         let old =
             if let Ok(mut slot) = latest.try_lock() { slot.replace(publication) } else { None };
         drop(old);
-        let remaining =
-            runtime.next_wake_after(SAFETY_WAKE.saturating_sub(iteration_started.elapsed()));
-        if !remaining.is_zero() {
-            thread::park_timeout(remaining);
-        }
+        wait_for_next_update(&runtime, iteration_started);
+    }
+}
+
+fn wait_for_next_update(runtime: &GameplayRuntime, iteration_started: Instant) {
+    let remaining =
+        runtime.next_wake_after(SAFETY_WAKE.saturating_sub(iteration_started.elapsed()));
+    if !remaining.is_zero() {
+        thread::park_timeout(remaining);
     }
 }
 

@@ -16,8 +16,12 @@ pub struct KaleidPlayEvidence {
     pub branches: Vec<bmz_core::replay::BranchDecision>,
     pub evaluations: Vec<bmz_core::replay::BranchEvaluation>,
     pub ended_at: bmz_core::time::TimeUs,
+    /// Last completed scoring update before a manual stop or explicit completion.
+    /// Older recordings use the stop time itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scored_through: Option<bmz_core::time::TimeUs>,
     pub manually_stopped: bool,
-    /// Explicit completion before natural score settlement. `ended_at` is the scoring cutoff.
+    /// Explicit completion before natural score settlement.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub finished_early: bool,
     pub options: std::collections::BTreeMap<String, serde_json::Value>,

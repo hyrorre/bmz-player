@@ -435,6 +435,7 @@ fn replay_event(
         return Ok(None);
     };
     Ok(Some(ReplayEvent {
+        applied_after: None,
         lane,
         kind: if input.pressed { InputKind::Press } else { InputKind::Release },
         time: TimeUs(input.time_us),

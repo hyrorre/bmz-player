@@ -10,7 +10,8 @@ pub struct ConditionalRuntime {
     /// BMZ ClearType index, snapshotted before starting this play.
     pub best_lamp: u8,
     pub replay_auto: Option<bool>,
-    pub pending_inputs: Vec<InputEvent>,
+    /// Human inputs received before their offset-adjusted judgement time, on every chart.
+    pub pending_inputs: PendingInputs,
     pub error: Option<String>,
     pub(super) processed_time: Option<TimeUs>,
 }
@@ -54,16 +55,25 @@ pub(super) fn next_evaluation_for(
 }
 
 /// At an early terminal state the still-visible DEFAULT suffix becomes final.
-pub(super) fn finalize_defaults(session: &mut GameSession, at: TimeUs) {
-    let Some(program) = &session.chart.metadata.conditional else {
+pub(super) fn finalize_defaults(
+    chart: &PlayableChart,
+    runtime: &mut ConditionalRuntime,
+    at: TimeUs,
+) {
+    let Some(program) = &chart.metadata.conditional else {
         return;
     };
+    if runtime.decisions.len() == program.blocks.len() {
+        return;
+    }
+    // A fatal hold tick can predate a branch already selected on the audio clock.
+    let time = at.max(runtime.decisions.last().map_or(TimeUs(0), |decision| decision.time));
     for (index, block) in program.blocks.iter().enumerate() {
-        if !session.conditional.decisions.iter().any(|d| d.block == index) {
-            session.conditional.decisions.push(BranchDecision {
+        if !runtime.decisions.iter().any(|d| d.block == index) {
+            runtime.decisions.push(BranchDecision {
                 block: index,
                 branch: block.conditions.len(),
-                time: at.max(TimeUs(0)),
+                time,
             });
         }
     }
@@ -102,161 +112,166 @@ fn condition_value(
     }
 }
 
-fn choose_decisions(
+/// Both players stop at the same scoring position before changing the chart. Audio
+/// determines when the choice is due; it never extends the scoring interval.
+pub(super) struct ScoringStep {
+    pub until: TimeUs,
+    pub input_limit: usize,
+    pub branch: Option<TimeUs>,
+}
+
+pub(super) fn next_scoring_step(
     chart: &PlayableChart,
     runtime: &ConditionalRuntime,
+    replay: Option<&ReplayPlayer>,
+    audio_now: TimeUs,
+    score_now: TimeUs,
+    cutoff: Option<TimeUs>,
+) -> ScoringStep {
+    let mut step = ScoringStep { until: score_now, input_limit: usize::MAX, branch: None };
+    let Some(at) = next_evaluation_for(chart, runtime) else { return step };
+    let recorded = replay
+        .and_then(|player| player.kaleid.as_ref())
+        .and_then(|evidence| evidence.evaluations.iter().find(|e| e.decision.time == at));
+    // An unevaluated DEFAULT suffix is also saved at a stop. Only an evaluation
+    // proves the branch took place beyond the last scoring update.
+    if cutoff.is_some_and(|end| at > end) && recorded.is_none() {
+        return step;
+    }
+    step.until = step.until.min(TimeUs(at.0.saturating_sub(1)));
+    step.branch = (at <= audio_now).then_some(at);
+    if let Some(position) = recorded.and_then(|e| e.score_position) {
+        step.until = step.until.min(position.time);
+        step.input_limit = position.input_count;
+        if score_now < position.time {
+            step.branch = None;
+        }
+    }
+    step
+}
+
+fn select_chart(
+    old: &mut Arc<PlayableChart>,
+    runtime: &mut ConditionalRuntime,
+    judge: &mut JudgeEngine,
+    autoplay: &mut Option<AutoplayController>,
+    score: &ScoreState,
+    gauge: f32,
+    total: u32,
     at: TimeUs,
-    value: impl Fn(&str) -> f64,
-) -> Vec<BranchDecision> {
-    let Some(program) = &chart.metadata.conditional else { return Vec::new() };
-    // All blocks at this time see the same pre-boundary score/gauge snapshot.
-    let mut decisions = Vec::new();
+    input_count: usize,
+) -> Option<PlayableChart> {
+    let program = old.metadata.conditional.clone()?;
+    let reference_total = *runtime.reference_total.get_or_insert(total);
+    let auto = runtime
+        .replay_auto
+        .unwrap_or_else(|| autoplay.as_ref().is_some_and(AutoplayController::is_full));
+    let score_position = runtime
+        .processed_time
+        .map(|time| bmz_core::replay::ReplayScorePosition { time, input_count });
+    let mut mismatch = false;
+    let mut choices = vec![None; program.blocks.len()];
+    for decision in &runtime.decisions {
+        choices[decision.block] = Some(decision.branch);
+    }
     for (i, block) in program.blocks.iter().enumerate() {
-        if runtime.decisions.iter().any(|d| d.block == i) || program.evaluation_time(i, chart) != at
-        {
+        if choices[i].is_some() || program.evaluation_time(i, old) != at {
             continue;
         }
-        let choice = if let Some(replay) = &runtime.replay_decisions {
-            replay
-                .iter()
-                .find(|d| d.block == i)
-                .map_or(block.conditions.len(), |d| d.branch.min(block.conditions.len()))
-        } else {
-            block
-                .conditions
-                .iter()
-                .position(|c| c.matches(value(&c.variable)))
-                .unwrap_or(block.conditions.len())
-        };
-        decisions.push(BranchDecision { block: i, branch: choice, time: at });
+        let value =
+            |name| condition_value(name, score, reference_total, gauge, runtime.best_lamp, auto);
+        let values: std::collections::BTreeMap<_, _> = block
+            .conditions
+            .iter()
+            .map(|condition| (condition.variable.clone(), value(&condition.variable)))
+            .collect();
+        let default = block.conditions.len();
+        let calculated_branch =
+            block.conditions.iter().position(|c| c.matches(values[&c.variable])).unwrap_or(default);
+        let mut branch = calculated_branch;
+        if let Some(decisions) = &runtime.replay_decisions {
+            let recorded = decisions.iter().find(|d| d.block == i);
+            branch = recorded.map_or(default, |d| d.branch.min(default));
+            mismatch |= branch != calculated_branch || recorded.is_none_or(|d| d.time != at);
+        }
+        let decision = BranchDecision { block: i, branch, time: at };
+        choices[i] = Some(branch);
+        runtime.decisions.push(decision);
+        runtime.evaluations.push(bmz_core::replay::BranchEvaluation {
+            decision,
+            score_position,
+            values,
+            calculated_branch,
+            from_replay: runtime.replay_decisions.is_some(),
+        });
     }
-    decisions
-}
-
-fn evaluations(
-    chart: &PlayableChart,
-    runtime: &ConditionalRuntime,
-    decisions: &[BranchDecision],
-    value: impl Fn(&str) -> f64,
-) -> Vec<bmz_core::replay::BranchEvaluation> {
-    let Some(program) = &chart.metadata.conditional else { return Vec::new() };
-    decisions
-        .iter()
-        .map(|decision| {
-            let block = &program.blocks[decision.block];
-            let values: std::collections::BTreeMap<_, _> = block
-                .conditions
-                .iter()
-                .map(|condition| (condition.variable.clone(), value(&condition.variable)))
-                .collect();
-            let calculated_branch = block
-                .conditions
-                .iter()
-                .position(|condition| condition.matches(values[&condition.variable]))
-                .unwrap_or(block.conditions.len());
-            bmz_core::replay::BranchEvaluation {
-                decision: *decision,
-                values,
-                calculated_branch,
-                from_replay: runtime.replay_decisions.is_some(),
-            }
-        })
-        .collect()
-}
-
-pub(super) fn evaluate(session: &mut GameSession, at: TimeUs) {
-    let Some(program) = session.chart.metadata.conditional.clone() else {
-        return;
-    };
-    let reference_total =
-        *session.conditional.reference_total.get_or_insert(session.scored_total_notes);
-    let decisions = choose_decisions(&session.chart, &session.conditional, at, |name| {
-        condition_value(
-            name,
-            &session.score,
-            reference_total,
-            session.gauge.current().value,
-            session.conditional.best_lamp,
-            session.conditional.replay_auto.unwrap_or_else(|| {
-                session.autoplay.as_ref().is_some_and(AutoplayController::is_full)
-            }),
-        )
-    });
-    let evaluated = evaluations(&session.chart, &session.conditional, &decisions, |name| {
-        condition_value(
-            name,
-            &session.score,
-            reference_total,
-            session.gauge.current().value,
-            session.conditional.best_lamp,
-            session.conditional.replay_auto.unwrap_or_else(|| {
-                session.autoplay.as_ref().is_some_and(AutoplayController::is_full)
-            }),
-        )
-    });
-    let replay_mismatch = evaluated.iter().any(|evaluation| {
-        evaluation.from_replay
-            && (evaluation.calculated_branch != evaluation.decision.branch
-                || session
-                    .conditional
-                    .replay_decisions
-                    .as_ref()
-                    .and_then(|decisions| {
-                        decisions
-                            .iter()
-                            .find(|decision| decision.block == evaluation.decision.block)
-                    })
-                    .is_none_or(|recorded| recorded.time != evaluation.decision.time))
-    });
-    if replay_mismatch {
+    if mismatch {
         let message =
             "Replayの記録枝または評価時刻が再計算と一致しません。記録枝で参考再生しています。";
-        let provenance = &mut Arc::make_mut(&mut session.chart).metadata.kaleid;
-        if !provenance.diagnostics.iter().any(|diagnostic| diagnostic == message) {
-            provenance.diagnostics.push(message.into());
+        let diagnostics = &mut Arc::make_mut(old).metadata.kaleid.diagnostics;
+        if !diagnostics.iter().any(|s| s == message) {
+            diagnostics.push(message.into());
         }
-    }
-    session.conditional.evaluations.extend(evaluated);
-    session.conditional.decisions.extend(decisions);
-    let mut choices = vec![None; program.blocks.len()];
-    for d in &session.conditional.decisions {
-        choices[d.block] = Some(d.branch);
     }
     let mut chart = match program.materialize(&choices) {
         Ok(chart) => chart,
         Err(error) => {
-            session.conditional.error = Some(error.to_string());
-            // Keep the playable suffix and the failed-interpretation evidence.
-            Arc::make_mut(&mut session.chart).metadata.kaleid.diagnostics.push(error.to_string());
-            for decision in &mut session.conditional.decisions {
-                if decision.time == at {
-                    decision.branch = program.blocks[decision.block].conditions.len();
-                }
+            runtime.error = Some(error.to_string());
+            Arc::make_mut(old).metadata.kaleid.diagnostics.push(error.to_string());
+            for decision in runtime.decisions.iter_mut().filter(|d| d.time == at) {
+                decision.branch = program.blocks[decision.block].conditions.len();
             }
-            return;
+            return None;
         }
     };
-    chart.metadata.source_format = session.chart.metadata.source_format;
-    chart.metadata.total = session.chart.metadata.total;
-    chart.metadata.bmson_total_percent = session.chart.metadata.bmson_total_percent;
-    for diagnostic in &session.chart.metadata.kaleid.diagnostics {
+    chart.metadata.source_format = old.metadata.source_format;
+    chart.metadata.total = old.metadata.total;
+    chart.metadata.bmson_total_percent = old.metadata.bmson_total_percent;
+    for diagnostic in &old.metadata.kaleid.diagnostics {
         if !chart.metadata.kaleid.diagnostics.contains(diagnostic) {
             chart.metadata.kaleid.diagnostics.push(diagnostic.clone());
         }
     }
-    chart.metadata.conditional_revision = session.chart.metadata.conditional_revision + 1;
+    chart.metadata.conditional_revision = old.metadata.conditional_revision + 1;
     chart.metadata.conditional = Some(program);
-    retain_preloaded_sounds(&session.chart, &mut chart);
-    preserve_history(&session.chart, &session.judge, &mut chart, at);
-    rebind_audio(session, &chart, at);
-    session.judge.rebind_chart(&session.chart, &chart);
+    retain_preloaded_sounds(old, &mut chart);
+    preserve_history(old, judge, &mut chart, at);
+    let mine_cursors = judge.lanes.each_ref().map(|lane| lane.next_mine_index);
+    judge.rebind_chart(old, &chart);
+    // The original prefix is still in order. Resume at the first unprocessed
+    // mine there, even if the branch has already scheduled audio beyond it.
     for lane in Lane::ALL {
-        session.judge.lanes[lane.index()].next_mine_index =
-            chart.lane_notes[lane.index()].partition_point(|n| n.time < at);
+        judge.lanes[lane.index()].next_mine_index = mine_cursors[lane.index()]
+            .min(chart.notes_for_lane(lane).partition_point(|n| n.time < at));
     }
-    if let Some(auto) = &mut session.autoplay {
-        auto.skip_before(&chart, at);
+    if let Some(auto) = autoplay {
+        let next = runtime
+            .processed_time
+            .map_or(TimeUs(i64::MIN), |time| TimeUs(time.0.saturating_add(1)));
+        auto.skip_before(&chart, next.min(at));
     }
+    Some(chart)
+}
+
+pub(super) fn evaluate(session: &mut GameSession, at: TimeUs) {
+    let input_count = session
+        .replay_player
+        .as_ref()
+        .map_or(session.replay_recorder.events.len(), |p| p.next_index);
+    let Some(chart) = select_chart(
+        &mut session.chart,
+        &mut session.conditional,
+        &mut session.judge,
+        &mut session.autoplay,
+        &session.score,
+        session.gauge.current().value,
+        session.scored_total_notes,
+        at,
+        input_count,
+    ) else {
+        return;
+    };
+    rebind_audio(session, &chart, at);
     session.scored_total_notes =
         crate::score::scored_note_count_excluding_lanes(&chart, &session.display_only_lane_mask);
     session.timing_map =
@@ -268,69 +283,21 @@ pub(super) fn evaluate(session: &mut GameSession, at: TimeUs) {
 }
 
 pub(super) fn evaluate_opponent(opponent: &mut BattleOpponentSession, at: TimeUs) {
-    let Some(program) = opponent.chart.metadata.conditional.clone() else { return };
-    let reference_total =
-        *opponent.conditional.reference_total.get_or_insert(opponent.scored_total_notes);
-    let decisions = choose_decisions(&opponent.chart, &opponent.conditional, at, |name| {
-        condition_value(
-            name,
-            &opponent.score,
-            reference_total,
-            opponent.gauge.current().value,
-            opponent.conditional.best_lamp,
-            opponent.conditional.replay_auto.unwrap_or_else(|| {
-                opponent.autoplay.as_ref().is_some_and(AutoplayController::is_full)
-            }),
-        )
-    });
-    let evaluated = evaluations(&opponent.chart, &opponent.conditional, &decisions, |name| {
-        condition_value(
-            name,
-            &opponent.score,
-            reference_total,
-            opponent.gauge.current().value,
-            opponent.conditional.best_lamp,
-            opponent.conditional.replay_auto.unwrap_or_else(|| {
-                opponent.autoplay.as_ref().is_some_and(AutoplayController::is_full)
-            }),
-        )
-    });
-    opponent.conditional.evaluations.extend(evaluated);
-    opponent.conditional.decisions.extend(decisions);
-    let mut choices = vec![None; program.blocks.len()];
-    for decision in &opponent.conditional.decisions {
-        choices[decision.block] = Some(decision.branch);
+    let input_count = opponent.replay_player.as_ref().map_or(0, |p| p.next_index);
+    if let Some(chart) = select_chart(
+        &mut opponent.chart,
+        &mut opponent.conditional,
+        &mut opponent.judge,
+        &mut opponent.autoplay,
+        &opponent.score,
+        opponent.gauge.current().value,
+        opponent.scored_total_notes,
+        at,
+        input_count,
+    ) {
+        opponent.scored_total_notes = crate::score::scored_note_count(&chart);
+        opponent.chart = Arc::new(chart);
     }
-    let mut chart = match program.materialize(&choices) {
-        Ok(chart) => chart,
-        Err(error) => {
-            opponent.conditional.error = Some(error.to_string());
-            Arc::make_mut(&mut opponent.chart).metadata.kaleid.diagnostics.push(error.to_string());
-            for decision in &mut opponent.conditional.decisions {
-                if decision.time == at {
-                    decision.branch = program.blocks[decision.block].conditions.len();
-                }
-            }
-            return;
-        }
-    };
-    chart.metadata.source_format = opponent.chart.metadata.source_format;
-    chart.metadata.total = opponent.chart.metadata.total;
-    chart.metadata.bmson_total_percent = opponent.chart.metadata.bmson_total_percent;
-    chart.metadata.conditional_revision = opponent.chart.metadata.conditional_revision + 1;
-    chart.metadata.conditional = Some(program);
-    retain_preloaded_sounds(&opponent.chart, &mut chart);
-    preserve_history(&opponent.chart, &opponent.judge, &mut chart, at);
-    opponent.judge.rebind_chart(&opponent.chart, &chart);
-    for lane in Lane::ALL {
-        opponent.judge.lanes[lane.index()].next_mine_index =
-            chart.lane_notes[lane.index()].partition_point(|n| n.time < at);
-    }
-    if let Some(auto) = &mut opponent.autoplay {
-        auto.skip_before(&chart, at);
-    }
-    opponent.scored_total_notes = crate::score::scored_note_count(&chart);
-    opponent.chart = Arc::new(chart);
 }
 
 fn retain_preloaded_sounds(old: &PlayableChart, new: &mut PlayableChart) {
@@ -469,21 +436,12 @@ fn rebind_audio(session: &mut GameSession, new: &PlayableChart, at: TimeUs) {
     session.auto_keysound_scheduler.skip = sounds;
 }
 
-pub(super) fn advance_before_boundary(
-    session: &mut GameSession,
-    at: TimeUs,
-) -> Vec<JudgementEvent> {
-    let mut events = super::input::process_timed_inputs(session, at);
-    events.extend(advance_time(session, at));
-    events
-}
-
 /// Split held-note intervals even when the owner crosses an entire LN in one wake.
 pub(super) fn advance_time(session: &mut GameSession, at: TimeUs) -> Vec<JudgementEvent> {
     if session.state == PlayState::Failed || session.play_end_reached() {
         return Vec::new();
     }
-    let previous = session.conditional.processed_time.unwrap_or(TimeUs(-1));
+    let previous = session.conditional.processed_time.unwrap_or(at.min(TimeUs(-1)));
     if at < previous {
         return Vec::new();
     }
@@ -495,33 +453,25 @@ pub(super) fn advance_time(session: &mut GameSession, at: TimeUs) -> Vec<Judgeme
         points.push(TimeUs(point.time.0 - 1));
         points.push(point.time);
     }
-    for pair in &session.chart.long_notes {
-        if pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Hcn {
-            points.extend([
-                pair.start_time,
-                TimeUs(
-                    pair.start_time
-                        .0
-                        .saturating_add(session.judge.windows.bad_slow_us)
-                        .saturating_add(1),
-                ),
-                pair.end_time,
-            ]);
-        }
-    }
+    session.judge.append_hcn_boundaries(&session.chart, previous, at, &mut points);
     points.retain(|t| *t > previous && *t < at);
-    points.push(at);
     points.sort_unstable();
     points.dedup();
     let mut events = Vec::new();
-    for time in points {
+    for time in points.into_iter().chain(std::iter::once(at)) {
         if session.play_end_reached() {
             break;
         }
         // Integrate the old hold state up to this boundary, then apply its discrete events.
-        apply_hcn_gauge(session, time);
+        events.extend(apply_hcn_gauge(session, time));
+        if session.state == PlayState::Failed {
+            break;
+        }
         super::frame::sync_judge_windows(session, time);
         events.extend(super::input::process_mine_passes(session, time));
+        if session.state == PlayState::Failed {
+            break;
+        }
         events.extend(super::input::process_misses(session, time));
         update_hcn_lane_timers(session, time);
         if session.lane_hcn_timer.iter().any(Option::is_some) {

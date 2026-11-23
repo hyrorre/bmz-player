@@ -1,6 +1,6 @@
-/// HCN passing 中レーンの表示タイマー状態。
-use super::judgement::{update_gauge_increase_timer, update_gauge_increase_timer_state};
+use crate::judge::model::HoldGaugeEvent;
 
+/// HCN passing 中レーンの表示タイマー状態。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HcnLaneTimer {
     /// 押下中 (回復中) なら true、離している (減衰中) なら false。
@@ -57,9 +57,7 @@ pub fn update_hcn_lane_timers(session: &mut GameSession, audio_now: TimeUs) {
             // on the next update. Do not mark it as already applied here.
             let just_played_missed_head = muted
                 && session.pending_keysounds.iter().any(|event| {
-                    event.trigger == KeySoundTrigger::Miss
-                        && event.note_id == pair.start_note_id
-                        && event.time == audio_now
+                    event.trigger == KeySoundTrigger::Miss && event.note_id == pair.start_note_id
                 });
             if just_played_missed_head {
                 next_muted[idx] = None;
@@ -167,36 +165,75 @@ pub(super) fn update_battle_opponent_hcn(opponent: &mut BattleOpponentSession, n
         }
     }
     opponent.lane_hcn_timer = next;
-    if next.iter().all(Option::is_none) {
-        opponent.last_hcn_gauge_at = None;
-        return;
-    }
-    let previous = opponent.last_hcn_gauge_at.replace(now).unwrap_or(now);
+    opponent.last_hcn_gauge_at = next.iter().any(Option::is_some).then_some(now);
+}
+
+/// Merge each lane's 200ms crossings in chart-time order. Gauge caps and depletion
+/// make the order of a recovery and damage on different lanes observable.
+fn hcn_ticks(
+    chart: &PlayableChart,
+    timers: &mut [Option<HcnLaneTimer>; LANE_COUNT],
+    previous: TimeUs,
+    now: TimeUs,
+) -> impl Iterator<Item = HoldGaugeEvent> + use<> {
+    use std::cmp::Reverse;
+    let mut next = std::collections::BinaryHeap::new();
     let delta = now.0.saturating_sub(previous.0).max(0);
-    for (idx, timer) in opponent.lane_hcn_timer.iter_mut().enumerate() {
-        if hln_passing(&opponent.chart, idx, now) {
+    for (lane, timer) in timers.iter_mut().enumerate() {
+        let Some(timer) = timer else { continue };
+        if hln_passing(chart, lane, previous) {
             continue;
         }
-        let Some(timer) = timer else {
-            continue;
-        };
-        let ticks = advance_hcn_counter(timer, delta);
-        for _ in 0..ticks {
-            let previous_gauge = opponent.gauge.current().value;
-            opponent.gauge.apply_hcn_hold();
-            let current = opponent.gauge.current();
-            update_gauge_increase_timer_state(
-                &mut opponent.gauge_increase_started_at,
-                previous_gauge,
-                current.value,
-                current.definition.max,
-                now,
-            );
-        }
-        for _ in 0..-ticks {
-            opponent.gauge.apply_hcn_drain();
+        let count = timer.passing_count_us;
+        if advance_hcn_counter(timer, delta) != 0 {
+            let progress = if timer.inclease { count } else { -count };
+            let first = TimeUs(previous.0 + (HCN_UPDATE_US + 1 - progress));
+            next.push(Reverse((first, lane, timer.inclease)));
         }
     }
+    std::iter::from_fn(move || {
+        let Reverse((at, lane, held)) = next.pop()?;
+        if let Some(next_at) = at.0.checked_add(HCN_UPDATE_US).map(TimeUs).filter(|&t| t <= now) {
+            next.push(Reverse((next_at, lane, held)));
+        }
+        Some(HoldGaugeEvent { time: at, lane: Lane::ALL[lane], increase: held })
+    })
+}
+
+/// Include HLN body events up to each HCN crossing. The common outcome handler
+/// orders simultaneous ticks by lane and stops on the first fatal effect.
+fn next_hold_outcome(
+    ticks: &mut std::iter::Peekable<impl Iterator<Item = HoldGaugeEvent>>,
+    judge: &mut JudgeEngine,
+    chart: &PlayableChart,
+) -> Option<JudgeOutcome> {
+    let time = ticks.peek()?.time;
+    let mut outcome = judge.advance_hln(chart, time);
+    while let Some(tick) = ticks.next_if(|tick| tick.time == time) {
+        outcome.hold_ticks.push(tick);
+    }
+    Some(outcome)
+}
+
+pub(super) fn apply_battle_opponent_hcn_gauge(
+    opponent: &mut BattleOpponentSession,
+    now: TimeUs,
+) -> Vec<DisplayJudgementEvent> {
+    let mut events = Vec::new();
+    if let Some(previous) = opponent.last_hcn_gauge_at
+        && now > previous
+    {
+        opponent.last_hcn_gauge_at = Some(now);
+        let mut ticks =
+            hcn_ticks(&opponent.chart, &mut opponent.lane_hcn_timer, previous, now).peekable();
+        while !opponent.gauge.current_closes_play_on_zero()
+            && let Some(outcome) =
+                next_hold_outcome(&mut ticks, &mut opponent.judge, &opponent.chart)
+        {
+            events.extend(super::frame::apply_battle_opponent_outcome(opponent, outcome));
+        }
+    }
+    events
 }
 
 /// beatoraja の HCN ゲージ増減判定 (passing ベース)。
@@ -204,63 +241,28 @@ pub(super) fn update_battle_opponent_hcn(opponent: &mut BattleOpponentSession, n
 /// `mpassingcount` 相当の符号付きカウンタにフレーム経過時間を加減算して、
 /// ±200ms を超えるたびに GREAT/BAD × rate 0.5 でゲージを 1 tick 更新する。
 /// 始端を見逃しても途中から押し直せば回復する。
-pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
+pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) -> Vec<JudgementEvent> {
+    let mut events = Vec::new();
     if session.lane_hcn_timer.iter().all(Option::is_none) {
         session.last_hcn_gauge_at = None;
-        return;
+        return events;
     }
 
     let previous = session.last_hcn_gauge_at.unwrap_or(audio_now);
-    session.last_hcn_gauge_at = Some(audio_now);
     if audio_now.0 <= previous.0 {
-        return;
+        session.last_hcn_gauge_at.get_or_insert(audio_now);
+        return events;
     }
+    session.last_hcn_gauge_at = Some(audio_now);
 
-    let delta_us = audio_now.0 - previous.0;
-    for idx in 0..LANE_COUNT {
-        let hold_time =
-            if session.chart.metadata.conditional.is_some() { previous } else { audio_now };
-        if hln_passing(&session.chart, idx, hold_time) {
-            continue;
-        }
-        let Some(mut timer) = session.lane_hcn_timer[idx] else {
-            continue;
-        };
-        let ticks = advance_hcn_counter(&mut timer, delta_us);
-        if ticks > 0 {
-            for _ in 0..ticks {
-                if session.display_only_lane_mask[idx] {
-                    if let Some(gauge) = &mut session.opponent.gauge {
-                        let previous_gauge = gauge.current().value;
-                        gauge.apply_hcn_hold();
-                        let current = gauge.current();
-                        update_gauge_increase_timer_state(
-                            &mut session.opponent.gauge_increase_started_at,
-                            previous_gauge,
-                            current.value,
-                            current.definition.max,
-                            audio_now,
-                        );
-                    }
-                } else {
-                    let previous_gauge = session.gauge.current().value;
-                    session.gauge.apply_hcn_hold();
-                    update_gauge_increase_timer(session, previous_gauge, audio_now);
-                }
-            }
-        } else {
-            for _ in 0..-ticks {
-                if session.display_only_lane_mask[idx] {
-                    if let Some(gauge) = &mut session.opponent.gauge {
-                        gauge.apply_hcn_drain();
-                    }
-                } else {
-                    session.gauge.apply_hcn_drain();
-                }
-            }
-        }
-        session.lane_hcn_timer[idx] = Some(timer);
+    let mut ticks =
+        hcn_ticks(&session.chart, &mut session.lane_hcn_timer, previous, audio_now).peekable();
+    while session.state != PlayState::Failed
+        && let Some(outcome) = next_hold_outcome(&mut ticks, &mut session.judge, &session.chart)
+    {
+        events.extend(apply_judge_outcome(session, outcome));
     }
+    events
 }
 fn hln_passing(chart: &PlayableChart, lane: usize, now: TimeUs) -> bool {
     chart.long_notes.iter().any(|pair| {

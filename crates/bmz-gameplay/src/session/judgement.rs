@@ -98,6 +98,9 @@ pub(super) fn apply_judge_outcome_with_display_time(
                         );
                     }
                     update_failed_state_from_gauge(session);
+                    if session.state == PlayState::Failed {
+                        session.scoring_closed_at.get_or_insert(event.time);
+                    }
                 }
                 Effect::Potion(event) => {
                     let display_only = session.display_only_lane_mask[event.lane.index()];

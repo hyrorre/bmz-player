@@ -16,7 +16,11 @@ use crate::select_options::{ArrangeOption, DoubleOption, DoubleOptionScoreBucket
 pub const REPLAY_FILE_VERSION: u32 = 8;
 /// Revision 1 updated DX POP windows. Revision 2 updates scoring and passage judgement.
 /// Revision 3 applies the HCN EmptyPoor policy in the shared judge before recording history.
-pub const REPLAY_JUDGE_REVISION: u32 = 3;
+/// Revision 4 applies HCN and HLN gauge changes in chart order at chart and input
+/// boundaries, delays passive scoring for negative human input offsets on all charts,
+/// records the scoring boundary for inputs that arrive after it, and records the
+/// scoring position at each branch evaluation.
+pub const REPLAY_JUDGE_REVISION: u32 = 4;
 pub const SEED_SCHEME_BEATORAJA_24BIT_V1: &str = "beatoraja_24bit_v1";
 pub const SEED_SCHEME_LEGACY_SHARED_V3: &str = "legacy_shared_v3";
 pub const S_RANDOM_SCHEME_LEGACY_40MS_V1: &str = SRandomScheme::LEGACY_40MS_V1;
@@ -171,7 +175,7 @@ impl ReplayFile {
         // Device timestamps received in the same poll can differ by a few
         // microseconds and arrive out of order. ReplayPlayer consumes a time-
         // ordered stream, so preserve equal-time order while normalizing it.
-        events.sort_by_key(|event| event.time);
+        events.sort_by_key(ReplayEvent::delivery_time);
         Self {
             kaleid: None,
             branch_decisions: None,
@@ -605,11 +609,26 @@ mod tests {
     #[test]
     fn conditional_replay_roundtrip_and_duplicate_rejection() {
         let decision = bmz_core::replay::BranchDecision { block: 2, branch: 1, time: TimeUs(123) };
+        let evaluation = bmz_core::replay::BranchEvaluation {
+            decision,
+            score_position: Some(bmz_core::replay::ReplayScorePosition {
+                time: TimeUs(100),
+                input_count: 0,
+            }),
+            values: Default::default(),
+            calculated_branch: 1,
+            from_replay: false,
+        };
         let replay =
             ReplayFile::new([1; 32], 1, None, ArrangeOption::Normal, None, None, Vec::new())
+                .with_kaleid_evidence(Some(bmz_chart::kaleid::KaleidPlayEvidence {
+                    evaluations: vec![evaluation.clone()],
+                    ..Default::default()
+                }))
                 .with_branch_decisions(Some(vec![decision]));
         let parsed = parse_replay(&toml::to_string(&replay).unwrap()).unwrap();
         assert_eq!(parsed.player().branch_decisions, Some(vec![decision]));
+        assert_eq!(parsed.player().kaleid.unwrap().evaluations, [evaluation]);
         let duplicate = replay.with_branch_decisions(Some(vec![decision, decision]));
         assert!(parse_replay(&toml::to_string(&duplicate).unwrap()).is_err());
     }
@@ -617,6 +636,7 @@ mod tests {
     #[test]
     fn replay_constructor_stably_orders_input_events() {
         let event = |lane, time| ReplayEvent {
+            applied_after: None,
             lane,
             kind: InputKind::Press,
             time: TimeUs(time),
@@ -631,15 +651,26 @@ mod tests {
             ArrangeOption::Normal,
             None,
             None,
-            vec![event(Lane::Key1, 30), event(Lane::Key2, 20), event(Lane::Key3, 20)],
+            vec![
+                ReplayEvent { applied_after: Some(TimeUs(40)), ..event(Lane::Key4, 10) },
+                event(Lane::Key1, 30),
+                event(Lane::Key2, 20),
+                event(Lane::Key3, 20),
+            ],
         );
 
         assert_eq!(
             replay.events.iter().map(|event| event.time.0).collect::<Vec<_>>(),
-            vec![20, 20, 30]
+            vec![20, 20, 30, 10]
         );
         assert_eq!(replay.events[0].lane, Lane::Key2);
         assert_eq!(replay.events[1].lane, Lane::Key3);
+        let encoded = toml::to_string(&replay).unwrap();
+        assert_eq!(encoded.matches("applied_after").count(), 1);
+        let mut player = parse_replay(&encoded).unwrap().player();
+        player.skip_before(TimeUs(35));
+        assert!(player.poll_until(TimeUs(39)).is_empty());
+        assert_eq!(player.poll_until(TimeUs(40))[0].time, TimeUs(10));
     }
 
     #[test]
@@ -676,6 +707,7 @@ mod tests {
             None,
             None,
             vec![ReplayEvent {
+                applied_after: None,
                 lane: Lane::Key1,
                 kind: InputKind::Press,
                 time: TimeUs(1_000),
@@ -711,6 +743,7 @@ mod tests {
             Some(0x12_3456),
             None,
             vec![ReplayEvent {
+                applied_after: None,
                 lane: Lane::Scratch,
                 kind: InputKind::Press,
                 time: TimeUs(5_000),
@@ -853,6 +886,7 @@ events = []
             None,
             None,
             vec![ReplayEvent {
+                applied_after: None,
                 lane: Lane::Key2,
                 kind: InputKind::Release,
                 time: TimeUs(2_000),
@@ -1094,6 +1128,7 @@ events = []
             None,
             None,
             vec![ReplayEvent {
+                applied_after: None,
                 lane: Lane::Key1,
                 kind: InputKind::Press,
                 time: TimeUs(10),
@@ -1109,6 +1144,7 @@ events = []
             None,
             None,
             vec![ReplayEvent {
+                applied_after: None,
                 lane: Lane::Key2,
                 kind: InputKind::Release,
                 time: TimeUs(20),

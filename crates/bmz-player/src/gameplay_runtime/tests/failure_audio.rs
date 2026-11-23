@@ -42,6 +42,12 @@ fn optional_play_behaviors_wait_for_events_not_pcm_and_preserve_terminal_audio_r
             runtime.session.play_keysound_on_miss = enabled;
             let mut processor = audio.processor();
             start_long_bgm_and_keys(&mut runtime, &audio, &input, &mut processor);
+            // Release the HCN early to exercise normal completion below the clear border.
+            runtime.session.audio_clock.current_frame.store(350, Ordering::Release);
+            for event in events(350) {
+                input.push_shared_event(event);
+            }
+            runtime.advance(&audio);
             runtime.session.audio_clock.current_frame.store(2_000, Ordering::Release);
             runtime.advance(&audio);
             assert!(runtime.session.judge.is_exhausted(&runtime.session.chart));
@@ -71,6 +77,21 @@ fn optional_play_behaviors_wait_for_events_not_pcm_and_preserve_terminal_audio_r
             }
         }
     }
+}
+
+#[test]
+fn held_hcn_and_missed_taps_match_across_owner_updates() {
+    let run = |updates: Vec<u64>| {
+        let (mut runtime, audio, input) = fixture(64);
+        let mut processor = audio.processor();
+        start_long_bgm_and_keys(&mut runtime, &audio, &input, &mut processor);
+        for at in updates {
+            runtime.session.audio_clock.current_frame.store(at, Ordering::Release);
+            runtime.advance(&audio);
+        }
+        runtime.session.gauge.carry_values()
+    };
+    assert_eq!(run(vec![2_000]), run((101..=2_000).collect()));
 }
 
 #[test]
@@ -126,6 +147,7 @@ fn optional_play_behaviors_hcn_miss_plays_then_mutes_and_resumes_on_press() {
                     judge_window_rates: None,
                     branch_decisions: None,
                     events: vec![bmz_core::replay::ReplayEvent {
+                        applied_after: None,
                         lane: Lane::Key4,
                         kind: InputKind::Press,
                         time: TimeUs(950_000),
@@ -236,6 +258,12 @@ fn gauge_failure_discards_failure_frame_schedule_and_all_existing_voices() {
         let (mut runtime, audio, input) = fixture(64);
         let mut processor = audio.processor();
         start_long_bgm_and_keys(&mut runtime, &audio, &input, &mut processor);
+        // Let the mine at 400ms pass so the following POOR causes the failure.
+        runtime.session.audio_clock.current_frame.store(110, Ordering::Release);
+        for event in events(110) {
+            input.push_shared_event(event);
+        }
+        runtime.advance(&audio);
         runtime.session.gauge = GaugeState::new(gauge, 160.0, 8);
         runtime.session.gauge.set_initial_value(0.1);
         // Missing the next notes depletes the gauge in the same advance that

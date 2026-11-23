@@ -67,6 +67,7 @@ fn store_play_result_writes_replay_and_score() {
             judge_window_rates: None,
             branch_decisions: Some(decisions.clone()),
             replay_events: vec![ReplayEvent {
+                applied_after: None,
                 lane: Lane::Key1,
                 kind: InputKind::Press,
                 time: TimeUs(10),
@@ -227,6 +228,7 @@ fn save_existing_replay_to_slot_reuses_the_history_file() {
             judge_window_rates: None,
             branch_decisions: None,
             replay_events: vec![ReplayEvent {
+                applied_after: None,
                 lane: Lane::Key1,
                 kind: InputKind::Press,
                 time: TimeUs(10),
@@ -867,6 +869,7 @@ fn slot_rule_first_record_always_written() {
 fn classify_replay_device_type_uses_controller_majority() {
     let events = vec![
         ReplayEvent {
+            applied_after: None,
             lane: Lane::Key1,
             kind: InputKind::Press,
             time: TimeUs(10),
@@ -874,6 +877,7 @@ fn classify_replay_device_type_uses_controller_majority() {
             scratch_direction: None,
         },
         ReplayEvent {
+            applied_after: None,
             lane: Lane::Key2,
             kind: InputKind::Press,
             time: TimeUs(20),
@@ -881,6 +885,7 @@ fn classify_replay_device_type_uses_controller_majority() {
             scratch_direction: None,
         },
         ReplayEvent {
+            applied_after: None,
             lane: Lane::Scratch,
             kind: InputKind::Press,
             time: TimeUs(30),
@@ -888,6 +893,7 @@ fn classify_replay_device_type_uses_controller_majority() {
             scratch_direction: None,
         },
         ReplayEvent {
+            applied_after: None,
             lane: Lane::Key1,
             kind: InputKind::Release,
             time: TimeUs(40),
@@ -903,6 +909,7 @@ fn classify_replay_device_type_uses_controller_majority() {
 fn classify_replay_device_type_defaults_keyboard_for_ties() {
     let events = vec![
         ReplayEvent {
+            applied_after: None,
             lane: Lane::Key1,
             kind: InputKind::Press,
             time: TimeUs(10),
@@ -910,6 +917,7 @@ fn classify_replay_device_type_defaults_keyboard_for_ties() {
             scratch_direction: None,
         },
         ReplayEvent {
+            applied_after: None,
             lane: Lane::Key2,
             kind: InputKind::Press,
             time: TimeUs(20),

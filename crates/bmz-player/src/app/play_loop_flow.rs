@@ -68,8 +68,9 @@ impl WinitApp {
                         | bmz_gameplay::session::PlayState::Failed
                 ) =>
             {
-                let result_settled_at = frame.render_snapshot.time;
-                let result_settled = active_play.running.gameplay.result.is_some();
+                let save_settled = active_play.running.gameplay.result.is_some()
+                    && !active_play.running.practice_mode
+                    && !active_play.running.score_save_disabled;
                 let mut snapshot = frame.render_snapshot;
                 // gameplayと同じ絶対時刻で動画を選び、前snapshot参照による
                 // 常時1フレーム分のBGA表示遅延を発生させない。
@@ -98,8 +99,8 @@ impl WinitApp {
                 snapshot.course_titles = course_titles.clone();
                 self.apply_play_table_text(&mut snapshot);
                 self.play.last_play_snapshot = Some(snapshot);
-                if result_settled {
-                    self.finalize_settled_play_result_once(result_settled_at);
+                if save_settled {
+                    self.start_play_result_save();
                 }
             }
             Ok(frame) => {
@@ -151,10 +152,12 @@ impl WinitApp {
                 let chart_length_ms = active_play.running.chart_length_ms;
                 let play_duration_ms = active_play.running.finish_play_duration_ms();
                 let finish_requested = active_play.running.gameplay.finish_requested();
-                let early_finished = if active_play.running.pending_finished.is_some() {
-                    None
-                } else if let Some(finished) = active_play.running.finished.clone() {
+                let failed = frame.state == bmz_gameplay::session::PlayState::Failed;
+                let requested_fade = finish_requested && !failed;
+                let early_finished = if let Some(finished) = active_play.running.finished.clone() {
                     Some(finished)
+                } else if requested_fade || active_play.running.pending_finished.is_some() {
+                    None
                 } else {
                     match crate::screens::play_finish::finish_session_result_once(
                         &mut active_play.running.finished,
@@ -221,7 +224,6 @@ impl WinitApp {
                 }
                 self.notify_obs_play_ended();
                 let now = Instant::now();
-                let failed = frame.state == bmz_gameplay::session::PlayState::Failed;
                 self.play.play_ending = Some(PlayEndingTransition {
                     completion_remaining_ms,
                     result_settled_elapsed_at_finish_ms,
@@ -237,6 +239,9 @@ impl WinitApp {
                     )
                 });
                 self.update_play_ending_snapshot();
+                if requested_fade {
+                    self.start_play_result_save();
+                }
             }
             Err(error) => {
                 tracing::error!(%error, "failed to advance play session");
@@ -248,9 +253,8 @@ impl WinitApp {
         self.sync_profile_visual_offset_from_active_play();
     }
 
-    /// Play画面を `Playing` のまま維持し、判定確定後の保存・IRだけを先行する。
-    /// 実際の `Finished` 遷移と退出演出は gameplay の従来の終了条件に任せる。
-    fn finalize_settled_play_result_once(&mut self, settled_at: TimeUs) {
+    /// Save the owner's settled result while Play or its exit fade continues.
+    fn start_play_result_save(&mut self) {
         let finish_mode = if self.play.active_course.is_some() {
             crate::screens::play_finish::FinishResultMode::CourseStage
         } else {
@@ -262,16 +266,16 @@ impl WinitApp {
         if active_play.running.finished.is_some()
             || active_play.running.pending_finished.is_some()
             || active_play.running.finish_error.is_some()
-            || active_play.running.practice_mode
-            || active_play.running.score_save_disabled
         {
             return;
         }
         let chart_length_ms = active_play.running.chart_length_ms;
+        let Some(result) = &active_play.running.gameplay.result else { return };
         // 保存値は判定確定時刻を使うが、RunningPlaySession の terminal duration は
         // 従来どおり実際に Finished/Failed へ入った時点まで凍結しない。
-        let play_duration_ms =
-            (active_play.running.audio.clock().elapsed_since(TimeUs(0)).0.max(0) / 1_000) as u64;
+        let play_duration_ms = active_play.running.play_duration_ms.unwrap_or_else(|| {
+            (active_play.running.audio.clock().elapsed_since(TimeUs(0)).0.max(0) / 1_000) as u64
+        });
         match crate::screens::play_finish::spawn_settled_session_result(
             crate::screens::play_finish::FinishSessionResultOnceRequest {
                 profile_paths: &self.boot.profile_paths,
@@ -291,7 +295,7 @@ impl WinitApp {
                     || active_play.running.score_save_disabled,
                 finish_mode,
             },
-            settled_at,
+            result.settled_at,
             active_play.running.result_graph.clone(),
         ) {
             Ok(pending) => active_play.running.pending_finished = Some(pending),

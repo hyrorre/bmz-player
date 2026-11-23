@@ -11,13 +11,49 @@ pub struct ReplayRecorder {
 
 impl ReplayRecorder {
     pub fn record(&mut self, input: InputEvent) {
+        self.record_after(input, None);
+    }
+
+    pub(crate) fn record_after(&mut self, input: InputEvent, applied_after: Option<TimeUs>) {
         self.events.push(ReplayEvent {
+            applied_after,
             lane: input.lane,
             kind: input.kind,
             time: input.time,
             device_kind: input.device_kind,
             scratch_direction: input.scratch_direction,
         });
+    }
+}
+
+/// Keep the timestamp used by the judge separate from the hold/passage timeline.
+#[derive(Clone, Copy)]
+pub(crate) struct TimedInput {
+    pub input: InputEvent,
+    pub applied_after: Option<TimeUs>,
+    pub collected_at: Option<std::time::Instant>,
+}
+
+impl TimedInput {
+    pub(crate) fn new(input: InputEvent, processed: Option<TimeUs>) -> Self {
+        Self { applied_after: processed.filter(|&at| at >= input.time), input, collected_at: None }
+    }
+
+    pub(crate) fn order(&self) -> (TimeUs, bool) {
+        // Keep recording order for backdated edges delivered after the same boundary.
+        (self.delivery_time(), self.applied_after.is_some())
+    }
+
+    pub(crate) fn same_input_time(&self, other: &Self) -> bool {
+        self.input.time == other.input.time && self.applied_after == other.applied_after
+    }
+
+    pub(crate) fn delivery_time(&self) -> TimeUs {
+        self.applied_after.unwrap_or(self.input.time)
+    }
+
+    pub(crate) fn before_input(&self) -> TimeUs {
+        self.applied_after.unwrap_or_else(|| TimeUs(self.input.time.0.saturating_sub(1)))
     }
 }
 
@@ -47,7 +83,7 @@ impl ReplayPlayer {
         self.kaleid
             .as_ref()
             .filter(|evidence| evidence.finished_early)
-            .map(|evidence| evidence.ended_at)
+            .map(|evidence| evidence.scored_through.unwrap_or(evidence.ended_at))
     }
 
     /// Use a fixed chart-time cadence for replay misses and HCN integration, so
@@ -56,9 +92,21 @@ impl ReplayPlayer {
     /// Listing the due ticks does not move the cursor. Each tick is marked by
     /// [`Self::complete_scoring_tick`] only after its processing has finished,
     /// so an interrupted batch never reports unprocessed ticks as scored.
-    pub(crate) fn scoring_times_until(&self, now: TimeUs) -> Vec<TimeUs> {
-        let finish = self.explicit_finish_at().filter(|end| *end <= now);
+    /// The owner's cutoff can include a recorded stop between regular ticks.
+    pub(crate) fn scoring_times_through(&self, now: TimeUs, cutoff: Option<TimeUs>) -> Vec<TimeUs> {
+        let finish = cutoff.filter(|end| *end <= now);
         let now = finish.unwrap_or(now);
+        if now.0 < 0 {
+            // A live press after READY can have a negative judgement time. Preserve
+            // that input if play stops before the delayed scoring clock reaches zero.
+            if let Some(end) = finish
+                && self.scored_until().is_none()
+                && self.events.first().is_some_and(|e| e.delivery_time() <= end)
+            {
+                return vec![end];
+            }
+            return Vec::new();
+        }
         // READY does not score before chart zero, including negative recorded inputs.
         let mut time = self.next_scoring_time.unwrap_or(TimeUs(0));
         let mut times = Vec::new();
@@ -66,7 +114,7 @@ impl ReplayPlayer {
             times.push(time);
             time = TimeUs(time.0.saturating_add(REPLAY_SCORING_STEP_US));
         }
-        // An explicit exit can fall between the usual 1 ms scoring ticks.
+        // A recorded exit or stop can fall between the usual 1 ms scoring ticks.
         if let Some(end) = finish
             && times.last().copied().or_else(|| self.scored_until()).is_none_or(|last| last < end)
         {
@@ -83,6 +131,9 @@ impl ReplayPlayer {
         if self.input_excludes_start_margin {
             for event in &mut self.events {
                 event.time.0 = event.time.0.saturating_add(margin.0);
+                if let Some(after) = &mut event.applied_after {
+                    after.0 = after.0.saturating_add(margin.0);
+                }
             }
             self.input_excludes_start_margin = false;
         }
@@ -97,26 +148,35 @@ impl ReplayPlayer {
         self.next_scoring_time.map(|next| TimeUs(next.0.saturating_sub(REPLAY_SCORING_STEP_US)))
     }
     pub fn poll_until(&mut self, now: TimeUs) -> Vec<InputEvent> {
-        let mut out = Vec::new();
-        while let Some(event) = self.events.get(self.next_index).copied() {
-            if event.time > now {
-                break;
-            }
-            self.next_index += 1;
-            out.push(InputEvent {
-                lane: event.lane,
-                kind: event.kind,
-                time: event.time,
-                source: bmz_core::input::InputSource::Replay,
-                device_kind: event.device_kind,
-                scratch_direction: event.scratch_direction,
-            });
-        }
-        out
+        self.poll_timed_until(now, usize::MAX).map(|timed| timed.input).collect()
+    }
+
+    pub(crate) fn poll_timed_until(
+        &mut self,
+        now: TimeUs,
+        input_limit: usize,
+    ) -> impl Iterator<Item = TimedInput> + '_ {
+        let end = input_limit.min(self.events.len());
+        let remaining = self.events.get(self.next_index..end).unwrap_or_default();
+        let due = remaining.iter().take_while(|event| event.delivery_time() <= now).count();
+        self.next_index += due;
+        remaining[..due].iter().map(|event| {
+            TimedInput::new(
+                InputEvent {
+                    lane: event.lane,
+                    kind: event.kind,
+                    time: event.time,
+                    source: bmz_core::input::InputSource::Replay,
+                    device_kind: event.device_kind,
+                    scratch_direction: event.scratch_direction,
+                },
+                event.applied_after,
+            )
+        })
     }
 
     pub fn skip_before(&mut self, start_time: TimeUs) {
-        self.next_index = self.events.partition_point(|event| event.time < start_time);
+        self.next_index = self.events.partition_point(|event| event.delivery_time() < start_time);
         self.next_scoring_time = Some(start_time);
     }
 }
@@ -141,32 +201,35 @@ mod tests {
         };
 
         assert_eq!(
-            replay.scoring_times_until(TimeUs(4_000)),
+            replay.scoring_times_through(TimeUs(4_000), Some(end)),
             [TimeUs(0), TimeUs(1_000), TimeUs(2_000), end]
         );
         replay.complete_scoring_tick(end);
-        assert!(replay.scoring_times_until(TimeUs(5_000)).is_empty());
+        assert!(replay.scoring_times_through(TimeUs(5_000), Some(end)).is_empty());
     }
 
     #[test]
     fn scoring_cursor_does_not_repeat_ticks_and_resumes_after_seek() {
         let mut replay = ReplayPlayer::default();
-        let due = replay.scoring_times_until(TimeUs(2_500));
+        let due = replay.scoring_times_through(TimeUs(2_500), None);
         assert_eq!(due, vec![TimeUs(0), TimeUs(1_000), TimeUs(2_000)]);
         for time in due {
             replay.complete_scoring_tick(time);
         }
-        assert!(replay.scoring_times_until(TimeUs(2_999)).is_empty());
-        assert_eq!(replay.scoring_times_until(TimeUs(4_000)), vec![TimeUs(3_000), TimeUs(4_000)]);
+        assert!(replay.scoring_times_through(TimeUs(2_999), None).is_empty());
+        assert_eq!(
+            replay.scoring_times_through(TimeUs(4_000), None),
+            vec![TimeUs(3_000), TimeUs(4_000)]
+        );
         replay.skip_before(TimeUs(10_000));
-        assert_eq!(replay.scoring_times_until(TimeUs(10_000)), vec![TimeUs(10_000)]);
+        assert_eq!(replay.scoring_times_through(TimeUs(10_000), None), vec![TimeUs(10_000)]);
     }
 
     #[test]
     fn scored_until_reports_only_completed_ticks() {
         let mut replay = ReplayPlayer::default();
         assert_eq!(replay.scored_until(), None);
-        let due = replay.scoring_times_until(TimeUs(1_300_600));
+        let due = replay.scoring_times_through(TimeUs(1_300_600), None);
         assert_eq!(due.last(), Some(&TimeUs(1_300_000)));
         // Listing a batch does not count as processing it.
         assert_eq!(replay.scored_until(), None);
@@ -174,8 +237,8 @@ mod tests {
         assert_eq!(replay.scored_until(), Some(TimeUs(0)));
         replay.complete_scoring_tick(TimeUs(1_300_000));
         assert_eq!(replay.scored_until(), Some(TimeUs(1_300_000)));
-        assert_eq!(replay.scoring_times_until(TimeUs(1_300_600)), Vec::<TimeUs>::new());
-        assert_eq!(replay.scoring_times_until(TimeUs(1_301_000)), vec![TimeUs(1_301_000)]);
+        assert_eq!(replay.scoring_times_through(TimeUs(1_300_600), None), Vec::<TimeUs>::new());
+        assert_eq!(replay.scoring_times_through(TimeUs(1_301_000), None), vec![TimeUs(1_301_000)]);
     }
 
     #[test]
@@ -207,6 +270,7 @@ mod tests {
             branch_decisions: None,
             events: vec![
                 ReplayEvent {
+                    applied_after: None,
                     lane: bmz_core::lane::Lane::Key1,
                     kind: InputKind::Press,
                     time: TimeUs(1),
@@ -214,6 +278,7 @@ mod tests {
                     scratch_direction: None,
                 },
                 ReplayEvent {
+                    applied_after: None,
                     lane: bmz_core::lane::Lane::Key1,
                     kind: InputKind::Release,
                     time: TimeUs(2),

@@ -30,11 +30,13 @@ impl GameplayRuntime {
             }
         };
         consider(0);
+        let delay = session.input_scoring_delay_us();
+        let score_now = now.saturating_sub(delay);
         let reflections = session.timing_map.bpm_reflections();
         if let Some(point) =
-            reflections.get(reflections.partition_point(|point| point.time.0 <= now))
+            reflections.get(reflections.partition_point(|point| point.time.0 <= score_now))
         {
-            consider(point.time.0);
+            consider(point.time.0.saturating_add(delay));
         }
         if let Some(time) = crate::session::conditional::next_evaluation(session) {
             consider(time.0);
@@ -42,31 +44,49 @@ impl GameplayRuntime {
         for lane in bmz_core::lane::Lane::ALL {
             let state = &session.judge.lanes[lane.index()];
             if let Some(note) = session.chart.notes_for_lane(lane).get(state.next_note_index) {
-                consider(note.time.0);
+                consider(note.time.0.saturating_add(delay));
                 consider(
-                    note.time.0.saturating_add(session.judge.windows.bad_slow_us).saturating_add(1),
+                    note.time
+                        .0
+                        .saturating_add(session.judge.windows.bad_slow_us)
+                        .saturating_add(1)
+                        .saturating_add(delay),
                 );
             }
             if let Some(long) = state.active_long {
-                consider(session.chart.long_notes[long.pair_index].end_time.0);
+                consider(
+                    session.chart.long_notes[long.pair_index].end_time.0.saturating_add(delay),
+                );
             }
             if let Some(release) = session.lane_auto_release_at[lane.index()] {
-                consider(release.0);
+                consider(release.0.saturating_add(delay));
             }
         }
         if let Some(replay) = &session.replay_player
             && let Some(event) = replay.events.get(replay.next_index)
         {
-            consider(event.time.0);
+            consider(event.delivery_time().0.saturating_add(delay));
+        }
+        // Human inputs wait for their offset-adjusted judgement time before scoring.
+        if session.state == PlayState::Playing
+            && (session.replay_player.is_none() || session.replay_lane_mask.is_some())
+            && !session.autoplay.as_ref().is_some_and(crate::autoplay::AutoplayController::is_full)
+            && let Some(input) =
+                session.conditional.pending_inputs.iter().min_by_key(|input| input.time)
+        {
+            if input.time.0 <= now {
+                return std::time::Duration::ZERO;
+            }
+            consider(input.time.0);
         }
         if let Some(bgm) = session.chart.bgm_events.get(session.bgm_scheduler.next_index) {
             consider(bgm.time.0.saturating_sub(ahead));
         }
-        if crate::session::uses_scheduled_auto_keysounds(session) {
+        if let Some(lanes) = crate::session::scheduled_keysound_lanes(session) {
             // Judgement can already be past a note whose auto keysound is still due.
             for lane in bmz_core::lane::Lane::ALL {
                 let next = session.auto_keysound_scheduler.next_note_index[lane.index()];
-                if !session.display_only_lane_mask[lane.index()]
+                if lanes[lane.index()]
                     && let Some(note) = session.chart.notes_for_lane(lane).get(next)
                 {
                     consider(note.time.0.saturating_sub(ahead));

@@ -475,6 +475,7 @@ fn run_mode_with_render_stall(stall_ms: u64, mode: u8) -> (String, u64) {
                 )
             })
             .map(|event| bmz_core::replay::ReplayEvent {
+                applied_after: None,
                 lane: event.lane,
                 kind: event.kind,
                 time: event.time,

@@ -1577,6 +1577,85 @@ fn rank_se_is_used_only_after_result_bgms_and_never_downgrades_rank() {
 
 #[cfg(target_os = "windows")]
 #[test]
+#[ignore = "requires a Windows audio output and its own Winit event loop"]
+fn requested_fade_starts_while_the_score_database_is_locked() {
+    use bmz_gameplay::session::{PlayState, advance_session_frame};
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    let event_loop =
+        EventLoop::<AppUserEvent>::with_user_event().with_any_thread(true).build().unwrap();
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    let (mut boot, path, _) = super::boot_chart::registered_charts(&data);
+    boot.app_config.input.gamepad_enabled = false;
+    let id = boot.library_db.chart_id_by_chart_file_path(&path).unwrap().unwrap();
+    let prepared = crate::screens::play_start::prepare_play_session_for_chart_with_winit_input(
+        &boot.library_db,
+        &boot.app_config,
+        &boot.profile_config,
+        id,
+        Default::default(),
+    )
+    .unwrap();
+    let runtime = AudioRuntime::open(&boot.app_config.audio).unwrap();
+    let mut started = open_prepared_winit_play_session(&boot.score_db, &runtime, prepared).unwrap();
+    // Resolve the single tap at a fixed chart time, before natural score settlement.
+    started.running.gameplay.configure_prepared(|session| {
+        let time = session.chart.lane_notes.iter().flatten().next().unwrap().time;
+        session.audio_clock.pause_at(time);
+        session.autoplay = Some(Default::default());
+        advance_session_frame(session, &mut bmz_audio::queue::ScheduledSoundQueue::new());
+        session.autoplay = None;
+        assert_eq!(session.state, PlayState::Playing);
+        assert!(session.judge.is_exhausted(&session.chart));
+        assert_eq!(session.scoring_closed_at, None);
+        session.audio_clock.running = true;
+    });
+    started.running.start_gameplay_runtime(None, 0).unwrap();
+    let (maintenance_tx, _) = tokio::sync::watch::channel(false);
+    let mut app = WinitApp::new(
+        boot,
+        AppOptions { viewer_play: true, ..Default::default() },
+        Instant::now(),
+        None,
+        None,
+        Arc::new(AtomicBool::new(false)),
+        event_loop.create_proxy(),
+        LogBuffer::default(),
+        maintenance_tx,
+        None,
+    )
+    .unwrap();
+    app.viewer_mode = false;
+    app.viewer_waiting = false;
+    app.play.active_play = Some(started);
+    app.play.play_ready_sound_started_at = Some(Instant::now());
+    let lock = rusqlite::Connection::open(&app.boot.profile_paths.score_db).unwrap();
+    lock.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let exit = app.test_input(&PhysicalControl::KeyboardKey("Q".into()), true, false);
+    assert!(app.begin_play_fadeout_after_final_notes_control(&exit));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.play.play_ending.is_none() {
+        app.consume_active_play();
+        assert!(Instant::now() < deadline, "fade waited for the score database");
+        std::thread::yield_now();
+    }
+    assert!(app.play.play_ending.as_ref().unwrap().fadeout_started_at.is_some());
+    assert!(app.play.active_play.as_ref().unwrap().running.pending_finished.is_some());
+    app.finish_play_ending();
+    assert!(app.play.play_ending.is_some());
+    assert!(app.result.finished_play.is_none());
+    lock.execute_batch("ROLLBACK").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.play.play_ending.is_some() {
+        app.finish_play_ending();
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert!(app.result.finished_play.is_some());
+    assert_eq!(app.boot.score_db.recent_history(2, 0).unwrap().len(), 1);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
 #[ignore = "creates an isolated Winit event loop; run alone"]
 fn result_and_select_entries_reuse_skin_decodes_started_ahead() {
     use winit::platform::windows::EventLoopBuilderExtWindows;

@@ -170,6 +170,7 @@ impl Fixture {
                 match note.kind {
                     NoteKind::Tap => {
                         events.push(ReplayEvent {
+                            applied_after: None,
                             lane,
                             kind: InputKind::Press,
                             time: note.time,
@@ -177,6 +178,7 @@ impl Fixture {
                             scratch_direction: None,
                         });
                         events.push(ReplayEvent {
+                            applied_after: None,
                             lane,
                             kind: InputKind::Release,
                             time: TimeUs(note.time.0 + 10000),
@@ -185,6 +187,7 @@ impl Fixture {
                         });
                     }
                     NoteKind::LongStart | NoteKind::LongEnd => events.push(ReplayEvent {
+                        applied_after: None,
                         lane,
                         kind: if note.kind == NoteKind::LongStart {
                             InputKind::Press

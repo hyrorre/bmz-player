@@ -16,3 +16,4 @@ bmz-audio = { path = "../bmz-audio" }
 
 [dev-dependencies]
 tempfile = "3"
+tracing-subscriber.workspace = true

@@ -271,6 +271,7 @@ fn build_freq_replay_keeps_recorded_windows_after_viewing_speed_changes() {
                 freq_semitones: 12,
                 replay_player: Some(ReplayPlayer {
                     events: vec![bmz_core::replay::ReplayEvent {
+                        applied_after: None,
                         lane: Lane::Key1,
                         kind: InputKind::Press,
                         time: TimeUs(1_030_000),

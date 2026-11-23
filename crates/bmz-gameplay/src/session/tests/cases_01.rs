@@ -81,6 +81,7 @@ fn independent_battle_opponent_replay_advances_without_taking_primary_lanes() {
             kaleid: None,
             branch_decisions: None,
             events: vec![bmz_core::replay::ReplayEvent {
+                applied_after: None,
                 lane: Lane::Key1,
                 kind: InputKind::Press,
                 time: TimeUs(0),
@@ -221,6 +222,7 @@ fn independent_battle_opponent_applies_hcn_hold_and_release_ticks() {
                 events: [(InputKind::Press, 0), (InputKind::Release, 100_000)]
                     .into_iter()
                     .map(|(kind, time)| bmz_core::replay::ReplayEvent {
+                        applied_after: None,
                         lane: Lane::Key1,
                         kind,
                         time: TimeUs(time),
@@ -365,7 +367,8 @@ fn display_only_opponent_hcn_updates_only_opponent_gauge() {
 
     assert_eq!(session.gauge.current().value, 50.0);
     assert!(session.opponent.gauge.as_ref().unwrap().current().value > 50.0);
-    assert_eq!(session.opponent.gauge_increase_started_at, Some(TimeUs(500_000)));
+    // The interval contains two recoveries, at 200001 and 400001 microseconds.
+    assert_eq!(session.opponent.gauge_increase_started_at, Some(TimeUs(400_001)));
 }
 
 #[test]

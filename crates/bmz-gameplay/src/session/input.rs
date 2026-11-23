@@ -36,6 +36,7 @@ pub fn apply_input_offset_auto_adjust(session: &mut GameSession, events: &[Judge
 use super::audio::counts_for_input_offset_auto_adjust;
 use super::judgement::{apply_judge_outcome_with_display_time, push_skin_runtime_event};
 use super::state::{INPUT_OFFSET_AUTO_ADJUST_BATCH, INPUT_OFFSET_AUTO_ADJUST_STEP_US};
+use crate::replay::TimedInput;
 
 pub fn update_recent_judgements(session: &mut GameSession, events: &[JudgementEvent], now: TimeUs) {
     for event in events {
@@ -174,52 +175,92 @@ pub fn apply_auto_key_release(session: &mut GameSession, audio_now: TimeUs) {
     }
 }
 
-/// 人間が操作するレーンの入力を取得し、キービーム・キー状態へ反映する。
-fn collect_player_lane_inputs(session: &mut GameSession) -> Vec<InputEvent> {
+/// Human inputs waiting for their offset-adjusted time, with the instant each batch was collected.
+#[derive(Debug, Default)]
+pub struct PendingInputs(Vec<(InputEvent, std::time::Instant)>);
+
+impl PendingInputs {
+    pub fn push(&mut self, input: InputEvent) {
+        self.0.push((input, std::time::Instant::now()));
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &InputEvent> {
+        self.0.iter().map(|(input, _)| input)
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    fn take_due(&mut self, now: TimeUs, processed: Option<TimeUs>) -> Vec<TimedInput> {
+        let mut due = Vec::new();
+        self.0.retain(|&(input, collected_at)| {
+            if input.time > now {
+                return true;
+            }
+            due.push(TimedInput {
+                collected_at: Some(collected_at),
+                ..TimedInput::new(input, processed)
+            });
+            false
+        });
+        due.sort_by_key(|edge| edge.input.time);
+        due
+    }
+}
+
+impl Extend<InputEvent> for PendingInputs {
+    fn extend<T: IntoIterator<Item = InputEvent>>(&mut self, inputs: T) {
+        let at = std::time::Instant::now();
+        self.0.extend(inputs.into_iter().map(|input| (input, at)));
+    }
+}
+
+/// Collect once per owner update, before choosing its scoring horizon or evaluating branches.
+pub(super) fn collect_player_inputs(session: &mut GameSession) {
     let ctx = InputTimingContext {
         audio_clock: &session.audio_clock,
         offsets: session.offsets,
         timestamp_anchor: session.input_timestamp_anchor,
     };
-    let mut inputs = session.input_system.collect_game_inputs(&ctx);
+    let (batch, collected_at) = session.input_system.collect_game_inputs_with_time(&ctx);
+    let inputs = &mut session.conditional.pending_inputs.0;
+    inputs.extend(batch.into_iter().map(|input| (input, collected_at)));
     if let Some(autoplay) = &session.autoplay {
-        inputs.retain(|input| !autoplay.is_lane_enabled(input.lane));
+        inputs.retain(|(input, _)| !autoplay.is_lane_enabled(input.lane));
     }
     if let Some(replay_lane_mask) = &session.replay_lane_mask {
-        inputs.retain(|input| !replay_lane_mask[input.lane.index()]);
+        inputs.retain(|(input, _)| !replay_lane_mask[input.lane.index()]);
     }
-    update_recent_inputs(session, &inputs, session.audio_clock.now());
+}
+
+fn take_due_player_inputs(session: &mut GameSession, now: TimeUs) -> Vec<InputEvent> {
+    collect_player_inputs(session);
+    let inputs: Vec<_> = session
+        .conditional
+        .pending_inputs
+        .take_due(now, None)
+        .into_iter()
+        .map(|edge| edge.input)
+        .collect();
+    update_recent_inputs(session, &inputs, now);
     update_lane_key_states(session, &inputs);
     inputs
 }
 
 pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
-    let mut inputs = collect_player_lane_inputs(session);
-    inputs.sort_by_key(|input| input.time);
-    let mut judgements = Vec::new();
-    for input in inputs {
-        if session.play_end_reached() {
-            break;
-        }
-        if !session.display_only_lane_mask[input.lane.index()] {
-            if let Some(projection) = &session.replay_lane_projection {
-                if let Some(source_lane) = projection.record_to_source[input.lane.index()] {
-                    session.replay_recorder.record(InputEvent { lane: source_lane, ..input });
-                }
-            } else {
-                session.replay_recorder.record(input);
-            }
-        }
-        judgements.extend(misses_before_input(session, input.time));
-        if session.state == PlayState::Failed {
-            break;
-        }
-        let events = process_session_input(session, input);
-        super::latency::judged();
-        apply_input_offset_auto_adjust(session, &events);
-        judgements.extend(events);
-    }
-    judgements
+    let now = session.audio_clock.now();
+    collect_player_inputs(session);
+    let inputs = take_human_scoring_inputs(session, now);
+    apply_timed_inputs(session, inputs, now)
 }
 
 pub(super) fn uses_ordered_inputs(session: &GameSession) -> bool {
@@ -238,7 +279,7 @@ pub fn present_inputs_after_scoring_closed(session: &mut GameSession, audio_now:
     } else if session.autoplay.as_ref().is_some_and(AutoplayController::is_full) {
         discard_human_inputs(session);
     } else {
-        let inputs = collect_player_lane_inputs(session);
+        let inputs = take_due_player_inputs(session, audio_now);
         for input in inputs {
             present_unscored_input(session, input);
         }
@@ -414,29 +455,9 @@ pub fn process_replay_inputs(session: &mut GameSession, audio_now: TimeUs) -> Ve
     if session.play_end_reached() {
         return Vec::new();
     }
-    let Some(player) = &mut session.replay_player else {
-        return Vec::new();
-    };
-
-    let mut inputs = player.poll_until(audio_now);
-    if let Some(replay_lane_mask) = &session.replay_lane_mask {
-        inputs.retain(|input| replay_lane_mask[input.lane.index()]);
-    }
-    let inputs =
-        inputs.into_iter().map(|input| project_replay_input(session, input)).collect::<Vec<_>>();
-    update_lane_key_states(session, &inputs);
-    let mut judgements = Vec::new();
-    for input in inputs {
-        if session.play_end_reached() {
-            break;
-        }
-        judgements.extend(misses_before_input(session, input.time));
-        if session.state == PlayState::Failed || session.play_end_reached() {
-            break;
-        }
-        judgements.extend(process_session_input(session, input));
-    }
-    judgements
+    let mut inputs = Vec::new();
+    append_replay_inputs(session, audio_now, usize::MAX, &mut inputs);
+    apply_timed_inputs(session, inputs, audio_now)
 }
 
 fn project_replay_input(session: &mut GameSession, mut input: InputEvent) -> InputEvent {
@@ -517,129 +538,191 @@ pub fn process_autoplay_inputs(
     judgements
 }
 
-/// 通過判定・時間積分のため、人間・Replay・Autoplay の入力を一本の時系列へまとめる。
-pub(super) fn process_timed_inputs(session: &mut GameSession, now: TimeUs) -> Vec<JudgementEvent> {
-    let ctx = InputTimingContext {
-        audio_clock: &session.audio_clock,
-        offsets: session.offsets,
-        timestamp_anchor: session.input_timestamp_anchor,
-    };
-    let mut human = session.input_system.collect_game_inputs(&ctx);
-    let ordered_timeline = uses_ordered_inputs(session);
-    let has_mines = session.judge.has_mines(&session.chart);
-    if ordered_timeline || has_mines {
-        human.append(&mut session.conditional.pending_inputs);
-        let (ready, future): (Vec<_>, Vec<_>) =
-            human.into_iter().partition(|input| input.time <= now);
-        human = ready;
-        session.conditional.pending_inputs = future;
-        if let Some(cutoff) = session.conditional.decisions.iter().map(|d| d.time).max() {
-            for input in &mut human {
-                input.time = input.time.max(cutoff);
-            }
-        }
-    }
+fn take_human_scoring_inputs(session: &mut GameSession, now: TimeUs) -> Vec<TimedInput> {
+    let mut human =
+        session.conditional.pending_inputs.take_due(now, session.conditional.processed_time);
     if session.replay_player.is_some() && session.replay_lane_mask.is_none() {
-        update_recent_inputs(session, &human, now);
+        for edge in &human {
+            update_recent_inputs(session, &[edge.input], now);
+        }
         human.clear();
     }
-    human.retain(|input| {
-        !session.autoplay.as_ref().is_some_and(|auto| auto.is_lane_enabled(input.lane))
-            && !session.replay_lane_mask.as_ref().is_some_and(|mask| mask[input.lane.index()])
-    });
-    for input in &human {
-        if session.display_only_lane_mask[input.lane.index()] {
-            continue;
-        }
-        let source_lane = session
-            .replay_lane_projection
-            .as_ref()
-            .map_or(Some(input.lane), |projection| projection.record_to_source[input.lane.index()]);
-        if let Some(lane) = source_lane {
-            session.replay_recorder.record(InputEvent { lane, ..*input });
-        }
-    }
-    let mut inputs: Vec<_> = human.into_iter().map(|input| (input, true)).collect();
+    human
+}
+
+fn append_replay_inputs(
+    session: &mut GameSession,
+    now: TimeUs,
+    limit: usize,
+    inputs: &mut Vec<TimedInput>,
+) {
     if let Some(player) = &mut session.replay_player {
-        let replay = player.poll_until(now);
+        inputs.extend(player.poll_timed_until(now, limit).filter(|timed| {
+            session.replay_lane_mask.as_ref().is_none_or(|mask| mask[timed.input.lane.index()])
+        }));
+    }
+}
+
+/// 通過判定・時間積分のため、人間・Replay・Autoplay の入力を一本の時系列へまとめる。
+pub(super) fn process_timed_inputs(
+    session: &mut GameSession,
+    now: TimeUs,
+    input_limit: usize,
+) -> Vec<JudgementEvent> {
+    let mut inputs = take_human_scoring_inputs(session, now);
+    append_replay_inputs(session, now, input_limit, &mut inputs);
+    if let Some(auto) = &mut session.autoplay {
         inputs.extend(
-            replay
+            auto.poll_until(&session.chart, now)
                 .into_iter()
-                .filter(|input| {
-                    session.replay_lane_mask.as_ref().is_none_or(|mask| mask[input.lane.index()])
-                })
-                .map(|input| (input, false)),
+                .map(|input| TimedInput::new(input, None)),
         );
     }
-    if let Some(auto) = &mut session.autoplay {
-        inputs.extend(auto.poll_until(&session.chart, now).into_iter().map(|input| (input, false)));
-    }
-    inputs.sort_by_key(|(input, _)| input.time);
-    let mut events = Vec::new();
-    for group in inputs.chunk_by(|(left, _), (right, _)| left.time == right.time) {
-        if session.state == PlayState::Failed || session.play_end_reached() {
-            break;
-        }
-        let time = group[0].0.time;
-        let before = TimeUs(time.0.saturating_sub(1));
-        if ordered_timeline {
-            events.extend(super::conditional::advance_time(session, before));
-            super::frame::sync_judge_windows(session, time);
-        } else {
-            if has_mines {
-                events.extend(process_mine_passes(session, before));
-            }
-            events.extend(misses_before_input(session, time));
-        }
-        if session.state == PlayState::Failed {
-            break;
-        }
-        let mut outcomes = Vec::new();
-        for &(mut input, human) in group {
-            if input.source == InputSource::Replay {
-                input = project_replay_input(session, input);
-            }
-            update_recent_inputs(session, &[input], now);
-            update_lane_key_states(session, &[input]);
-            outcomes.push((input, human, evaluate_session_input(session, input)));
-        }
-        // Passing sees the final held state of the timestamp, before the input
-        // judgements affect the gauge. Earlier mines saw the previous state.
-        if has_mines {
-            events.extend(process_mine_passes(session, time));
-        }
-        for (input, human, outcome) in outcomes {
-            if session.state == PlayState::Failed {
-                break;
-            }
-            let judged = apply_input_outcome(session, input, outcome);
-            if human {
-                apply_input_offset_auto_adjust(session, &judged);
-            }
-            events.extend(judged);
-        }
-        if ordered_timeline {
-            apply_hcn_gauge(session, time);
-            update_hcn_lane_timers(session, time);
-            if session.lane_hcn_timer.iter().any(Option::is_some) {
-                session.last_hcn_gauge_at = Some(time);
-            }
-            session.conditional.processed_time = Some(time);
-        }
-    }
+    let events = apply_timed_inputs(session, inputs, now);
     if session.autoplay.is_some() {
         apply_auto_key_release(session, now);
     }
     events
 }
 
-fn misses_before_input(session: &mut GameSession, time: TimeUs) -> Vec<JudgementEvent> {
-    if session.state != PlayState::Playing {
-        return Vec::new();
-    }
-    process_misses(session, TimeUs(time.0.saturating_sub(1)))
+/// Player-specific effects of an input. The order in which passage, key state,
+/// mines, judgements and hold timers see it is shared by live play and both replays.
+pub(super) trait InputScoring {
+    type Event;
+    fn stopped(&self) -> bool;
+    fn has_mines(&self) -> bool;
+    fn advance_to_input(
+        &mut self,
+        first: TimedInput,
+        has_mines: bool,
+        events: &mut Vec<Self::Event>,
+    ) -> TimeUs;
+    fn judge_edge(&mut self, edge: TimedInput, now: TimeUs) -> (InputEvent, JudgeOutcome);
+    fn pass_mines(&mut self, time: TimeUs) -> Vec<Self::Event>;
+    fn apply_judgement(&mut self, input: InputEvent, outcome: JudgeOutcome) -> Vec<Self::Event>;
+    fn update_hold(&mut self, time: TimeUs);
 }
 
+pub(super) fn apply_timed_inputs<S: InputScoring>(
+    player: &mut S,
+    mut inputs: Vec<TimedInput>,
+    now: TimeUs,
+) -> Vec<S::Event> {
+    let mut events = Vec::new();
+    if inputs.is_empty() {
+        return events;
+    }
+    inputs.sort_by_key(TimedInput::order);
+    let has_mines = player.has_mines();
+    for group in inputs.chunk_by(TimedInput::same_input_time) {
+        if player.stopped() {
+            break;
+        }
+        let time = player.advance_to_input(group[0], has_mines, &mut events);
+        if player.stopped() {
+            break;
+        }
+        // A mine at this timestamp sees the final held state before the input
+        // judgements affect the gauge. Earlier mines saw the previous state.
+        let outcomes: Vec<_> = group.iter().map(|&edge| player.judge_edge(edge, now)).collect();
+        if has_mines {
+            events.extend(player.pass_mines(time));
+        }
+        for (edge, (input, outcome)) in group.iter().zip(outcomes) {
+            if player.stopped() {
+                break;
+            }
+            events.extend(player.apply_judgement(input, outcome));
+            if input.source == InputSource::Human
+                && let Some(collected_at) = edge.collected_at
+            {
+                super::latency::judged(collected_at);
+            }
+        }
+        player.update_hold(time);
+    }
+    events
+}
+
+impl InputScoring for GameSession {
+    type Event = JudgementEvent;
+    fn stopped(&self) -> bool {
+        self.state == PlayState::Failed || self.play_end_reached()
+    }
+    fn has_mines(&self) -> bool {
+        self.judge.has_mines(&self.chart)
+    }
+
+    fn advance_to_input(
+        &mut self,
+        first: TimedInput,
+        has_mines: bool,
+        events: &mut Vec<JudgementEvent>,
+    ) -> TimeUs {
+        let before = first.before_input();
+        let time = first.delivery_time();
+        let hold = self.conditional.processed_time.map_or(time, |last| time.max(last));
+        if uses_ordered_inputs(self) || self.judge.has_hcn(&self.chart) {
+            events.extend(super::conditional::advance_time(self, before));
+            if self.state == PlayState::Playing {
+                events.extend(apply_hcn_gauge(self, hold));
+            }
+        } else {
+            super::frame::sync_judge_windows(self, before);
+            if has_mines {
+                events.extend(process_mine_passes(self, before));
+            }
+            if self.state == PlayState::Playing {
+                events.extend(process_misses(self, before));
+            }
+        }
+        // Use the edge's own rank even if a late delivery crosses a rank change.
+        super::frame::sync_judge_windows(self, first.input.time);
+        hold
+    }
+
+    fn judge_edge(&mut self, timed: TimedInput, now: TimeUs) -> (InputEvent, JudgeOutcome) {
+        let mut input = timed.input;
+        if input.source == InputSource::Human && !self.display_only_lane_mask[input.lane.index()] {
+            let lane = self
+                .replay_lane_projection
+                .as_ref()
+                .map_or(Some(input.lane), |p| p.record_to_source[input.lane.index()]);
+            if let Some(lane) = lane {
+                self.replay_recorder
+                    .record_after(InputEvent { lane, ..input }, timed.applied_after);
+            }
+        }
+        if input.source == InputSource::Replay {
+            input = project_replay_input(self, input);
+        }
+        update_recent_inputs(self, &[input], now);
+        update_lane_key_states(self, &[input]);
+        (input, evaluate_session_input(self, input))
+    }
+
+    fn pass_mines(&mut self, time: TimeUs) -> Vec<JudgementEvent> {
+        process_mine_passes(self, time)
+    }
+
+    fn apply_judgement(&mut self, input: InputEvent, outcome: JudgeOutcome) -> Vec<JudgementEvent> {
+        let events = apply_input_outcome(self, input, outcome);
+        if input.source == InputSource::Human {
+            apply_input_offset_auto_adjust(self, &events);
+        }
+        events
+    }
+
+    fn update_hold(&mut self, time: TimeUs) {
+        if uses_ordered_inputs(self) || self.judge.has_hcn(&self.chart) {
+            update_hcn_lane_timers(self, time);
+            if self.lane_hcn_timer.iter().any(Option::is_some) {
+                self.last_hcn_gauge_at = Some(time);
+            }
+            self.conditional.processed_time = Some(time);
+        }
+    }
+}
 pub(super) fn process_session_input(
     session: &mut GameSession,
     input: InputEvent,
@@ -686,11 +769,13 @@ fn apply_input_outcome(
     input: InputEvent,
     outcome: JudgeOutcome,
 ) -> Vec<JudgementEvent> {
-    // 判定・記録・発音には補正済み input.time を維持し、表示だけ打鍵時から始める。
-    // 処理時の now ではなく入力の元時刻を使い、入力配送や描画の遅延を引き継ぐ。
+    // 判定・記録・発音には補正済み input.time を維持し、表示は打鍵時刻と判定時刻の遅い方から
+    // 始める。正のオフセットで判定時刻まで保留した入力も、アニメーションを途中から始めない。
+    // 処理時の now ではなく入力の時刻を使い、入力配送や描画の遅延を引き継ぐ。
     // Replay / Auto は譜面時刻が確定済みなので現在の profile offset を引かない。
-    let display_time = (input.source == InputSource::Human)
-        .then(|| TimeUs(input.time.0.saturating_sub(session.offsets.input_offset_us)));
+    let display_time = (input.source == InputSource::Human).then(|| {
+        TimeUs(input.time.0.max(input.time.0.saturating_sub(session.offsets.input_offset_us)))
+    });
     apply_judge_outcome_with_display_time(session, outcome, display_time)
 }
 

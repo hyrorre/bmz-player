@@ -644,6 +644,24 @@ fn terminal_gauges_update_a_periodic_point_at_the_same_time() {
 }
 
 #[test]
+fn terminal_gauges_trim_audio_samples_past_the_scoring_cutoff() {
+    let sampled = gauge_with(&[(GaugeType::Hard, 4.0)]);
+    let settled = gauge_with(&[(GaugeType::Hard, 0.0), (GaugeType::Normal, 37.0)]);
+    let mut chart = chart();
+    chart.end_time = TimeUs(2_400_000);
+    let samples = [0, 500_000, 1_000_000, 1_500_000, 2_000_000].map(|t| (t, &sampled));
+    for history in [&samples[..], &samples[..4]] {
+        let mut collector = periodic_collector(history);
+        collector.record_terminal_gauges(&settled, TimeUs(1_980_000));
+        let graph = collector.snapshot_for_result_parts(&chart, &HashMap::new(), Some(&settled));
+        for gauge in &settled.gauges {
+            let points = points_of(&graph, gauge.definition.gauge_type);
+            assert_eq!(&points[4..], &[(1980, gauge.value), (2000, 0.0), (2500, 0.0)]);
+        }
+    }
+}
+
+#[test]
 fn failed_tail_keeps_the_stop_point_and_fills_later_samples_only() {
     // A manual stop at 1230ms with a non-zero gauge keeps the existing zero tail.
     let sampled = gauge_with(&[(GaugeType::Normal, 70.0)]);

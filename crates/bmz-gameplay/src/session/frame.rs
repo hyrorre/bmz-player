@@ -1,25 +1,39 @@
 pub fn sync_judge_windows(session: &mut GameSession, now: TimeUs) {
-    let percent = judge_percent_at_time_for_keymode(
-        session.chart.metadata.judge_rank_spec,
-        &session.chart.judge_rank_events,
-        now,
-        session.primary_key_mode,
-        session.rule_mode,
-    );
-    let windows = session.judge.window_rates.for_rank(
-        session.base_judge_windows,
-        percent,
-        session.rule_mode,
-        session.primary_key_mode,
-    );
     let rate = if session.replay_player.is_some() {
         session.replay_judge_rate_percent
     } else {
         session.audio_clock.playback_rate_percent()
     };
-    session.judge.set_window_set(scale_judge_windows_for_playback_rate(windows, rate));
+    set_judge_windows(
+        &mut session.judge,
+        &session.chart,
+        session.base_judge_windows,
+        session.primary_key_mode,
+        session.rule_mode,
+        now,
+        rate,
+    );
 }
 
+fn set_judge_windows(
+    judge: &mut JudgeEngine,
+    chart: &PlayableChart,
+    base: crate::judge::model::JudgeWindows,
+    key_mode: KeyMode,
+    rule: RuleMode,
+    now: TimeUs,
+    rate: u16,
+) {
+    let percent = judge_percent_at_time_for_keymode(
+        chart.metadata.judge_rank_spec,
+        &chart.judge_rank_events,
+        now,
+        key_mode,
+        rule,
+    );
+    let windows = judge.window_rates.for_rank(base, percent, rule, key_mode);
+    judge.set_window_set(scale_judge_windows_for_playback_rate(windows, rate));
+}
 use super::judgement::{
     update_failed_state_from_gauge, update_gauge_increase_timer_state, update_gauge_max_timer,
     update_gauge_max_timer_state,
@@ -59,120 +73,44 @@ pub fn advance_session_frame(
 
     session.apply_play_end_request(false);
     if session.state == PlayState::Playing {
-        sync_judge_windows(session, times.audio_now);
-        let ordered_timeline = super::input::uses_ordered_inputs(session);
+        let full_replay = session.replay_player.is_some() && session.replay_lane_mask.is_none();
+        let cutoff =
+            session.recorded_replay_end().map(|end| end.scored_through.unwrap_or(end.ended_at));
+        if session.scoring_closed_at.is_none() {
+            if full_replay {
+                drain_human_inputs(session);
+            } else {
+                super::input::collect_player_inputs(session);
+            }
+        }
+        let score_now = primary_score_time(session, times.audio_now);
+        let score_now = cutoff.map_or(score_now, |end| end.min(score_now));
 
         if session.scoring_closed_at.is_some() {
             // 採点確定後も、キー表示・キー音・skin入力イベントは従来どおり進める。
             present_inputs_after_scoring_closed(session, times.audio_now);
-        } else if ordered_timeline {
-            while let Some(at) =
-                super::conditional::next_evaluation(session).filter(|at| *at <= times.audio_now)
-            {
-                let before = TimeUs(at.0.saturating_sub(1));
-                judgements.extend(super::conditional::advance_before_boundary(session, before));
-                if session.state != PlayState::Playing {
-                    break;
-                }
-                // A delayed wake can cross the boundary before all prefix audio is queued.
-                schedule_chart_audio(session, before, audio);
-                if session.play_end_reached() {
-                    break;
-                }
-                super::conditional::evaluate(session, at);
-            }
-            if session.state == PlayState::Playing {
-                judgements
-                    .extend(super::conditional::advance_before_boundary(session, times.audio_now));
-            }
-        } else if session.replay_player.is_some() && session.replay_lane_mask.is_none() {
-            // Full replays, including HLN, need the fixed scoring clock for misses,
-            // mines and hold gauge updates even when there are no recorded inputs.
-            drain_human_inputs(session);
-            let scoring_times =
-                session.replay_player.as_ref().unwrap().scoring_times_until(times.audio_now);
-            for now in scoring_times {
-                if session.play_end_reached() {
-                    break;
-                }
-                sync_judge_windows(session, now);
-                if session.judge.has_mines(&session.chart) {
-                    judgements.extend(super::input::process_timed_inputs(session, now));
-                } else {
-                    judgements.extend(process_replay_inputs(session, now));
-                    // Partial autoplay (D-BATTLE AS) is not recorded in the human
-                    // input log. Run it on the same scoring clock as the replay.
-                    judgements.extend(process_autoplay_inputs(session, now));
-                    if session.autoplay.is_some() {
-                        apply_auto_key_release(session, now);
-                    }
-                }
-                if session.play_end_reached() {
-                    break;
-                }
-                judgements.extend(process_mine_passes(session, now));
-                judgements.extend(process_misses(session, now));
-                update_hcn_lane_timers(session, now);
-                apply_hcn_gauge(session, now);
-                update_failed_state_from_gauge(session);
-                if let Some(replay) = &mut session.replay_player {
-                    replay.complete_scoring_tick(now);
-                }
-                if session.state != PlayState::Playing {
-                    break;
-                }
-            }
-        } else if session.judge.has_mines(&session.chart)
-            || session.chart.long_notes.iter().any(|pair| {
-                pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Hln
-            })
-        {
-            judgements.extend(super::input::process_timed_inputs(session, times.audio_now));
         } else {
-            if session.autoplay.as_ref().is_some_and(AutoplayController::is_full) {
-                // フルオート中は人間のキー入力を判定にも視覚エフェクトにも渡さない。
-                // キービームは process_autoplay_inputs 側(ノーツ処理時)で発火する。
-                // (ハイスピード等のオプション操作は app 側で別途処理される)
-                discard_human_inputs(session);
-            } else {
-                judgements.extend(process_human_inputs(session));
-            }
-            if session.replay_player.is_some() {
-                judgements.extend(process_replay_inputs(session, times.audio_now));
-            }
-            judgements.extend(process_autoplay_inputs(session, times.audio_now));
-            if session.autoplay.is_some() {
-                apply_auto_key_release(session, times.audio_now);
-            }
-        }
-        if !session.play_end_reached()
-            && session.scoring_closed_at.is_none()
-            && !ordered_timeline
-            && (session.replay_player.is_none() || session.replay_lane_mask.is_some())
-        {
-            if session.state == PlayState::Playing {
-                judgements.extend(process_mine_passes(session, times.audio_now));
-            }
-            if session.state == PlayState::Playing || !session.chart.metadata.kaleid.effective.hln {
-                judgements.extend(process_misses(session, times.audio_now));
-            }
-            update_hcn_lane_timers(session, times.audio_now);
-            if session.state == PlayState::Playing {
-                apply_hcn_gauge(session, times.audio_now);
-            }
-            update_failed_state_from_gauge(session);
+            advance_scoring(
+                session,
+                times.audio_now,
+                score_now,
+                cutoff,
+                ScoringTarget::Primary { audio: Some(audio), judgements: &mut judgements },
+            );
         }
         update_failed_state_from_gauge(session);
+        session.apply_play_end_request(false);
         if !session.play_end_reached() && session.chart.metadata.conditional.is_some() {
             schedule_chart_audio(session, times.audio_schedule_until, audio);
         }
         if !session.play_end_reached() {
             schedule_keysounds(session, audio);
         }
+        update_recent_inputs(session, &[], times.audio_now);
         update_recent_judgements(session, &judgements, times.audio_now);
         update_full_combo_timer(session, &judgements);
         if !session.play_end_reached() {
-            advance_battle_opponent(session, times.audio_now);
+            advance_battle_opponent(session, times.audio_now, cutoff);
             session.apply_play_end_request(true);
         }
 
@@ -195,8 +133,9 @@ pub fn advance_session_frame(
             session.scoring_closed_at = Some(times.audio_now);
             session.natural_result_settled_at = Some(times.audio_now);
         }
-        if session.state == PlayState::Playing && playback_deadline_passed(session, times.audio_now)
-        {
+        let finish_clock =
+            if session.scoring_closed_at.is_some() { times.audio_now } else { score_now };
+        if session.state == PlayState::Playing && playback_deadline_passed(session, finish_clock) {
             if session.judge.is_exhausted(&session.chart) {
                 session.state = PlayState::Finished;
             } else if session.timing_map.bpm_reflection_at(times.audio_now).is_some() {
@@ -207,6 +146,14 @@ pub fn advance_session_frame(
             }
         }
     }
+    if session.state == PlayState::Ready
+        && session
+            .recorded_replay_end()
+            .is_some_and(|end| end.manually_stopped && times.audio_now >= end.ended_at)
+    {
+        session.manually_stopped = true;
+        session.state = PlayState::Failed;
+    }
     if session.scoring_closed_at.is_none()
         && matches!(session.state, PlayState::Finished | PlayState::Failed)
     {
@@ -215,7 +162,11 @@ pub fn advance_session_frame(
     }
     update_gauge_max_timer(session, times.audio_now);
     if matches!(session.state, PlayState::Failed | PlayState::Finished) {
-        super::conditional::finalize_defaults(session, times.audio_now);
+        let end = session.scoring_closed_at.unwrap_or(times.audio_now);
+        super::conditional::finalize_defaults(&session.chart, &mut session.conditional, end);
+        if let Some(rival) = &mut session.opponent.independent {
+            super::conditional::finalize_defaults(&rival.chart, &mut rival.conditional, end);
+        }
     }
 
     let mine_hits = std::mem::take(&mut session.pending_mine_hits);
@@ -231,27 +182,141 @@ pub fn advance_session_frame(
     }
 }
 
+enum ScoringTarget<'a> {
+    Primary { audio: Option<&'a mut dyn AudioScheduler>, judgements: &'a mut Vec<JudgementEvent> },
+    Opponent,
+}
+
+/// Only the caller supplies the audio and scoring horizons. Live play, replay,
+/// battle and seek all complete the same prefix before selecting a new chart.
+fn advance_scoring(
+    session: &mut GameSession,
+    audio_now: TimeUs,
+    score_now: TimeUs,
+    cutoff: Option<TimeUs>,
+    mut target: ScoringTarget<'_>,
+) {
+    loop {
+        let (chart, runtime, player) = match target {
+            ScoringTarget::Primary { .. } => (
+                &session.chart,
+                &session.conditional,
+                session.replay_player.as_ref().filter(|_| session.replay_lane_mask.is_none()),
+            ),
+            ScoringTarget::Opponent => {
+                let Some(rival) = &session.opponent.independent else { return };
+                (&rival.chart, &rival.conditional, rival.replay_player.as_ref())
+            }
+        };
+        let step = super::conditional::next_scoring_step(
+            chart, runtime, player, audio_now, score_now, cutoff,
+        );
+        match &mut target {
+            ScoringTarget::Primary { audio, judgements } => {
+                let full_replay = player.is_some();
+                if let Some(replay) = player.filter(|_| !super::input::uses_ordered_inputs(session))
+                {
+                    let ticks = replay.scoring_times_through(step.until, cutoff);
+                    for time in ticks {
+                        if session.play_end_reached() || session.apply_play_end_request(false) {
+                            return;
+                        }
+                        score_primary_at(session, time, true, step.input_limit, judgements);
+                        session
+                            .replay_player
+                            .as_mut()
+                            .unwrap()
+                            .complete_scoring_tick(session.scoring_closed_at.unwrap_or(time));
+                        if session.state != PlayState::Playing {
+                            return;
+                        }
+                    }
+                } else {
+                    score_primary_at(
+                        session,
+                        step.until,
+                        full_replay,
+                        step.input_limit,
+                        judgements,
+                    );
+                }
+                let Some(at) = step.branch else { return };
+                if session.state != PlayState::Playing {
+                    return;
+                }
+                if let Some(audio) = audio.as_deref_mut() {
+                    schedule_chart_audio(session, TimeUs(at.0.saturating_sub(1)), audio);
+                }
+                if session.apply_play_end_request(false) {
+                    return;
+                }
+                super::conditional::evaluate(session, at);
+            }
+            ScoringTarget::Opponent => {
+                score_battle_opponent_through(session, &step, cutoff);
+                let Some(at) = step.branch else { return };
+                if session.play_end_reached() || session.apply_play_end_request(false) {
+                    return;
+                }
+                let rival = session.opponent.independent.as_mut().unwrap();
+                if opponent_hold_failed(rival) {
+                    return;
+                }
+                super::conditional::evaluate_opponent(rival, at);
+            }
+        }
+    }
+}
+
+fn score_primary_at(
+    session: &mut GameSession,
+    now: TimeUs,
+    full_replay: bool,
+    input_limit: usize,
+    judgements: &mut Vec<JudgementEvent>,
+) {
+    judgements.extend(super::input::process_timed_inputs(session, now, input_limit));
+    if super::input::uses_ordered_inputs(session) || session.judge.has_hcn(&session.chart) {
+        judgements.extend(super::conditional::advance_time(session, now));
+        return;
+    }
+    sync_judge_windows(session, now);
+    if session.state == PlayState::Playing || full_replay {
+        judgements.extend(process_mine_passes(session, now));
+    }
+    if session.state == PlayState::Playing
+        || full_replay
+        || !session.chart.metadata.kaleid.effective.hln
+    {
+        judgements.extend(process_misses(session, now));
+    }
+    update_hcn_lane_timers(session, now);
+    update_failed_state_from_gauge(session);
+    session.conditional.processed_time = Some(now);
+}
+
 /// Viewer の途中再生開始前に、過去の入力・判定 cursor を無音で進める。
 /// 開始時刻より前に判定時刻を迎えたscore対象ノートはPGREATとして事前集計し、
 /// 境界時刻のノートはその位置からのAutoplay対象として残す。
 pub fn prepare_viewer_seek(session: &mut GameSession, start_time: TimeUs) {
+    // Inputs held for a judgement time at the previous position never score after the seek.
+    session.conditional.pending_inputs.clear();
     if session.chart.metadata.conditional.is_some() {
         let previous_state = session.state;
         session.state = PlayState::Playing;
         let before = TimeUs(start_time.0.saturating_sub(1));
-        while let Some(at) =
-            super::conditional::next_evaluation(session).filter(|at| *at < start_time)
-        {
-            super::conditional::advance_before_boundary(session, TimeUs(at.0.saturating_sub(1)));
-            if session.state != PlayState::Playing {
-                break;
-            }
-            super::conditional::evaluate(session, at);
-        }
-        if session.state == PlayState::Playing {
-            super::conditional::advance_before_boundary(session, before);
-        }
-        advance_battle_opponent(session, before);
+        let cutoff =
+            session.recorded_replay_end().map(|end| end.scored_through.unwrap_or(end.ended_at));
+        let audio_now =
+            session.recorded_replay_end().map_or(before, |end| before.min(end.ended_at));
+        advance_scoring(
+            session,
+            audio_now,
+            cutoff.map_or(before, |end| before.min(end)),
+            cutoff,
+            ScoringTarget::Primary { audio: None, judgements: &mut Vec::new() },
+        );
+        advance_battle_opponent(session, audio_now, cutoff);
         // Fast-forward judgement state without emitting historical audio or effects.
         session.pending_keysounds.clear();
         session.pending_keysound_volumes.clear();
@@ -282,12 +347,19 @@ pub fn prepare_viewer_seek(session: &mut GameSession, start_time: TimeUs) {
     if let Some(replay) = &mut session.replay_player {
         replay.skip_before(start_time);
     }
+    // The seek already restored prefix judgements. Start hold integration here.
+    let before = TimeUs(start_time.0.saturating_sub(1));
+    session.conditional.processed_time = Some(before);
+    if session.judge.has_hcn(&session.chart) {
+        update_hcn_lane_timers(session, start_time);
+        session.last_hcn_gauge_at = Some(start_time);
+    }
     if let Some(opponent) = &mut session.opponent.independent {
         opponent.judge.skip_before(&opponent.chart, start_time);
         apply_battle_opponent_viewer_pgreat_prefix(opponent, start_time);
         // The prefix has already been restored above. Never run its scoring clock
         // again from zero; leave the exact seek boundary available for inputs.
-        opponent.conditional.processed_time = Some(TimeUs(start_time.0.saturating_sub(1)));
+        opponent.conditional.processed_time = Some(before);
         if let Some(autoplay) = &mut opponent.autoplay {
             autoplay.skip_before(&opponent.chart, start_time);
             for lane in Lane::ALL {
@@ -300,6 +372,9 @@ pub fn prepare_viewer_seek(session: &mut GameSession, start_time: TimeUs) {
         }
         if let Some(replay) = &mut opponent.replay_player {
             replay.skip_before(start_time);
+        }
+        if opponent.judge.has_hcn(&opponent.chart) {
+            update_battle_opponent_hcn(opponent, start_time);
         }
     }
     session.bgm_scheduler = BgmScheduler::starting_at(&session.chart, start_time);
@@ -442,50 +517,67 @@ fn viewer_pgreat_prefix_events(
     events
 }
 
-fn advance_battle_opponent(session: &mut GameSession, now: TimeUs) {
-    if session.opponent.independent.is_none() {
+fn advance_battle_opponent(
+    session: &mut GameSession,
+    audio_now: TimeUs,
+    primary_cutoff: Option<TimeUs>,
+) {
+    let Some(opponent) = &session.opponent.independent else { return };
+    if opponent_hold_failed(opponent) {
         return;
     }
-    let replay_times = session
-        .opponent
-        .independent
-        .as_ref()
-        .and_then(|opponent| opponent.replay_player.as_ref())
-        .map(|replay| replay.scoring_times_until(now));
-    let mut replay_times = replay_times.map(Vec::into_iter);
-    while !session.play_end_reached() {
-        let time = if let Some(times) = &mut replay_times {
-            times.next()
-        } else {
-            next_battle_opponent_time(session.opponent.independent.as_ref().unwrap(), now)
+    let end = opponent.replay_player.as_ref().and_then(ReplayPlayer::explicit_finish_at);
+    let failed = session.scoring_closed_at.filter(|_| session.state == PlayState::Failed);
+    let cutoff = end.into_iter().chain(primary_cutoff).chain(failed).min();
+    advance_scoring(
+        session,
+        audio_now,
+        cutoff.map_or(audio_now, |end| end.min(audio_now)),
+        cutoff,
+        ScoringTarget::Opponent,
+    );
+    let rival = session.opponent.independent.as_mut().unwrap();
+    if let Some(end) = rival.replay_player.as_ref().and_then(|p| p.kaleid.as_ref())
+        && end.finished_early
+        && end.ended_at <= audio_now
+    {
+        super::conditional::finalize_defaults(&rival.chart, &mut rival.conditional, end.ended_at);
+    }
+}
+
+fn score_battle_opponent_through(
+    session: &mut GameSession,
+    step: &super::conditional::ScoringStep,
+    cutoff: Option<TimeUs>,
+) {
+    let opponent = session.opponent.independent.as_ref().unwrap();
+    let replay_times =
+        opponent.replay_player.as_ref().map(|p| p.scoring_times_through(step.until, cutoff));
+    let mut ticks = replay_times.map(Vec::into_iter);
+    while !session.play_end_reached() && !session.apply_play_end_request(false) {
+        let time = match &mut ticks {
+            Some(ticks) => ticks.next(),
+            None => next_battle_opponent_time(
+                session.opponent.independent.as_ref().unwrap(),
+                step.until,
+            ),
         };
         let Some(time) = time else { break };
-        // Each player evaluates the same boundary against their own preceding score.
-        // Inputs at T are consumed only after all blocks at T have selected.
-        while let Some(at) = session
-            .opponent
-            .independent
-            .as_ref()
-            .and_then(|opponent| {
-                super::conditional::next_evaluation_for(&opponent.chart, &opponent.conditional)
-            })
-            .filter(|at| *at <= time)
-        {
-            advance_battle_opponent_at(session, TimeUs(at.0.saturating_sub(1)));
-            super::conditional::evaluate_opponent(
-                session.opponent.independent.as_mut().unwrap(),
-                at,
-            );
-        }
-        advance_battle_opponent_at(session, time);
-        if let Some(replay) = session
-            .opponent
-            .independent
-            .as_mut()
-            .and_then(|opponent| opponent.replay_player.as_mut())
-        {
+        advance_battle_opponent_at(session, time, step.input_limit);
+        let rival = session.opponent.independent.as_mut().unwrap();
+        if let Some(replay) = &mut rival.replay_player {
             replay.complete_scoring_tick(time);
         }
+        if opponent_hold_failed(rival) {
+            return;
+        }
+    }
+    // Conditional charts also finish the exact (possibly fractional) interval, like
+    // the primary judge. Two inputs on this boundary can straddle the chart change.
+    if !session.play_end_reached()
+        && session.opponent.independent.as_ref().unwrap().chart.metadata.conditional.is_some()
+    {
+        advance_battle_opponent_at(session, step.until, step.input_limit);
     }
 }
 
@@ -544,111 +636,73 @@ fn uses_fixed_opponent_clock(opponent: &BattleOpponentSession) -> bool {
         })
 }
 
-fn advance_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
+fn advance_battle_opponent_at(session: &mut GameSession, now: TimeUs, input_limit: usize) {
     let boundaries = {
         let Some(opponent) = session.opponent.independent.as_ref() else { return };
         let previous = opponent.conditional.processed_time.unwrap_or(TimeUs(-1));
         let reflections = opponent.judge.bpm_reflections(&opponent.chart);
         let start = reflections.partition_point(|point| point.time <= previous);
-        reflections[start..]
+        let mut boundaries = reflections[start..]
             .iter()
             .take_while(|point| point.time <= now)
             .flat_map(|point| [TimeUs(point.time.0 - 1), point.time])
             .filter(|&time| time > previous && time < now)
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        opponent.judge.append_hcn_boundaries(&opponent.chart, previous, now, &mut boundaries);
+        boundaries.sort_unstable();
+        boundaries.dedup();
+        boundaries
     };
     for time in boundaries {
-        score_battle_opponent_at(session, time);
+        score_battle_opponent_at(session, time, input_limit);
     }
-    score_battle_opponent_at(session, now);
+    score_battle_opponent_at(session, now, input_limit);
 }
 
-fn score_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
+fn score_battle_opponent_at(session: &mut GameSession, now: TimeUs, input_limit: usize) {
+    use crate::replay::TimedInput;
     let playback_rate_percent = session.audio_clock.playback_rate_percent();
     let Some(opponent) = &mut session.opponent.independent else {
         return;
     };
     let display_uses_primary_arrangement = opponent.display_uses_primary_arrangement;
     let publish_display_judgements = opponent.publish_display_judgements;
-    if opponent.conditional.processed_time.is_some_and(|time| now <= time) {
+    if opponent.conditional.processed_time.is_some_and(|time| now < time) {
         return;
     }
     opponent.conditional.processed_time = Some(now);
+    if opponent_hold_failed(opponent) {
+        return;
+    }
 
-    let percent = judge_percent_at_time_for_keymode(
-        opponent.chart.metadata.judge_rank_spec,
-        &opponent.chart.judge_rank_events,
-        now,
-        opponent.key_mode,
-        opponent.rule_mode,
-    );
-    let windows = opponent.judge.window_rates.for_rank(
-        opponent.base_judge_windows,
-        percent,
-        opponent.rule_mode,
-        opponent.key_mode,
-    );
     let rate = if opponent.replay_player.is_some() {
         opponent.replay_judge_rate_percent
     } else {
         playback_rate_percent
     };
-    let windows = scale_judge_windows_for_playback_rate(windows, rate);
-    opponent.judge.set_window_set(windows);
     // The first update may jump directly to a note/zone boundary. Set this
     // before inputs, which can themselves settle a zone at that same timestamp.
     opponent.judge.free_zone_autoplay = std::array::from_fn(|i| {
         opponent.autoplay.as_ref().is_some_and(|auto| auto.is_lane_enabled(Lane::ALL[i]))
     });
 
-    let mut inputs = if let Some(replay) = &mut opponent.replay_player {
-        replay.poll_until(now)
+    let inputs: Vec<_> = if let Some(replay) = &mut opponent.replay_player {
+        replay.poll_timed_until(now, input_limit).collect()
     } else if let Some(autoplay) = &mut opponent.autoplay {
-        autoplay.poll_until(&opponent.chart, now)
+        autoplay
+            .poll_until(&opponent.chart, now)
+            .into_iter()
+            .map(|input| TimedInput::new(input, None))
+            .collect()
     } else {
         Vec::new()
     };
-    inputs.sort_by_key(|input| input.time);
-    let mut display_judgements = Vec::new();
-    let has_mines = opponent.judge.has_mines(&opponent.chart);
-    for group in inputs.chunk_by(|left, right| left.time == right.time) {
-        let time = group[0].time;
-        let before = TimeUs(time.0.saturating_sub(1));
-        if has_mines {
-            let outcome = battle_opponent_passes(opponent, before);
-            display_judgements.extend(apply_battle_opponent_outcome(opponent, outcome));
-        }
-        let misses = battle_opponent_misses(opponent, before);
-        display_judgements.extend(apply_battle_opponent_outcome(opponent, misses));
-        let mut outcomes = Vec::new();
-        for &input in group {
-            let judge_time = if input.source == InputSource::Auto {
-                input.time
-            } else {
-                opponent_reflected_time(opponent, input.time).unwrap_or(input.time)
-            };
-            let lane = input.lane.index();
-            let held = &mut opponent.lane_key_hold[lane];
-            held.update(input.kind, input.scratch_direction);
-            if input.kind == InputKind::Press {
-                opponent.lane_keyon_started_at[lane] = Some(input.time);
-            } else if !held.is_held() {
-                opponent.lane_keyon_started_at[lane] = None;
-            }
-            outcomes.push(opponent.judge.process_input_at(&opponent.chart, input, judge_time));
-        }
-        if has_mines {
-            let outcome = battle_opponent_passes(opponent, time);
-            display_judgements.extend(apply_battle_opponent_outcome(opponent, outcome));
-        }
-        for outcome in outcomes {
-            display_judgements.extend(apply_battle_opponent_outcome(opponent, outcome));
-        }
+    if !inputs.is_empty() {
+        sync_opponent_judge_windows(opponent, now, rate);
     }
-    let mine_outcome = battle_opponent_passes(opponent, now);
-    display_judgements.extend(apply_battle_opponent_outcome(opponent, mine_outcome));
-    let miss_outcome = battle_opponent_misses(opponent, now);
-    display_judgements.extend(apply_battle_opponent_outcome(opponent, miss_outcome));
+    let mut display_judgements = super::input::apply_timed_inputs(opponent, inputs, now);
+    sync_opponent_judge_windows(opponent, now, rate);
+    advance_opponent_passage(opponent, now, true, &mut display_judgements);
     update_battle_opponent_hcn(opponent, now);
     update_battle_opponent_skin_timers(opponent, &display_judgements, now);
 
@@ -677,6 +731,95 @@ fn score_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
         .recent_judgements
         .extend(display_judgements.iter().map(|display| display.judgement.clone()));
     session.recent_display_judgements.extend(display_judgements);
+}
+
+fn sync_opponent_judge_windows(opponent: &mut BattleOpponentSession, now: TimeUs, rate: u16) {
+    set_judge_windows(
+        &mut opponent.judge,
+        &opponent.chart,
+        opponent.base_judge_windows,
+        opponent.key_mode,
+        opponent.rule_mode,
+        now,
+        rate,
+    );
+}
+impl super::input::InputScoring for BattleOpponentSession {
+    type Event = DisplayJudgementEvent;
+    fn stopped(&self) -> bool {
+        opponent_hold_failed(self)
+    }
+    fn has_mines(&self) -> bool {
+        self.judge.has_mines(&self.chart)
+    }
+
+    fn advance_to_input(
+        &mut self,
+        first: crate::replay::TimedInput,
+        has_mines: bool,
+        events: &mut Vec<Self::Event>,
+    ) -> TimeUs {
+        advance_opponent_passage(self, first.before_input(), has_mines, events);
+        let time = first.delivery_time();
+        events.extend(apply_battle_opponent_hcn_gauge(self, time));
+        if self.replay_player.is_some() {
+            sync_opponent_judge_windows(self, first.input.time, self.replay_judge_rate_percent);
+        }
+        time
+    }
+
+    fn judge_edge(
+        &mut self,
+        edge: crate::replay::TimedInput,
+        _now: TimeUs,
+    ) -> (InputEvent, JudgeOutcome) {
+        let input = edge.input;
+        let judge_time = if input.source == InputSource::Auto {
+            input.time
+        } else {
+            opponent_reflected_time(self, input.time).unwrap_or(input.time)
+        };
+        let lane = input.lane.index();
+        let held = &mut self.lane_key_hold[lane];
+        held.update(input.kind, input.scratch_direction);
+        if input.kind == InputKind::Press {
+            self.lane_keyon_started_at[lane] = Some(input.time);
+        } else if !held.is_held() {
+            self.lane_keyon_started_at[lane] = None;
+        }
+        (input, self.judge.process_input_at(&self.chart, input, judge_time))
+    }
+    fn pass_mines(&mut self, time: TimeUs) -> Vec<Self::Event> {
+        let outcome = battle_opponent_passes(self, time);
+        apply_battle_opponent_outcome(self, outcome)
+    }
+    fn apply_judgement(&mut self, _input: InputEvent, outcome: JudgeOutcome) -> Vec<Self::Event> {
+        apply_battle_opponent_outcome(self, outcome)
+    }
+    fn update_hold(&mut self, time: TimeUs) {
+        update_battle_opponent_hcn(self, time);
+    }
+}
+
+fn opponent_hold_failed(opponent: &BattleOpponentSession) -> bool {
+    opponent.gauge.current_closes_play_on_zero() && opponent.judge.has_hcn(&opponent.chart)
+}
+
+fn advance_opponent_passage(
+    opponent: &mut BattleOpponentSession,
+    at: TimeUs,
+    check_mines: bool,
+    judgements: &mut Vec<DisplayJudgementEvent>,
+) {
+    judgements.extend(apply_battle_opponent_hcn_gauge(opponent, at));
+    if check_mines && !opponent_hold_failed(opponent) {
+        let outcome = battle_opponent_passes(opponent, at);
+        judgements.extend(apply_battle_opponent_outcome(opponent, outcome));
+    }
+    if !opponent_hold_failed(opponent) {
+        let outcome = battle_opponent_misses(opponent, at);
+        judgements.extend(apply_battle_opponent_outcome(opponent, outcome));
+    }
 }
 
 fn opponent_reflected_time(opponent: &BattleOpponentSession, at: TimeUs) -> Option<TimeUs> {
@@ -716,14 +859,17 @@ fn battle_opponent_passes(opponent: &mut BattleOpponentSession, at: TimeUs) -> J
     opponent.judge.process_mine_passes_at(&opponent.chart, at, reflected, &held)
 }
 
-fn apply_battle_opponent_outcome(
+pub(super) fn apply_battle_opponent_outcome(
     opponent: &mut BattleOpponentSession,
     mut outcome: JudgeOutcome,
 ) -> Vec<DisplayJudgementEvent> {
+    if opponent_hold_failed(opponent) {
+        return Vec::new();
+    }
     let has_hln = opponent.chart.long_notes.iter().any(|pair| {
         pair.mode.unwrap_or(opponent.chart.metadata.long_note_mode) == LongNoteMode::Hln
     });
-    if has_hln || !outcome.potion_hits.is_empty() {
+    if has_hln || !outcome.hold_ticks.is_empty() || !outcome.potion_hits.is_empty() {
         enum Effect {
             Judge(JudgementEvent),
             Hold(crate::judge::model::HoldGaugeEvent),
@@ -780,17 +926,7 @@ fn apply_battle_opponent_outcome(
     }
     let mut display_judgements = Vec::with_capacity(outcome.events.len());
     outcome.events.sort_by_key(|event| event.time);
-    outcome.hold_ticks.sort_by_key(|event| event.time);
-    let mut holds = outcome.hold_ticks.into_iter().peekable();
     for event in outcome.events {
-        while holds.peek().is_some_and(|hold| hold.time <= event.time) {
-            let hold = holds.next().unwrap();
-            if hold.increase {
-                opponent.gauge.apply_hcn_hold();
-            } else {
-                opponent.gauge.apply_hcn_drain();
-            }
-        }
         opponent.score.apply(&event);
         if event.affects_score {
             let previous_gauge = opponent.gauge.current().value;
@@ -809,13 +945,6 @@ fn apply_battle_opponent_outcome(
             judgement: event,
             combo: opponent.score.combo,
         });
-    }
-    for hold in holds {
-        if hold.increase {
-            opponent.gauge.apply_hcn_hold();
-        } else {
-            opponent.gauge.apply_hcn_drain();
-        }
     }
     for mine in outcome.mine_hits {
         opponent.gauge.apply_mine(mine.damage);
@@ -939,7 +1068,7 @@ pub fn result_is_settled(session: &GameSession, audio_now: TimeUs) -> bool {
 /// - 全ノーツ（LN/CN/HCN の終端を含む）が判定済みであること。
 /// - 人間入力が採点対象に残る場合、以後に取得する入力の判定時刻
 ///   (`取得時刻 + input_offset_us`) が `E + W` を超えること。
-///   すなわち `audio_now > E + W + max(0, -input_offset_us)`。
+///   負の補正では入力配送の猶予も含めて待つ。
 /// - フルリプレイでは、外側の時計ではなく実際に処理を終えた 1ms tick が `E + W` を超えること。
 ///   記録済み入力には現在のオフセットを再適用しないため、負オフセット分は待たない。
 /// - 独立した対戦相手を持つ場合は、その採点も同じ条件で終わっていること。
@@ -968,7 +1097,9 @@ pub fn natural_result_settled(session: &GameSession, audio_now: TimeUs) -> bool 
         };
         scored.is_some_and(|scored| scored.0 > deadline)
     } else {
-        audio_now.0 > deadline.saturating_add(human_input_settle_margin_us(session))
+        let delay = session.input_scoring_delay_us();
+        audio_now.0.saturating_sub(delay) > deadline
+            && (delay == 0 || session.conditional.processed_time.is_some_and(|at| at.0 > deadline))
     };
     primary_settled
         && session
@@ -978,21 +1109,49 @@ pub fn natural_result_settled(session: &GameSession, audio_now: TimeUs) -> bool 
             .is_none_or(|opponent| battle_opponent_result_settled(opponent, audio_now))
 }
 
-/// 人間入力が採点対象に残る場合の追加待機。入力時刻へ加えるオフセットが負のとき、
-/// 取得時刻が `E + W` を過ぎた入力もまだ判定窓内に入り得る。
-fn human_input_settle_margin_us(session: &GameSession) -> i64 {
-    let human_scored = !session.autoplay.as_ref().is_some_and(AutoplayController::is_full);
-    if human_scored { session.offsets.input_offset_us.saturating_neg().max(0) } else { 0 }
+impl GameSession {
+    /// Chart-time delay for passive passage. Leave 3 ms of real time for input delivery.
+    pub(crate) fn input_scoring_delay_us(&self) -> i64 {
+        if self.offsets.input_offset_us >= 0
+            || (self.replay_player.is_some() && self.replay_lane_mask.is_none())
+            || self.autoplay.as_ref().is_some_and(AutoplayController::is_full)
+        {
+            return 0;
+        }
+        let delivery_us = 3_000 * i64::from(self.audio_clock.playback_rate_percent()) / 100;
+        self.offsets.input_offset_us.saturating_neg().saturating_add(delivery_us)
+    }
+}
+
+fn primary_score_time(session: &GameSession, audio_now: TimeUs) -> TimeUs {
+    let delay = session.input_scoring_delay_us();
+    if delay == 0 {
+        return audio_now;
+    }
+    // A received input can be judged immediately. Integrate everything preceding it
+    // first, and never undo that progress on a later wake without input.
+    session
+        .conditional
+        .pending_inputs
+        .iter()
+        .map(|input| input.time)
+        .filter(|&time| time <= audio_now)
+        .chain(session.conditional.processed_time)
+        .fold(TimeUs(audio_now.0.saturating_sub(delay)), TimeUs::max)
 }
 
 fn battle_opponent_result_settled(opponent: &BattleOpponentSession, audio_now: TimeUs) -> bool {
-    if let Some(replay) = &opponent.replay_player
-        && let Some(end) = replay.explicit_finish_at()
-    {
-        return replay.scored_until().is_some_and(|scored| scored >= end);
+    if opponent_hold_failed(opponent) {
+        return true;
     }
     if super::conditional::next_evaluation_for(&opponent.chart, &opponent.conditional).is_some() {
         return false;
+    }
+    if let Some(replay) = &opponent.replay_player
+        && let Some(end) = replay.explicit_finish_at()
+    {
+        return replay.scored_until().is_some_and(|scored| scored >= end)
+            || (end.0 < 0 && replay.events.first().is_none_or(|e| e.delivery_time() > end));
     }
     if !opponent.judge.is_exhausted(&opponent.chart) {
         return audio_now.0 > opponent.chart.end_time.0.saturating_add(SESSION_END_MARGIN_US)
@@ -1036,10 +1195,12 @@ fn schedule_chart_audio(session: &mut GameSession, until: TimeUs, audio: &mut dy
     // キー音自動再生モード: ノーツの押下有無に関わらず、譜面の生タイミングで
     // キー音を鳴らす。入力オフセット・表示オフセットは適用しない。
     // 押鍵時のキー音は `schedule_keysounds` 側で抑制する。
-    if uses_scheduled_auto_keysounds(session) {
+    // 部分オートでは、自動演奏のレーンだけを予約する。
+    if let Some(lanes) = scheduled_keysound_lanes(session) {
+        let skipped = std::array::from_fn(|i| !lanes[i]);
         session.auto_keysound_scheduler.schedule_until(
             &session.chart,
-            &session.display_only_lane_mask,
+            &skipped,
             &session.audio_clock,
             until,
             session.audio_mix.master_volume

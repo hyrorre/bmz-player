@@ -335,6 +335,13 @@ pub struct GameSession {
 }
 
 impl GameSession {
+    /// Inclusive replay cutoff when the user ends play. Input compensation can
+    /// leave scoring behind the audio clock even at an explicit completion.
+    pub fn replay_stop_scored_through(&self) -> Option<TimeUs> {
+        (self.manually_stopped || self.finished_early)
+            .then(|| self.conditional.processed_time.unwrap_or(TimeUs(-1)))
+    }
+
     /// 採用する結果の確定時刻。採点を閉じていない `Playing` の間は `None`。
     ///
     /// 更新を経ずに終了状態へ置かれたセッションは、現在の譜面時刻を停止境界とする。
@@ -645,7 +652,10 @@ impl AutoKeysoundScheduler {
             }
             let notes = chart.notes_for_lane(lane);
             while let Some(note) = notes.get(self.next_note_index[lane_index]) {
-                if play_end.is_pending() {
+                // A pending exit stops this batch at once so a dense chart cannot delay it.
+                // Only audio is cut short; scoring applies the request between updates, and
+                // a rejected request leaves the remaining notes for the next update.
+                if play_end.interrupts_update() {
                     return;
                 }
                 if note.time > until {
@@ -701,16 +711,28 @@ impl AutoKeysoundScheduler {
 
 pub fn compute_frame_times(session: &GameSession) -> FrameTimes {
     let audio_now = session.audio_clock.now();
-    let schedule_ahead = schedule_ahead_us(&session.audio_clock);
-    let audio_schedule_until = TimeUs(audio_now.0.saturating_add(schedule_ahead));
+    let audio_schedule_until =
+        TimeUs(audio_now.0.saturating_add(schedule_ahead_us(&session.audio_clock)));
     // A recorded stop bounds only the updates that can still score or end the
     // replay. The ending after it follows the clock, as it did in the recorded play.
     if matches!(session.state, PlayState::Ready | PlayState::Playing)
-        && let Some(end) = session.recorded_replay_end().map(|evidence| evidence.ended_at)
+        && let Some(end) = session.recorded_replay_end()
     {
+        // Finish leaves already queued audio playing. Reproduce the recording's
+        // last scheduling window even if the viewer changes the playback speed.
+        let tail = if end.manually_stopped || !session.audio_clock.schedule_ahead {
+            0
+        } else {
+            audio_schedule_ahead_us(session.replay_judge_rate_percent)
+        };
+        let final_horizon = TimeUs(end.ended_at.0.saturating_add(tail));
         return FrameTimes {
-            audio_now: audio_now.min(end),
-            audio_schedule_until: audio_schedule_until.min(end),
+            audio_now: audio_now.min(end.ended_at),
+            audio_schedule_until: if audio_now >= end.ended_at {
+                final_horizon
+            } else {
+                audio_schedule_until.min(final_horizon)
+            },
         };
     }
     FrameTimes { audio_now, audio_schedule_until }

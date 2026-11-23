@@ -37,6 +37,7 @@ fn reflected_input_uses_the_mirrored_delta_and_forward_effect_time() {
     let mut replay = session_with_autoplay(tap_before_reflection());
     replay.autoplay = None;
     replay.replay_player = Some(ReplayPlayer::new(vec![ReplayEvent {
+        applied_after: None,
         time: actual,
         lane: input.lane,
         kind: input.kind,

@@ -10,7 +10,9 @@ use bmz_render::plan::{DrawCommand, DrawPlan, TextureId};
 use bmz_render::scene::AppSceneSnapshot;
 use bmz_render::skin::{DynamicTimerRuntime, SkinContext, SkinManifest};
 
-fn press_at(session: &mut GameSession, time: TimeUs, delivery_delay: i64) {
+/// Press at `time` and deliver it after `delivery_delay`. Returns when the press is
+/// judged: a positive offset holds it until its judgement time.
+fn press_at(session: &mut GameSession, time: TimeUs, delivery_delay: i64) -> TimeUs {
     let control = PhysicalControl::KeyboardKey("Z".to_string());
     let mut backend = BufferedInputBackend::default();
     for (kind, timestamp) in [(InputKind::Release, 999_000_000), (InputKind::Press, 1_000_000_000)]
@@ -39,14 +41,23 @@ fn press_at(session: &mut GameSession, time: TimeUs, delivery_delay: i64) {
     };
     session.input_timestamp_anchor =
         Some(InputTimestampAnchor { monotonic_ns: 1_000_000_000, audio_time: time });
-    session.audio_clock.pause_at(TimeUs(time.0 + delivery_delay));
-    let judgements = process_human_inputs(session);
+    let delivered_at = TimeUs(time.0 + delivery_delay);
+    let judged_at = TimeUs(time.0 + session.offsets.input_offset_us);
+    let processed_at = delivered_at.max(judged_at);
+    session.audio_clock.pause_at(delivered_at);
+    let mut judgements = process_human_inputs(session);
+    if processed_at > delivered_at {
+        assert!(judgements.is_empty());
+        session.audio_clock.pause_at(processed_at);
+        judgements = process_human_inputs(session);
+    }
     assert_eq!(judgements.len(), 1);
     assert_eq!(judgements[0].judge, Judge::PGreat);
     assert_eq!(judgements[0].delta, TimeUs(10_000));
-    assert_eq!(judgements[0].time, TimeUs(time.0 + session.offsets.input_offset_us));
+    assert_eq!(judgements[0].time, judged_at);
     assert_eq!(session.replay_recorder.events.last().unwrap().time, judgements[0].time);
-    update_recent_judgements(session, &judgements, TimeUs(time.0 + delivery_delay));
+    update_recent_judgements(session, &judgements, processed_at);
+    processed_at
 }
 
 fn judgement_skin() -> SkinContext {
@@ -100,14 +111,16 @@ fn input_offset_keeps_judge_combo_and_bomb_visible_and_animating_on_every_press(
             let mut timers = DynamicTimerRuntime::default();
             for (index, note_time) in [1_000_000, 1_200_000].into_iter().enumerate() {
                 let physical_time = TimeUs(note_time + 10_000 - offset);
-                press_at(&mut session, physical_time, delivery_delay);
+                let processed_at = press_at(&mut session, physical_time, delivery_delay);
+                // The display starts at the later of the press and its judgement time.
+                let shown_from = TimeUs(physical_time.0 + offset.max(0));
                 let mut previous_x = None;
                 for elapsed in [0, 5_000, 19_000, 20_000, 30_000] {
-                    let now = TimeUs(physical_time.0 + delivery_delay + elapsed);
+                    let now = TimeUs(processed_at.0 + elapsed);
                     let snapshot =
                         build_render_snapshot(&session, now, &session.recent_judgements, None);
                     let judgement = snapshot.recent_judgements.last().unwrap();
-                    assert_eq!(judgement.time, physical_time);
+                    assert_eq!(judgement.time, shown_from);
                     assert_eq!(judgement.delta_us, 10_000);
                     assert_eq!(judgement.combo, index as u32 + 1);
                     let plan = DrawPlan::from_scene_with_skin(
@@ -145,7 +158,7 @@ fn input_offset_keeps_judge_combo_and_bomb_visible_and_animating_on_every_press(
 }
 
 #[test]
-fn input_offset_display_history_expires_without_falling_back_to_scoring_time() {
+fn input_offset_display_history_expires_800ms_after_the_display_starts() {
     for offset in [-500_000, 500_000] {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
         profile.judge.input_offset_us = offset;
@@ -153,13 +166,15 @@ fn input_offset_display_history_expires_without_falling_back_to_scoring_time() {
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
         let physical_time = TimeUs(1_010_000 - offset);
         press_at(&mut session, physical_time, 0);
+        // A negative offset shows from the press, a positive one from its judgement time.
+        let shown_from = TimeUs(physical_time.0 + offset.max(0));
         for age in [799_000, 801_000] {
-            let now = TimeUs(physical_time.0 + age);
+            let now = TimeUs(shown_from.0 + age);
             update_recent_judgements(&mut session, &[], now);
             let snapshot = build_render_snapshot(&session, now, &session.recent_judgements, None);
             if age < 800_000 {
                 assert_eq!(snapshot.recent_judgements.len(), 1);
-                assert_eq!(snapshot.recent_judgements[0].time, physical_time);
+                assert_eq!(snapshot.recent_judgements[0].time, shown_from);
             } else {
                 assert!(snapshot.recent_judgements.is_empty());
             }
