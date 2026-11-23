@@ -335,8 +335,11 @@ fn reset_scene_skin_to_defaults_removes_named_defs_without_same_id_name_collisio
 
 #[test]
 fn skin_slot_history_restores_options_files_and_offsets_by_path() {
+    let data_dir = std::path::absolute("data").unwrap();
+    let original = data_dir.join("skins/ECFN/play/play7.luaskin");
+    let paths = AppPaths::from_dirs("resources".into(), data_dir, "cache".into(), "logs".into());
     let mut skin = SkinConfig {
-        play7: "data/skins/ECFN/play/play7.luaskin".to_string(),
+        play7: original.to_string_lossy().into_owned(),
         play7_offsets: vec![SkinOffsetConfig {
             name: Some("Judge offset".to_string()),
             id: 32,
@@ -348,8 +351,10 @@ fn skin_slot_history_restores_options_files_and_offsets_by_path() {
     skin.play7_options.insert("Judge".to_string(), "On".to_string());
     skin.play7_files.insert("Notes".to_string(), "default.png".to_string());
 
-    save_skin_slot_history(&mut skin, SkinSlot::Play7);
-    skin.play7 = "data/skins/Starseeker/play/play7.luaskin".to_string();
+    switch_skin_slot(&mut skin, SkinSlot::Play7, &paths, String::new());
+    assert!(skin.play7_options.is_empty());
+    assert!(skin.play7_files.is_empty());
+    assert!(skin.play7_offsets.is_empty());
     skin.play7_options.insert("Judge".to_string(), "Off".to_string());
     skin.play7_files.insert("Notes".to_string(), "other.png".to_string());
     skin.play7_offsets = vec![SkinOffsetConfig {
@@ -358,10 +363,13 @@ fn skin_slot_history_restores_options_files_and_offsets_by_path() {
         x: -4,
         ..Default::default()
     }];
-    save_skin_slot_history(&mut skin, SkinSlot::Play7);
-
-    skin.play7 = "data/skins/ECFN/play/play7.luaskin".to_string();
-    restore_skin_slot_history(&mut skin, SkinSlot::Play7);
+    switch_skin_slot(
+        &mut skin,
+        SkinSlot::Play7,
+        &paths,
+        "data:skins/ECFN/play/play7.luaskin".into(),
+    );
+    skin = toml::from_str(&toml::to_string(&skin).unwrap()).unwrap();
 
     assert_eq!(skin.play7_options.get("Judge").map(String::as_str), Some("On"));
     assert_eq!(skin.play7_files.get("Notes").map(String::as_str), Some("default.png"));
@@ -374,10 +382,16 @@ fn skin_slot_history_restores_options_files_and_offsets_by_path() {
             ..Default::default()
         }]
     );
+    switch_skin_slot(&mut skin, SkinSlot::Play7, &paths, String::new());
+    assert_eq!(skin.play7_options["Judge"], "Off");
+    assert_eq!(skin.play7_files["Notes"], "other.png");
+    assert_eq!(skin.play7_offsets[0].x, -4);
 }
 
 #[test]
 fn skin_slot_history_isolates_same_path_by_slot() {
+    let paths =
+        AppPaths::from_dirs("resources".into(), "data".into(), "cache".into(), "logs".into());
     let shared_path = "data/skins/shared/play.luaskin".to_string();
     let mut skin = SkinConfig {
         play7: shared_path.clone(),
@@ -387,12 +401,12 @@ fn skin_slot_history_isolates_same_path_by_slot() {
         ..SkinConfig::default()
     };
 
-    save_skin_slot_history(&mut skin, SkinSlot::Play7);
-    save_skin_slot_history(&mut skin, SkinSlot::Play14);
-    skin.play7_offsets.clear();
-    skin.play14_offsets.clear();
-    restore_skin_slot_history(&mut skin, SkinSlot::Play7);
-    restore_skin_slot_history(&mut skin, SkinSlot::Play14);
+    for slot in [SkinSlot::Play7, SkinSlot::Play14] {
+        switch_skin_slot(&mut skin, slot, &paths, String::new());
+    }
+    for slot in [SkinSlot::Play7, SkinSlot::Play14] {
+        switch_skin_slot(&mut skin, slot, &paths, "data:skins/shared/play.luaskin".into());
+    }
 
     assert_eq!(skin.play7_offsets[0].h, 7);
     assert_eq!(skin.play14_offsets[0].h, 14);
@@ -400,18 +414,23 @@ fn skin_slot_history_isolates_same_path_by_slot() {
 
 #[test]
 fn skin_slot_history_restores_legacy_path_only_entry() {
-    let path = "data/skins/legacy/play7.luaskin".to_string();
-    let mut skin = SkinConfig { play7: path.clone(), ..SkinConfig::default() };
-    skin.history.insert(
-        path.clone(),
-        SkinHistoryEntryConfig {
-            offsets: vec![SkinOffsetConfig { id: 30, h: 12, ..Default::default() }],
-            ..Default::default()
-        },
-    );
+    let paths =
+        AppPaths::from_dirs("resources".into(), "data".into(), "cache".into(), "logs".into());
+    let legacy = "data/skins/legacy/play7.luaskin";
+    let path = "data:skins/legacy/play7.luaskin";
+    for selected in [legacy, path] {
+        let mut skin = SkinConfig::default();
+        skin.history.insert(
+            legacy.into(),
+            SkinHistoryEntryConfig {
+                offsets: vec![SkinOffsetConfig { id: 30, h: 12, ..Default::default() }],
+                ..Default::default()
+            },
+        );
 
-    restore_skin_slot_history(&mut skin, SkinSlot::Play7);
+        assert!(switch_skin_slot(&mut skin, SkinSlot::Play7, &paths, selected.into()));
 
-    assert_eq!(skin.play7_offsets[0].h, 12);
-    assert!(skin.history.contains_key(&skin_slot_history_key(SkinSlot::Play7, &path)));
+        assert_eq!(skin.play7_offsets[0].h, 12);
+        assert!(skin.history.contains_key(&skin_slot_history_key(SkinSlot::Play7, path)));
+    }
 }

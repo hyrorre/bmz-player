@@ -94,11 +94,13 @@ impl WinitApp {
         if !target.cycle_skin(
             &mut self.boot.profile_config.skin,
             self.skin.skin_catalog.get(),
+            &self.boot.app_paths,
             direction,
         ) {
             return false;
         }
         self.select.lr2_skin_settings.scroll = 0;
+        self.apply_profile_skin_offsets_to_active_play();
         self.apply_lr2_skin_settings_change(target);
         true
     }
@@ -152,5 +154,6 @@ impl WinitApp {
     fn apply_lr2_skin_settings_change(&mut self, target: Lr2SkinTarget) {
         self.boot.profile_config.updated_at = now_unix_seconds();
         self.reload_skins(target.reload_request());
+        self.queue_profile_config_save("LR2 skin settings");
     }
 }
