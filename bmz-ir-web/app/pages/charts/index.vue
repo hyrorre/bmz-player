@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import type { IrDifficultyLabel } from '../../../shared/types/ir'
-import { readDifficultyFilter } from '../../../shared/utils/difficulty_filter'
+import type { IrDifficultyLabel, IrDifficultyTableOption } from '../../../shared/types/ir'
+import {
+  readDifficultyFilter,
+  type DifficultyFilter,
+} from '../../../shared/utils/difficulty_filter'
 
 interface ChartListItem {
   sha256: string
@@ -34,19 +37,92 @@ const chartListQuery = computed(() => ({ ...listQuery.value, ...difficulty.value
 const localePath = useLocalePath()
 const { t } = useI18n()
 const { translateApiError } = useApiError()
-const { data, pending, error, refresh } = await useFetch<ChartListResult>('/api/v1/charts', {
-  query: computed(() => ({ ...apiQuery.value, ...difficulty.value })),
-})
-const difficultyLabel = computed(() => {
+const [
+  { data, pending, error, refresh },
+  { data: catalog, pending: catalogPending, error: catalogError },
+] = await Promise.all([
+  useFetch<ChartListResult>('/api/v1/charts', {
+    query: computed(() => ({ ...apiQuery.value, ...difficulty.value })),
+  }),
+  useFetch<{ tables: IrDifficultyTableOption[] }>('/api/v1/difficulty-tables'),
+])
+
+const selectedTable = computed(() =>
+  catalog.value?.tables.find(({ id }) => id === difficulty.value?.difficulty_table),
+)
+const matchedLabel = computed(() => {
   const label = data.value?.difficulty_filter
-  if (
-    label &&
-    label.table_id === difficulty.value?.difficulty_table &&
-    label.level === difficulty.value.difficulty_level
-  ) {
-    return `${label.symbol}${label.level}`
+  return label?.table_id === difficulty.value?.difficulty_table ? label : undefined
+})
+
+const tableItems = computed(() => {
+  const items = [{ value: 'all', label: t('charts.allDifficultyTables') }]
+  for (const table of catalog.value?.tables ?? []) {
+    items.push({
+      value: `table:${table.id}`,
+      label: table.symbol ? `${table.name} (${table.symbol})` : table.name,
+    })
   }
-  return difficulty.value?.difficulty_level || difficulty.value?.difficulty_table
+  if (difficulty.value && !selectedTable.value) {
+    items.push({
+      value: `table:${difficulty.value.difficulty_table}`,
+      label: matchedLabel.value?.table_name || difficulty.value.difficulty_table,
+    })
+  }
+  return items
+})
+const levelItems = computed(() => {
+  const levels = selectedTable.value?.levels ?? []
+  const current = difficulty.value?.difficulty_level
+  const available =
+    current !== undefined && !levels.includes(current) ? [...levels, current] : levels
+  const symbol = selectedTable.value?.symbol ?? matchedLabel.value?.symbol ?? ''
+  return [
+    { value: 'all', label: t('charts.allDifficultyLevels') },
+    ...available.map((level) => ({
+      value: `level:${level}`,
+      label: `${symbol}${level}` || t('common.none'),
+    })),
+  ]
+})
+
+function difficultyLocation(filter?: DifficultyFilter) {
+  return {
+    path: route.path,
+    query: {
+      ...route.query,
+      difficulty_table: filter?.difficulty_table,
+      difficulty_level: filter?.difficulty_level,
+      page: undefined,
+    },
+  }
+}
+
+const tableChoice = computed({
+  get: () => (difficulty.value ? `table:${difficulty.value.difficulty_table}` : 'all'),
+  set(value: string) {
+    if (value === tableChoice.value) return
+    void navigateTo(
+      difficultyLocation(
+        value === 'all' ? undefined : { difficulty_table: value.slice('table:'.length) },
+      ),
+    )
+  },
+})
+const levelChoice = computed({
+  get: () =>
+    difficulty.value?.difficulty_level === undefined
+      ? 'all'
+      : `level:${difficulty.value.difficulty_level}`,
+  set(value: string) {
+    if (!difficulty.value || value === levelChoice.value) return
+    void navigateTo(
+      difficultyLocation({
+        difficulty_table: difficulty.value.difficulty_table,
+        difficulty_level: value === 'all' ? undefined : value.slice('level:'.length),
+      }),
+    )
+  },
 })
 
 const errorDescription = computed(() =>
@@ -56,7 +132,7 @@ useSeoMeta({ title: () => t('charts.title') })
 </script>
 
 <template>
-  <main>
+  <main class="min-w-0">
     <section class="mx-auto w-full max-w-4xl px-5 py-10">
       <div class="mb-8">
         <p class="mb-2 text-sm font-medium text-primary-300">BMZ Internet Ranking</p>
@@ -69,7 +145,7 @@ useSeoMeta({ title: () => t('charts.title') })
       <form class="mb-4 flex gap-3" @submit.prevent="applySearch(refresh)">
         <UInput
           v-model="search"
-          class="flex-1"
+          class="min-w-0 flex-1"
           icon="i-lucide-search"
           :placeholder="t('charts.searchPlaceholder')"
           :aria-label="t('charts.searchPlaceholder')"
@@ -77,20 +153,38 @@ useSeoMeta({ title: () => t('charts.title') })
         <UButton type="submit" color="primary" variant="subtle">{{ t('common.search') }}</UButton>
       </form>
 
-      <div v-if="difficulty" class="mb-4 flex flex-wrap items-center gap-2 text-sm">
-        <span class="text-muted">{{ t('charts.difficultyFilter') }}</span>
+      <div class="mb-4 flex items-end gap-2 sm:gap-3">
+        <UFormField :label="t('lamps.table')" class="min-w-0 flex-[2] sm:max-w-76">
+          <USelectMenu
+            v-model="tableChoice"
+            :items="tableItems"
+            value-key="value"
+            :loading="catalogPending"
+            :disabled="tableItems.length === 1"
+            class="w-full"
+          />
+        </UFormField>
+        <UFormField :label="t('charts.difficultyFilter')" class="min-w-0 flex-1 sm:max-w-48">
+          <USelect
+            v-model="levelChoice"
+            :items="levelItems"
+            :disabled="levelItems.length === 1"
+            class="w-full"
+          />
+        </UFormField>
         <UButton
-          :to="localePath({ path: '/charts', query: { q: listQuery.q } })"
+          v-if="difficulty"
+          :to="difficultyLocation()"
           :aria-label="t('charts.clearDifficultyFilter')"
           :title="t('charts.clearDifficultyFilter')"
-          trailing-icon="i-lucide-x"
-          color="primary"
+          icon="i-lucide-x"
+          color="neutral"
           variant="subtle"
-          size="sm"
-        >
-          {{ difficultyLabel }}
-        </UButton>
+        />
       </div>
+      <p v-if="catalogError" class="mb-4 text-sm text-muted">
+        {{ t('charts.difficultyOptionsUnavailable') }}
+      </p>
 
       <UAlert v-if="error" color="error" :description="errorDescription" class="mb-6" />
       <p v-else-if="pending" class="text-sm text-neutral-400">{{ t('common.loading') }}</p>

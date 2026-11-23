@@ -2,18 +2,14 @@ import type { IrDifficultyLabel } from '../types/ir'
 
 export interface DifficultyFilter {
   difficulty_table: string
-  difficulty_level: string
+  difficulty_level?: string
 }
 
 export function readDifficultyFilter(query: Record<string, unknown>): DifficultyFilter | undefined {
   const { difficulty_table, difficulty_level } = query
-  if (
-    typeof difficulty_table === 'string' &&
-    difficulty_table &&
-    typeof difficulty_level === 'string'
-  ) {
-    return { difficulty_table, difficulty_level }
-  }
+  if (typeof difficulty_table !== 'string' || !difficulty_table) return
+  if (typeof difficulty_level === 'string') return { difficulty_table, difficulty_level }
+  if (difficulty_level === undefined) return { difficulty_table }
 }
 
 export function difficultyFilterForLabel(label: IrDifficultyLabel): DifficultyFilter {

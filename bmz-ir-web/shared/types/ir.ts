@@ -417,18 +417,22 @@ export interface IrDifficultyLabel {
   level: string
 }
 
-export interface IrLampTable {
+export interface IrDifficultyTable {
   id: string
   name: string
   symbol: string
+}
+
+export interface IrDifficultyTableOption extends IrDifficultyTable {
+  levels: string[]
 }
 
 export type IrDistributionMode = 'lamp' | 'score'
 
 export interface IrDifficultyDistribution {
   player: { id: string; display_name: string }
-  tables: IrLampTable[]
-  table: IrLampTable | null
+  tables: IrDifficultyTable[]
+  table: IrDifficultyTable | null
   levels: {
     level: string
     total: number

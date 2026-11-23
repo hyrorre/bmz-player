@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { BatchItem } from 'drizzle-orm/batch'
 import {
   and,
+  asc,
   eq,
   exists,
   inArray,
@@ -15,7 +16,7 @@ import {
 } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/sqlite-core'
 import { db, schema } from 'hub:db'
-import type { IrDifficultyLabel } from '../../shared/types/ir'
+import type { IrDifficultyLabel, IrDifficultyTableOption } from '../../shared/types/ir'
 import type { DifficultyFilter } from '../../shared/utils/difficulty_filter'
 import { publicChartCondition } from './moderation/visibility'
 
@@ -241,6 +242,37 @@ function activeDifficultyGeneration() {
   )
 }
 
+export async function listDifficultyTableOptions(): Promise<IrDifficultyTableOption[]> {
+  const { difficultyTables: tables, difficultyTableEntries: entries } = schema
+  const rows = await db
+    .select({
+      id: tables.id,
+      name: tables.name,
+      symbol: tables.symbol,
+      levelOrder: tables.levelOrder,
+      levels: sql`json_group_array(distinct ${entries.level})`.mapWith(
+        (value: string) => JSON.parse(value) as string[],
+      ),
+    })
+    .from(tables)
+    .innerJoin(entries, activeDifficultyGeneration())
+    .groupBy(tables.id)
+    .orderBy(asc(tables.priority), asc(tables.name), asc(tables.id))
+  return rows.map(({ levelOrder, levels, ...table }) => ({
+    ...table,
+    levels: levels.sort(compareDifficultyLevels(levelOrder)),
+  }))
+}
+
+export function compareDifficultyLevels(levelOrder: string[]) {
+  const order = new Map(levelOrder.map((level, index) => [level, index]))
+  const collator = new Intl.Collator('en', { numeric: true })
+  return (left: string, right: string) =>
+    (order.get(left) ?? levelOrder.length) - (order.get(right) ?? levelOrder.length) ||
+    collator.compare(left, right) ||
+    left.localeCompare(right)
+}
+
 function chartMd5Match() {
   return eq(schema.difficultyTableEntries.md5, sql`nullif(lower(${schema.charts.md5}), '')`)
 }
@@ -249,28 +281,30 @@ function chartSha256Match() {
   return eq(schema.difficultyTableEntries.sha256, sql`lower(${schema.charts.sha256})`)
 }
 
-function activeDifficultyEntries(condition: SQL | undefined) {
+function activeDifficultyEntries(hash: 'md5' | 'sha256', condition?: SQL) {
+  const entries = schema.difficultyTableEntries
+  const index = sql.identifier(`idx_difficulty_table_entries_${hash}`)
+  const match = hash === 'md5' ? chartMd5Match() : chartSha256Match()
+  // Start with the chart hash to avoid rereading the entire table for each chart.
   return db
     .select({ found: sql`1` })
-    .from(schema.difficultyTableEntries)
+    .from(sql`${entries} indexed by ${index}`)
     .innerJoin(schema.difficultyTables, activeDifficultyGeneration())
-    .where(condition)
+    .where(and(match, condition))
 }
 
 export function chartDifficultyCondition(filter: DifficultyFilter): SQL {
   const entries = schema.difficultyTableEntries
-  const selectedLevel = and(
+  const selectedDifficulty = and(
     eq(entries.tableId, filter.difficulty_table),
-    eq(entries.level, filter.difficulty_level),
+    filter.difficulty_level === undefined ? undefined : eq(entries.level, filter.difficulty_level),
   )
-  const md5Match = chartMd5Match()
-
   // An MD5 match in any active table suppresses every SHA-256 label for the chart.
   return or(
-    exists(activeDifficultyEntries(and(selectedLevel, md5Match))),
+    exists(activeDifficultyEntries('md5', selectedDifficulty)),
     and(
-      notExists(activeDifficultyEntries(md5Match)),
-      exists(activeDifficultyEntries(and(selectedLevel, chartSha256Match()))),
+      notExists(activeDifficultyEntries('md5')),
+      exists(activeDifficultyEntries('sha256', selectedDifficulty)),
     ),
   )!
 }
@@ -304,7 +338,7 @@ export function difficultyTableCharts(tableId: string, level?: string) {
 
   // Separate equality joins let SQLite use the digest indexes for both branches.
   return registered(md5Match)
-    .unionAll(registered(chartSha256Match(), notExists(activeDifficultyEntries(md5Match))))
+    .unionAll(registered(chartSha256Match(), notExists(activeDifficultyEntries('md5'))))
     .unionAll(unregisteredDifficultyCharts(tableId, level))
     .as('difficulty_charts')
 }
@@ -386,6 +420,7 @@ function unregisteredDifficultyCharts(tableId: string, level?: string) {
 export async function difficultyFilterLabel(
   filter: DifficultyFilter,
 ): Promise<IrDifficultyLabel | null> {
+  if (filter.difficulty_level === undefined) return null
   const tables = schema.difficultyTables
   const [table] = await db
     .select({ table_id: tables.id, table_name: tables.name, symbol: tables.symbol })

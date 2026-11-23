@@ -90,6 +90,8 @@ const logoutHandler = (await import('../../api/v1/auth/logout.post')).default as
 const registerHandler = (await import('../../api/v1/auth/register.post')).default as Handler
 const scoresPostHandler = (await import('../../api/v1/scores.post')).default as Handler
 const chartsIndexHandler = (await import('../../api/v1/charts/index.get')).default as Handler
+const difficultyTablesHandler = (await import('../../api/v1/difficulty-tables.get'))
+  .default as Handler
 const lampsHandler = (await import('../../api/v1/lamps/index.get')).default as Handler
 const lampChartsHandler = (await import('../../api/v1/lamps/charts.get')).default as Handler
 const chartDetailHandler = (await import('../../api/v1/charts/[sha256]/index.get'))
@@ -1511,9 +1513,47 @@ function coursePayload(charts: string[], key: string, exScore = 100) {
 }
 
 describe('rankings, courses, and aggregates', () => {
+  test('difficulty table options use the active generation and preserve the level order', async () => {
+    await db.insert(schema.difficultyTables).values([
+      {
+        id: 'stella',
+        name: 'Stella',
+        symbol: 'st',
+        sourceUrl: 'https://example.invalid/st',
+        activeGeneration: 'current',
+        levelOrder: ['10', 'declared-only', '2'],
+        priority: 1,
+      },
+      { id: 'unsynced', sourceUrl: 'https://example.invalid/unsynced' },
+      {
+        id: 'insane',
+        name: 'Insane',
+        symbol: '★',
+        sourceUrl: 'https://example.invalid/insane',
+        activeGeneration: 'current',
+      },
+    ])
+    const stella = { tableId: 'stella', generation: 'current' }
+    await db.insert(schema.difficultyTableEntries).values([
+      { ...stella, level: '30' },
+      { ...stella, level: '2' },
+      { ...stella, level: '3' },
+      { ...stella, level: '2' },
+      { ...stella, level: '10' },
+      { ...stella, level: 'retired', generation: 'old' },
+      { tableId: 'unsynced', generation: 'current', level: '1' },
+      { tableId: 'insane', generation: 'current', level: '1' },
+    ])
+    const result = await difficultyTablesHandler(event({ path: '/api/v1/difficulty-tables' }))
+    expect(result.tables).toEqual([
+      { id: 'insane', name: 'Insane', symbol: '★', levels: ['1'] },
+      { id: 'stella', name: 'Stella', symbol: 'st', levels: ['10', '2', '3', '30'] },
+    ])
+  })
+
   test('difficulty filters match displayed labels before paging and respect visibility', async () => {
-    const hashes = ['a', 'b', 'c', 'd', 'e'].map((value) => value.repeat(64))
-    const md5s = ['a', 'b', 'c', 'd', 'e'].map((value) => value.repeat(32))
+    const hashes = ['a', 'b', 'c', 'd', 'e', 'f'].map((value) => value.repeat(64))
+    const md5s = ['a', 'b', 'c', 'd', 'e', 'f'].map((value) => value.repeat(32))
     for (const [i, sha256] of hashes.entries()) {
       await db.insert(schema.charts).values({
         sha256,
@@ -1546,6 +1586,7 @@ describe('rankings, courses, and aggregates', () => {
       { ...level, sha256: hashes[2] },
       { ...level, sha256: hashes[3], generation: 'old' },
       { ...level, sha256: hashes[4] },
+      { ...level, level: '2', md5: md5s[5] },
       { tableId: 'insane', level: '20', md5: md5s[1], generation: 'current' },
       { tableId: 'insane', level: '20', md5: md5s[2], generation: 'old' },
     ])
@@ -1574,11 +1615,27 @@ describe('rankings, courses, and aggregates', () => {
       event({ path: url.replace('q=Stella', 'q=Other') }),
     )
     expect(noTitleMatch.pagination.total).toBe(0)
+    const tableOnly = await chartsIndexHandler(
+      event({ path: '/api/v1/charts?difficulty_table=stella' }),
+    )
+    expect(tableOnly.pagination.total).toBe(3)
+    expect(tableOnly.charts.map((chart: { sha256: string }) => chart.sha256)).toEqual([
+      hashes[5],
+      hashes[2],
+      hashes[0],
+    ])
+    const tableAndTitle = await chartsIndexHandler(
+      event({ path: '/api/v1/charts?difficulty_table=stella&q=Other' }),
+    )
+    expect(tableAndTitle.charts.map((chart: { sha256: string }) => chart.sha256)).toEqual([
+      hashes[5],
+    ])
     const distribution = await lampsHandler(
       event({ path: '/api/v1/lamps?player=alice&table=stella' }),
     )
     expect(distribution.levels).toEqual([
       { level: '1+', total: 2, segments: [{ rank: 0, count: 2 }] },
+      { level: '2', total: 1, segments: [{ rank: 0, count: 1 }] },
     ])
   })
 

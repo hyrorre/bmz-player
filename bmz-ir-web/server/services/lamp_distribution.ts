@@ -8,7 +8,7 @@ import type {
   IrDistributionCharts,
   IrDistributionMode,
 } from '../../shared/types/ir'
-import { difficultyTableCharts } from './difficulty_tables'
+import { compareDifficultyLevels, difficultyTableCharts } from './difficulty_tables'
 import { isPublicPlayer, publicPlayerCondition } from './moderation/visibility'
 
 export async function loadDifficultyDistribution(
@@ -61,19 +61,12 @@ export async function loadDifficultyDistribution(
     if (row.chart) (segment.first_page ??= []).push(row.chart)
     levels.set(row.level, level)
   }
-  const order = new Map(table.levelOrder.map((level, i) => [level, i]))
-  const unlisted = table.levelOrder.length
-  const collator = new Intl.Collator('en', { numeric: true })
+  const compareLevels = compareDifficultyLevels(table.levelOrder)
   return {
     player,
     tables: activeTables.map(({ levelOrder: _levelOrder, ...item }) => item),
     table: { id: table.id, name: table.name, symbol: table.symbol },
-    levels: [...levels.values()].sort(
-      (left, right) =>
-        (order.get(left.level) ?? unlisted) - (order.get(right.level) ?? unlisted) ||
-        collator.compare(left.level, right.level) ||
-        left.level.localeCompare(right.level),
-    ),
+    levels: [...levels.values()].sort((left, right) => compareLevels(left.level, right.level)),
   }
 }
 
