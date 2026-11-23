@@ -87,7 +87,14 @@ impl Lr2SkinTarget {
         let paths: Vec<&str> =
             std::iter::once("").chain(candidates.iter().map(|c| c.path.as_str())).collect();
         let current = skin_slot_path(skin, self.0);
-        let index = paths.iter().position(|path| *path == current).unwrap_or(0);
+        let index = paths
+            .iter()
+            .position(|path| *path == current)
+            .or_else(|| {
+                let current = skin_history_path(app_paths, skin, current);
+                paths.iter().position(|path| skin_history_path(app_paths, skin, path) == current)
+            })
+            .unwrap_or(0);
         let next = paths[step_index(index, paths.len(), direction)].to_string();
         switch_skin_slot(skin, self.0, app_paths, next)
     }
@@ -250,4 +257,5 @@ pub(crate) fn lr2_cycle_skin_item(
     true
 }
 
+use super::catalog::skin_history_path;
 use super::*;

@@ -246,7 +246,7 @@ pub(in crate::ui) fn switch_skin_slot(
     true
 }
 
-fn skin_history_path(app_paths: &AppPaths, skin: &SkinConfig, path: &str) -> String {
+pub(super) fn skin_history_path(app_paths: &AppPaths, skin: &SkinConfig, path: &str) -> String {
     let path = path.trim();
     let Some(resolved) = app_paths.resolve_optional_path_ref(path).ok().flatten() else {
         return path.to_owned();
@@ -266,10 +266,33 @@ fn skin_history_path(app_paths: &AppPaths, skin: &SkinConfig, path: &str) -> Str
     } else {
         (resolved.as_path(), path)
     };
-    app_paths
-        .data_path_ref(entry)
-        .or_else(|| app_paths.resource_path_ref(entry))
-        .unwrap_or_else(|| fallback.to_owned())
+    let reference = if path.starts_with(RESOURCE_PATH_PREFIX) {
+        app_paths.resource_path_ref(entry).or_else(|| app_paths.data_path_ref(entry))
+    } else if path.starts_with(DATA_PATH_PREFIX) {
+        app_paths.data_path_ref(entry).or_else(|| app_paths.resource_path_ref(entry))
+    } else {
+        let data = app_paths.data_path_ref(entry);
+        let resource = app_paths.resource_path_ref(entry);
+        match (data, resource) {
+            (Some(data), Some(resource)) => {
+                let data_relative = data.strip_prefix(DATA_PATH_PREFIX).unwrap_or_default();
+                let resource_relative =
+                    resource.strip_prefix(RESOURCE_PATH_PREFIX).unwrap_or_default();
+                // A shared root is listed as bundled. A nested resource root may
+                // also be the only one that lists the skin in its catalog.
+                if data_relative == resource_relative
+                    || (resource_relative.starts_with("skins/")
+                        && !data_relative.starts_with("skins/"))
+                {
+                    Some(resource)
+                } else {
+                    Some(data)
+                }
+            }
+            (data, resource) => data.or(resource),
+        }
+    };
+    reference.unwrap_or_else(|| fallback.to_owned())
 }
 
 fn save_skin_slot_history(skin: &mut SkinConfig, slot: SkinSlot, path: &str) {
@@ -315,6 +338,7 @@ fn restore_skin_slot_history(skin: &mut SkinConfig, slot: SkinSlot, app_paths: &
     *skin_slot_offsets_mut(skin, slot) = entry.offsets;
 }
 use super::*;
+use crate::paths::{DATA_PATH_PREFIX, RESOURCE_PATH_PREFIX};
 
 #[cfg(test)]
 mod tests {
@@ -367,6 +391,59 @@ mod tests {
             root.join("cache"),
             root.join("logs"),
         )
+    }
+
+    #[test]
+    fn skin_history_keeps_its_origin_when_shared_roots_split() {
+        let temp = tempfile::tempdir().unwrap();
+        let split = app_paths(&temp);
+        let shared = AppPaths::from_dirs(
+            split.resource_dir.clone(),
+            split.resource_dir.clone(),
+            split.cache_dir.clone(),
+            split.logs_dir.clone(),
+        );
+        let slot = SkinSlot::Play7;
+        let bundled = "resource:skins/A/play.luaskin";
+        let user = "data:skins/A/play.luaskin";
+        let mut skin = SkinConfig {
+            play7: "resource:./skins//A/play.luaskin".into(),
+            play7_options: BTreeMap::from([("Layout".into(), "Bundled".into())]),
+            play7_files: BTreeMap::from([("Notes".into(), "bundled.png".into())]),
+            play7_offsets: vec![SkinOffsetConfig { id: 30, x: 12, ..Default::default() }],
+            ..Default::default()
+        };
+
+        assert!(switch_skin_slot(&mut skin, slot, &shared, user.into()));
+        assert!(skin.play7_options.is_empty());
+        assert!(skin.play7_files.is_empty());
+        assert!(skin.play7_offsets.is_empty());
+        skin.play7_options.insert("Layout".into(), "User".into());
+        skin.play7_files.insert("Notes".into(), "user.png".into());
+        skin.play7_offsets.push(SkinOffsetConfig { id: 30, x: -4, ..Default::default() });
+
+        let alias = shared.resource_dir.join("skins/A/play.luaskin");
+        assert!(switch_skin_slot(&mut skin, slot, &shared, alias.to_string_lossy().into_owned()));
+        assert_eq!(skin.play7_options["Layout"], "Bundled");
+        assert!(switch_skin_slot(&mut skin, slot, &shared, String::new()));
+        let mut skin = toml::from_str(&toml::to_string(&skin).unwrap()).unwrap();
+
+        for (path, layout, file, x) in
+            [(bundled, "Bundled", "bundled.png", 12), (user, "User", "user.png", -4)]
+        {
+            assert!(switch_skin_slot(&mut skin, slot, &split, path.into()));
+            assert_eq!(skin.play7_options["Layout"], layout);
+            assert_eq!(skin.play7_files["Notes"], file);
+            assert_eq!(skin.play7_offsets[0].x, x);
+        }
+
+        let nested = AppPaths::from_dirs(
+            split.resource_dir.clone(),
+            split.data_dir.parent().unwrap().to_path_buf(),
+            split.cache_dir,
+            split.logs_dir,
+        );
+        assert_eq!(skin_history_path(&nested, &skin, &alias.to_string_lossy()), bundled);
     }
 
     #[test]

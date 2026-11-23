@@ -538,6 +538,14 @@ mod tests {
         skin.select_files.insert("Font".into(), "custom.ttf".into());
         skin.select_offsets
             .push(SkinOffsetConfig { name: Some("Saved offset".into()), ..Default::default() });
+        skin.history.insert(
+            skin_slot_history_key(SkinSlot::Select, &skin.select),
+            SkinHistoryEntryConfig {
+                options: BTreeMap::from([("Custom".into(), "Previous".into())]),
+                files: skin.select_files.clone(),
+                offsets: skin.select_offsets.clone(),
+            },
+        );
         let before = skin.clone();
         // An installed fallback's definitions must not normalize the failed skin's options.
         let meta = SkinConfigMeta {

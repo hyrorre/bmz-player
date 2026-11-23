@@ -31,7 +31,7 @@ fn lr2_skin_change_wraps_through_default_and_candidates_keeping_history() {
         select: vec![candidate("data:skins/a.lr2skin"), candidate("data:skins/b.lr2skin")],
         ..Default::default()
     };
-    let mut skin = SkinConfig { select: "data:skins/a.lr2skin".to_string(), ..Default::default() };
+    let mut skin = SkinConfig { select: "data/skins/a.lr2skin".to_string(), ..Default::default() };
     skin.select_options.insert("Layout".to_string(), "HD".to_string());
 
     assert!(target.cycle_skin(&mut skin, &catalog, &app_paths, 1));
