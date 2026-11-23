@@ -116,6 +116,7 @@ pub(super) fn push_note_objects<T: KeyLayoutMapper>(
     objects: &mut Vec<IntermediateObject>,
     warnings: &mut Vec<ImportWarning>,
 ) {
+    let base62 = super::metadata::bms_uses_base62_obj_ids(bms);
     for note in bms.notes().all_notes() {
         let Some(mapping) = T::from_channel_id(note.channel_id) else {
             continue;
@@ -145,9 +146,11 @@ pub(super) fn push_note_objects<T: KeyLayoutMapper>(
                 mode: None,
                 explicit_end_sound: false,
             },
-            BmsNoteKind::Landmine => {
-                IntermediateObjectKind::MineNote { lane, wav_key: None, damage: f64::from(wav_id) }
-            }
+            BmsNoteKind::Landmine => IntermediateObjectKind::MineNote {
+                lane,
+                wav_key: None,
+                damage: mine_damage(note.wav_id, base62),
+            },
         };
         objects.push(IntermediateObject {
             measure: track_of(note.offset),
@@ -360,4 +363,16 @@ pub(super) fn push_stop_objects(
             kind: IntermediateObjectKind::Stop { stop_key: key },
         });
     }
+}
+
+/// The mine channel value is a number: base 36 (case-insensitive) unless the
+/// chart declares `#BASE 62`. `ObjId::as_u16` is a base-62 index, which made
+/// `ZZ` 2205 instead of LR2's (and beatoraja's) 1295.
+fn mine_damage(id: bms_rs::bms::command::ObjId, base62: bool) -> f64 {
+    if base62 {
+        return f64::from(id.as_u16());
+    }
+    let digit = |c: char| c.to_digit(36).unwrap_or(0);
+    let [high, low] = id.into_chars();
+    f64::from(digit(high) * 36 + digit(low))
 }

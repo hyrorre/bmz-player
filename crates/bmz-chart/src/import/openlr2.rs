@@ -82,7 +82,8 @@ fn apply(
             // Keep LR2's operation order: these floating-point roundoff errors
             // are observable after each note is converted to integer milliseconds.
             let advance = 240.0 / bpm * length * (position - previous) * 1000.0;
-            let stop = stop_units / 192.0 * (240000.0 / bpm);
+            // LR2: stopVal / 192.0 * 240000.0 / nowBPM, in this order.
+            let stop = stop_units / 192.0 * 240000.0 / bpm;
             realtime_ms += advance + stop;
             stop_units = 0.0;
             previous = position;
@@ -194,7 +195,89 @@ fn atol(text: &str) -> i32 {
 
 type Point = (f64, i32, u64, Action);
 
+/// `#BPMxx` / `#STOPxx` slots read as LR2_bmsload.cpp does: the key in the
+/// chart's base, `#BPM` by `atof` from column 7, `#STOP` by `atol` from column 8
+/// (kept only when positive), later lines replacing earlier ones. An unset
+/// slot is -1: an extended BPM then plays at |-1| = 1 and a STOP is -1.
+struct Slots {
+    bpm: std::collections::HashMap<u16, f64>,
+    stop: std::collections::HashMap<u16, f64>,
+}
+
+fn slot_key(token: &[u8], base62: bool) -> Option<u16> {
+    let digit = |b: u8| -> Option<u16> {
+        let n = match b {
+            b'0'..=b'9' => b - b'0',
+            b'A'..=b'Z' => b - b'A' + 10,
+            b'a'..=b'z' if base62 => b - b'a' + 36,
+            b'a'..=b'z' => b - b'a' + 10,
+            _ => return None,
+        };
+        Some(u16::from(n))
+    };
+    let radix = if base62 { 62 } else { 36 };
+    Some(digit(*token.first()?)? * radix + digit(*token.get(1)?)?)
+}
+
+fn slots(text: &str, base62: bool) -> Slots {
+    let mut slots = Slots { bpm: Default::default(), stop: Default::default() };
+    for line in text.lines().map(str::trim) {
+        let bytes = line.as_bytes();
+        if bytes.len() >= 7 && bytes[..4].eq_ignore_ascii_case(b"#BPM") {
+            if let Some(key) = slot_key(&bytes[4..6], base62).filter(|k| *k >= 1) {
+                slots.bpm.insert(key, atof(line.get(7..).unwrap_or("")));
+            }
+        } else if bytes.len() >= 8 && bytes[..5].eq_ignore_ascii_case(b"#STOP") {
+            let value = atol(line.get(8..).unwrap_or(""));
+            if let Some(key) = slot_key(&bytes[5..7], base62).filter(|k| *k >= 1)
+                && value > 0
+            {
+                slots.stop.insert(key, f64::from(value));
+            }
+        }
+    }
+    slots
+}
+
+/// C `atof` for the plain decimal forms: optional sign, digits, an optional
+/// fraction and exponent, up to the first other character. No number gives 0.
+fn atof(text: &str) -> f64 {
+    let text = text.trim_start_matches([' ', '\t', '\n', '\r', '\x0b', '\x0c']);
+    let bytes = text.as_bytes();
+    let mut end = 0;
+    if matches!(bytes.first(), Some(b'+' | b'-')) {
+        end = 1;
+    }
+    let digits_start = end;
+    while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+        end += 1;
+    }
+    if bytes.get(end) == Some(&b'.') {
+        end += 1;
+        while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+            end += 1;
+        }
+    }
+    if end == digits_start || (end == digits_start + 1 && bytes[digits_start] == b'.') {
+        return 0.0;
+    }
+    if matches!(bytes.get(end), Some(b'e' | b'E')) {
+        let mut exp = end + 1;
+        if matches!(bytes.get(exp), Some(b'+' | b'-')) {
+            exp += 1;
+        }
+        if bytes.get(exp).is_some_and(u8::is_ascii_digit) {
+            while bytes.get(exp).is_some_and(u8::is_ascii_digit) {
+                exp += 1;
+            }
+            end = exp;
+        }
+    }
+    text[..end].parse().unwrap_or(0.0)
+}
+
 fn raw_objects(text: &str, source: &IntermediateChart) -> Result<Vec<Point>, ImportError> {
+    let slots = slots(text, source.metadata.base62_obj_ids);
     let mut points = Vec::new();
     for line in text.lines().map(str::trim) {
         let bytes = line.as_bytes();
@@ -252,18 +335,9 @@ fn raw_objects(text: &str, source: &IntermediateChart) -> Result<Vec<Point>, Imp
             };
             let action = match channel {
                 3 => Action::Bpm(f64::from(value)),
-                8 => source
-                    .resources
-                    .bpm_table
-                    .iter()
-                    .find(|b| b.key == value)
-                    .map_or(Action::None, |b| Action::Bpm(b.bpm)),
-                9 => source
-                    .resources
-                    .stop_table
-                    .iter()
-                    .find(|s| s.key == value)
-                    .map_or(Action::None, |s| Action::Stop(s.value as f64)),
+                // `BPM < 0.0` is negated; an unset slot is -1.
+                8 => Action::Bpm(slots.bpm.get(&value).copied().unwrap_or(-1.0).abs()),
+                9 => Action::Stop(slots.stop.get(&value).copied().unwrap_or(-1.0)),
                 _ => Action::None,
             };
             let object = super::intermediate::IntermediateObject {
@@ -361,5 +435,48 @@ mod tests {
         let notes = &chart.lane_notes[Lane::Key1.index()];
         assert_eq!(notes[0].time.0, 1_000_000);
         assert_eq!(notes[1].time.0, 3_000_000);
+    }
+
+    /// Slot keys are base 36 in a normal chart: `1A` is 46, which bms-rs
+    /// indexes as 72. The extended BPM and STOP must still be found.
+    #[test]
+    fn extended_bpm_and_stop_slots_use_the_chart_base() {
+        let chart =
+            load("#BPM 120\n#BPM1A 240\n#STOP1A 192\n#00108:1A\n#00109:1A\n#00111:01\n#00211:01\n");
+        let notes = &chart.lane_notes[Lane::Key1.index()];
+        // 2 s at 120, then a 1 s stop at 240 (192 / 192 * 240000 / 240).
+        assert_eq!(notes[0].time.0, 2_000_000);
+        assert_eq!(notes[1].time.0, 4_000_000);
+    }
+
+    /// LR2 leaves an unset slot at -1: BPM |-1| = 1, STOP -1 (a negative stop).
+    #[test]
+    fn unset_extended_bpm_and_stop_slots_are_minus_one() {
+        let bpm = load("#BPM 120\n#00108:02\n#00111:01\n#00211:01\n");
+        let notes = &bpm.lane_notes[Lane::Key1.index()];
+        assert_eq!(notes[1].time.0 - notes[0].time.0, 240_000_000);
+        let stop = load("#BPM 120\n#00109:02\n#00111:01\n#00211:01\n");
+        let notes = &stop.lane_notes[Lane::Key1.index()];
+        assert_eq!(notes[1].time.0 - notes[0].time.0, 1_989_583);
+    }
+
+    /// A mine channel value is a base-36 number unless `#BASE 62` is set.
+    #[test]
+    fn mine_damage_is_a_base36_number() {
+        let chart = load("#BPM 120\n#001D1:ZZ\n#00211:01\n");
+        let mine = chart.lane_notes[Lane::Key1.index()]
+            .iter()
+            .find(|n| n.kind == crate::model::NoteKind::Mine)
+            .unwrap();
+        assert_eq!(mine.damage, Some(1295.0));
+    }
+
+    #[test]
+    fn atof_reads_the_leading_number_like_c() {
+        assert_eq!(super::atof(" 150.5abc"), 150.5);
+        assert_eq!(super::atof("-2e2"), -200.0);
+        assert_eq!(super::atof("1e"), 1.0);
+        assert_eq!(super::atof(".5"), 0.5);
+        assert_eq!(super::atof("x"), 0.0);
     }
 }
