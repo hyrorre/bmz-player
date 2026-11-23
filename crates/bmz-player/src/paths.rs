@@ -260,17 +260,11 @@ impl AppPaths {
     }
 
     pub fn resource_path_ref(&self, path: &Path) -> Option<String> {
-        normalize_path_lexically(path)
-            .strip_prefix(normalize_path_lexically(&self.resource_dir))
-            .ok()
-            .map(|relative| format!("{RESOURCE_PATH_PREFIX}{}", path_to_slash(relative)))
+        path_ref(path, &self.resource_dir, RESOURCE_PATH_PREFIX)
     }
 
     pub fn data_path_ref(&self, path: &Path) -> Option<String> {
-        normalize_path_lexically(path)
-            .strip_prefix(normalize_path_lexically(&self.data_dir))
-            .ok()
-            .map(|relative| format!("{DATA_PATH_PREFIX}{}", path_to_slash(relative)))
+        path_ref(path, &self.data_dir, DATA_PATH_PREFIX)
     }
 }
 
@@ -537,6 +531,14 @@ fn strip_first_component(path: &Path, expected: &str) -> Option<PathBuf> {
         }
         _ => None,
     }
+}
+
+fn path_ref(path: &Path, root: &Path, prefix: &str) -> Option<String> {
+    // Anchor both paths before folding `..` so `.` remains a directory boundary.
+    let path = normalize_path_lexically(&std::path::absolute(path).ok()?);
+    let root = normalize_path_lexically(&std::path::absolute(root).ok()?);
+    let relative = path.strip_prefix(root).ok()?;
+    Some(format!("{prefix}{}", path_to_slash(relative)))
 }
 
 fn path_to_slash(path: &Path) -> String {

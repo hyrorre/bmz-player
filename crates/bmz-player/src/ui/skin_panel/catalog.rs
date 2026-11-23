@@ -355,6 +355,38 @@ mod tests {
     }
 
     #[test]
+    fn current_data_dir_keeps_bundled_and_user_skin_histories_separate() {
+        let paths = AppPaths::from_dirs("..".into(), ".".into(), "cache".into(), "logs".into());
+        let bundled = "resource:skins/A/play.luaskin";
+        let user = "data:skins/A/play.luaskin";
+        let mut skin = SkinConfig {
+            play7: bundled.into(),
+            play7_options: BTreeMap::from([("Layout".into(), "Bundled".into())]),
+            play7_files: BTreeMap::from([("Notes".into(), "bundled.png".into())]),
+            play7_offsets: vec![SkinOffsetConfig { id: 30, x: 12, ..Default::default() }],
+            ..Default::default()
+        };
+
+        assert!(switch_skin_slot(&mut skin, SkinSlot::Play7, &paths, user.into()));
+        assert!(skin.play7_options.is_empty());
+        assert!(skin.play7_files.is_empty());
+        assert!(skin.play7_offsets.is_empty());
+        skin.play7_options.insert("Layout".into(), "User".into());
+        skin.play7_files.insert("Notes".into(), "user.png".into());
+        skin.play7_offsets.push(SkinOffsetConfig { id: 30, x: -4, ..Default::default() });
+
+        for (path, layout, file, x) in
+            [(bundled, "Bundled", "bundled.png", 12), (user, "User", "user.png", -4)]
+        {
+            assert!(switch_skin_slot(&mut skin, SkinSlot::Play7, &paths, path.into()));
+            assert_eq!(skin.play7_options["Layout"], layout);
+            assert_eq!(skin.play7_files["Notes"], file);
+            assert_eq!(skin.play7_offsets[0].x, x);
+            assert!(skin.history.contains_key(&skin_slot_history_key(SkinSlot::Play7, path)));
+        }
+    }
+
+    #[test]
     fn parent_dir_skin_path_does_not_share_history_with_a_real_subdirectory() {
         let temp = tempfile::tempdir().unwrap();
         let paths = app_paths(&temp);
