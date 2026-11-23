@@ -232,6 +232,8 @@ fn result_end_time_tracks_scoring_events_and_invalidates_with_the_chart() {
     chart.lane_notes[Lane::Key1.index()].clear();
     assert_eq!(engine.result_end_time(&chart), chart.end_time);
 }
+#[path = "tests/legacy_mine.rs"]
+mod legacy_mine;
 #[path = "tests/mine.rs"]
 mod mine;
 #[path = "tests/miss_keysound.rs"]

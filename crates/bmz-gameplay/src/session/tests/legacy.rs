@@ -2,7 +2,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use bmz_core::input::InputKind;
+use bmz_core::input::{InputKind, ScratchDirection};
 use bmz_core::lane::{KeyMode, Lane};
 use bmz_core::replay::ReplayEvent;
 use bmz_core::time::TimeUs;
@@ -345,4 +345,134 @@ fn legacy_no_good_and_no_great_keep_the_long_note_margin() {
     assert_eq!(run([100, 100, 0], 30_000), [0, 1, 0, 0, 0, 0]);
     // NO GREAT: PGREAT 幅 18ms が残るので、+10ms / -10ms は PGREAT。
     assert_eq!(run([100, 0, 0], 10_000), [1, 0, 0, 0, 0, 0]);
+}
+
+fn replay_event(
+    lane: Lane,
+    kind: InputKind,
+    ms: i64,
+    direction: Option<ScratchDirection>,
+) -> ReplayEvent {
+    ReplayEvent {
+        lane,
+        kind,
+        time: TimeUs(ms * 1_000),
+        device_kind: Default::default(),
+        scratch_direction: direction,
+    }
+}
+
+fn legacy_replay_session(chart: PlayableChart, events: Vec<ReplayEvent>) -> GameSession {
+    let mut session = legacy_session(chart);
+    session.replay_player = Some(ReplayPlayer { events, ..Default::default() });
+    session.replay_judge_rate_percent = 100;
+    session
+}
+
+/// Standard LN at 1000–2000 ms on `lane`.
+fn legacy_ln_chart(lane: Lane) -> PlayableChart {
+    let mut chart = chart_with_hcn_long_note();
+    chart.metadata.long_note_mode = LongNoteMode::Ln;
+    chart.metadata.key_mode = KeyMode::K7;
+    let mut notes = std::mem::take(&mut chart.lane_notes[Lane::Key1.index()]);
+    for note in &mut notes {
+        note.lane = lane;
+        note.time = TimeUs(note.time.0 + 1_000_000);
+    }
+    chart.lane_notes[lane.index()] = notes;
+    let pair = &mut chart.long_notes[0];
+    pair.mode = Some(LongNoteMode::Ln);
+    pair.lane = lane;
+    pair.start_time = TimeUs(1_000_000);
+    pair.end_time = TimeUs(2_000_000);
+    chart.total_notes = 1;
+    chart.end_time = TimeUs(2_000_000);
+    chart
+}
+
+/// OpenLR2 merges both scratch directions into one key: releasing the first
+/// direction while the second is held keeps the LN alive.
+#[test]
+fn legacy_scratch_release_while_the_other_direction_is_held_keeps_the_ln() {
+    let up = Some(ScratchDirection::Up);
+    let down = Some(ScratchDirection::Down);
+    let mut session = legacy_replay_session(
+        legacy_ln_chart(Lane::Scratch),
+        vec![
+            replay_event(Lane::Scratch, InputKind::Press, 1_000, up),
+            replay_event(Lane::Scratch, InputKind::Press, 1_010, down),
+            replay_event(Lane::Scratch, InputKind::Release, 1_100, up),
+            replay_event(Lane::Scratch, InputKind::Release, 2_100, down),
+        ],
+    );
+    advance_at(&mut session, &mut TestAudio::default(), 2_200_000);
+    assert_eq!(judge_counts(&session), [1, 0, 0, 0, 0, 0]);
+}
+
+#[test]
+fn legacy_scratch_release_of_the_last_direction_is_still_an_early_release() {
+    let up = Some(ScratchDirection::Up);
+    let mut session = legacy_replay_session(
+        legacy_ln_chart(Lane::Scratch),
+        vec![
+            replay_event(Lane::Scratch, InputKind::Press, 1_000, up),
+            replay_event(Lane::Scratch, InputKind::Release, 1_100, up),
+        ],
+    );
+    advance_at(&mut session, &mut TestAudio::default(), 2_200_000);
+    assert_eq!(judge_counts(&session), [0, 0, 0, 1, 0, 0]);
+}
+
+/// Mine at 1000 ms (damage 10) and a tap at 2000 ms on Key1.
+fn legacy_mine_chart() -> PlayableChart {
+    let mut chart = chart_with_mine(TimeUs(1_000_000), 10.0);
+    let mut tap = chart_with_keysound().lane_notes[Lane::Key1.index()][0].clone();
+    tap.time = TimeUs(2_000_000);
+    chart.lane_notes[Lane::Key1.index()].push(tap);
+    chart.total_notes = 1;
+    chart.end_time = TimeUs(2_000_000);
+    chart.metadata.key_mode = KeyMode::K7;
+    chart
+}
+
+/// `ApplyJudgeMine` counts a hit mine as POOR (BP) without breaking the
+/// combo, and subtracts the damage from the gauge.
+#[test]
+fn legacy_mine_hit_counts_as_poor_and_takes_the_gauge_damage() {
+    let mut session = legacy_replay_session(
+        legacy_mine_chart(),
+        vec![
+            replay_event(Lane::Key1, InputKind::Press, 990, None),
+            replay_event(Lane::Key1, InputKind::Release, 995, None),
+            replay_event(Lane::Key1, InputKind::Press, 2_000, None),
+            replay_event(Lane::Key1, InputKind::Release, 2_010, None),
+        ],
+    );
+    session.gauge = GaugeState::new(bmz_core::clear::GaugeType::Hard, 160.0, 1);
+    let before = session.gauge.current().value;
+    let mut audio = TestAudio::default();
+    advance_at(&mut session, &mut audio, 1_500_000);
+    assert_eq!(judge_counts(&session), [0, 0, 0, 0, 1, 0]);
+    assert_eq!(session.score.bp(), 1);
+    assert!((before - session.gauge.current().value - 10.0).abs() < 1e-4);
+
+    advance_at(&mut session, &mut audio, 2_100_000);
+    assert_eq!(judge_counts(&session), [1, 0, 0, 0, 1, 0]);
+    assert_eq!(session.score.combo, 1, "the mine did not break the combo");
+    assert_eq!(session.score.past_notes, 1);
+}
+
+#[test]
+fn legacy_key_held_across_a_mine_is_hit_once() {
+    let mut session = legacy_replay_session(
+        legacy_mine_chart(),
+        vec![
+            replay_event(Lane::Key1, InputKind::Press, 500, None),
+            replay_event(Lane::Key1, InputKind::Release, 1_500, None),
+        ],
+    );
+    session.gauge = GaugeState::new(bmz_core::clear::GaugeType::Hard, 160.0, 1);
+    advance_at(&mut session, &mut TestAudio::default(), 1_600_000);
+    assert_eq!(judge_counts(&session), [0, 0, 0, 0, 1, 0]);
+    assert!((session.gauge.current().value - 90.0).abs() < 1e-4);
 }

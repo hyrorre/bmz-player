@@ -27,7 +27,7 @@ pub fn gauge_definitions_for_rule_mode_and_keymode(
         RuleMode::Beatoraja => gauge_definitions_for(property),
         RuleMode::Lr2Oraja if property == GaugeProperty::Lr2 => lr2oraja_gauge_definitions(),
         RuleMode::Lr2Oraja => gauge_definitions_for(property),
-        RuleMode::Legacy => lr2oraja_gauge_definitions(),
+        RuleMode::Legacy => legacy_gauge_definitions(),
         RuleMode::Dx => {
             if key_mode == KeyMode::K9 {
                 dx_pop_gauge_definition_table().to_vec()
@@ -54,6 +54,19 @@ pub(super) fn lr2oraja_gauge_definitions() -> Vec<GaugeDefinition> {
                 definition.death = 2.0;
             }
             _ => {}
+        }
+    }
+    definitions
+}
+
+/// LEGACY のゲージ定義。GROOVE / HARD / EASY は OpenLR2 と同じ値の LR2oraja
+/// 定義を使う。HAZARD は OpenLR2 の DEATH（`judge_damage[2]`）に合わせ、
+/// PGREAT〜GOOD で回復せず、空POORでは減らない。
+pub(super) fn legacy_gauge_definitions() -> Vec<GaugeDefinition> {
+    let mut definitions = lr2oraja_gauge_definitions();
+    for definition in &mut definitions {
+        if definition.gauge_type == GaugeType::Hazard {
+            definition.values = [0.0, 0.0, 0.0, -100.0, -100.0, 0.0];
         }
     }
     definitions

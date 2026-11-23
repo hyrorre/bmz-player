@@ -232,7 +232,6 @@ pub(super) fn uses_legacy_frame_clock(session: &GameSession) -> bool {
     session.rule_mode == RuleMode::Legacy
         && !super::conditional::uses_ordered_timeline(&session.chart)
         && session.timing_map.bpm_reflections().is_empty()
-        && !session.judge.has_mines(&session.chart)
         && session.chart.long_notes.iter().all(|pair| {
             pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Ln
         })
@@ -663,6 +662,9 @@ fn process_legacy_timed_inputs(
     }
     let mut cursor = 0;
     let mut events = Vec::new();
+    // On this polling clock mines share the lane cursor with notes, as in
+    // OpenLR2, instead of the separate `process_mine_passes` sweep.
+    session.judge.set_legacy_inline_mines(true);
     while tick <= now.0 && session.state == PlayState::Playing && !session.play_end_reached() {
         let start = cursor;
         while cursor < inputs.len() && inputs[cursor].0.time.0 / 1000 * 1000 <= tick {
@@ -683,22 +685,30 @@ fn process_legacy_timed_inputs(
             })
             .collect();
         for lane in crate::judge::engine::LEGACY_LANE_ORDER {
-            let mut has_input = false;
+            let mut has_edge = false;
             for &(input, human) in projected.iter().filter(|(input, _)| input.lane == lane) {
-                has_input = true;
                 update_recent_inputs(session, &[input], now);
                 update_lane_key_states(session, &[input]);
+                // OpenLR2 merges both scratch directions into one key state:
+                // releasing one direction while the other is held stays a hold.
+                if input.kind == InputKind::Release && session.lane_key_hold[lane.index()].is_held()
+                {
+                    push_skin_runtime_event(session, SkinRuntimeEventKind::Input(input));
+                    continue;
+                }
+                has_edge = true;
                 let outcome = evaluate_session_input(session, input);
                 if human {
                     human_events.extend(outcome.events.iter().cloned());
                 }
                 combined.append(outcome);
             }
-            if !has_input {
-                combined.append(session.judge.process_legacy_idle_lane(
+            if !has_edge {
+                combined.append(session.judge.process_legacy_lane_poll(
                     &session.chart,
                     lane,
                     time,
+                    session.lane_key_hold[lane.index()].is_held(),
                     session.play_keysound_on_miss,
                 ));
             }

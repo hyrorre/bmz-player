@@ -107,3 +107,15 @@ SP 5K/7K、DP 10K/14K、NORMAL/MIRROR/RANDOM、randFix、標準LNのロングス
 実データの再比較では、すいーつ・くえすと！の111037ms、および大豆の国の譜面の111505msのBAD/GREATが、OpenLR2と同じ時刻・順序になった。当該経路の差は解消したが、他の境界・ポーリング差が残りEX差はそれぞれ−1点／＋2点のまま。Carnivalの新規実測ログは全2028判定・EX3760の一致を維持した。出力は`.local/legacy-recursion-sweets`、`legacy-recursion-soy`、`legacy-recursion-captured`。
 
 判定境界の数式で差が生じる条件、および同じ入力でも直前idle pollの有無で次ノートへの入力消費が変わる条件は説明・再現済みとして扱う。ただし、それが過去プレイで実際に起きたという因果の確定とは区別する。期待判定に合うよう時刻や閾値を調整しない。
+
+## 地雷・スクラッチ合成・LN終端音・DEATHゲージ
+
+PRレビューのOpenLR2比較（公開版`09b666a`）で残っていた差のうち、参照ソース`D:/Tools/openlr2-research`の`ProcSinglenote` / `ProcLongnote` / `ApplyJudgeMine` / `judge_damage`で挙動を確認できたものをLEGACYへ反映した。
+
+- 地雷：OpenLR2は地雷を同じレーンのノート列に置き、カーソル先頭の1オブジェクトだけを処理する。1msポーリングの経路では、地雷を`next_mine_index`のカーソルで並べ、先頭の地雷が後続ノートの判定と見逃しを止めるようにした。早押しは`realTiming - timing < GREAT`の厳密な不等号、通過は地雷時刻を過ぎた最初のポーリングで押下・保持なら被弾する。BAD連続判定の次が地雷でもBAD幅内なら処理する。この経路の条件から地雷なしの制限を外した。
+- 被弾時は`ApplyJudgeMine`と同じく`judgecount[1]`（POOR）を加算し、BPに入る。コンボ・EX・処理済みノート数は変えない。ゲージはダメージ値をそのまま引く（BMSの地雷チャンネル値。BMZの既存換算と同じ）。
+- スクラッチ：OpenLR2の入力合成（新規押下 > 保持 > 解放）に合わせ、片方向を離してももう片方を押していれば解放として扱わない。
+- LN終端音：OpenLR2はLN完了時に終点の音を鳴らさないため、LEGACYの標準LNでは終点キー音を出さない。
+- DEATH：`judge_damage[2]`は空POORで0。LEGACYのHAZARDをPG/GR/GD 0、BAD/POOR -100、空POOR 0にした。GROOVE / HARD / EASYはLR2oraja定義とOpenLR2の値・HARDの減少倍率式・30%未満の0.6倍が一致することを確認した。
+
+確認していないもの：OpenLR2のP-ATTACK / G-ATTACKはBMZにない。AssistEasy / EXHARDはOpenLR2にないBMZのゲージとして残す。コースのゲージ表（`isCourse`時の別テーブル）とGROOVEのコース時下限は今回の比較対象外。地雷入りの譜面はOpenLR2計測版との実プレイ照合をまだ行っていない。

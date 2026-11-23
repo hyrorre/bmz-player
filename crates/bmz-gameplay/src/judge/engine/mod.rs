@@ -78,6 +78,7 @@ pub struct JudgeEngine {
     free_zone_scratched: HashSet<NoteId>,
     pub free_zone_autoplay: [bool; LANE_COUNT],
     chart_index: Option<std::sync::Arc<ChartIndex>>,
+    legacy_inline_mines: bool,
 }
 
 impl JudgeEngine {
@@ -154,6 +155,7 @@ impl JudgeEngine {
             free_zone_scratched: HashSet::new(),
             free_zone_autoplay: [false; LANE_COUNT],
             chart_index: None,
+            legacy_inline_mines: false,
         }
     }
 
@@ -232,7 +234,14 @@ impl JudgeEngine {
             }
             InputKind::Release => {
                 let mut expired = JudgeOutcome::default();
-                if self.rule_mode == RuleMode::Legacy {
+                let mine = self.process_legacy_mine_head(
+                    chart,
+                    input.lane,
+                    LegacyLaneKey::Release,
+                    judge_time,
+                    input.time,
+                );
+                if self.rule_mode == RuleMode::Legacy && mine.is_none() {
                     self.settle_missed_notes_in_lane(
                         chart,
                         input.lane,
@@ -243,7 +252,10 @@ impl JudgeEngine {
                         &mut expired,
                     );
                 }
-                if expired.events.is_empty() {
+                if let Some(mine) = mine {
+                    // A mine at the lane head takes this poll (OpenLR2 returns).
+                    mine
+                } else if expired.events.is_empty() {
                     self.process_release(chart, timed_input, input.time)
                 } else {
                     expired.consumed_input = true;
@@ -293,6 +305,8 @@ impl JudgeEngine {
         stop_after_first: bool,
         outcome: &mut JudgeOutcome,
     ) {
+        // An unconsumed LEGACY inline mine blocks every later note of the lane.
+        let mine_bound = self.legacy_pending_mine(chart, lane);
         let lane_state = &mut self.lanes[lane.index()];
         while let Some((idx, note)) = next_unjudged_press_reference_note(
             chart,
@@ -300,6 +314,9 @@ impl JudgeEngine {
             lane_state.next_note_index,
             &self.judged_notes,
         ) {
+            if mine_bound.is_some_and(|mine| mine < idx) {
+                break;
+            }
             if self.rule_mode == RuleMode::Legacy && hln::is_hln_head(chart, note.id) {
                 break;
             }
@@ -376,8 +393,25 @@ impl JudgeEngine {
         now: TimeUs,
         play_keysound: bool,
     ) -> JudgeOutcome {
+        self.process_legacy_lane_poll(chart, lane, now, false, play_keysound)
+    }
+
+    /// One poll of a lane without a key edge. `held` is OpenLR2's
+    /// `keypress == 2`; it matters only for a passing inline mine.
+    pub fn process_legacy_lane_poll(
+        &mut self,
+        chart: &PlayableChart,
+        lane: Lane,
+        now: TimeUs,
+        held: bool,
+        play_keysound: bool,
+    ) -> JudgeOutcome {
         if chart.notes_for_lane(lane).is_empty() {
             return JudgeOutcome::default();
+        }
+        let key = if held { LegacyLaneKey::Hold } else { LegacyLaneKey::Idle };
+        if let Some(mine) = self.process_legacy_mine_head(chart, lane, key, now, now) {
+            return mine;
         }
         self.process_misses_at_filtered(chart, now, |_| now, play_keysound, Some(lane))
     }
@@ -478,11 +512,16 @@ impl JudgeEngine {
                                 active.start_delta,
                                 now,
                             ));
-                            outcome.keysounds.push(KeySoundEvent {
-                                note_id: active.end.end_note_id,
-                                time: now,
-                                trigger: KeySoundTrigger::NoteJudged,
-                            });
+                            // OpenLR2 finishes an LN without playing an end sound.
+                            if !(self.rule_mode == RuleMode::Legacy
+                                && active.mode == LongNoteMode::Ln)
+                            {
+                                outcome.keysounds.push(KeySoundEvent {
+                                    note_id: active.end.end_note_id,
+                                    time: now,
+                                    trigger: KeySoundTrigger::NoteJudged,
+                                });
+                            }
                         }
                     }
                     LongNoteMode::Cn | LongNoteMode::Hcn => {
@@ -623,6 +662,15 @@ impl JudgeEngine {
         play_miss_keysound: bool,
     ) -> JudgeOutcome {
         let mut outcome = JudgeOutcome::default();
+        if let Some(mine) = self.process_legacy_mine_head(
+            chart,
+            input.lane,
+            LegacyLaneKey::Press,
+            input.time,
+            event_time,
+        ) {
+            return mine;
+        }
         if self.rule_mode == RuleMode::Legacy {
             // OpenLR2 consumes this invocation after one expired POOR.
             // Only a tap BAD continues to the next note with the same press.
@@ -670,6 +718,9 @@ impl JudgeEngine {
         input: InputEvent,
         event_time: TimeUs,
     ) -> JudgeOutcome {
+        if let Some(mine) = self.process_legacy_recursive_mine(chart, input, event_time) {
+            return mine;
+        }
         let state = &self.lanes[input.lane.index()];
         let Some((index, note)) = next_unjudged_press_reference_note(
             chart,
@@ -1069,7 +1120,7 @@ impl JudgeEngine {
                 }
                 lane_state.active_long = None;
                 self.judged_notes.insert(active.start_note_id, judge);
-                finalize_long_release(
+                let mut outcome = finalize_long_release(
                     chart,
                     input.lane,
                     active,
@@ -1078,7 +1129,12 @@ impl JudgeEngine {
                     release_delta,
                     mute_limit,
                     input.time,
-                )
+                );
+                if self.rule_mode == RuleMode::Legacy && active.mode == LongNoteMode::Ln {
+                    // OpenLR2 finishes an LN without playing an end sound.
+                    outcome.keysounds.retain(|sound| sound.note_id != active.end.end_note_id);
+                }
+                outcome
             }
             LongNoteMode::Cn | LongNoteMode::Hcn => {
                 let delta = input.time.0 - active.end.end_time.0;
@@ -1117,8 +1173,10 @@ impl JudgeEngine {
 mod helpers;
 mod hln;
 mod kaleid;
+mod legacy_mine;
 
 use helpers::*;
+pub(crate) use legacy_mine::LegacyLaneKey;
 
 #[cfg(test)]
 #[path = "tests.rs"]

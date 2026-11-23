@@ -856,3 +856,16 @@ fn assist_easy_gauge_clears_with_light_assist_lamp_in_every_definition_table() {
         );
     }
 }
+
+/// OpenLR2 DEATH (`judge_damage[2]`): no recovery, -100 on BAD / POOR and no
+/// damage on EMPTY POOR. LR2oraja's HAZARD keeps its own values.
+#[test]
+fn legacy_hazard_matches_openlr2_death_gauge() {
+    let legacy = definition_for_rule_mode(GaugeType::Hazard, RuleMode::Legacy);
+    assert_eq!(legacy.values, [0.0, 0.0, 0.0, -100.0, -100.0, 0.0]);
+    let lr2oraja = definition_for_rule_mode(GaugeType::Hazard, RuleMode::Lr2Oraja);
+    assert_eq!(lr2oraja.values, [0.15, 0.06, 0.0, -100.0, -100.0, -10.0]);
+
+    let normal = definition_for_rule_mode(GaugeType::Normal, RuleMode::Legacy);
+    assert_eq!(normal.values, [1.0, 1.0, 0.5, -4.0, -6.0, -2.0]);
+}

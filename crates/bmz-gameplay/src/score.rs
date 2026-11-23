@@ -116,6 +116,12 @@ impl ScoreState {
         }
     }
 
+    /// OpenLR2's `ApplyJudgeMine` adds a hit mine to the POOR count, and so to
+    /// BP. It does not touch the combo, the EX score or the processed notes.
+    pub fn record_legacy_mine_hit(&mut self) {
+        self.judges.slow_poor += 1;
+    }
+
     pub fn ex_score(&self) -> u32 {
         (self.judges.fast_pgreat + self.judges.slow_pgreat) * 2
             + self.judges.fast_great
