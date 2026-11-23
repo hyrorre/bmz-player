@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { createClient } from '@libsql/client'
 import { drizzle } from 'drizzle-orm/libsql'
 import { and, eq, isNull } from 'drizzle-orm'
@@ -1751,6 +1751,37 @@ describe('rankings, courses, and aggregates', () => {
       expect(first.charts).toHaveLength(50)
       expect(first.charts[0]).toMatchObject({ title: 'Table chart 00', sha256: null })
       expect(first.charts[49]).toMatchObject({ title: 'Table chart 49', sha256: null })
+    }
+  })
+
+  test('score distribution first pages look up history by player and chart', async () => {
+    await db.insert(schema.difficultyTables).values({
+      id: 'fixture',
+      sourceUrl: 'https://example.invalid/table',
+      activeGeneration: 'current',
+    })
+    const execute = spyOn(client, 'execute')
+    try {
+      await lampsHandler(
+        event({ path: '/api/v1/lamps?player=alice&mode=score&include=first_pages' }),
+      )
+      const queries = execute.mock.calls.flatMap(([statement]) =>
+        typeof statement === 'object' && statement.sql.includes('as "rank_index"')
+          ? [statement]
+          : [],
+      )
+      expect(queries).toHaveLength(1)
+      const { sql, args } = queries[0]!
+      const plan = await client.execute({ sql: `EXPLAIN QUERY PLAN ${sql}`, args })
+      const historyLookups = plan.rows
+        .map((row) => String(row.detail))
+        .filter((step) => step.startsWith('SEARCH scores '))
+      expect(historyLookups.length).toBeGreaterThan(0)
+      for (const lookup of historyLookups) {
+        expect(lookup).toMatch(/player_id=\? AND chart_sha256=\?/)
+      }
+    } finally {
+      execute.mockRestore()
     }
   })
 

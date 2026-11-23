@@ -189,9 +189,10 @@ function highestScoreRank(playerId: string, chartSha256: ChartHash) {
   const maxEx = sql`(${score.notes} * 2)`
   // The cast keeps the 2/9 through 9/9 thresholds exact when D1 binds the multiplier as REAL.
   const scoreRank = sql<number>`max(1, cast(${score.exScore} * ${IR_SCORE_GRADES.length} / ${maxEx} as integer))`
+  // The accepted-history index cannot narrow this correlated lookup by chart.
   return db
     .select({ rank: max(scoreRank) })
-    .from(score)
+    .from(sql`${score} indexed by ${sql.identifier('idx_scores_player_chart_rule')}`)
     .where(
       and(
         eq(score.playerId, playerId),
