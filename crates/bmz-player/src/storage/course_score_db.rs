@@ -339,7 +339,6 @@ pub(super) fn best_course_score(
         .query_row(
         "SELECT cs.id, cs.course_hash, cs.ln_policy, cs.rule_mode, cs.ex_score, cs.max_ex_score, cs.clear_type, cs.gauge_type,
                 cs.gauge_value, cs.max_combo, cs.bp,
-                COALESCE((SELECT SUM(sh.cb) FROM score_history sh WHERE sh.course_score_id = cs.id), 0),
                 cs.course_failed, cs.course_clear,
                 (SELECT COUNT(*) FROM course_scores count_cs
                     WHERE count_cs.course_hash = cs.course_hash
@@ -501,7 +500,6 @@ pub(super) fn best_course_score_for_trophy(
         .query_row(
         "SELECT cs.id, cs.course_hash, cs.ln_policy, cs.rule_mode, cs.ex_score, cs.max_ex_score, cs.clear_type,
                 cs.gauge_type, cs.gauge_value, cs.max_combo, cs.bp,
-                COALESCE((SELECT SUM(sh.cb) FROM score_history sh WHERE sh.course_score_id = cs.id), 0),
                 cs.course_failed, cs.course_clear,
                 (SELECT COUNT(*) FROM course_scores count_cs
                     WHERE count_cs.course_hash = cs.course_hash
@@ -555,32 +553,41 @@ pub(super) fn best_course_score_for_trophy(
 
 fn hydrate_course_best_judges(conn: &Connection, best: &mut Option<CourseBestScore>) -> Result<()> {
     let Some(best) = best else { return Ok(()) };
-    let counts = conn.query_row(
+    let (counts, cb) = conn.query_row(
         "SELECT
             COALESCE(SUM(fast_pgreat), 0), COALESCE(SUM(slow_pgreat), 0),
             COALESCE(SUM(fast_great), 0), COALESCE(SUM(slow_great), 0),
             COALESCE(SUM(fast_good), 0), COALESCE(SUM(slow_good), 0),
             COALESCE(SUM(fast_bad), 0), COALESCE(SUM(slow_bad), 0),
             COALESCE(SUM(fast_poor), 0), COALESCE(SUM(slow_poor), 0),
-            COALESCE(SUM(fast_empty_poor), 0), COALESCE(SUM(slow_empty_poor), 0)
+            COALESCE(SUM(fast_empty_poor), 0), COALESCE(SUM(slow_empty_poor), 0),
+            CASE WHEN ?2 AND COUNT(*) > 0 AND COUNT(*) = (
+                SELECT COUNT(*) FROM course_score_charts WHERE course_score_id = ?1
+            ) THEN MAX(0, ?3 - SUM(fast_empty_poor + slow_empty_poor))
+              ELSE COALESCE(SUM(cb), 0) END
          FROM score_history
          WHERE course_score_id = ?1",
-        params![best.course_score_id],
+        // The failed course BP includes unplayed stages. Subtract empty POOR
+        // only when every played stage has linked judgement counts.
+        params![best.course_score_id, best.course_failed, best.bp],
         |row| {
-            Ok(FastSlowJudgeCounts {
-                fast_pgreat: row.get(0)?,
-                slow_pgreat: row.get(1)?,
-                fast_great: row.get(2)?,
-                slow_great: row.get(3)?,
-                fast_good: row.get(4)?,
-                slow_good: row.get(5)?,
-                fast_bad: row.get(6)?,
-                slow_bad: row.get(7)?,
-                fast_poor: row.get(8)?,
-                slow_poor: row.get(9)?,
-                fast_empty_poor: row.get(10)?,
-                slow_empty_poor: row.get(11)?,
-            })
+            Ok((
+                FastSlowJudgeCounts {
+                    fast_pgreat: row.get(0)?,
+                    slow_pgreat: row.get(1)?,
+                    fast_great: row.get(2)?,
+                    slow_great: row.get(3)?,
+                    fast_good: row.get(4)?,
+                    slow_good: row.get(5)?,
+                    fast_bad: row.get(6)?,
+                    slow_bad: row.get(7)?,
+                    fast_poor: row.get(8)?,
+                    slow_poor: row.get(9)?,
+                    fast_empty_poor: row.get(10)?,
+                    slow_empty_poor: row.get(11)?,
+                },
+                row.get(12)?,
+            ))
         },
     )?;
     best.judge_counts = DisplayJudgeCounts {
@@ -592,6 +599,7 @@ fn hydrate_course_best_judges(conn: &Connection, best: &mut Option<CourseBestSco
         empty_poor: counts.fast_empty_poor.saturating_add(counts.slow_empty_poor),
     };
     best.fast_slow_counts = counts;
+    best.cb = cb;
     Ok(())
 }
 
@@ -903,7 +911,7 @@ fn course_replay_slot_from_row(
 
 fn course_best_score_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CourseBestScore> {
     Ok(CourseBestScore {
-        last_played_at: row.get(17)?,
+        last_played_at: row.get(16)?,
         course_score_id: row.get(0)?,
         course_hash: row.get(1)?,
         ln_policy: ln_score_policy_from_row(row, 2)?,
@@ -915,14 +923,14 @@ fn course_best_score_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Cours
         gauge_value: row.get(8)?,
         max_combo: row.get(9)?,
         bp: row.get(10)?,
-        cb: row.get(11)?,
+        cb: 0,
         judge_counts: DisplayJudgeCounts::default(),
         fast_slow_counts: FastSlowJudgeCounts::default(),
-        course_failed: row.get(12)?,
-        course_clear: row.get(13)?,
-        play_count: row.get(14)?,
-        clear_count: row.get(15)?,
-        played_at: row.get(16)?,
+        course_failed: row.get(11)?,
+        course_clear: row.get(12)?,
+        play_count: row.get(13)?,
+        clear_count: row.get(14)?,
+        played_at: row.get(15)?,
     })
 }
 

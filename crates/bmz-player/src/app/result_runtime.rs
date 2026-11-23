@@ -17,7 +17,6 @@ use crate::storage::play_result::StoredPlayResult;
 pub(super) fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary {
     let last = course.entry_summaries.last();
     let max_combo = course.course_max_combo;
-    let cb = course.entry_summaries.iter().map(|summary| summary.cb).sum();
     let fast_slow_counts =
         course.entry_summaries.iter().fold(ResultFastSlowJudgeCounts::default(), |acc, summary| {
             ResultFastSlowJudgeCounts {
@@ -70,7 +69,7 @@ pub(super) fn course_result_summary_for_skin(course: &CourseResultSummary) -> Re
         ex_score: course.total_ex_score,
         max_combo,
         bp: course.bp,
-        cb,
+        cb: course.bp.saturating_sub(course.judge_counts.empty_poor),
         gauge_value: course.final_gauge_value,
         gauge_type: course.final_gauge_type,
         total_notes: course.total_notes,

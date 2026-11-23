@@ -525,6 +525,8 @@ Light Assistだけなら`LightAssistEasy`になります。この優先順位は
 
 コース2曲目以降の開始前に手動で中断した場合も、完了済みステージだけで`Failed` attemptを保存します。
 未開始曲のstage結果・プレイ回数・replayは追加せず、コース全体のノーツ数と未プレイ分のBPを使います。
+コースリザルトのCBにも途中終了曲の未処理ノーツと未開始曲の全ノーツを加算し、空POORは除きます。
+保存済みのFAILEDコースベストは、プレイした全ステージの履歴が紐付いていれば、コースのBPと空POOR数から同じCBを復元します。
 1曲目の開始前キャンセルではcourse attemptを作りません。Autoplay / Replay等の保存除外条件は上表に従います。
 
 BMZのコースIRはproviderの単曲`send_policy`を参照せず、course definitionが

@@ -282,7 +282,7 @@ pub(crate) fn enqueue_local_score_jobs_with_scan(
                     payload.chart.notes.total = evidence.actual_total;
                     payload.result.notes = evidence.actual_total;
                     payload.result.pass_notes =
-                        Some(judged_note_count(&row).min(evidence.actual_total));
+                        Some(backfill_pass_notes(&row, evidence.actual_total));
                     payload.play_options.insert("kaleid".into(), serde_json::json!(evidence));
                 }
                 Ok(None) => payload.chart.kaleid = Default::default(),
@@ -826,7 +826,7 @@ fn build_local_score_submission(
             ex_score: row.ex_score,
             max_combo: row.max_combo,
             notes: scored_total_notes,
-            pass_notes: Some(judged_note_count(row).min(scored_total_notes)),
+            pass_notes: Some(backfill_pass_notes(row, scored_total_notes)),
             min_bp: row.bp,
             min_cb: row.cb,
             ghost: None,
@@ -842,21 +842,27 @@ fn build_local_score_submission(
     }
 }
 
-fn judged_note_count(row: &BackfillScoreRow) -> u32 {
-    [
-        row.fast_pgreat,
-        row.slow_pgreat,
-        row.fast_great,
-        row.slow_great,
-        row.fast_good,
-        row.slow_good,
-        row.fast_bad,
-        row.slow_bad,
-        row.fast_poor,
-        row.slow_poor,
-    ]
-    .into_iter()
-    .fold(0_u32, u32::saturating_add)
+fn backfill_pass_notes(row: &BackfillScoreRow, total_notes: u32) -> u32 {
+    // A non-consuming BAD or a suppressed POOR can make judgement counts differ
+    // from processed notes. Local failed attempts retain the remainder in BP and CB,
+    // even when a course stage was stored with a NoPlay lamp.
+    let judged_cb = [row.fast_bad, row.slow_bad, row.fast_poor, row.slow_poor]
+        .into_iter()
+        .fold(0_u32, u32::saturating_add);
+    let judged_bp =
+        judged_cb.saturating_add(row.fast_empty_poor).saturating_add(row.slow_empty_poor);
+    if row.source_kind == ScoreSourceKind::Local
+        && let Some(remaining) = row.cb.checked_sub(judged_cb)
+        && remaining > 0
+        && row.bp.checked_sub(judged_bp) == Some(remaining)
+        && let Some(processed) = total_notes.checked_sub(remaining)
+    {
+        return processed;
+    }
+    [row.fast_pgreat, row.slow_pgreat, row.fast_great, row.slow_great, row.fast_good, row.slow_good]
+        .into_iter()
+        .fold(judged_cb, u32::saturating_add)
+        .min(total_notes)
 }
 
 fn backfill_applied_double_option(row: &BackfillScoreRow) -> DoubleOption {

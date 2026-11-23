@@ -353,6 +353,17 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
     assert_eq!(runtime_state.text_values.get(&3).map(String::as_str), Some("RANK AAA"));
     // Stage 3 was left unplayed after a FAILED; LR2 still shows its level.
     course.total_entries = 3;
+    course.final_clear_type = ClearType::Failed;
+    course.course_failed = true;
+    course.course_clear = false;
+    course.entry_summaries[0].cb = 2;
+    course.entry_summaries[1].cb = 30;
+    course.judge_counts.empty_poor = 5;
+    // 180 unplayed notes, 32 stage CB (including the failed stage's remainder), 5 empty POOR.
+    course.bp = 217;
+    let failed = course_result_summary_for_skin(&course);
+    assert_eq!((failed.bp, failed.cb), (217, 212));
+    assert_eq!(result_lua_runtime_number_values_for_summary(&failed)[&425], 212);
     course.stage_charts = [("12", "ANOTHER"), ("", ""), ("9", "HYPER")]
         .map(|(play_level, difficulty_name)| crate::screens::course_session::CourseStageChartInfo {
             play_level: play_level.to_string(),

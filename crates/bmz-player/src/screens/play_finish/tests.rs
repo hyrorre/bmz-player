@@ -116,14 +116,14 @@ fn bokutachi_course_stage_device_policy_and_later_failure_are_independent() {
 }
 
 #[test]
-fn bokutachi_stage_complete_song_uses_completion_and_update_uses_real_metrics() {
+fn course_stage_complete_song_uses_completion_and_update_uses_real_metrics() {
     use crate::config::profile_config::IrSendPolicyConfig::*;
     let mut result = play_result_from_session(&session());
     result.clear_type = ClearType::Normal;
     result.gauge_value = 80.0;
-    assert!(should_send_bokutachi_stage(CompleteSong, &result, ClearType::NoPlay, true, None));
-    assert!(!should_send_bokutachi_stage(CompleteSong, &result, ClearType::FullCombo, false, None));
-    assert!(should_send_bokutachi_stage(Always, &result, ClearType::NoPlay, false, None));
+    assert!(should_send_ir_score(CompleteSong, &result, ClearType::NoPlay, true, None));
+    assert!(!should_send_ir_score(CompleteSong, &result, ClearType::FullCombo, false, None));
+    assert!(should_send_ir_score(Always, &result, ClearType::NoPlay, false, None));
     let mut best = crate::storage::score_db::BestScoreSummary {
         numeric_score_available: true,
         play_options: None,
@@ -151,13 +151,7 @@ fn bokutachi_stage_complete_song_uses_completion_and_update_uses_real_metrics() 
     best.max_combo = result.score.max_combo;
     best.bp = result.record_bp();
     best.cb = result.record_cb();
-    assert!(!should_send_bokutachi_stage(
-        UpdateScore,
-        &result,
-        ClearType::NoPlay,
-        true,
-        Some(&best)
-    ));
+    assert!(!should_send_ir_score(UpdateScore, &result, ClearType::NoPlay, true, Some(&best)));
     for metric in 0..5 {
         let mut previous = best.clone();
         let mut current = result.clone();
@@ -169,7 +163,7 @@ fn bokutachi_stage_complete_song_uses_completion_and_update_uses_real_metrics() 
             3 => previous.bp += 1,
             _ => previous.cb += 1,
         }
-        assert!(should_send_bokutachi_stage(UpdateScore, &current, lamp, true, Some(&previous)));
+        assert!(should_send_ir_score(UpdateScore, &current, lamp, true, Some(&previous)));
     }
 }
 
@@ -457,22 +451,22 @@ fn latency_stall_test_never_persists_manual_result() {
 
 #[test]
 fn should_send_ir_score_follows_policy() {
-    use crate::config::profile_config::IrSendPolicyConfig;
+    use crate::config::profile_config::IrSendPolicyConfig::*;
     use crate::storage::score_db::BestScoreSummary;
 
     let mut result = play_result_from_session(&session());
     result.gauge_value = 0.0;
     // Failed (ゲージ 0) は CompleteSong では送らない。
-    assert!(should_send_ir_score(IrSendPolicyConfig::Always, &result, false, None));
-    assert!(!should_send_ir_score(IrSendPolicyConfig::CompleteSong, &result, false, None));
+    assert!(should_send_ir_score(Always, &result, result.clear_type, true, None));
+    assert!(!should_send_ir_score(CompleteSong, &result, result.clear_type, true, None));
     result.gauge_value = 12.0;
-    assert!(should_send_ir_score(IrSendPolicyConfig::CompleteSong, &result, false, None));
+    assert!(should_send_ir_score(CompleteSong, &result, result.clear_type, true, None));
     // ゲージが残っていても、Esc などで途中に止めたプレイは CompleteSong では送らない。
-    assert!(!should_send_ir_score(IrSendPolicyConfig::CompleteSong, &result, true, None));
-    assert!(should_send_ir_score(IrSendPolicyConfig::Always, &result, true, None));
+    assert!(!should_send_ir_score(CompleteSong, &result, result.clear_type, false, None));
+    assert!(should_send_ir_score(Always, &result, result.clear_type, false, None));
 
     // UpdateScore: ベストが無ければ送る。
-    assert!(should_send_ir_score(IrSendPolicyConfig::UpdateScore, &result, false, None));
+    assert!(should_send_ir_score(UpdateScore, &result, result.clear_type, true, None));
 
     let best = BestScoreSummary {
         numeric_score_available: true,
@@ -497,11 +491,11 @@ fn should_send_ir_score_follows_policy() {
         replay_path: String::new(),
     };
     // session() の結果は EX 0 / Failed / combo 0 / BP 1 なので全項目で劣る。
-    assert!(!should_send_ir_score(IrSendPolicyConfig::UpdateScore, &result, false, Some(&best)));
+    assert!(!should_send_ir_score(UpdateScore, &result, result.clear_type, true, Some(&best)));
     // EX が改善すれば送る。
     let mut improved = result.clone();
     improved.score.judges.fast_pgreat = 100;
-    assert!(should_send_ir_score(IrSendPolicyConfig::UpdateScore, &improved, false, Some(&best)));
+    assert!(should_send_ir_score(UpdateScore, &improved, improved.clear_type, true, Some(&best)));
 }
 
 fn open_network_db() -> NetworkDatabase {
@@ -944,74 +938,98 @@ fn helper_course_stage_payload_uses_finished_lamp_and_original_bp() {
 }
 
 #[test]
-fn finish_session_result_course_stage_enqueues_ir_with_rounded_clear_type() {
-    let root = make_temp_dir("finish-course-stage-ir");
-    let paths = ProfilePaths {
-        root_dir: root.clone(),
-        profile_toml: root.join("profile.toml"),
-        collection_db: root.join("collection.db"),
-        score_db: root.join("score.db"),
-        network_db: root.join("network.db"),
-        replay_dir: root.join("replay"),
-    };
-    let mut conn = Connection::open_in_memory().unwrap();
-    configure_connection(&conn).unwrap();
-    run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut score_db = ScoreDatabase::from_connection(conn);
-    let mut network_db = open_network_db();
-    let replay_config = ReplayConfig {
-        auto_save: false,
-        slot_rules: crate::config::profile_config::default_slot_rules(),
-    };
-    let ir_config = IrConfig {
-        primary_provider: "bms-ir".to_string(),
-        providers: vec![IrProviderConfig {
-            provider: "bms-ir".to_string(),
-            provider_key: "bms-ir".to_string(),
-            base_url: crate::ir::bms_ir::BMS_IR_DEFAULT_BASE_URL.to_string(),
-            enabled: true,
-            account_display_name: "Player".to_string(),
-            account_id: "account-1".to_string(),
-            send_policy: Default::default(),
-            role: Default::default(),
-            last_login_at: None,
-            last_success_at: None,
-        }],
-        ..IrConfig::default()
-    };
-    let mut session = session();
-    Arc::get_mut(&mut session.chart).unwrap().metadata.source_format =
-        bmz_chart::model::ChartSourceFormat::Bms;
+fn failed_song_ir_matches_local_misses_and_only_queues_an_improvement() {
+    use crate::config::profile_config::IrSendPolicyConfig;
+    use crate::ir::types::IrScoreSubmission;
+    use bmz_core::clear::GaugeType;
 
-    let finished = finish_session_result(
-        &mut score_db,
-        &mut network_db,
-        FinishSessionResultRequest {
-            profile_paths: &paths,
-            replay_config: &replay_config,
-            ir_config: &ir_config,
-            session: &session,
-            source_ln_profile: ChartLnProfile::from_chart(&session.chart),
-            chart_length_ms: None,
-            play_duration_ms: None,
-            played_at: 1_700_000_110,
-            applied_arrange: &AppliedArrange::default(),
-            target_ex_score: None,
-            score_key: score_key(&session),
-            practice_mode: false,
-            finish_mode: FinishResultMode::CourseStage,
-        },
-    )
-    .unwrap();
+    for (mode, manually_stopped, empty_poor, lamp) in [
+        (FinishResultMode::CourseStage, false, 0, "NoPlay"),
+        (FinishResultMode::CourseStage, true, 1, "NoPlay"),
+        (FinishResultMode::Normal, false, 0, "Failed"),
+        (FinishResultMode::Normal, true, 1, "Failed"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let paths = profile_paths(root.path());
+        let mut score_db = open_score_db();
+        let mut network_db = open_network_db();
+        let mut ir_config = all_ir_providers();
+        for provider in &mut ir_config.providers {
+            provider.send_policy = IrSendPolicyConfig::UpdateScore;
+        }
+        let mut session = session();
+        let chart = Arc::make_mut(&mut session.chart);
+        chart.metadata.source_format = bmz_chart::model::ChartSourceFormat::Bms;
+        chart.total_notes = 1710;
+        session.scored_total_notes = chart.total_notes;
+        let gauge =
+            if mode == FinishResultMode::CourseStage { GaugeType::Class } else { GaugeType::Hard };
+        session.gauge = GaugeState::new(gauge, 160.0, chart.total_notes);
+        session.gauge.set_initial_value(if manually_stopped { 80.0 } else { 0.0 });
+        session.state = PlayState::Failed;
+        session.manually_stopped = manually_stopped;
+        session.score.past_notes = 6;
+        session.score.judges.fast_pgreat = 1;
+        session.score.judges.slow_poor = 5;
+        session.score.judges.fast_empty_poor = empty_poor;
+        session.score.max_combo = 1;
 
-    assert_eq!(finished.summary.ir_queued_jobs, 1);
-    let jobs = network_db.pending_ir_score_jobs(1_700_000_110, 10).unwrap();
-    assert_eq!(jobs.len(), 1);
-    let payload: serde_json::Value = serde_json::from_str(&jobs[0].payload_json).unwrap();
-    assert_eq!(payload["result"]["clear"], "NoPlay");
-    assert_eq!(payload["play_options"]["course_stage"], true);
-
-    std::fs::remove_dir_all(root).unwrap();
+        let expected = (1709 + empty_poor, 1709);
+        for (played_at, expected_jobs) in [(100, 3), (101, 0)] {
+            let finished = finish_session_result(
+                &mut score_db,
+                &mut network_db,
+                FinishSessionResultRequest {
+                    profile_paths: &paths,
+                    replay_config: &ReplayConfig {
+                        auto_save: false,
+                        slot_rules: crate::config::profile_config::default_slot_rules(),
+                    },
+                    ir_config: &ir_config,
+                    session: &session,
+                    source_ln_profile: ChartLnProfile::from_chart(&session.chart),
+                    chart_length_ms: Some(100_000),
+                    play_duration_ms: Some(1_000),
+                    played_at,
+                    applied_arrange: &AppliedArrange::default(),
+                    target_ex_score: None,
+                    score_key: score_key(&session),
+                    practice_mode: false,
+                    finish_mode: mode,
+                },
+            )
+            .unwrap();
+            assert_eq!((finished.summary.bp, finished.summary.cb), expected);
+            assert_eq!(finished.summary.ir_queued_jobs, expected_jobs);
+        }
+        let history = score_db.recent_history(2, 0).unwrap();
+        assert_eq!(history.len(), 2);
+        for entry in history {
+            assert_eq!(entry.clear_type, lamp);
+            assert_eq!((entry.bp, entry.cb), expected);
+        }
+        let best = score_db.best_scores_for_charts(&[score_key(&session)]).unwrap().pop().unwrap();
+        assert_eq!((best.bp, best.cb), expected);
+        let jobs = network_db.pending_ir_score_jobs(101, 10).unwrap();
+        assert_eq!(jobs.len(), 3);
+        for job in jobs {
+            let payload: IrScoreSubmission = serde_json::from_str(&job.payload_json).unwrap();
+            assert_eq!(payload.result.clear, lamp);
+            assert_eq!(
+                payload.play_options.contains_key("course_stage"),
+                mode == FinishResultMode::CourseStage
+            );
+            assert_eq!(
+                (payload.result.min_bp, payload.result.min_cb),
+                expected,
+                "{}",
+                job.provider
+            );
+            assert_eq!(payload.result.pass_notes, Some(6));
+            assert_eq!(payload.result.judges.slow.poor, 5);
+            assert_eq!(payload.result.judges.fast.empty_poor, empty_poor);
+        }
+    }
 }
 
 #[test]

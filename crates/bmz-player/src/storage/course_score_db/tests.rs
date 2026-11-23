@@ -202,6 +202,34 @@ fn insert_course_score_round_trips_score_children_and_trophies() {
 }
 
 #[test]
+fn failed_course_best_cb_includes_unplayed_stages_when_played_history_is_linked() {
+    let mut conn = open_conn();
+    let mut record = sample_score("partial", 2, "Failed", 10);
+    // One PGREAT, one POOR, one empty POOR, 98 unprocessed and 400 unplayed.
+    record.bp = 500;
+    let id = insert_course_score(&mut conn, &record).unwrap();
+    let best = |conn: &Connection| {
+        best_course_score(conn, "partial", LN_POLICY, RuleMode::Beatoraja).unwrap().unwrap()
+    };
+    assert_eq!(best(&conn).cb, 0);
+    conn.execute(
+        "INSERT INTO score_history (
+            chart_sha256, played_at, clear_type, gauge_type, gauge_value,
+            total_notes, ex_score, bp, cb, max_combo,
+            fast_pgreat, slow_pgreat, fast_great, slow_great, fast_good, slow_good,
+            fast_bad, slow_bad, fast_poor, slow_poor, fast_empty_poor, slow_empty_poor,
+            gauge_option, replay_path, course_score_id
+         ) VALUES (?1, 10, 'NoPlay', 'Class', 0, 100, 2, 100, 99, 1,
+                   1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, '', '', ?2)",
+        params![hash_to_hex(&[1; 32]), id],
+    )
+    .unwrap();
+    let best = best(&conn);
+    assert_eq!((best.bp, best.cb), (500, 499));
+    assert_eq!(best.judge_counts.poor, 1);
+}
+
+#[test]
 fn best_and_latest_are_scoped_by_course_hash() {
     let mut conn = open_conn();
     insert_course_score(&mut conn, &sample_score("course-a", 400, "Hard", 10)).unwrap();
