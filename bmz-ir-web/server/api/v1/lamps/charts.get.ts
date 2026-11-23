@@ -1,5 +1,9 @@
 import { createError, defineEventHandler, getQuery } from 'h3'
-import { IR_CLEAR_LABELS, IR_SCORE_RANK_LABELS } from '../../../../shared/constants/ir'
+import {
+  IR_CLEAR_LABELS,
+  IR_DISTRIBUTION_PAGE_SIZE,
+  IR_SCORE_RANK_LABELS,
+} from '../../../../shared/constants/ir'
 import { clampInteger } from '../../../services/ir/common'
 import { loadDistributionCharts } from '../../../services/lamp_distribution'
 import { distributionMode, lampPlayerId, lampQueryText } from '../../../utils/lamp_query'
@@ -23,7 +27,7 @@ export default defineEventHandler(async (event) => {
     table,
     level,
     rank,
-    limit: clampInteger(query.limit, 50, 1, 100),
+    limit: clampInteger(query.limit, IR_DISTRIBUTION_PAGE_SIZE, 1, 100),
     offset: clampInteger(query.offset, 0, 0, 100_000),
   })
   if (!result) throw createError({ statusCode: 404, statusMessage: 'Player not found' })

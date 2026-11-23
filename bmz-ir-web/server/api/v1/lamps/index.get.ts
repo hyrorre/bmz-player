@@ -10,6 +10,7 @@ export default defineEventHandler(async (event) => {
     await lampPlayerId(event, query.player),
     mode,
     table,
+    query.include === 'first_pages',
   )
   if (!report) throw createError({ statusCode: 404, statusMessage: 'Player not found' })
   return report

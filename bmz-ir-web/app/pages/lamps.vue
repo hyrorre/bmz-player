@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { NuxtLink } from '#components'
-import { IR_CLEAR_LABELS, IR_SCORE_RANK_LABELS } from '../../shared/constants/ir'
+import {
+  IR_CLEAR_LABELS,
+  IR_DISTRIBUTION_PAGE_SIZE,
+  IR_SCORE_RANK_LABELS,
+} from '../../shared/constants/ir'
 import type {
   IrDifficultyDistribution,
   IrDistributionCharts,
@@ -30,6 +34,7 @@ const reportQuery = computed(() => ({
   player: playerId.value,
   table: queryText(route.query.table),
   mode: mode.value,
+  include: 'first_pages',
 }))
 const { data, status, error } = await useAsyncData(
   () => `lamp-distribution:${JSON.stringify(reportQuery.value)}`,
@@ -97,11 +102,13 @@ function restoreSegmentFocus() {
 }
 
 const { page, pageSize, offset, pageLocation } = useRoutePagination({
+  pageSize: IR_DISTRIBUTION_PAGE_SIZE,
   queryKey: 'chart_page',
   maxOffset: 100_000,
 })
+const firstPage = computed(() => (offset.value === 0 ? selection.value?.first_page : undefined))
 const chartsQuery = computed(() =>
-  selection.value
+  selection.value && firstPage.value === undefined
     ? {
         table: selection.value.table.id,
         level: selection.value.level,
@@ -129,7 +136,18 @@ const {
   }),
   { lazy: true },
 )
-const chartList = computed(() => chartResult.value?.result)
+const chartList = computed<IrDistributionCharts | null | undefined>(() => {
+  if (!selection.value || firstPage.value === undefined) return chartResult.value?.result
+  return {
+    charts: firstPage.value,
+    pagination: {
+      limit: pageSize,
+      offset: 0,
+      total: selection.value.count,
+      has_more: selection.value.count > pageSize,
+    },
+  }
+})
 const maxChartPage = computed(() =>
   Math.max(1, Math.ceil((chartList.value?.pagination.total ?? 0) / pageSize)),
 )
@@ -277,11 +295,11 @@ useSeoMeta({ title: () => t('lamps.title') })
         @after:leave="restoreSegmentFocus"
       >
         <template #body>
-          <p v-if="chartsStatus === 'pending'" class="p-5 text-sm text-muted">
+          <p v-if="chartsQuery && chartsStatus === 'pending'" class="p-5 text-sm text-muted">
             {{ t('common.loading') }}
           </p>
           <UAlert
-            v-else-if="chartsError"
+            v-else-if="chartsQuery && chartsError"
             class="m-4"
             color="error"
             :description="translateApiError(chartsError, 'errors.chartsLoadFailed')"

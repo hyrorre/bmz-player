@@ -432,19 +432,25 @@ export interface IrDifficultyDistribution {
   levels: {
     level: string
     total: number
-    segments: { rank: number; count: number }[]
+    segments: {
+      rank: number
+      count: number
+      first_page?: IrDistributionChart[]
+    }[]
   }[]
 }
 
+export interface IrDistributionChart {
+  id: string
+  /** Null when the chart is only present in the synced difficulty table. */
+  sha256: string | null
+  title: string
+  subtitle: string | null
+  artist: string | null
+}
+
 export interface IrDistributionCharts {
-  charts: {
-    id: string
-    /** Null when the chart is only present in the synced difficulty table. */
-    sha256: string | null
-    title: string
-    subtitle: string | null
-    artist: string | null
-  }[]
+  charts: IrDistributionChart[]
   pagination: IrRanking['ranking']['pagination']
 }
 

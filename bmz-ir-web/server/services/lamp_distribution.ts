@@ -1,8 +1,10 @@
-import { and, asc, count, eq, isNotNull, max, sql } from 'drizzle-orm'
+import { and, asc, count, eq, isNotNull, lte, max, sql, type SQL } from 'drizzle-orm'
+import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
 import { db, schema } from 'hub:db'
-import { IR_SCORE_GRADES } from '../../shared/constants/ir'
+import { IR_DISTRIBUTION_PAGE_SIZE, IR_SCORE_GRADES } from '../../shared/constants/ir'
 import type {
   IrDifficultyDistribution,
+  IrDistributionChart,
   IrDistributionCharts,
   IrDistributionMode,
 } from '../../shared/types/ir'
@@ -13,6 +15,7 @@ export async function loadDifficultyDistribution(
   playerId: string,
   mode: IrDistributionMode,
   tableId?: string,
+  includeFirstPages = false,
 ): Promise<IrDifficultyDistribution | null> {
   const profiles = schema.profiles
   const [player] = await db
@@ -36,18 +39,26 @@ export async function loadDifficultyDistribution(
   if (!table) return { player, tables: [], table: null, levels: [] }
 
   const ranks = chartRanks(playerId, mode, table.id)
-  const rows = await db
-    .select({ level: ranks.level, rank: ranks.rank, count: count() })
-    .from(ranks)
-    .groupBy(ranks.level, sql`${ranks.rank}`)
-    .orderBy(sql`${ranks.rank} desc`)
+  const rows: { level: string; rank: number; count: number; chart?: IrDistributionChart }[] =
+    includeFirstPages
+      ? await loadDistributionFirstPages(ranks)
+      : await db
+          .select({ level: ranks.level, rank: ranks.rank, count: count() })
+          .from(ranks)
+          .groupBy(ranks.level, sql`${ranks.rank}`)
+          .orderBy(sql`${ranks.rank} desc`)
 
   type Level = IrDifficultyDistribution['levels'][number]
   const levels = new Map<string, Level>()
   for (const row of rows) {
     const level = levels.get(row.level) ?? { level: row.level, total: 0, segments: [] }
-    level.segments.push({ rank: row.rank, count: row.count })
-    level.total += row.count
+    let segment = level.segments.at(-1)
+    if (!segment || segment.rank !== row.rank) {
+      segment = { rank: row.rank, count: row.count }
+      level.segments.push(segment)
+      level.total += row.count
+    }
+    if (row.chart) (segment.first_page ??= []).push(row.chart)
     levels.set(row.level, level)
   }
   const order = new Map(table.levelOrder.map((level, i) => [level, i]))
@@ -82,22 +93,58 @@ export async function loadDistributionCharts(
   const ranks = chartRanks(playerId, mode, table, level)
   const [items, counts] = await Promise.all([
     db
-      .select({
-        id: ranks.id,
-        sha256: ranks.sha256,
-        title: ranks.title,
-        subtitle: ranks.subtitle,
-        artist: ranks.artist,
-      })
+      .select(distributionChartColumns(ranks))
       .from(ranks)
       .where(eq(ranks.rank, rank))
-      .orderBy(sql`${ranks.title} collate nocase`, ranks.subtitle, sql`${ranks.id}`)
+      .orderBy(distributionChartOrder(ranks))
       .limit(limit)
       .offset(offset),
     db.select({ total: count() }).from(ranks).where(eq(ranks.rank, rank)),
   ])
   const total = counts[0]?.total ?? 0
   return { charts: items, pagination: { limit, offset, total, has_more: offset + limit < total } }
+}
+
+type ChartRanks = ReturnType<typeof chartRanks>
+
+function distributionChartColumns<
+  T extends Record<keyof IrDistributionChart, AnySQLiteColumn | SQL.Aliased>,
+>({ id, sha256, title, subtitle, artist }: T): Pick<T, keyof IrDistributionChart> {
+  return { id, sha256, title, subtitle, artist }
+}
+
+function distributionChartOrder({
+  title,
+  subtitle,
+  id,
+}: Pick<ChartRanks, 'title' | 'subtitle' | 'id'>) {
+  return sql`${title} collate nocase, ${subtitle}, ${id}`
+}
+
+async function loadDistributionFirstPages(ranks: ChartRanks) {
+  const segment = sql`partition by ${ranks.level}, ${ranks.rank}`
+  const ordered = db
+    .select({
+      ...distributionChartColumns(ranks),
+      level: ranks.level,
+      rank: ranks.rank,
+      count: sql<number>`count(*) over (${segment})`.as('segment_count'),
+      position: sql<number>`row_number() over (
+        ${segment} order by ${distributionChartOrder(ranks)}
+      )`.as('chart_position'),
+    })
+    .from(ranks)
+    .as('ordered_distribution_charts')
+  return db
+    .select({
+      level: ordered.level,
+      rank: ordered.rank,
+      count: ordered.count,
+      chart: distributionChartColumns(ordered),
+    })
+    .from(ordered)
+    .where(lte(ordered.position, IR_DISTRIBUTION_PAGE_SIZE))
+    .orderBy(sql`${ordered.rank} desc`, sql`${ordered.position}`)
 }
 
 function chartRanks(playerId: string, mode: IrDistributionMode, tableId: string, level?: string) {

@@ -1642,6 +1642,51 @@ describe('rankings, courses, and aggregates', () => {
     expect(after.pagination.total).toBe(3)
   })
 
+  test('distribution first pages keep complete segment counts and match the chart listing order', async () => {
+    await submitScore({ id: 'alice' }, submission({ clear: 'Hard' }), [], 10)
+    await db.insert(schema.difficultyTables).values({
+      id: 'fixture',
+      sourceUrl: 'https://example.invalid/table',
+      symbol: 'st',
+      name: 'Fixture',
+      activeGeneration: 'current',
+    })
+    const entry = { tableId: 'fixture', generation: 'current', level: '1' }
+    await db.insert(schema.difficultyTableEntries).values({ ...entry, sha256: CHART_A })
+    for (let i = 51; i >= 0; i--) {
+      await db.insert(schema.difficultyTableEntries).values({
+        ...entry,
+        md5: i.toString(16).padStart(32, '0'),
+        title: `Table chart ${String(i).padStart(2, '0')}`,
+      })
+    }
+
+    for (const [mode, playedRank] of [
+      ['lamp', 5],
+      ['score', 9],
+    ] as const) {
+      const query = `player=alice&table=fixture&mode=${mode}`
+      const summary = await lampsHandler(
+        event({ path: `/api/v1/lamps?${query}&include=first_pages` }),
+      )
+      const first = await lampChartsHandler(
+        event({ path: `/api/v1/lamps/charts?${query}&level=1&rank=0` }),
+      )
+      expect(summary.levels[0]).toMatchObject({
+        level: '1',
+        total: 53,
+        segments: [
+          { rank: playedRank, count: 1, first_page: [{ sha256: CHART_A }] },
+          { rank: 0, count: 52, first_page: first.charts },
+        ],
+      })
+      expect(first.pagination).toEqual({ limit: 50, offset: 0, total: 52, has_more: true })
+      expect(first.charts).toHaveLength(50)
+      expect(first.charts[0]).toMatchObject({ title: 'Table chart 00', sha256: null })
+      expect(first.charts[49]).toMatchObject({ title: 'Table chart 49', sha256: null })
+    }
+  })
+
   test('course ranking pages keep ties and the signed-in player outside the page', async () => {
     for (const [i, id] of ['alice', 'bob', 'carol'].entries()) {
       const payload = coursePayload([CHART_A], 'course-page', i === 2 ? 90 : 100)
