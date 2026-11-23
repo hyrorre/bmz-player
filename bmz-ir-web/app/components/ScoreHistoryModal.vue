@@ -8,7 +8,7 @@ defineProps<{
   limit: number
   scoreKey: (score: T) => string
   scoreBp: (score: T) => number
-  scoreTo?: (score: T) => string
+  scoreDetailId?: (score: T) => string
   showLn: boolean
   scoreOption: (score: T) => string
 }>()
@@ -16,6 +16,10 @@ const open = defineModel<boolean>('open', { required: true })
 const page = defineModel<number>('page', { required: true })
 const { t } = useI18n()
 const { formatDateTime } = useLocaleFormat()
+const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclosure()
+watch([open, page], () => {
+  expandedScoreRow.value = null
+})
 
 function formatScoreDate(value: string | null) {
   return value ? formatDateTime(value) : '-'
@@ -34,6 +38,9 @@ function formatScoreDate(value: string | null) {
         <table class="w-full text-sm">
           <thead class="bg-elevated text-left text-toned">
             <tr>
+              <th v-if="scoreDetailId" scope="col" class="w-px px-1">
+                <span class="sr-only">{{ t('score.title') }}</span>
+              </th>
               <th class="px-3 py-2">{{ t('table.date') }}</th>
               <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
               <th class="px-3 py-2">{{ t('table.clear') }}</th>
@@ -45,29 +52,39 @@ function formatScoreDate(value: string | null) {
             </tr>
           </thead>
           <tbody>
-            <tr
-              v-for="score in history.scores"
-              :key="scoreKey(score)"
-              class="border-t border-default"
-            >
-              <td class="px-3 py-2 text-muted">
-                {{ formatScoreDate(score.played_at ?? score.server_received_at) }}
-              </td>
-              <td class="px-3 py-2 text-right">
-                <NuxtLink v-if="scoreTo" :to="scoreTo(score)" class="hover:underline">
+            <template v-for="score in history.scores" :key="scoreKey(score)">
+              <tr class="border-t border-default">
+                <td v-if="scoreDetailId" class="px-1 py-1">
+                  <ScoreDetailToggle
+                    :expanded="expandedScoreRow === scoreKey(score)"
+                    :controls="scoreDetailsId"
+                    @toggle="toggleScoreDetails(scoreKey(score))"
+                  />
+                </td>
+                <td class="px-3 py-2 text-muted">
+                  {{ formatScoreDate(score.played_at ?? score.server_received_at) }}
+                </td>
+                <td class="px-3 py-2 text-right">
                   <RankingExScore :score="score.ex_score" :max="score.max_ex_score" />
-                </NuxtLink>
-                <RankingExScore v-else :score="score.ex_score" :max="score.max_ex_score" />
-              </td>
-              <td class="px-3 py-2"><IrClearBadge :clear="score.clear" /></td>
-              <td v-if="showLn" class="px-3 py-2 text-muted">
-                {{ lnPolicyLabel(score.ln_policy) }}
-              </td>
-              <td class="px-3 py-2 text-muted">{{ ruleModeLabel(score.rule_mode) }}</td>
-              <td class="px-3 py-2 text-xs text-muted">{{ scoreOption(score) }}</td>
-              <td class="px-3 py-2 text-right">{{ score.max_combo }}</td>
-              <td class="px-3 py-2 text-right">{{ scoreBp(score) }}</td>
-            </tr>
+                </td>
+                <td class="px-3 py-2"><IrClearBadge :clear="score.clear" /></td>
+                <td v-if="showLn" class="px-3 py-2 text-muted">
+                  {{ lnPolicyLabel(score.ln_policy) }}
+                </td>
+                <td class="px-3 py-2 text-muted">{{ ruleModeLabel(score.rule_mode) }}</td>
+                <td class="px-3 py-2 text-xs text-muted">{{ scoreOption(score) }}</td>
+                <td class="px-3 py-2 text-right">{{ score.max_combo }}</td>
+                <td class="px-3 py-2 text-right">{{ scoreBp(score) }}</td>
+              </tr>
+              <tr
+                v-if="scoreDetailId && expandedScoreRow === scoreKey(score)"
+                class="border-t border-default bg-elevated"
+              >
+                <td :colspan="showLn ? 9 : 8">
+                  <ScoreInlineDetails :id="scoreDetailsId" :score-id="scoreDetailId(score)" />
+                </td>
+              </tr>
+            </template>
           </tbody>
         </table>
       </div>

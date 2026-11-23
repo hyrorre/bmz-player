@@ -1,12 +1,6 @@
 <script setup lang="ts">
-interface JudgeCounts {
-  pgreat: number
-  great: number
-  good: number
-  bad: number
-  poor: number
-  empty_poor: number
-}
+import type { IrJudges } from '../../../shared/types/ir'
+import type { ScoreReplay } from '../../types/scoreDetails'
 
 interface ScoreDetail {
   score: {
@@ -22,7 +16,7 @@ interface ScoreDetail {
     rule_mode: string
     arrange_1p?: string | null
     arrange_2p?: string | null
-    judges: { fast: JudgeCounts; slow: JudgeCounts }
+    judges: Partial<IrJudges> | null
     device_type: string
     platform: string
     client_name: string
@@ -42,54 +36,18 @@ interface ScoreDetail {
     level: number | null
     notes: number
   } | null
-  replay: { status: string; size_bytes: number | null; format: string } | null
+  replay: ScoreReplay | null
 }
 
 const route = useRoute()
 const scoreId = computed(() => String(route.params.id ?? ''))
 const localePath = useLocalePath()
 const { t } = useI18n()
-const { formatDateTime, formatNumber } = useLocaleFormat()
+const { formatDateTime } = useLocaleFormat()
 const { translateApiError } = useApiError()
 const { data, pending, error } = await useFetch<ScoreDetail>(
   () => `/api/v1/scores/${scoreId.value}`,
 )
-
-const replayAvailable = computed(() =>
-  ['uploaded', 'verified'].includes(data.value?.replay?.status ?? ''),
-)
-const replayError = ref('')
-
-async function downloadReplay() {
-  replayError.value = ''
-  try {
-    const target = await $fetch<{ download_url: string }>(`/api/v1/scores/${scoreId.value}/replay`)
-    window.location.href = target.download_url
-  } catch (error) {
-    replayError.value = translateApiError(error, 'errors.replayLoadFailed')
-  }
-}
-
-function judgeRow(key: keyof JudgeCounts) {
-  const judges = data.value?.score.judges
-  if (!judges) {
-    return { fast: 0, slow: 0, total: 0 }
-  }
-  return {
-    fast: judges.fast[key],
-    slow: judges.slow[key],
-    total: judges.fast[key] + judges.slow[key],
-  }
-}
-
-const judgeRows = [
-  { key: 'pgreat' as const, label: 'PGREAT' },
-  { key: 'great' as const, label: 'GREAT' },
-  { key: 'good' as const, label: 'GOOD' },
-  { key: 'bad' as const, label: 'BAD' },
-  { key: 'poor' as const, label: 'POOR' },
-  { key: 'empty_poor' as const, label: 'EMPTY POOR' },
-]
 
 const verificationBadge = computed(() => {
   switch (data.value?.score.verification) {
@@ -166,48 +124,12 @@ useSeoMeta({ title: () => t('score.title') })
           </div>
         </div>
 
-        <h2 class="mb-3 text-lg font-medium">{{ t('score.judgementBreakdown') }}</h2>
-        <div class="mb-8 overflow-x-auto rounded-lg border border-neutral-800">
-          <table class="w-full text-sm">
-            <thead class="bg-neutral-900 text-left text-neutral-300">
-              <tr>
-                <th class="px-3 py-2">{{ t('score.judgement') }}</th>
-                <th class="px-3 py-2 text-right">FAST</th>
-                <th class="px-3 py-2 text-right">SLOW</th>
-                <th class="px-3 py-2 text-right">{{ t('table.total') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in judgeRows" :key="row.key" class="border-t border-neutral-800">
-                <td class="px-3 py-2">{{ row.label }}</td>
-                <td class="px-3 py-2 text-right">{{ judgeRow(row.key).fast }}</td>
-                <td class="px-3 py-2 text-right">{{ judgeRow(row.key).slow }}</td>
-                <td class="px-3 py-2 text-right font-medium">{{ judgeRow(row.key).total }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <h2 class="mb-3 text-lg font-medium">{{ t('score.replay') }}</h2>
-        <div class="space-y-3">
-          <UAlert v-if="replayError" color="error" :description="replayError" />
-          <template v-if="replayAvailable">
-            <p class="text-sm text-neutral-400">
-              {{ data.replay?.format }} ・
-              {{ data.replay?.size_bytes == null ? '?' : formatNumber(data.replay.size_bytes) }}
-              bytes ・
-              {{
-                data.replay?.status === 'verified' ? t('score.hashVerified') : t('score.uploaded')
-              }}
-            </p>
-            <UButton color="primary" icon="i-lucide-download" @click="downloadReplay">
-              {{ t('score.downloadReplay') }}
-            </UButton>
-          </template>
-          <p v-else class="text-sm text-neutral-400">
-            {{ t('score.noReplay') }}
-          </p>
-        </div>
+        <ScoreAttemptDetails
+          :key="data.score.id"
+          :score-id="data.score.id"
+          :judges="data.score.judges"
+          :replay="data.replay"
+        />
 
         <div class="mt-10 text-xs text-neutral-600">
           {{ data.score.client_name }} {{ data.score.client_version }} ({{ data.score.platform }})

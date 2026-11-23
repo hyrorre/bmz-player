@@ -85,6 +85,9 @@ const ja = {
     },
     score: {
       title: 'スコア詳細',
+      bestEx: 'EXスコアベスト',
+      bestClear: 'クリアベスト',
+      retry: '再試行',
       scoreSuffix: 'のスコア',
       verifiedPlay: 'プレイ署名済み',
       signedBackfill: '履歴署名済み',
@@ -296,6 +299,9 @@ const en = {
     },
     score: {
       title: 'Score details',
+      bestEx: 'Best EX score',
+      bestClear: 'Best clear',
+      retry: 'Retry',
       scoreSuffix: ' score',
       verifiedPlay: 'Play signed',
       signedBackfill: 'History signed',
@@ -508,6 +514,9 @@ const ko = {
     },
     score: {
       title: '스코어 상세',
+      bestEx: '최고 EX 스코어',
+      bestClear: '최고 클리어',
+      retry: '다시 시도',
       scoreSuffix: '의 스코어',
       verifiedPlay: '플레이 서명 완료',
       signedBackfill: '기록 서명 완료',
@@ -715,6 +724,9 @@ const zhCN = {
     },
     score: {
       title: '成绩详情',
+      bestEx: '最高 EX 分数',
+      bestClear: '最佳通关',
+      retry: '重试',
       scoreSuffix: '的成绩',
       verifiedPlay: '游玩已签名',
       signedBackfill: '历史已签名',
@@ -921,6 +933,9 @@ const zhTW = {
     },
     score: {
       title: '成績詳情',
+      bestEx: '最高 EX 分數',
+      bestClear: '最佳通關',
+      retry: '重試',
       scoreSuffix: '的成績',
       verifiedPlay: '遊玩已簽署',
       signedBackfill: '歷史已簽署',

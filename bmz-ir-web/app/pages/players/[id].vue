@@ -55,6 +55,7 @@ const { formatDateTime, formatNumber } = useLocaleFormat()
 const { translateApiError } = useApiError()
 const toast = useToast()
 const rivalUpdating = ref(false)
+const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclosure()
 
 const selectableLnPolicies = availableLnFilterItems(true, true)
 const lnPolicies = computed(() =>
@@ -219,6 +220,9 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
           <table class="w-full text-sm">
             <thead class="bg-elevated text-left text-toned">
               <tr>
+                <th scope="col" class="w-px px-1">
+                  <span class="sr-only">{{ t('score.title') }}</span>
+                </th>
                 <th class="px-3 py-2">{{ t('table.chart') }}</th>
                 <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
                 <th class="px-3 py-2">{{ t('table.clear') }}</th>
@@ -232,56 +236,67 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
               </tr>
             </thead>
             <tbody>
-              <tr v-for="score in data.best_scores" :key="score.id" class="border-t border-default">
-                <td class="min-w-48 px-3 py-2">
-                  <NuxtLink
-                    :to="localePath(`/charts/${score.chart_sha256}`)"
-                    class="font-medium hover:underline"
-                  >
-                    {{ score.chart?.title ?? score.chart_sha256.slice(0, 12) }}
-                    <span v-if="score.chart?.subtitle" class="text-muted">{{
-                      score.chart.subtitle
-                    }}</span>
-                  </NuxtLink>
-                  <p v-if="score.chart?.artist" class="text-xs text-muted">
-                    {{ score.chart.artist }}
-                  </p>
-                  <DifficultyTableBadges
-                    v-if="score.chart?.difficulty_labels.length"
-                    :labels="score.chart.difficulty_labels"
-                    class="mt-1"
-                  />
-                </td>
-                <td class="px-3 py-2 text-right">
-                  <NuxtLink
-                    :to="localePath(`/scores/${score.best_ex_score_id ?? score.score_id}`)"
-                    class="hover:underline"
-                  >
+              <template v-for="score in data.best_scores" :key="score.id">
+                <tr class="border-t border-default">
+                  <td class="px-1 py-1">
+                    <ScoreDetailToggle
+                      :expanded="expandedScoreRow === score.id"
+                      :controls="scoreDetailsId"
+                      @toggle="toggleScoreDetails(score.id)"
+                    />
+                  </td>
+                  <td class="min-w-48 px-3 py-2">
+                    <NuxtLink
+                      :to="localePath(`/charts/${score.chart_sha256}`)"
+                      class="font-medium hover:underline"
+                    >
+                      {{ score.chart?.title ?? score.chart_sha256.slice(0, 12) }}
+                      <span v-if="score.chart?.subtitle" class="text-muted">{{
+                        score.chart.subtitle
+                      }}</span>
+                    </NuxtLink>
+                    <p v-if="score.chart?.artist" class="text-xs text-muted">
+                      {{ score.chart.artist }}
+                    </p>
+                    <DifficultyTableBadges
+                      v-if="score.chart?.difficulty_labels.length"
+                      :labels="score.chart.difficulty_labels"
+                      class="mt-1"
+                    />
+                  </td>
+                  <td class="px-3 py-2 text-right">
                     <RankingExScore :score="score.ex_score" :max="score.max_ex_score" />
-                  </NuxtLink>
-                </td>
-                <td class="px-3 py-2">
-                  <NuxtLink
-                    :to="localePath(`/scores/${score.best_clear_score_id ?? score.score_id}`)"
-                    class="hover:underline"
-                  >
+                  </td>
+                  <td class="px-3 py-2">
                     <IrClearBadge :clear="score.clear_type" :rank="score.clear_rank" />
-                  </NuxtLink>
-                </td>
-                <td v-if="lnPolicies.length" class="px-3 py-2 text-muted">
-                  {{ score.chart?.has_ln ? lnPolicyLabel(score.ln_policy) : '-' }}
-                </td>
-                <td class="px-3 py-2 text-muted">{{ ruleModeLabel(score.rule_mode) }}</td>
-                <td class="px-3 py-2 text-xs whitespace-nowrap text-muted">
-                  {{ formatRankingArrange(score, score.chart?.mode ?? null) }}
-                </td>
-                <td class="px-3 py-2 text-right">{{ score.max_combo }}</td>
-                <td class="px-3 py-2 text-right">{{ score.min_bp }}</td>
-                <td class="px-3 py-2 text-muted">{{ score.device_type }}</td>
-                <td class="px-3 py-2 whitespace-nowrap text-muted">
-                  {{ formatDateTime(score.played_at ?? score.server_received_at) }}
-                </td>
-              </tr>
+                  </td>
+                  <td v-if="lnPolicies.length" class="px-3 py-2 text-muted">
+                    {{ score.chart?.has_ln ? lnPolicyLabel(score.ln_policy) : '-' }}
+                  </td>
+                  <td class="px-3 py-2 text-muted">{{ ruleModeLabel(score.rule_mode) }}</td>
+                  <td class="px-3 py-2 text-xs whitespace-nowrap text-muted">
+                    {{ formatRankingArrange(score, score.chart?.mode ?? null) }}
+                  </td>
+                  <td class="px-3 py-2 text-right">{{ score.max_combo }}</td>
+                  <td class="px-3 py-2 text-right">{{ score.min_bp }}</td>
+                  <td class="px-3 py-2 text-muted">{{ score.device_type }}</td>
+                  <td class="px-3 py-2 whitespace-nowrap text-muted">
+                    {{ formatDateTime(score.played_at ?? score.server_received_at) }}
+                  </td>
+                </tr>
+                <tr
+                  v-if="expandedScoreRow === score.id"
+                  class="border-t border-default bg-elevated"
+                >
+                  <td :colspan="lnPolicies.length ? 11 : 10">
+                    <ScoreInlineDetails
+                      :id="scoreDetailsId"
+                      :score-id="score.best_ex_score_id ?? score.score_id"
+                      :other-score-id="score.best_clear_score_id"
+                    />
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
         </div>

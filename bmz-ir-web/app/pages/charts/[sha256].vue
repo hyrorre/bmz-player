@@ -147,10 +147,7 @@ const {
 )
 
 const canShowSelfArea = computed(() => Boolean(selfBestEntry.value || detail.value?.stats.self))
-
-function scoreLocation(id: string) {
-  return localePath({ path: `/scores/${id}`, query: route.query })
-}
+const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclosure()
 
 const copyMd5 = async () => {
   if (detail.value) {
@@ -248,52 +245,54 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
           </UFormField>
         </div>
 
-        <div
-          v-if="canShowSelfArea"
-          class="mb-4 flex flex-col gap-3 rounded-lg border border-neutral-800 p-4 sm:flex-row sm:items-center sm:justify-between"
-        >
-          <div v-if="selfBestEntry" class="min-w-0">
-            <p class="text-xs text-neutral-500">{{ t('ranking.personalBest') }}</p>
-            <div class="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1">
-              <p class="text-sm text-neutral-300">#{{ selfBestEntry.rank }}</p>
-              <NuxtLink :to="scoreLocation(selfBestEntry.score.score_id)" class="hover:underline">
+        <div v-if="canShowSelfArea" class="mb-4 rounded-lg border border-default p-4">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div v-if="selfBestEntry" class="min-w-0">
+              <p class="text-xs text-neutral-500">{{ t('ranking.personalBest') }}</p>
+              <div class="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                <p class="text-sm text-neutral-300">#{{ selfBestEntry.rank }}</p>
                 <RankingExScore
                   :score="selfBestEntry.score.ex_score"
                   :max="selfBestEntry.score.max_ex_score"
                 />
-              </NuxtLink>
-              <NuxtLink
-                :to="
-                  scoreLocation(
-                    selfBestEntry.score.source_score_ids?.clear ?? selfBestEntry.score.score_id,
-                  )
-                "
-                class="hover:underline"
-              >
                 <IrClearBadge :clear="selfBestEntry.score.clear" />
-              </NuxtLink>
-              <p class="text-sm">COMBO {{ selfBestEntry.score.max_combo }}</p>
-              <p class="text-sm">BP {{ selfBestEntry.score.min_bp }}</p>
+                <p class="text-sm">COMBO {{ selfBestEntry.score.max_combo }}</p>
+                <p class="text-sm">BP {{ selfBestEntry.score.min_bp }}</p>
+                <ScoreDetailToggle
+                  :expanded="expandedScoreRow === 'personal-best'"
+                  :controls="scoreDetailsId"
+                  @toggle="toggleScoreDetails('personal-best')"
+                />
+              </div>
+              <p class="mt-1 text-xs text-neutral-500">
+                {{ selfBestEntry.score.gauge }} ·
+                <template v-if="lnPolicies.length"
+                  >{{ lnPolicyLabel(selfBestEntry.score.ln_policy) }} ·</template
+                >
+                {{ ruleModeLabel(selfBestEntry.score.rule_mode) }} ·
+                {{ formatRankingArrange(selfBestEntry.score, detail.chart.mode) }}
+              </p>
             </div>
-            <p class="mt-1 text-xs text-neutral-500">
-              {{ selfBestEntry.score.gauge }} ·
-              <template v-if="lnPolicies.length"
-                >{{ lnPolicyLabel(selfBestEntry.score.ln_policy) }} ·</template
-              >
-              {{ ruleModeLabel(selfBestEntry.score.rule_mode) }} ·
-              {{ formatRankingArrange(selfBestEntry.score, detail.chart.mode) }}
-            </p>
+            <p v-else class="text-sm text-neutral-400">{{ t('ranking.noPersonalBest') }}</p>
+            <UButton
+              icon="i-lucide-list"
+              color="neutral"
+              variant="subtle"
+              class="shrink-0"
+              @click="openHistory"
+            >
+              {{ t('ranking.selfHistory') }}
+            </UButton>
           </div>
-          <p v-else class="text-sm text-neutral-400">{{ t('ranking.noPersonalBest') }}</p>
-          <UButton
-            icon="i-lucide-list"
-            color="neutral"
-            variant="subtle"
-            class="shrink-0"
-            @click="openHistory"
-          >
-            {{ t('ranking.selfHistory') }}
-          </UButton>
+          <ScoreInlineDetails
+            v-if="selfBestEntry && expandedScoreRow === 'personal-best'"
+            :id="scoreDetailsId"
+            :score-id="
+              selfBestEntry.score.source_score_ids?.ex_score ?? selfBestEntry.score.score_id
+            "
+            :other-score-id="selfBestEntry.score.source_score_ids?.clear"
+            class="mt-3 border-t border-default"
+          />
         </div>
 
         <RankingPagination
@@ -316,6 +315,9 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
           <table class="w-full text-sm">
             <thead class="bg-elevated text-left text-toned">
               <tr>
+                <th scope="col" class="w-px px-1">
+                  <span class="sr-only">{{ t('score.title') }}</span>
+                </th>
                 <th class="px-3 py-2">#</th>
                 <th class="px-3 py-2">{{ t('table.player') }}</th>
                 <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
@@ -330,47 +332,65 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
               </tr>
             </thead>
             <tbody>
-              <tr
-                v-for="entry in ranking.ranking.entries"
-                :key="entry.score.score_id"
-                class="border-t border-default"
-              >
-                <td class="px-3 py-2 text-toned">{{ entry.rank }}</td>
-                <td class="px-3 py-2">
-                  <NuxtLink :to="localePath(`/players/${entry.player.id}`)" class="hover:underline">
-                    {{ entry.player.display_name }}
-                  </NuxtLink>
-                  <UBadge v-if="entry.relation.is_rival" size="sm" color="warning" variant="subtle">
-                    rival
-                  </UBadge>
-                </td>
-                <td class="px-3 py-2 text-right">
-                  <NuxtLink :to="scoreLocation(entry.score.score_id)" class="hover:underline">
+              <template v-for="entry in ranking.ranking.entries" :key="entry.score.score_id">
+                <tr class="border-t border-default">
+                  <td class="px-1 py-1">
+                    <ScoreDetailToggle
+                      :expanded="expandedScoreRow === entry.score.score_id"
+                      :controls="scoreDetailsId"
+                      @toggle="toggleScoreDetails(entry.score.score_id)"
+                    />
+                  </td>
+                  <td class="px-3 py-2 text-toned">{{ entry.rank }}</td>
+                  <td class="px-3 py-2">
+                    <NuxtLink
+                      :to="localePath(`/players/${entry.player.id}`)"
+                      class="hover:underline"
+                    >
+                      {{ entry.player.display_name }}
+                    </NuxtLink>
+                    <UBadge
+                      v-if="entry.relation.is_rival"
+                      size="sm"
+                      color="warning"
+                      variant="subtle"
+                    >
+                      rival
+                    </UBadge>
+                  </td>
+                  <td class="px-3 py-2 text-right">
                     <RankingExScore :score="entry.score.ex_score" :max="entry.score.max_ex_score" />
-                  </NuxtLink>
-                </td>
-                <td class="px-3 py-2">
-                  <NuxtLink
-                    :to="scoreLocation(entry.score.source_score_ids?.clear ?? entry.score.score_id)"
-                    class="hover:underline"
-                  >
+                  </td>
+                  <td class="px-3 py-2">
                     <IrClearBadge :clear="entry.score.clear" />
-                  </NuxtLink>
-                </td>
-                <td v-if="lnPolicies.length" class="px-3 py-2 text-muted">
-                  {{ lnPolicyLabel(entry.score.ln_policy) }}
-                </td>
-                <td class="px-3 py-2 text-muted">{{ ruleModeLabel(entry.score.rule_mode) }}</td>
-                <td class="px-3 py-2 text-xs text-muted">
-                  {{ formatRankingArrange(entry.score, detail.chart.mode) }}
-                </td>
-                <td class="px-3 py-2 text-right">{{ entry.score.max_combo }}</td>
-                <td class="px-3 py-2 text-right">{{ entry.score.min_bp }}</td>
-                <td class="px-3 py-2 text-neutral-400">{{ entry.score.device_type }}</td>
-                <td class="px-3 py-2 text-neutral-400">
-                  {{ formatScoreDate(entry.score.played_at) }}
-                </td>
-              </tr>
+                  </td>
+                  <td v-if="lnPolicies.length" class="px-3 py-2 text-muted">
+                    {{ lnPolicyLabel(entry.score.ln_policy) }}
+                  </td>
+                  <td class="px-3 py-2 text-muted">{{ ruleModeLabel(entry.score.rule_mode) }}</td>
+                  <td class="px-3 py-2 text-xs text-muted">
+                    {{ formatRankingArrange(entry.score, detail.chart.mode) }}
+                  </td>
+                  <td class="px-3 py-2 text-right">{{ entry.score.max_combo }}</td>
+                  <td class="px-3 py-2 text-right">{{ entry.score.min_bp }}</td>
+                  <td class="px-3 py-2 text-neutral-400">{{ entry.score.device_type }}</td>
+                  <td class="px-3 py-2 text-neutral-400">
+                    {{ formatScoreDate(entry.score.played_at) }}
+                  </td>
+                </tr>
+                <tr
+                  v-if="expandedScoreRow === entry.score.score_id"
+                  class="border-t border-default bg-elevated"
+                >
+                  <td :colspan="lnPolicies.length ? 12 : 11">
+                    <ScoreInlineDetails
+                      :id="scoreDetailsId"
+                      :score-id="entry.score.source_score_ids?.ex_score ?? entry.score.score_id"
+                      :other-score-id="entry.score.source_score_ids?.clear"
+                    />
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
         </div>
@@ -384,7 +404,7 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
           :limit="historyLimit"
           :score-key="(score) => score.score_id"
           :score-bp="(score) => score.min_bp"
-          :score-to="(score) => scoreLocation(score.score_id)"
+          :score-detail-id="(score) => score.score_id"
           :show-ln="Boolean(lnPolicies.length)"
           :score-option="(score) => formatRankingArrange(score, detail?.chart.mode ?? null)"
         />

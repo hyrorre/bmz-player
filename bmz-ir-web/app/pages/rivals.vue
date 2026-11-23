@@ -12,6 +12,7 @@ const { user } = useUserSession()
 const { t } = useI18n()
 const { translateApiError } = useApiError()
 const toast = useToast()
+const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclosure()
 
 if (!user.value) {
   await navigateTo(localePath('/login'))
@@ -264,6 +265,9 @@ useSeoMeta({ title: () => t('rivals.title') })
               <table class="w-full min-w-[980px] text-sm">
                 <thead class="bg-elevated text-left text-muted">
                   <tr>
+                    <th scope="col" class="w-px px-1">
+                      <span class="sr-only">{{ t('score.title') }}</span>
+                    </th>
                     <th class="w-28 px-4 py-3">LV</th>
                     <th class="px-4 py-3">{{ t('table.chart') }}</th>
                     <th class="w-44 px-4 py-3">{{ t('table.conditions') }}</th>
@@ -276,67 +280,79 @@ useSeoMeta({ title: () => t('rivals.title') })
                   </tr>
                 </thead>
                 <tbody>
-                  <tr
+                  <template
                     v-for="row in comparison.comparisons"
                     :key="`${row.chart.sha256}-${row.rule.ln_policy}-${row.rule.double_option}-${row.rule.rule_mode}-${row.rule.scoring}`"
-                    class="border-t border-muted"
                   >
-                    <td class="px-4 py-3 align-top">
-                      <DifficultyTableBadges
-                        v-if="row.difficulty_labels.length"
-                        :labels="row.difficulty_labels"
-                      />
-                      <UBadge v-else color="neutral" size="sm" variant="subtle">
-                        ☆{{ row.chart.level ?? '?' }}
-                      </UBadge>
-                    </td>
-                    <td class="max-w-80 px-4 py-3 align-top">
-                      <NuxtLink
-                        :to="localePath(`/charts/${row.chart.sha256}`)"
-                        class="font-semibold text-highlighted hover:underline"
-                      >
-                        {{ row.chart.title || row.chart.sha256.slice(0, 12) }}
-                      </NuxtLink>
-                      <p v-if="row.chart.subtitle" class="mt-0.5 text-xs text-muted">
-                        {{ row.chart.subtitle }}
-                      </p>
-                      <p class="mt-0.5 text-xs text-muted">{{ row.chart.artist ?? '' }}</p>
-                    </td>
-                    <td class="px-4 py-3 align-top text-muted">
-                      {{ row.rule.ln_policy }} / {{ row.rule.double_option }} /
-                      {{ row.rule.rule_mode }} / {{ row.rule.scoring }}
-                    </td>
-                    <td class="px-4 py-3 text-right font-medium">
-                      <NuxtLink
-                        :to="localePath(`/scores/${row.self.score_id}`)"
-                        class="hover:underline"
-                      >
+                    <tr class="border-t border-muted">
+                      <td class="px-1 py-1 align-top">
+                        <ScoreDetailToggle
+                          :expanded="expandedScoreRow === row.self.score_id"
+                          :controls="scoreDetailsId"
+                          @toggle="toggleScoreDetails(row.self.score_id)"
+                        />
+                      </td>
+                      <td class="px-4 py-3 align-top">
+                        <DifficultyTableBadges
+                          v-if="row.difficulty_labels.length"
+                          :labels="row.difficulty_labels"
+                        />
+                        <UBadge v-else color="neutral" size="sm" variant="subtle">
+                          ☆{{ row.chart.level ?? '?' }}
+                        </UBadge>
+                      </td>
+                      <td class="max-w-80 px-4 py-3 align-top">
+                        <NuxtLink
+                          :to="localePath(`/charts/${row.chart.sha256}`)"
+                          class="font-semibold text-highlighted hover:underline"
+                        >
+                          {{ row.chart.title || row.chart.sha256.slice(0, 12) }}
+                        </NuxtLink>
+                        <p v-if="row.chart.subtitle" class="mt-0.5 text-xs text-muted">
+                          {{ row.chart.subtitle }}
+                        </p>
+                        <p class="mt-0.5 text-xs text-muted">{{ row.chart.artist ?? '' }}</p>
+                      </td>
+                      <td class="px-4 py-3 align-top text-muted">
+                        {{ row.rule.ln_policy }} / {{ row.rule.double_option }} /
+                        {{ row.rule.rule_mode }} / {{ row.rule.scoring }}
+                      </td>
+                      <td class="px-4 py-3 text-right font-medium">
                         {{ row.self.ex_score }}
-                      </NuxtLink>
-                    </td>
-                    <td class="px-4 py-3 text-right font-medium">
-                      <NuxtLink
-                        :to="localePath(`/scores/${row.rival.score_id}`)"
-                        class="hover:underline"
-                      >
+                      </td>
+                      <td class="px-4 py-3 text-right font-medium">
                         {{ row.rival.ex_score }}
-                      </NuxtLink>
-                    </td>
-                    <td
-                      class="px-4 py-3 text-right font-semibold"
-                      :class="outcomeClass(row.outcome.ex_score)"
+                      </td>
+                      <td
+                        class="px-4 py-3 text-right font-semibold"
+                        :class="outcomeClass(row.outcome.ex_score)"
+                      >
+                        {{ signed(row.difference.ex_score) }}
+                      </td>
+                      <td class="px-4 py-3 text-right">{{ row.self.min_bp }}</td>
+                      <td class="px-4 py-3 text-right">{{ row.rival.min_bp }}</td>
+                      <td
+                        class="px-4 py-3 text-right font-semibold"
+                        :class="outcomeClass(row.outcome.min_bp)"
+                      >
+                        {{ signed(row.difference.min_bp) }}
+                      </td>
+                    </tr>
+                    <tr
+                      v-if="expandedScoreRow === row.self.score_id"
+                      class="border-t border-default bg-elevated"
                     >
-                      {{ signed(row.difference.ex_score) }}
-                    </td>
-                    <td class="px-4 py-3 text-right">{{ row.self.min_bp }}</td>
-                    <td class="px-4 py-3 text-right">{{ row.rival.min_bp }}</td>
-                    <td
-                      class="px-4 py-3 text-right font-semibold"
-                      :class="outcomeClass(row.outcome.min_bp)"
-                    >
-                      {{ signed(row.difference.min_bp) }}
-                    </td>
-                  </tr>
+                      <td colspan="10">
+                        <ScoreInlineDetails
+                          :id="scoreDetailsId"
+                          :score-id="row.self.score_id"
+                          :other-score-id="row.rival.score_id"
+                          :score-label="t('rivals.myEx')"
+                          :other-score-label="t('rivals.rivalEx')"
+                        />
+                      </td>
+                    </tr>
+                  </template>
                 </tbody>
               </table>
             </div>
