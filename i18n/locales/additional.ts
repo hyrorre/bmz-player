@@ -173,10 +173,6 @@ const ja = {
       chartCount: '{count} 譜面',
       segment: '{level} {rank}、{count} 譜面',
     },
-    footer: {
-      tagline: 'BMZ Internet Ranking — BMS コミュニティのために。',
-      rights: 'BMS楽曲・譜面などの権利は、それぞれの制作者に帰属します。',
-    },
   },
   validation: {
     displayNameMax: '名前は64文字以内にしてください。',
@@ -386,10 +382,6 @@ const en = {
       chartCount: 'Charts: {count}',
       segment: '{level}, {rank}, chart count {count}',
     },
-    footer: {
-      tagline: 'BMZ Internet Ranking — Built for the BMS community.',
-      rights: 'Rights to BMS songs, charts, and related works belong to their respective creators.',
-    },
   },
   validation: {
     displayNameMax: 'Name must be 64 characters or fewer.',
@@ -594,10 +586,6 @@ const ko = {
       chartCount: '채보 {count}개',
       segment: '{level} {rank}, 채보 {count}개',
     },
-    footer: {
-      tagline: 'BMZ Internet Ranking — BMS 커뮤니티를 위해 만들었습니다.',
-      rights: 'BMS 음악, 채보 및 관련 저작물의 권리는 각 제작자에게 있습니다.',
-    },
   },
   validation: {
     displayNameMax: '이름은 64자 이하여야 합니다.',
@@ -801,10 +789,6 @@ const zhCN = {
       chartCount: '{count} 张谱面',
       segment: '{level} {rank}，{count} 张谱面',
     },
-    footer: {
-      tagline: 'BMZ Internet Ranking — 为 BMS 社区打造。',
-      rights: 'BMS 曲目、谱面及相关作品的权利归各自创作者所有。',
-    },
   },
   validation: {
     displayNameMax: '名称不得超过 64 个字符。',
@@ -1007,10 +991,6 @@ const zhTW = {
       noCharts: '此條件下沒有公開譜面。',
       chartCount: '{count} 張譜面',
       segment: '{level} {rank}，{count} 張譜面',
-    },
-    footer: {
-      tagline: 'BMZ Internet Ranking — 為 BMS 社群打造。',
-      rights: 'BMS 樂曲、譜面及相關作品的權利歸各自創作者所有。',
     },
   },
   validation: {

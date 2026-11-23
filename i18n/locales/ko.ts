@@ -10,7 +10,6 @@ export default defineI18nLocale(() =>
       common: {
         language: '언어',
         openMenu: '메뉴 열기',
-        licenses: '라이선스',
         backHome: '홈으로 돌아가기',
         loading: '로드 중...',
         search: '검색',

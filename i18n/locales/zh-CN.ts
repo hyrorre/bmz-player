@@ -8,7 +8,6 @@ export default defineI18nLocale(() =>
       common: {
         language: '语言',
         openMenu: '打开菜单',
-        licenses: '许可证',
         backHome: '返回首页',
         loading: '加载中...',
         search: '搜索',

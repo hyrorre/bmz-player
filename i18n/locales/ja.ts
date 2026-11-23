@@ -11,7 +11,6 @@ export default defineI18nLocale(() =>
       common: {
         language: '言語',
         openMenu: 'メニューを開く',
-        licenses: 'ライセンス',
         backHome: 'トップへ戻る',
         loading: '読み込み中...',
         search: '検索',
