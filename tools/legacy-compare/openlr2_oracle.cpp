@@ -64,7 +64,7 @@ int fail(const char* message) {
 int main() {
     std::string chart;
     int keymode = 0, random1 = 0, random2 = 0, seed = 0, gauge = 0, end_ms = -1;
-    int randfix1 = 0, randfix2 = 0, randsc1 = 0, randsc2 = 0, dpflip = 0;
+    int randfix1 = 0, randfix2 = 0, randsc1 = 0, randsc2 = 0, dpflip = 0, dump_objects = 0;
     std::vector<Edge> edges;
     for (std::string line; std::getline(std::cin, line);) {
         std::istringstream in(line);
@@ -89,6 +89,8 @@ int main() {
             in >> dpflip;
         } else if (key == "gauge") {
             in >> gauge;
+        } else if (key == "objects") {
+            in >> dump_objects;
         } else if (key == "end") {
             in >> end_ms;
         } else if (key == "e") {
@@ -141,6 +143,14 @@ int main() {
     for (int i = 1; i <= 5; ++i) std::printf("H,judgetime%d,%d\n", i, p.judgetime[i]);
     for (int gtype = 0; gtype < 6; ++gtype)
         for (int j = 0; j < 6; ++j) std::printf("H,damage%d_%d,%.17g\n", gtype, j, p.judge_damage[gtype][j]);
+
+    // Debug aid: every loaded object in time order (op after conversion).
+    if (dump_objects) {
+        for (int i = 0; i < g->gameplay.bmsobj.count; ++i) {
+            const auto& n = g->gameplay.bmsobj.notes[i];
+            std::printf("O,%d,%d,%.17g,%.17g\n", i, n.op, n.realTiming, n.val);
+        }
+    }
 
     double last = 0;
     for (int lane = 0; lane < 20; ++lane) {

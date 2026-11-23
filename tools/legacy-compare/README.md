@@ -98,3 +98,15 @@ python tools/legacy-compare/oracle_vs_bmz.py --results .local/legacy-compare --o
 - ゲージ確認と閉店はScene04_Playと同じく各ポーリングの前に行います。
 - `oracle_vs_bmz.py`は、compare.pyで比較したプレイごとに、同じ入力をオラクルとBMZのランナー（`oracle_output_path`付き）へ与え、出力を1行ずつ比べます。対象は、判定のポーリング時刻・レーン・判定値、地雷の時刻・レーン・ダメージ、各ポーリング後のGROOVE / HARD / DEATH / EASYのHP・EX・コンボ・最大コンボ・判定数・処理済みノーツ数、閉店です。HPは`--tolerance`（既定1e-3、0で完全一致）以内を一致とします。
 - BMZ側はGameSessionのLEGACY 1msポーリングと同じく、レーン順に判定と地雷をスコア・ゲージへ反映し、ポーリング後に閉店を確認します。
+
+## 譜面の読み込みの全数比較
+
+`loader_vs_oracle.py`は、OpenLR2の`song.db`にある譜面を1つずつオラクルとBMZのランナー（`dump_path`付き）で読み込み、ノーツ数・判定幅・ゲージの増減量と、全ノート・LN終点・地雷の時刻（µs単位に切り捨て）を比べます。
+
+```powershell
+python tools/legacy-compare/loader_vs_oracle.py --oracle .local/openlr2-oracle/openlr2_oracle.exe --runner target\debug\examples\legacy_compare.exe --output .local/loader-all --jobs 10
+```
+
+- `--sample N`で無作為にN譜面、`--only <ファイル>`でファイルに書いたMD5の譜面だけを比べます。
+- 結果は`results.jsonl`（譜面ごと）と`summary.json`（集計）です。
+- オラクルへ`objects 1`を与えると、OpenLR2が読み込んだ全オブジェクトを、最終的な並び順で`O,番号,チャンネル,時刻,値`として出力します。時刻のずれを調べるときに使います。

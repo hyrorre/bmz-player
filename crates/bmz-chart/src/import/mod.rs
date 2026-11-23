@@ -7,7 +7,7 @@ pub mod intermediate;
 pub mod long_note;
 pub mod normalize;
 pub mod openlr2;
-mod openlr2_lanes;
+mod openlr2_objects;
 
 use std::path::Path;
 

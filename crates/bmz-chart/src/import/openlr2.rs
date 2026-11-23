@@ -1,24 +1,15 @@
-//! OpenLR2's sequential double-precision BMS clock, selected only by LEGACY.
-//! Source: LR2_bmsload.cpp, CMP_NotesByBmsTiming and the bpmt_realtime loop.
+//! OpenLR2's BMS clock, long notes and note count, selected only by LEGACY.
+//! The object pipeline itself is in `openlr2_objects`; this module applies its
+//! times to the BMZ chart and reads the LR2 header values.
 use std::{collections::BTreeMap, path::Path};
 
 use bmz_core::time::{ChartTick, TimeUs};
 
 use super::{
-    BmsRandomSource, BmsTextEncoding, bms_rs_adapter,
-    error::ImportError,
-    intermediate::{IntermediateChart, IntermediateObjectKind as Kind},
-    normalize::object_to_tick,
+    BmsRandomSource, BmsTextEncoding, bms_rs_adapter, error::ImportError,
+    intermediate::IntermediateChart,
 };
 use crate::model::{JudgeRankKind, JudgeRankSpec, PlayableChart};
-
-#[derive(Clone, Copy)]
-enum Action {
-    None,
-    Measure(f64),
-    Bpm(f64),
-    Stop(f64),
-}
 
 /// Re-evaluate the same source branches, without changing the import identity,
 /// sounds or random layout. All playback events share the resulting clock.
@@ -46,66 +37,44 @@ pub fn apply_from_bytes(
             message: "chart source changed while preparing LEGACY timing".into(),
         });
     }
-    let text = bms_rs_adapter::openlr2_resolved_text(path, bytes, encoding, random_source)?;
+    // LR2 reads the file byte by byte with fgets: in UTF-16 every line starts
+    // with a NUL or BOM byte instead of '#', so nothing is loaded.
+    let utf16 = bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]);
+    let text = if utf16 {
+        String::new()
+    } else {
+        bms_rs_adapter::openlr2_resolved_text(path, bytes, encoding, random_source)?
+    };
     // LR2 remaps channels for .pms files and #FP/DSC charts; only the plain BMS
     // channel layout is rebuilt with LR2's lane construction.
     let pms = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pms"));
     let dsc = text
         .lines()
         .any(|l| l.trim_start().get(..7).is_some_and(|h| h.eq_ignore_ascii_case("#FP/DSC")));
-    apply(chart, &intermediate, &text, !pms && !dsc)
+    apply(chart, &intermediate, &text, pms, !pms && !dsc)
 }
 
 fn apply(
     chart: &mut PlayableChart,
     source: &IntermediateChart,
     text: &str,
+    pms: bool,
     rebuild_lanes: bool,
 ) -> Result<(), ImportError> {
-    let raw = raw_objects(text, source)?;
-    let origin_shift = raw.iter().any(|p| p.0 == 0.0 && matches!(p.1, 11..=29 | 31..=49));
-    let shift = if origin_shift { 1.0 } else { 0.0 };
-    let mut points = Vec::new();
-    for measure in &source.measures {
-        points.push((
-            f64::from(measure.index) + shift,
-            2,
-            measure.start_tick.0 / crate::timing::IMPORT_TICK_SCALE,
-            Action::Measure(measure.length),
-        ));
-    }
-    for (position, priority, tick, action) in raw {
-        points.push((position + shift, priority, tick, action));
-    }
-    points.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-    let mut previous = 0.0;
-    let mut realtime_ms = 0.0;
-    let mut bpm = source.metadata.initial_bpm;
-    let mut length = source.measures.first().map_or(1.0, |m| m.length);
-    let mut stop_units = 0.0;
+    let loaded = super::openlr2_objects::load(text, source, pms);
+    let origin_shift = loaded.origin_shift;
+    // BMZ events are timed by tick. Measure entries define their tick; other
+    // ticks take the first object in LR2's final order.
+    let floor_us = |ms: f64| TimeUs((ms * 1000.0).floor() as i64);
     let mut times = BTreeMap::new();
-    let mut times_ms = BTreeMap::new();
-    for (position, _, tick, action) in points {
-        if position != previous {
-            // Keep LR2's operation order: these floating-point roundoff errors
-            // are observable after each note is converted to integer milliseconds.
-            let advance = 240.0 / bpm * length * (position - previous) * 1000.0;
-            // LR2: stopVal / 192.0 * 240000.0 / nowBPM, in this order.
-            let stop = stop_units / 192.0 * 240000.0 / bpm;
-            realtime_ms += advance + stop;
-            stop_units = 0.0;
-            previous = position;
+    for o in &loaded.objects {
+        if let (super::openlr2_objects::Origin::Measure(_), Some(tick)) = (o.origin, o.tick) {
+            times.insert(tick, floor_us(o.realtime));
         }
-        // Preserve which side of the integer-ms boundary the double lies on.
-        times.insert(tick, TimeUs((realtime_ms * 1000.0).floor() as i64));
-        // Keyed by the exact position: distinct positions can share a tick.
-        times_ms.insert(position.to_bits(), realtime_ms);
-        match action {
-            Action::None => {}
-            Action::Measure(value) => length = value,
-            Action::Bpm(value) if value > 0.0 => bpm = value,
-            Action::Stop(value) => stop_units = value.trunc(),
-            Action::Bpm(_) => {}
+    }
+    for o in &loaded.objects {
+        if let Some(tick) = o.tick {
+            times.entry(tick).or_insert_with(|| floor_us(o.realtime));
         }
     }
     let at = |tick: ChartTick, old: TimeUs| times.get(&tick.0).copied().unwrap_or(old);
@@ -152,17 +121,7 @@ fn apply(
         chart.metadata.start_note_margin = times.get(&0).copied().unwrap_or(TimeUs(0));
     }
     if rebuild_lanes {
-        let lnobj = text
-            .lines()
-            .filter_map(|line| {
-                let bytes = line.trim_start().as_bytes();
-                (bytes.len() >= 9 && bytes[..7].eq_ignore_ascii_case(b"#LNOBJ "))
-                    .then(|| slot_key(&bytes[7..9], source.metadata.base62_obj_ids))
-                    .flatten()
-            })
-            .next_back();
-        let raw = super::openlr2_lanes::raw_notes(text, source);
-        super::openlr2_lanes::rebuild(chart, source, &raw, lnobj, &times_ms, shift, shift_ticks);
+        super::openlr2_objects::rebuild(chart, source, &loaded, shift_ticks);
     }
     chart.end_time =
         chart.lane_notes.iter().flatten().map(|n| n.time).max().unwrap_or(chart.end_time);
@@ -201,7 +160,7 @@ fn apply(
 
 /// C `atol` limited to `int`: leading white space, an optional sign, then
 /// decimal digits up to the first other character. No digits give 0.
-fn atol(text: &str) -> i32 {
+pub(super) fn atol(text: &str) -> i32 {
     let text = text.trim_start_matches([' ', '\t', '\n', '\r', '\x0b', '\x0c']);
     let (negative, digits) = match text.as_bytes().first() {
         Some(b'-') => (true, &text[1..]),
@@ -214,17 +173,6 @@ fn atol(text: &str) -> i32 {
     }
     let value = if negative { -value } else { value };
     value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
-}
-
-type Point = (f64, i32, u64, Action);
-
-/// `#BPMxx` / `#STOPxx` slots read as LR2_bmsload.cpp does: the key in the
-/// chart's base, `#BPM` by `atof` from column 7, `#STOP` by `atol` from column 8
-/// (kept only when positive), later lines replacing earlier ones. An unset
-/// slot is -1: an extended BPM then plays at |-1| = 1 and a STOP is -1.
-struct Slots {
-    bpm: std::collections::HashMap<u16, f64>,
-    stop: std::collections::HashMap<u16, f64>,
 }
 
 pub(super) fn slot_key(token: &[u8], base62: bool) -> Option<u16> {
@@ -242,29 +190,9 @@ pub(super) fn slot_key(token: &[u8], base62: bool) -> Option<u16> {
     Some(digit(*token.first()?)? * radix + digit(*token.get(1)?)?)
 }
 
-fn slots(text: &str, base62: bool) -> Slots {
-    let mut slots = Slots { bpm: Default::default(), stop: Default::default() };
-    for line in text.lines().map(str::trim) {
-        let bytes = line.as_bytes();
-        if bytes.len() >= 7 && bytes[..4].eq_ignore_ascii_case(b"#BPM") {
-            if let Some(key) = slot_key(&bytes[4..6], base62).filter(|k| *k >= 1) {
-                slots.bpm.insert(key, atof(line.get(7..).unwrap_or("")));
-            }
-        } else if bytes.len() >= 8 && bytes[..5].eq_ignore_ascii_case(b"#STOP") {
-            let value = atol(line.get(8..).unwrap_or(""));
-            if let Some(key) = slot_key(&bytes[5..7], base62).filter(|k| *k >= 1)
-                && value > 0
-            {
-                slots.stop.insert(key, f64::from(value));
-            }
-        }
-    }
-    slots
-}
-
 /// C `atof` for the plain decimal forms: optional sign, digits, an optional
 /// fraction and exponent, up to the first other character. No number gives 0.
-fn atof(text: &str) -> f64 {
+pub(super) fn atof(text: &str) -> f64 {
     let text = text.trim_start_matches([' ', '\t', '\n', '\r', '\x0b', '\x0c']);
     let bytes = text.as_bytes();
     let mut end = 0;
@@ -297,89 +225,6 @@ fn atof(text: &str) -> f64 {
         }
     }
     text[..end].parse().unwrap_or(0.0)
-}
-
-fn raw_objects(text: &str, source: &IntermediateChart) -> Result<Vec<Point>, ImportError> {
-    let slots = slots(text, source.metadata.base62_obj_ids);
-    let mut points = Vec::new();
-    for line in text.lines().map(str::trim) {
-        let bytes = line.as_bytes();
-        if bytes.len() < 9
-            || bytes[0] != b'#'
-            || !bytes[1..4].iter().all(u8::is_ascii_digit)
-            || bytes[6] != b':'
-            || (!bytes[5].is_ascii_digit() && !bytes[4..6].eq_ignore_ascii_case(b"SC"))
-        {
-            continue;
-        }
-        let measure = line[1..4].parse::<u32>().unwrap();
-        let channel = if bytes[4..6].eq_ignore_ascii_case(b"SC") {
-            2888
-        } else {
-            i32::from(bytes[4].to_ascii_uppercase().saturating_sub(if bytes[4].is_ascii_digit() {
-                b'0'
-            } else {
-                b'A' - 10
-            })) * 10
-                + i32::from(bytes[5] - b'0')
-        };
-        if measure as usize >= source.measures.len() {
-            continue;
-        }
-        if channel <= 0 || channel == 2 {
-            continue;
-        }
-        let data = &bytes[7..];
-        let divisions = data.len() / 2;
-        for (index, token) in data.as_chunks::<2>().0.iter().enumerate() {
-            let radix = if channel == 3 {
-                16
-            } else if source.metadata.base62_obj_ids {
-                62
-            } else {
-                36
-            };
-            let digit = |b: u8| -> Option<u16> {
-                let n = match b {
-                    b'0'..=b'9' => b - b'0',
-                    b'A'..=b'Z' => b - b'A' + 10,
-                    b'a'..=b'z' if radix == 62 => b - b'a' + 36,
-                    b'a'..=b'z' => b - b'a' + 10,
-                    _ => return None,
-                };
-                (u16::from(n) < radix).then_some(u16::from(n))
-            };
-            let Some(value) = digit(token[0])
-                .zip(digit(token[1]))
-                .map(|(a, b)| a * radix + b)
-                .filter(|v| *v != 0)
-            else {
-                continue;
-            };
-            let action = match channel {
-                3 => Action::Bpm(f64::from(value)),
-                // `BPM < 0.0` is negated; an unset slot is -1.
-                8 => Action::Bpm(slots.bpm.get(&value).copied().unwrap_or(-1.0).abs()),
-                9 => Action::Stop(slots.stop.get(&value).copied().unwrap_or(-1.0)),
-                _ => Action::None,
-            };
-            let object = super::intermediate::IntermediateObject {
-                measure,
-                position_num: index as u32,
-                position_den: divisions as u32,
-                kind: Kind::BarLine,
-            };
-            let tick =
-                object_to_tick(&object, &source.measures)?.0 / crate::timing::IMPORT_TICK_SCALE;
-            points.push((
-                f64::from(measure) + index as f64 / divisions as f64,
-                channel,
-                tick,
-                action,
-            ));
-        }
-    }
-    Ok(points)
 }
 
 #[cfg(test)]
@@ -556,6 +401,64 @@ mod tests {
         assert_eq!(lane(&chart, Lane::Key6), [(Tap, 2000)]);
         assert_eq!(lane(&chart, Lane::Key7), [(Tap, 2000)]);
         assert_eq!(chart.total_notes, 3);
+    }
+
+    fn loaded_objects(text: &str) -> super::super::openlr2_objects::Loaded {
+        let path = Path::new("legacy.bms");
+        let source = bms_rs_adapter::import_bms_bytes_to_intermediate(
+            path,
+            (text.as_bytes(), None),
+            &BmsRandomSource::Lr2Seed(1),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        super::super::openlr2_objects::load(text, &source, false)
+    }
+
+    #[test]
+    fn inconsistent_position_order_matches_openlr2_qsort() {
+        // Two BGM lines split 9789 and 9781 ways put many positions less than
+        // 1/100000 measure apart. OpenLR2 (oracle, v261101) times the notes at
+        // 2399.9999999999864 and 3599.9999999999864 ms; walking the positions
+        // in true order gives 2399.9999999999845 instead.
+        let text = format!(
+            "#BPM 200\n#WAV01 a.wav\n#00101:{}\n#00101:{}\n#00211:01\n#00311:01\n",
+            "01".repeat(9789),
+            "01".repeat(9781)
+        );
+        let loaded = loaded_objects(&text);
+        let notes: Vec<f64> =
+            loaded.objects.iter().filter(|o| o.op == 11).map(|o| o.realtime).collect();
+        assert_eq!(notes, [2399.9999999999864, 3599.9999999999864]);
+    }
+
+    #[test]
+    fn long_lines_are_cut_like_fgets() {
+        // 102,399 characters per read: the first piece keeps (102399 - 7) / 2
+        // objects, the note at the very end of the line is lost.
+        let objects = 60_000;
+        let mut data = "00".repeat(objects - 1);
+        data.push_str("01");
+        let chart = load(&format!("#BPM 120\n#00111:{data}\n#00211:01\n"));
+        assert_eq!(chart.total_notes, 1);
+    }
+
+    #[test]
+    fn utf16_charts_load_no_notes() {
+        let text: Vec<u8> = [0xFF, 0xFE]
+            .into_iter()
+            .chain("#BPM 120\r\n#00111:01\r\n".encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        let path = Path::new("legacy.bms");
+        let source = BmsRandomSource::Lr2Seed(1);
+        let mut imported =
+            import_chart_bytes_with_assets(path, &text, source.clone(), AssetLookup::Declared)
+                .unwrap();
+        apply_from_bytes(&mut imported.chart, path, &text, &source, None).unwrap();
+        assert_eq!(imported.chart.total_notes, 0);
     }
 
     #[test]

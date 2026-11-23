@@ -101,10 +101,14 @@ def main() -> int:
     parser.add_argument("--sample-seed", type=int, default=1)
     parser.add_argument("--lr2-seed", type=int, default=1, help="LR2 random seed for #RANDOM")
     parser.add_argument("--jobs", type=int, default=8)
+    parser.add_argument("--only", help="file of chart MD5s to compare (whitespace separated)")
     args = parser.parse_args()
     out_dir = Path(args.output).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     items = [c for c in charts(Path(args.openlr2)) if Path(c["path"]).is_file()]
+    if args.only:
+        wanted = set(Path(args.only).read_text(encoding="utf-8").split())
+        items = [c for c in items if c["md5"] in wanted]
     if args.sample:
         items = random.Random(args.sample_seed).sample(items, min(args.sample, len(items)))
     oracle = Path(args.oracle).resolve()
