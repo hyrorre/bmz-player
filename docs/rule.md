@@ -70,7 +70,14 @@ NO GOOD / NO GREATとLEGACYを併用した場合は、LNの始点見逃し期限
 - タップBADの連続判定で、次の地雷がBAD幅内にあれば、同じ押下で地雷も処理します。
 - 被弾すると、ダメージ値をそのままゲージから引きます。POORの件数とBPに1を加えます。コンボ、EXスコア、処理済みノート数は変わりません。
 
-ゲージはLR2oraja方式を使います。GROOVE / HARD / EASYの増減はOpenLR2と同じ値です。HAZARDはOpenLR2のDEATHに合わせ、PGREAT〜GOODで回復せず、空POORでは減りません。BAD / POORで閉店します。LEGACYのスコアとリプレイは`rule_mode=Legacy`のキーでローカルに保存し、IRの送信やランキング照会の対象から外します。OpenLR2の保存済み実プレイとの一括照合を実施していますが、全条件の完全一致の確認は継続中です。BMZ拡張のHCN/HLN・動的分岐等と、BPM反映を含む譜面は別の実行経路を使い、地雷も従来の通過判定になります。
+GROOVE / HARD / HAZARD / EASYのゲージは、OpenLR2の単曲ゲージ（`judge_damage`と`ApplyJudgeNote` / `ApplyJudgeMine`）と同じ式・同じ順序で、倍精度で計算します。HAZARDはOpenLR2のDEATHにあたります。ASSIST EASY / EX-HARD / 段位系はOpenLR2にないBMZのゲージで、LR2oraja方式のままです。
+
+- TOTALはOpenLR2と同じく整数です。`#TOTAL`は`atol`と同じ読み方で小数点以下を捨て、1未満または未指定ならOpenLR2の既定式の値を整数に切り捨てて使います。
+- PGREAT〜GOODの増加量は`TOTAL / ノーツ数`を単精度で割った値です（EASYはその1.2倍）。HARDの減少倍率はOpenLR2の式（ノーツ数による値と`100 / int((TOTAL - 80) / 16)`の大きいほう）です。
+- 判定前のHPを整数に切り捨て、さらに偶数に切り下げた値が30以下なら、HARD / HAZARDのBAD・POOR・空POORのダメージは0.6倍です。
+- GROOVE / EASYは2未満になりません。HARD / HAZARDは2未満になると0と表示して閉店し、次の判定でHPが0に固定されます。地雷ではこの0.6倍と固定がありません。
+- 1回のポーリングでは、レーンを処理した順に判定と地雷をゲージへ反映し、全レーンの処理後に閉店を確認します。
+- クリアの判定には倍精度のHPを使います。LEGACYのスコアとリプレイは`rule_mode=Legacy`のキーでローカルに保存し、IRの送信やランキング照会の対象から外します。OpenLR2の保存済み実プレイとの一括照合を実施していますが、全条件の完全一致の確認は継続中です。BMZ拡張のHCN/HLN・動的分岐等と、BPM反映を含む譜面は別の実行経路を使い、地雷も従来の通過判定になります。
 
 ## 判定幅
 

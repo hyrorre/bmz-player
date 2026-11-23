@@ -151,6 +151,16 @@ fn apply(
             words.next()?.parse().ok()
         })
         .next_back();
+    // LR2 stores #TOTAL as an int read by atol: "160.5" is 160. A missing
+    // value is left for the gauge to replace with LR2's integer default.
+    chart.metadata.total = text
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim_start();
+            let head = line.get(..7)?;
+            head.eq_ignore_ascii_case("#TOTAL ").then(|| f64::from(atol(&line[7..])))
+        })
+        .next_back();
     chart.metadata.judge_rank = rank;
     chart.metadata.judge_rank_spec =
         rank.map(|value| JudgeRankSpec { value, kind: JudgeRankKind::BmsRank });
@@ -163,6 +173,23 @@ fn apply(
     }
     chart.judge_rank_events.clear();
     Ok(())
+}
+
+/// C `atol` limited to `int`: leading white space, an optional sign, then
+/// decimal digits up to the first other character. No digits give 0.
+fn atol(text: &str) -> i32 {
+    let text = text.trim_start_matches([' ', '\t', '\n', '\r', '\x0b', '\x0c']);
+    let (negative, digits) = match text.as_bytes().first() {
+        Some(b'-') => (true, &text[1..]),
+        Some(b'+') => (false, &text[1..]),
+        _ => (false, text),
+    };
+    let mut value: i64 = 0;
+    for byte in digits.bytes().take_while(u8::is_ascii_digit) {
+        value = (value * 10 + i64::from(byte - b'0')).min(i64::from(i32::MAX) + 1);
+    }
+    let value = if negative { -value } else { value };
+    value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 type Point = (f64, i32, u64, Action);
@@ -313,6 +340,17 @@ mod tests {
         assert_eq!(chart.metadata.judge_rank, Some(3));
         assert_eq!(chart.metadata.judge_rank_spec.unwrap().kind, JudgeRankKind::BmsRank);
         assert_eq!(chart.metadata.judge_rank_spec.unwrap().value, 3);
+    }
+
+    #[test]
+    fn total_is_read_like_lr2_atol() {
+        assert_eq!(load("#BPM 120\n#TOTAL 160.9\n#00111:01\n").metadata.total, Some(160.0));
+        assert_eq!(load("#BPM 120\n#total 300\n#00111:01\n").metadata.total, Some(300.0));
+        assert_eq!(load("#BPM 120\n#TOTAL abc\n#00111:01\n").metadata.total, Some(0.0));
+        assert_eq!(load("#BPM 120\n#00111:01\n").metadata.total, None);
+        assert_eq!(super::atol("  -12x"), -12);
+        assert_eq!(super::atol("+7"), 7);
+        assert_eq!(super::atol("99999999999"), i32::MAX);
     }
 
     #[test]

@@ -104,12 +104,31 @@ pub struct GaugeRuntimeDefinition {
     pub death: f32,
     pub values: [f32; 6],
     pub guts: &'static [(f32, f32)],
+    /// LEGACY only: OpenLR2's double-precision gauge arithmetic.
+    pub legacy: Option<LegacyGaugeRule>,
+}
+
+/// OpenLR2 single-song gauge arithmetic (`judge_damage` and `ApplyJudgeNote`),
+/// used for the LEGACY GROOVE / HARD / DEATH / EASY gauges.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LegacyGaugeRule {
+    /// `judge_damage` in LR2 judge order: EMPTY POOR, POOR, BAD, GOOD, GREAT,
+    /// PGREAT.
+    pub damage: [f64; 6],
+    /// BAD / POOR / EMPTY POOR damage is scaled by 0.6 while the even-floored
+    /// HP is 30 or less (all LR2 gauges except GROOVE and EASY).
+    pub guts: bool,
+    /// GROOVE and EASY never go below 2 in a single song.
+    pub floor_two: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct SingleGaugeState {
     pub definition: GaugeRuntimeDefinition,
     pub value: f32,
+    /// LEGACY only: the exact OpenLR2 HP. `value` mirrors it for display, and
+    /// is 0 once a closing gauge falls below 2 (where LR2 stops play).
+    pub legacy_hp: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -184,7 +203,11 @@ impl GaugeState {
                     total_notes,
                     rule_mode,
                 );
-                SingleGaugeState { value: definition.init, definition }
+                SingleGaugeState {
+                    value: definition.init,
+                    legacy_hp: definition.legacy.map(|_| f64::from(definition.init)),
+                    definition,
+                }
             })
             .collect();
 
@@ -304,6 +327,9 @@ impl GaugeState {
     pub fn set_initial_value(&mut self, value: f32) {
         for gauge in &mut self.gauges {
             gauge.value = value.clamp(gauge.definition.min, gauge.definition.max);
+            if gauge.legacy_hp.is_some() {
+                gauge.legacy_hp = Some(f64::from(gauge.value));
+            }
         }
     }
 
@@ -323,6 +349,9 @@ impl GaugeState {
                 self.gauges.iter_mut().find(|gauge| gauge.definition.gauge_type == value.gauge_type)
             {
                 gauge.value = value.value.clamp(gauge.definition.min, gauge.definition.max);
+                if gauge.legacy_hp.is_some() {
+                    gauge.legacy_hp = Some(f64::from(gauge.value));
+                }
             }
         }
         self.auto_shift_if_needed();

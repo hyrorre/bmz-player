@@ -673,7 +673,6 @@ fn process_legacy_timed_inputs(
         let group = &inputs[start..cursor];
         let time = TimeUs(tick);
         super::frame::sync_judge_windows(session, time);
-        let mut combined = JudgeOutcome::default();
         let mut human_events = Vec::new();
         let projected: Vec<_> = group
             .iter()
@@ -701,21 +700,24 @@ fn process_legacy_timed_inputs(
                 if human {
                     human_events.extend(outcome.events.iter().cloned());
                 }
-                combined.append(outcome);
+                // LR2 applies each judgement and mine to the gauge as its lane
+                // is polled; the order matters at the gauge limits.
+                events.extend(apply_judge_outcome(session, outcome));
             }
             if !has_edge {
-                combined.append(session.judge.process_legacy_lane_poll(
+                let outcome = session.judge.process_legacy_lane_poll(
                     &session.chart,
                     lane,
                     time,
                     session.lane_key_hold[lane.index()].is_held(),
                     session.play_keysound_on_miss,
-                ));
+                );
+                events.extend(apply_judge_outcome(session, outcome));
             }
         }
-        // LR2 checks gauge failure after polling all lanes. BAD recursion is
-        // similarly part of one poll, so apply the full batch before closing.
-        events.extend(apply_judge_outcome(session, combined));
+        // LR2 checks gauge failure only after polling all lanes, so a gauge
+        // that fails mid-poll still lets the remaining lanes (and any BAD
+        // recursion) be judged and scored; the loop stops before the next poll.
         apply_input_offset_auto_adjust(session, &human_events);
         session.conditional.processed_time = Some(time);
         tick += 1000;

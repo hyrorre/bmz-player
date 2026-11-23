@@ -869,3 +869,105 @@ fn legacy_hazard_matches_openlr2_death_gauge() {
     let normal = definition_for_rule_mode(GaugeType::Normal, RuleMode::Legacy);
     assert_eq!(normal.values, [1.0, 1.0, 0.5, -4.0, -6.0, -2.0]);
 }
+
+fn legacy_gauge(gauge_type: GaugeType, total: f64, notes: u32) -> GaugeState {
+    GaugeState::new_with_property_and_rule_mode(
+        gauge_type,
+        total,
+        notes,
+        GaugeProperty::Lr2,
+        RuleMode::Legacy,
+    )
+}
+
+fn legacy_hp(gauge: &GaugeState, gauge_type: GaugeType) -> f64 {
+    gauge.gauge(gauge_type).and_then(|g| g.legacy_hp).expect("legacy gauge")
+}
+
+/// LR2_bmsload.cpp: `total / (float)notes` is a float division stored as a
+/// double, and the HARD damage factor uses `int recover`.
+#[test]
+fn legacy_damage_table_keeps_lr2_c_types() {
+    let groove = legacy_gauge_rule(GaugeType::Normal, 480.0, 619).unwrap();
+    assert_eq!(groove.damage[5], f64::from(480.0_f32 / 619.0_f32));
+    assert_eq!(groove.damage[3], f64::from(480.0_f32 / 1238.0_f32));
+    assert_eq!(groove.damage[..3], [-2.0, -6.0, -4.0]);
+    let easy = legacy_gauge_rule(GaugeType::Easy, 480.0, 619).unwrap();
+    assert_eq!(easy.damage[5], f64::from(480.0_f32 / 619.0_f32) * 1.2);
+    assert_eq!(easy.damage[1], -4.800000000000001);
+    // 300 notes: notebase 3 - 50/250 = 2.8; TOTAL 200: recover = 7.
+    let hard = legacy_gauge_rule(GaugeType::Hard, 200.0, 300).unwrap();
+    let dmg = (2.8_f64 * 10.0).max(100.0 / 7.0) / 10.0;
+    assert_eq!(hard.damage[..3], [dmg * -2.0, dmg * -10.0, dmg * -6.0]);
+    assert_eq!(hard.damage[3..], [0.05, 0.1, 0.1]);
+    let death = legacy_gauge_rule(GaugeType::Hazard, 200.0, 300).unwrap();
+    assert_eq!(death.damage, [0.0, -100.0, -100.0, 0.0, 0.0, 0.0]);
+}
+
+#[test]
+fn legacy_total_is_lr2_int_with_its_default() {
+    assert_eq!(gauge_total_for_chart_and_rule_mode(Some(160.9), 500, RuleMode::Legacy), 160.0);
+    // Below 1 is replaced: 1000 notes -> (400 / 5 + 360) * 0.8 = 352, truncated.
+    assert_eq!(gauge_total_for_chart_and_rule_mode(Some(0.5), 1000, RuleMode::Legacy), 352.0);
+    assert_eq!(openlr2_default_gauge_total(500), 256.0);
+    assert_eq!(openlr2_default_gauge_total(100), 176.0);
+}
+
+/// The 0.6 scale uses the even-floored HP: 32.0000001 is 32 (full damage),
+/// 31.9999 is 30 (scaled). f32 rounding used to put these on the wrong side.
+#[test]
+fn legacy_hard_scale_uses_the_even_floored_double_hp() {
+    let mut gauge = legacy_gauge(GaugeType::Hard, 200.0, 2000);
+    let dmg = legacy_gauge_rule(GaugeType::Hard, 200.0, 2000).unwrap().damage[1];
+    let hard =
+        gauge.gauges.iter_mut().find(|g| g.definition.gauge_type == GaugeType::Hard).unwrap();
+    hard.legacy_hp = Some(32.000000000000625);
+    hard.apply(GaugeJudgeIndex::Pr, 1.0);
+    assert_eq!(hard.legacy_hp, Some(32.000000000000625 + dmg));
+    hard.legacy_hp = Some(31.9999);
+    hard.apply(GaugeJudgeIndex::Pr, 1.0);
+    assert_eq!(hard.legacy_hp, Some(31.9999 + dmg * 0.6));
+}
+
+/// HP in (0, 2) is shown as 0 and closes play; the next judgement locks it to
+/// 0 even if it would recover (`if (hp <= 0) HP = 0`).
+#[test]
+fn legacy_hard_below_two_closes_and_locks_on_the_next_judgement() {
+    let mut gauge = legacy_gauge(GaugeType::Hard, 200.0, 2000);
+    let hard =
+        gauge.gauges.iter_mut().find(|g| g.definition.gauge_type == GaugeType::Hard).unwrap();
+    // EMPTY POOR: 3 - 2 * 1.4 * 0.6 (dmg 1.4 for TOTAL 200, 2000 notes).
+    hard.legacy_hp = Some(3.0);
+    hard.apply(GaugeJudgeIndex::Epr, 1.0);
+    let hp = hard.legacy_hp.unwrap();
+    assert!(hp > 0.0 && hp < 2.0, "{hp}");
+    assert_eq!(hard.value, 0.0);
+    hard.apply(GaugeJudgeIndex::Pg, 1.0);
+    assert_eq!(hard.legacy_hp, Some(0.0));
+    assert!(gauge.current_closes_play_on_zero());
+}
+
+#[test]
+fn legacy_groove_floor_and_mine_then_pgreat_order() {
+    let mut gauge = legacy_gauge(GaugeType::Normal, 480.0, 619);
+    let pg = legacy_gauge_rule(GaugeType::Normal, 480.0, 619).unwrap().damage[5];
+    gauge.apply_mine(11.0);
+    assert_eq!(legacy_hp(&gauge, GaugeType::Normal), 9.0);
+    gauge.apply_mine(11.0);
+    assert_eq!(legacy_hp(&gauge, GaugeType::Normal), 2.0);
+    gauge.apply_judge(Judge::PGreat, 1.0);
+    assert_eq!(legacy_hp(&gauge, GaugeType::Normal), 2.0 + pg);
+    // GROOVE is not a closing gauge.
+    assert!(!gauge.current_closes_play_on_zero());
+}
+
+#[test]
+fn legacy_clear_border_uses_the_double_hp() {
+    let mut gauge = legacy_gauge(GaugeType::Normal, 480.0, 619);
+    let groove =
+        gauge.gauges.iter_mut().find(|g| g.definition.gauge_type == GaugeType::Normal).unwrap();
+    groove.legacy_hp = Some(79.999999999);
+    groove.value = 79.999999999_f64 as f32;
+    assert_eq!(groove.value, 80.0);
+    assert!(!groove.is_qualified());
+}
