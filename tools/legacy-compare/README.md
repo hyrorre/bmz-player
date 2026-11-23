@@ -49,7 +49,8 @@ python tools/legacy-compare/compare.py --profile lightning_23k --md5 751738dea11
 ## 対応範囲と比較の限界
 
 - SP 5K/7K・DP 10K/14K、NORMAL/MIRROR/RANDOM（randFixを含む）、標準LNと標準LNのスクラッチに対応します。RANDOMは記録seedとLR2乱数実装で復元し、正解判定からの配置推測はしません。DPはop 210/211を合わせて比較します。
-- S-RANDOM、ALL-SCRATCH、アシスト、EXTRA、ピッチ変更、地雷、動的判定変更などは理由を記録して除外します。
+- 地雷は、BMZ LEGACYのレーン内処理で再計算し、OpenLR2が`ApplyJudgeMine`で記録した被弾（op 214/215、値はダメージ）と回数・ダメージを比較します。被弾数が違えば`mismatch`です。`mine_hit_ms_deltas`に各被弾の時刻差、`bmz_mine_hit_list`・`reference_mine_hit_list`・`chart_mines`に全件を出します。押しっぱなしの判定には、リプレイの押下・解放から求めた保持状態を使います。計測ログ（`--poll-trace`）では保持状態を照合できないため、地雷入り譜面は除外します。
+- S-RANDOM、ALL-SCRATCH、アシスト、EXTRA、ピッチ変更、動的判定変更などは理由を記録して除外します。
 - OpenLR2を新しく起動して採点するツールではありません。記録したOpenLR2の実行バージョンはリプレイだけでは確定できません。
 - BMZの実際のimportとLEGACY JudgeEngineを使いますが、GameSession全体、HAZARD等のゲージによる途中終了、スコア保存処理は再現しません。
 - LEGACY専用のBMS時刻を使い、1ms周期でレーンごとに入力・見逃しを処理します。元のOpenLR2の全ポーリング時刻は保存されていません。また、記録は時計41、実際の判定は時計142で行われるため、記録の入力時刻をそのまま実際の判定引数とはみなせません。結果の完全一致を確認するには以下の計測経路を使います。

@@ -153,10 +153,17 @@ fn compare(req: &Request) -> Result<Value> {
     ensure!(
         chart.lane_notes.iter().flatten().all(|n| matches!(
             n.kind,
-            NoteKind::Tap | NoteKind::LongStart | NoteKind::LongEnd | NoteKind::Invisible
+            NoteKind::Tap
+                | NoteKind::LongStart
+                | NoteKind::LongEnd
+                | NoteKind::Invisible
+                | NoteKind::Mine
         )),
-        "unsupported note kind (mine/extension)"
+        "unsupported note kind (extension)"
     );
+    let has_mines = chart.lane_notes.iter().flatten().any(|n| n.kind == NoteKind::Mine);
+    // The poll trace records ProcNoteOnTiming arguments only, not held lanes.
+    ensure!(!(has_mines && req.poll_trace.is_some()), "mines are unsupported with a poll trace");
     let fixed_key = usize::try_from(header(105)?).context("negative fixed key")?;
     ensure!(fixed_key <= keys, "invalid fixed key {fixed_key}");
     let mut table: Vec<usize> = (0..16).collect();
@@ -235,6 +242,8 @@ fn compare(req: &Request) -> Result<Value> {
     let chart = std::sync::Arc::new(imported.chart);
     let mut judge =
         JudgeEngine::new_with_window_set(windows, RuleMode::Legacy).with_chart_index(chart.clone());
+    // Mines share the lane cursor with notes, as on the BMZ LEGACY polling clock.
+    judge.set_legacy_inline_mines(true);
     if let Some(path) = &req.poll_trace {
         return compare_poll_trace(&mut judge, &chart, Path::new(path), &req.md5, seed);
     }
@@ -246,6 +255,14 @@ fn compare(req: &Request) -> Result<Value> {
     for r in &expected {
         expected_counts[r.value as usize] += 1;
     }
+    // ApplyJudgeMine records op 214 (+1 for the right DP side) with the damage.
+    let expected_mines: Vec<(i32, i32)> = replay
+        .iter()
+        .filter(|r| r.op == 214 || (sides == 2 && r.op == 215))
+        .map(|r| (r.ms, r.value))
+        .collect();
+    let mut mine_hits: Vec<(i64, usize, f64)> = Vec::new();
+    let mut held = [false; bmz_core::lane::LANE_COUNT];
     let reference_notes: u32 = expected_counts[1..].iter().sum();
     let complete = reference_notes == chart.total_notes;
     let last_input = inputs.last().map_or(0, |r| i64::from(r.ms));
@@ -281,28 +298,26 @@ fn compare(req: &Request) -> Result<Value> {
                 inputs[start..cursor].iter().filter(|r| input_lane(r.op, keys, sides) == Some(lane))
             {
                 has_input = true;
-                events.extend(
-                    judge
-                        .process_input(
-                            &chart,
-                            InputEvent {
-                                lane,
-                                kind: if r.value == 1 {
-                                    InputKind::Press
-                                } else {
-                                    InputKind::Release
-                                },
-                                time: now,
-                                source: InputSource::Replay,
-                                device_kind: Default::default(),
-                                scratch_direction: None,
-                            },
-                        )
-                        .events,
+                held[lane.index()] = r.value == 1;
+                let outcome = judge.process_input(
+                    &chart,
+                    InputEvent {
+                        lane,
+                        kind: if r.value == 1 { InputKind::Press } else { InputKind::Release },
+                        time: now,
+                        source: InputSource::Replay,
+                        device_kind: Default::default(),
+                        scratch_direction: None,
+                    },
                 );
+                mine_hits.extend(outcome.mine_hits.iter().map(|h| (ms, lane.index(), h.damage)));
+                events.extend(outcome.events);
             }
             if !has_input {
-                events.extend(judge.process_legacy_idle_lane(&chart, lane, now, false).events);
+                let outcome =
+                    judge.process_legacy_lane_poll(&chart, lane, now, held[lane.index()], false);
+                mine_hits.extend(outcome.mine_hits.iter().map(|h| (ms, lane.index(), h.damage)));
+                events.extend(outcome.events);
             }
         }
         for event in events.into_iter().filter(|e| e.affects_score) {
@@ -343,8 +358,17 @@ fn compare(req: &Request) -> Result<Value> {
         first_difference = Some(json!({"index":sequence.len(), "bmz_judge":null,
             "reference_ms":r.ms, "reference_judge":r.value}));
     }
+    let mines_equal = mine_hits.len() == expected_mines.len()
+        && mine_hits.iter().zip(&expected_mines).all(|(got, want)| got.2 as i32 == want.1);
+    let mine_ms_deltas: Vec<i64> = mine_hits
+        .iter()
+        .zip(&expected_mines)
+        .map(|(got, want)| got.0 - i64::from(want.0))
+        .collect();
     let status = if !complete {
         "incomplete_reference"
+    } else if !mines_equal {
+        "mismatch"
     } else if counts == expected_counts && sequence_equal {
         "match"
     } else if counts == expected_counts {
@@ -357,6 +381,13 @@ fn compare(req: &Request) -> Result<Value> {
         "bmz_ex":counts[5]*2+counts[4], "reference_ex":expected_counts[5]*2+expected_counts[4],
         "ex_delta": i64::from(counts[5]*2+counts[4])-i64::from(expected_counts[5]*2+expected_counts[4]),
         "sequence_equal":sequence_equal, "first_sequence_difference":first_difference,
+        "chart_has_mines":has_mines, "bmz_mine_hits":mine_hits.len(), "reference_mine_hits":expected_mines.len(),
+        "mine_hits_equal":mines_equal, "mine_hit_ms_deltas":mine_ms_deltas,
+        "bmz_mine_hit_list":mine_hits.iter().map(|h| (h.0, h.1)).collect::<Vec<_>>(),
+        "reference_mine_hit_list":expected_mines.iter().map(|m| m.0).collect::<Vec<_>>(),
+        "chart_mines":has_mines.then(|| chart.lane_notes.iter().flatten()
+            .filter(|n| n.kind == NoteKind::Mine)
+            .map(|n| (n.time.0, n.lane.index())).collect::<Vec<_>>()),
         "chart_notes":chart.total_notes, "reference_notes":reference_notes, "rank_percent":percent,
         "arrange":arrange, "fixed_key":fixed_key, "seed":seed, "source_to_input_lanes":table, "import_warning_count":imported.warnings.len(),
         "model":"openlr2-sequential-timing-lane-polls-1ms", "full_session_verified":false}),

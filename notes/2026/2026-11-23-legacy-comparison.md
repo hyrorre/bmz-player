@@ -119,3 +119,18 @@ PRレビューのOpenLR2比較（公開版`09b666a`）で残っていた差の�
 - DEATH：`judge_damage[2]`は空POORで0。LEGACYのHAZARDをPG/GR/GD 0、BAD/POOR -100、空POOR 0にした。GROOVE / HARD / EASYはLR2oraja定義とOpenLR2の値・HARDの減少倍率式・30%未満の0.6倍が一致することを確認した。
 
 確認していないもの：OpenLR2のP-ATTACK / G-ATTACKはBMZにない。AssistEasy / EXHARDはOpenLR2にないBMZのゲージとして残す。コースのゲージ表（`isCourse`時の別テーブル）とGROOVEのコース時下限は今回の比較対象外。地雷入りの譜面はOpenLR2計測版との実プレイ照合をまだ行っていない。
+
+## 地雷を含めた再比較
+
+比較ランナーが地雷入り譜面を除外せず、BMZ LEGACYのレーン内処理で再計算するようにした。OpenLR2のリプレイが`ApplyJudgeMine`で残す被弾記録（op 214/215、値はダメージ）と、回数・ダメージ・時刻を比較する。押しっぱなしの判定には、リプレイの押下・解放から求めた保持状態を使う。
+
+全件比較では、地雷入りの2プレイ以外の結果は修正前から変わらなかった（一致158、判定順のみ差25）。
+
+| 譜面 | OpenLR2の被弾 | BMZの被弾 | 結果 |
+|---|---:|---:|---|
+| G e n g a o z o _ 関節崩し（途中閉店） | 13 | 13 | 全件一致。時刻差は0〜1ms |
+| sleep on dancing [Nightmare] | 194 | 180 | 180件は時刻まで一致。BMZだけの被弾は0件 |
+
+sleep on dancingの差14件は、すべて地雷の時刻がリプレイの押下記録より1.1〜2.7ms前にある場合だった。BMZは押下前のポーリングで離したまま通過として処理し、OpenLR2は押下で被弾している。リプレイの押下時刻は時計41で、判定に使う時計142やOpenLR2のフレーム境界は残っていない。タップの1〜2ms境界差と同じ種類の差と整合する。BMZの空POOR 2件の増加も、同じ地雷を通過させた結果、押下が先のノートに届いたもの。原因の確定には計測版での地雷入り譜面の実プレイ照合が必要で、計測ログ側は保持状態の照合に未対応。
+
+Carnivalの実測ログ（`--poll-trace`）は、修正後も2028判定・EX 3760で一致した。出力は`.local/legacy-parity-mines/`、`.local/legacy-mine-*`、`.local/legacy-captured-mines/`。
