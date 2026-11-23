@@ -42,7 +42,7 @@ const selectedRivalId = computed({
     }
   },
 })
-const { page, pageSize, maxPage, offset, pageLocation } = useRoutePagination(100_000)
+const { page, pageSize, maxPage, offset, pageLocation } = useRoutePagination({ maxOffset: 100_000 })
 function comparisonPageLocation(nextPage: number) {
   const location = pageLocation(nextPage)
   return { ...location, query: { ...location.query, player: selectedRivalId.value } }
@@ -129,12 +129,6 @@ function queryString(value: unknown): string | null {
 
 function rivalName(entry: IrRivalEntry): string {
   return entry.profile?.display_name || entry.player_id
-}
-
-function difficultyLabel(
-  label: IrRivalComparison['comparisons'][number]['difficulty_labels'][number],
-) {
-  return `${label.symbol}${label.level}`
 }
 
 function signed(value: number): string {
@@ -288,18 +282,10 @@ useSeoMeta({ title: () => t('rivals.title') })
                     class="border-t border-muted"
                   >
                     <td class="px-4 py-3 align-top">
-                      <div v-if="row.difficulty_labels.length" class="flex flex-wrap gap-1">
-                        <UBadge
-                          v-for="label in row.difficulty_labels"
-                          :key="`${label.table_id}-${label.level}`"
-                          color="primary"
-                          size="sm"
-                          :title="label.table_name"
-                          variant="subtle"
-                        >
-                          {{ difficultyLabel(label) }}
-                        </UBadge>
-                      </div>
+                      <DifficultyTableBadges
+                        v-if="row.difficulty_labels.length"
+                        :labels="row.difficulty_labels"
+                      />
                       <UBadge v-else color="neutral" size="sm" variant="subtle">
                         ☆{{ row.chart.level ?? '?' }}
                       </UBadge>

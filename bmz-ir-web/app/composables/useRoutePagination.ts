@@ -1,16 +1,19 @@
 import type { LocationQuery, LocationQueryRaw } from 'vue-router'
 
-const pageSize = 50
-const maxSafePage = Math.floor(Number.MAX_SAFE_INTEGER / pageSize) + 1
+const listPageSize = 50
 
-export function useRoutePagination(maxOffset = Number.MAX_SAFE_INTEGER) {
+export function useRoutePagination({
+  maxOffset = Number.MAX_SAFE_INTEGER,
+  pageSize = listPageSize,
+  queryKey = 'page',
+} = {}) {
   const route = useRoute()
   const maxPage = Math.floor(maxOffset / pageSize) + 1
-  const page = computed(() => Math.min(readPage(route.query.page), maxPage))
+  const page = computed(() => Math.min(readPage(route.query[queryKey], pageSize), maxPage))
   const offset = computed(() => (page.value - 1) * pageSize)
 
   function pageLocation(nextPage: number) {
-    return { path: route.path, query: { ...route.query, page: pageParam(nextPage) } }
+    return { path: route.path, query: { ...route.query, [queryKey]: pageParam(nextPage) } }
   }
 
   return { page, pageSize, maxPage, offset, pageLocation }
@@ -60,9 +63,10 @@ function searchParam(value: unknown) {
   return typeof value === 'string' ? value.trim() || undefined : undefined
 }
 
-function readPage(value: unknown) {
+function readPage(value: unknown, pageSize = listPageSize) {
   if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) return 1
   const parsed = Number(value)
+  const maxSafePage = Math.floor(Number.MAX_SAFE_INTEGER / pageSize) + 1
   return Number.isSafeInteger(parsed) && parsed <= maxSafePage ? parsed : 1
 }
 

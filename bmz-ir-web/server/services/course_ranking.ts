@@ -53,10 +53,15 @@ export interface RankedCourseRow {
 }
 
 /**
- * 全 best 行に同点同順位の順位を付け、先頭 limit 件と自分の行を返す。
+ * 全 best 行に同点同順位の順位を付け、指定ページと自分の行を返す。
  * 自分の順位と total は表示範囲外の行も含めて求める。
  */
-export function rankCourseRows(rows: CourseRankingRow[], selfId: string | null, limit: number) {
+export function rankCourseRows(
+  rows: CourseRankingRow[],
+  selfId: string | null,
+  limit: number,
+  offset = 0,
+) {
   let previousEx: number | null = null
   let rank = 0
   const ranked: RankedCourseRow[] = rows.map((row, index) => {
@@ -67,7 +72,7 @@ export function rankCourseRows(rows: CourseRankingRow[], selfId: string | null, 
     return { rank, row }
   })
   return {
-    entries: ranked.slice(0, limit),
+    entries: ranked.slice(offset, offset + limit),
     self: selfId ? ranked.find((entry) => entry.row.player_id === selfId) : undefined,
     total: ranked.length,
   }

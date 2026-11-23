@@ -1,10 +1,5 @@
 <script setup lang="ts">
-import type {
-  IrArrangeOptions,
-  IrChartLnProfile,
-  IrRuleMode,
-  LnScorePolicy,
-} from '../../../shared/types/ir'
+import type { IrArrangeOptions, IrChartLnProfile, IrRanking } from '../../../shared/types/ir'
 
 interface CourseDetail {
   course: {
@@ -51,6 +46,7 @@ interface CourseRankingEntry {
 interface CourseRanking {
   ranking: {
     entries: CourseRankingEntry[]
+    pagination: IrRanking['ranking']['pagination']
     self?: {
       rank: number
       score_id: string
@@ -97,28 +93,18 @@ const { formatDateTime } = useLocaleFormat()
 const { translateApiError } = useApiError()
 const courseHash = computed(() => String(route.params.hash ?? ''))
 
-type CourseLnPolicyFilter = 'ALL' | LnScorePolicy
-type CourseRuleModeFilter = 'ALL' | IrRuleMode
-
-const lnPolicy = ref<CourseLnPolicyFilter>('ALL')
-const ruleMode = ref<CourseRuleModeFilter>('ALL')
-
 const { data: detail, error: detailError } = await useFetch<CourseDetail>(
   () => `/api/v1/courses/${courseHash.value}`,
 )
 const lnPolicies = computed(() => lnFilterItems(detail.value?.course.ln_profile))
-watch(lnPolicies, (items) => {
-  if (!items.some((item) => item.value === lnPolicy.value)) lnPolicy.value = 'ALL'
-})
+const { lnPolicy, ruleMode, ruleQuery, rankingQuery, page, pageSize, maxPage, pageLocation } =
+  useRankingQuery(lnPolicies)
 const {
   data: ranking,
   pending: rankingPending,
   error: rankingError,
 } = await useFetch<CourseRanking>(() => `/api/v1/courses/${courseHash.value}/ranking`, {
-  query: computed(() => ({
-    ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
-    ...(ruleMode.value === 'ALL' ? {} : { rule_mode: ruleMode.value }),
-  })),
+  query: rankingQuery,
 })
 
 const selfBestEntry = computed<CourseRankingEntry | null>(
@@ -138,10 +124,7 @@ const {
   openHistory,
 } = useSelfScoreHistory<CourseSelfScoresResult>(
   () => `/api/v1/courses/${courseHash.value}/self-scores`,
-  () => ({
-    ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
-    ...(ruleMode.value === 'ALL' ? {} : { rule_mode: ruleMode.value }),
-  }),
+  () => ruleQuery.value,
 )
 
 function chartTitle(chart: CourseDetail['course']['charts'][number]): string {
@@ -267,6 +250,15 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
             {{ t('ranking.selfHistory') }}
           </UButton>
         </div>
+
+        <RankingPagination
+          v-if="ranking && !rankingPending && !rankingError"
+          :page="page"
+          :page-size="pageSize"
+          :max-page="maxPage"
+          :total="ranking.ranking.pagination.total"
+          :page-location="pageLocation"
+        />
 
         <UAlert v-if="rankingError" color="error" :description="rankingErrorDescription" />
         <p v-else-if="rankingPending" class="text-sm text-neutral-400">

@@ -5,10 +5,9 @@ import type {
   IrRanking,
   IrRankingEntry,
   IrRankingScope,
-  IrRuleMode,
   IrScoreHistoryResult,
-  LnScorePolicy,
 } from '~~/bmz-ir-web/shared/types/ir'
+import { readDifficultyFilter } from '~~/bmz-ir-web/shared/utils/difficulty_filter'
 
 interface ChartDetail {
   chart: IrChartLnProfile & {
@@ -54,7 +53,10 @@ interface ChartDetail {
 const route = useRoute()
 const localePath = useLocalePath()
 const listLocation = computed(() =>
-  localePath({ path: '/charts', query: listReturnQuery(route.query) }),
+  localePath({
+    path: '/charts',
+    query: { ...listReturnQuery(route.query), ...readDifficultyFilter(route.query) },
+  }),
 )
 const { user } = useUserSession()
 const { t } = useI18n()
@@ -72,10 +74,10 @@ if (/^[0-9a-f]{32}$/.test(chartParam.value)) {
     const lookup = await $fetch<{ sha256: string }>('/api/v1/charts/lookup', {
       query: { md5: chartParam.value },
     })
-    await navigateTo(
-      localePath({ path: `/charts/${lookup.sha256}`, query: listReturnQuery(route.query) }),
-      { redirectCode: 301, replace: true },
-    )
+    await navigateTo(localePath({ path: `/charts/${lookup.sha256}`, query: route.query }), {
+      redirectCode: 301,
+      replace: true,
+    })
   } catch {
     paramError.value = t('chart.md5NotFound')
   }
@@ -86,13 +88,7 @@ if (/^[0-9a-f]{32}$/.test(chartParam.value)) {
 const sha256 = computed(() => (/^[0-9a-f]{64}$/.test(chartParam.value) ? chartParam.value : ''))
 const canLoadChart = computed(() => sha256.value.length === 64)
 
-type LnPolicyFilter = 'ALL' | LnScorePolicy
-type RuleModeFilter = 'ALL' | IrRuleMode
 type RankingScopeFilter = Extract<IrRankingScope, 'global' | 'self_and_rivals'>
-
-const lnPolicy = ref<LnPolicyFilter>('ALL')
-const ruleMode = ref<RuleModeFilter>('ALL')
-const rankingScope = ref<RankingScopeFilter>('global')
 const rankingScopes = computed(() => [
   { label: t('ranking.global'), value: 'global' as const },
   ...(user.value ? [{ label: t('ranking.selfAndRivals'), value: 'self_and_rivals' as const }] : []),
@@ -103,8 +99,24 @@ const { data: detail, error: detailError } = await useFetch<ChartDetail>(
   { immediate: canLoadChart.value, watch: [sha256] },
 )
 const lnPolicies = computed(() => lnFilterItems(detail.value?.chart))
-watch(lnPolicies, (items) => {
-  if (!items.some((item) => item.value === lnPolicy.value)) lnPolicy.value = 'ALL'
+const {
+  lnPolicy,
+  ruleMode,
+  ruleQuery,
+  rankingQuery,
+  setRankingFilter,
+  page,
+  pageSize,
+  maxPage,
+  pageLocation,
+} = useRankingQuery(lnPolicies)
+const rankingScope = computed<RankingScopeFilter>({
+  get: () => (user.value && route.query.scope === 'self_and_rivals' ? 'self_and_rivals' : 'global'),
+  set(value) {
+    if (value !== rankingScope.value) {
+      void setRankingFilter('scope', value === 'global' ? undefined : value)
+    }
+  },
 })
 const {
   data: ranking,
@@ -112,12 +124,7 @@ const {
   error: rankingError,
 } = await useFetch<IrRanking>(() => `/api/v1/charts/${sha256.value}/ranking`, {
   immediate: canLoadChart.value,
-  watch: [sha256, lnPolicy, ruleMode, rankingScope],
-  query: computed(() => ({
-    scope: rankingScope.value,
-    ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
-    ...(ruleMode.value === 'ALL' ? {} : { rule_mode: ruleMode.value }),
-  })),
+  query: computed(() => ({ ...rankingQuery.value, scope: rankingScope.value })),
 })
 
 const selfBestEntry = computed<IrRankingEntry | null>(
@@ -136,18 +143,14 @@ const {
   openHistory,
 } = useSelfScoreHistory<IrScoreHistoryResult>(
   () => `/api/v1/charts/${sha256.value}/self-scores`,
-  () => ({
-    scope: 'self',
-    ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
-    ...(ruleMode.value === 'ALL' ? {} : { rule_mode: ruleMode.value }),
-  }),
+  () => ({ ...ruleQuery.value, scope: 'self' }),
 )
 
 const canShowSelfArea = computed(() => Boolean(selfBestEntry.value || detail.value?.stats.self))
 
-watch(user, (currentUser) => {
-  if (!currentUser) rankingScope.value = 'global'
-})
+function scoreLocation(id: string) {
+  return localePath({ path: `/scores/${id}`, query: route.query })
+}
 
 const copyMd5 = async () => {
   if (detail.value) {
@@ -253,10 +256,7 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
             <p class="text-xs text-neutral-500">{{ t('ranking.personalBest') }}</p>
             <div class="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1">
               <p class="text-sm text-neutral-300">#{{ selfBestEntry.rank }}</p>
-              <NuxtLink
-                :to="localePath(`/scores/${selfBestEntry.score.score_id}`)"
-                class="hover:underline"
-              >
+              <NuxtLink :to="scoreLocation(selfBestEntry.score.score_id)" class="hover:underline">
                 <RankingExScore
                   :score="selfBestEntry.score.ex_score"
                   :max="selfBestEntry.score.max_ex_score"
@@ -264,8 +264,8 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
               </NuxtLink>
               <NuxtLink
                 :to="
-                  localePath(
-                    `/scores/${selfBestEntry.score.source_score_ids?.clear ?? selfBestEntry.score.score_id}`,
+                  scoreLocation(
+                    selfBestEntry.score.source_score_ids?.clear ?? selfBestEntry.score.score_id,
                   )
                 "
                 class="hover:underline"
@@ -295,6 +295,15 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
             {{ t('ranking.selfHistory') }}
           </UButton>
         </div>
+
+        <RankingPagination
+          v-if="ranking && !rankingPending && !rankingError"
+          :page="page"
+          :page-size="pageSize"
+          :max-page="maxPage"
+          :total="ranking.ranking.pagination.total"
+          :page-location="pageLocation"
+        />
 
         <UAlert v-if="rankingError" color="error" :description="rankingErrorDescription" />
         <p v-else-if="rankingPending" class="text-sm text-neutral-400">
@@ -336,20 +345,13 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                   </UBadge>
                 </td>
                 <td class="px-3 py-2 text-right">
-                  <NuxtLink
-                    :to="localePath(`/scores/${entry.score.score_id}`)"
-                    class="hover:underline"
-                  >
+                  <NuxtLink :to="scoreLocation(entry.score.score_id)" class="hover:underline">
                     <RankingExScore :score="entry.score.ex_score" :max="entry.score.max_ex_score" />
                   </NuxtLink>
                 </td>
                 <td class="px-3 py-2">
                   <NuxtLink
-                    :to="
-                      localePath(
-                        `/scores/${entry.score.source_score_ids?.clear ?? entry.score.score_id}`,
-                      )
-                    "
+                    :to="scoreLocation(entry.score.source_score_ids?.clear ?? entry.score.score_id)"
                     class="hover:underline"
                   >
                     <IrClearBadge :clear="entry.score.clear" />
@@ -382,7 +384,7 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
           :limit="historyLimit"
           :score-key="(score) => score.score_id"
           :score-bp="(score) => score.min_bp"
-          :score-to="(score) => localePath(`/scores/${score.score_id}`)"
+          :score-to="(score) => scoreLocation(score.score_id)"
           :show-ln="Boolean(lnPolicies.length)"
           :score-option="(score) => formatRankingArrange(score, detail?.chart.mode ?? null)"
         />

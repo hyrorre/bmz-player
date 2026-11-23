@@ -1,7 +1,9 @@
 import { eq, sql } from 'drizzle-orm'
 import { getQuery } from 'h3'
 import { db, schema } from 'hub:db'
+import { IR_RANKING_MAX_OFFSET } from '../../../../../shared/constants/ir'
 import { asRuleMode, normalizeGaugeName, requireHex } from '../../../../services/ir'
+import { clampInteger } from '../../../../services/ir/common'
 import { isPublicCourse, publicPlayerCondition } from '../../../../services/moderation/visibility'
 import { resolveIrUser } from '../../../../utils/auth'
 import {
@@ -35,7 +37,8 @@ export default defineEventHandler(async (event) => {
     typeof query.rule_mode === 'string' && query.rule_mode && query.rule_mode !== 'ALL'
       ? asRuleMode(query.rule_mode)
       : null
-  const limit = Math.max(1, Math.min(200, Number(query.limit ?? 100) || 100))
+  const limit = clampInteger(query.limit, 100, 1, 200)
+  const offset = clampInteger(query.offset, 0, 0, IR_RANKING_MAX_OFFSET)
   const conditions = [
     eq(schema.courseScores.courseHash, courseHash),
     eq(schema.courseScores.accepted, true),
@@ -53,7 +56,12 @@ export default defineEventHandler(async (event) => {
     conditions.push(eq(schema.courseScores.ruleMode, ruleMode))
   }
 
-  const ranked = rankCourseRows(await fetchCourseRankingRows(conditions), user?.id ?? null, limit)
+  const ranked = rankCourseRows(
+    await fetchCourseRankingRows(conditions),
+    user?.id ?? null,
+    limit,
+    offset,
+  )
   const visibleIds = new Set(ranked.entries.map(({ row }) => row.course_score_id))
   if (ranked.self) visibleIds.add(ranked.self.row.course_score_id)
   const details =
@@ -118,9 +126,9 @@ export default defineEventHandler(async (event) => {
         : undefined,
       pagination: {
         limit,
-        offset: 0,
+        offset,
         total: ranked.total,
-        has_more: limit < ranked.total,
+        has_more: offset + limit < ranked.total,
       },
     },
   }

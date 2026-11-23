@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { IrDifficultyLabel } from '../../../shared/types/ir'
+import { readDifficultyFilter } from '../../../shared/utils/difficulty_filter'
 
 interface ChartListItem {
   sha256: string
@@ -15,6 +16,7 @@ interface ChartListItem {
 }
 
 interface ChartListResult {
+  difficulty_filter: IrDifficultyLabel | null
   charts: ChartListItem[]
   pagination: {
     limit: number
@@ -26,11 +28,25 @@ interface ChartListResult {
 
 const { search, page, pageSize, pageLocation, listQuery, apiQuery, applySearch } =
   useSearchableListQuery()
+const route = useRoute()
+const difficulty = computed(() => readDifficultyFilter(route.query))
+const chartListQuery = computed(() => ({ ...listQuery.value, ...difficulty.value }))
 const localePath = useLocalePath()
 const { t } = useI18n()
 const { translateApiError } = useApiError()
 const { data, pending, error, refresh } = await useFetch<ChartListResult>('/api/v1/charts', {
-  query: apiQuery,
+  query: computed(() => ({ ...apiQuery.value, ...difficulty.value })),
+})
+const difficultyLabel = computed(() => {
+  const label = data.value?.difficulty_filter
+  if (
+    label &&
+    label.table_id === difficulty.value?.difficulty_table &&
+    label.level === difficulty.value.difficulty_level
+  ) {
+    return `${label.symbol}${label.level}`
+  }
+  return difficulty.value?.difficulty_level || difficulty.value?.difficulty_table
 })
 
 const errorDescription = computed(() =>
@@ -50,7 +66,7 @@ useSeoMeta({ title: () => t('charts.title') })
         </p>
       </div>
 
-      <form class="mb-6 flex gap-3" @submit.prevent="applySearch(refresh)">
+      <form class="mb-4 flex gap-3" @submit.prevent="applySearch(refresh)">
         <UInput
           v-model="search"
           class="flex-1"
@@ -61,10 +77,25 @@ useSeoMeta({ title: () => t('charts.title') })
         <UButton type="submit" color="primary" variant="subtle">{{ t('common.search') }}</UButton>
       </form>
 
+      <div v-if="difficulty" class="mb-4 flex flex-wrap items-center gap-2 text-sm">
+        <span class="text-muted">{{ t('charts.difficultyFilter') }}</span>
+        <UButton
+          :to="localePath({ path: '/charts', query: { q: listQuery.q } })"
+          :aria-label="t('charts.clearDifficultyFilter')"
+          :title="t('charts.clearDifficultyFilter')"
+          trailing-icon="i-lucide-x"
+          color="primary"
+          variant="subtle"
+          size="sm"
+        >
+          {{ difficultyLabel }}
+        </UButton>
+      </div>
+
       <UAlert v-if="error" color="error" :description="errorDescription" class="mb-6" />
       <p v-else-if="pending" class="text-sm text-neutral-400">{{ t('common.loading') }}</p>
       <div v-else-if="!data?.charts.length" class="text-sm text-muted">
-        <p>{{ t('charts.empty') }}</p>
+        <p>{{ t(difficulty || listQuery.q ? 'charts.noMatches' : 'charts.empty') }}</p>
         <UPagination
           v-if="page > 1"
           :page="1"
@@ -78,7 +109,7 @@ useSeoMeta({ title: () => t('charts.title') })
       <ul v-else class="divide-y divide-neutral-800 rounded-lg border border-neutral-800">
         <li v-for="chart in data.charts" :key="chart.sha256">
           <NuxtLink
-            :to="localePath({ path: `/charts/${chart.sha256}`, query: listQuery })"
+            :to="localePath({ path: `/charts/${chart.sha256}`, query: chartListQuery })"
             class="flex items-center justify-between gap-4 px-4 py-3 hover:bg-neutral-900"
           >
             <div class="min-w-0">
@@ -89,7 +120,6 @@ useSeoMeta({ title: () => t('charts.title') })
               <p class="truncate text-sm text-neutral-400">
                 {{ chart.artist ?? '' }}<span v-if="chart.genre"> / {{ chart.genre }}</span>
               </p>
-              <DifficultyTableBadges :labels="chart.difficulty_labels" class="mt-1.5" />
             </div>
             <div class="shrink-0 text-right text-sm text-neutral-300">
               <p>
@@ -98,6 +128,11 @@ useSeoMeta({ title: () => t('charts.title') })
               <p class="text-neutral-500">{{ t('charts.notes', { count: chart.notes }) }}</p>
             </div>
           </NuxtLink>
+          <DifficultyTableBadges
+            :labels="chart.difficulty_labels"
+            :q="listQuery.q"
+            class="-mt-1 px-4 pb-3"
+          />
         </li>
       </ul>
 

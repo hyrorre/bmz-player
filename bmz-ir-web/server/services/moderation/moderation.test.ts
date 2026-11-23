@@ -134,6 +134,8 @@ beforeEach(async () => {
   await db.delete(schema.bestScores)
   await db.delete(schema.scores)
   await db.delete(schema.charts)
+  await db.delete(schema.difficultyTableEntries)
+  await db.delete(schema.difficultyTables)
   await db.delete(schema.userModeration)
   await db.delete(schema.chartModeration)
   await db.delete(schema.authRateLimits)
@@ -1440,6 +1442,96 @@ function coursePayload(charts: string[], key: string, exScore = 100) {
 }
 
 describe('rankings, courses, and aggregates', () => {
+  test('difficulty filters match displayed labels before paging and respect visibility', async () => {
+    const hashes = ['a', 'b', 'c', 'd', 'e'].map((value) => value.repeat(64))
+    const md5s = ['a', 'b', 'c', 'd', 'e'].map((value) => value.repeat(32))
+    for (const [i, sha256] of hashes.entries()) {
+      await db.insert(schema.charts).values({
+        sha256,
+        md5: md5s[i]!.toUpperCase(),
+        mode: '7K',
+        title: [0, 2, 4].includes(i) ? 'Stella fixture' : 'Other chart',
+        updatedAt: new Date(1000 + i),
+      })
+    }
+    await db.insert(schema.difficultyTables).values([
+      {
+        id: 'stella',
+        name: 'Stella',
+        symbol: 'st',
+        sourceUrl: 'https://example.invalid/st',
+        activeGeneration: 'current',
+      },
+      {
+        id: 'insane',
+        name: 'Insane',
+        symbol: '★',
+        sourceUrl: 'https://example.invalid/insane',
+        activeGeneration: 'current',
+      },
+    ])
+    const level = { tableId: 'stella', level: '1+', generation: 'current' }
+    await db.insert(schema.difficultyTableEntries).values([
+      { ...level, md5: md5s[0] },
+      { ...level, sha256: hashes[1] },
+      { ...level, sha256: hashes[2] },
+      { ...level, sha256: hashes[3], generation: 'old' },
+      { ...level, sha256: hashes[4] },
+      { tableId: 'insane', level: '20', md5: md5s[1], generation: 'current' },
+      { tableId: 'insane', level: '20', md5: md5s[2], generation: 'old' },
+    ])
+    await setChartStatus(hashes[4]!, 'hidden')
+    const url = '/api/v1/charts?difficulty_table=stella&difficulty_level=1%2B&q=Stella&limit=1'
+    const first = await chartsIndexHandler(event({ path: url }))
+    expect(first.pagination).toEqual({ limit: 1, offset: 0, total: 2, has_more: true })
+    expect(first.difficulty_filter).toEqual({
+      table_id: 'stella',
+      table_name: 'Stella',
+      symbol: 'st',
+      level: '1+',
+    })
+    expect(first.charts).toMatchObject([
+      { sha256: hashes[2], difficulty_labels: [first.difficulty_filter] },
+    ])
+    const second = await chartsIndexHandler(event({ path: `${url}&offset=1` }))
+    expect(second.charts).toMatchObject([
+      { sha256: hashes[0], difficulty_labels: [first.difficulty_filter] },
+    ])
+    const all = await chartsIndexHandler(
+      event({ path: '/api/v1/charts?difficulty_table=stella&difficulty_level=1%2B' }),
+    )
+    expect(all.pagination.total).toBe(2)
+    const noTitleMatch = await chartsIndexHandler(
+      event({ path: url.replace('q=Stella', 'q=Other') }),
+    )
+    expect(noTitleMatch.pagination.total).toBe(0)
+  })
+
+  test('course ranking pages keep ties and the signed-in player outside the page', async () => {
+    for (const [i, id] of ['alice', 'bob', 'carol'].entries()) {
+      const payload = coursePayload([CHART_A], 'course-page', i === 2 ? 90 : 100)
+      payload.result.bp = i
+      await submitCourseScore({ id }, payload)
+    }
+    const hash = computeCourseHash([CHART_A], {})
+    const token = (await createAuthTokens('alice')).accessToken
+    const getPage = (offset: number) =>
+      courseRankingHandler(
+        event({
+          path: `/api/v1/courses/${hash}/ranking?limit=1&offset=${offset}`,
+          params: { hash },
+          token,
+        }),
+      )
+    const second = await getPage(1)
+    expect(second.ranking.entries).toMatchObject([{ rank: 1, player: { id: 'bob' } }])
+    expect(second.ranking.self).toMatchObject({ rank: 1, included_in_entries: false })
+    expect(second.ranking.pagination).toEqual({ limit: 1, offset: 1, total: 3, has_more: true })
+    const last = await getPage(2)
+    expect(last.ranking.entries).toMatchObject([{ rank: 3, player: { id: 'carol' } }])
+    expect(last.ranking.pagination).toEqual({ limit: 1, offset: 2, total: 3, has_more: false })
+  })
+
   test.each([99, 100])(
     'player pages with limit=%i keep both statistics within D1 limits',
     async (limit) => {
@@ -1667,8 +1759,7 @@ describe('course visibility with several courses', () => {
 
   function bestCourseCount(players: { players: Array<{ id: string }> }, id: string) {
     return (players.players.find((player) => player.id === id) as
-      | { best_course_score_count: number }
-      | undefined)!.best_course_score_count
+      { best_course_score_count: number } | undefined)!.best_course_score_count
   }
 
   test('a blocked chart hides only the courses that contain it', async () => {

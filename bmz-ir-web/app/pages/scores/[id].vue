@@ -125,7 +125,7 @@ useSeoMeta({ title: () => t('score.title') })
         <div class="mb-8">
           <p class="mb-2 text-sm font-medium text-primary-300">
             <NuxtLink
-              :to="localePath(`/charts/${data.score.chart_sha256}`)"
+              :to="localePath({ path: `/charts/${data.score.chart_sha256}`, query: route.query })"
               class="hover:underline"
             >
               {{ data.chart?.title ?? data.score.chart_sha256.slice(0, 12) }}

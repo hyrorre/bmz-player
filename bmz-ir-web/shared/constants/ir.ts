@@ -7,6 +7,8 @@
  */
 export const MAX_REPLAY_BYTES = 4 * 1024 * 1024
 
+export const IR_RANKING_MAX_OFFSET = 100_000
+
 export const CLEAR_RANK: Record<string, number> = {
   no_play: 0,
   NoPlay: 0,

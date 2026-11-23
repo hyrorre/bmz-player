@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { BatchItem } from 'drizzle-orm/batch'
-import { and, eq, inArray, ne, or } from 'drizzle-orm'
+import { and, eq, exists, inArray, ne, notExists, or, sql, type SQL } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
 import type { IrDifficultyLabel } from '../../shared/types/ir'
+import type { DifficultyFilter } from '../../shared/utils/difficulty_filter'
 
 const DEFAULT_TIMEOUT_MS = 15_000
 const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -205,13 +206,7 @@ export async function lookupDifficultyLabels(
         sha256: schema.difficultyTableEntries.sha256,
       })
       .from(schema.difficultyTableEntries)
-      .innerJoin(
-        schema.difficultyTables,
-        and(
-          eq(schema.difficultyTables.id, schema.difficultyTableEntries.tableId),
-          eq(schema.difficultyTables.activeGeneration, schema.difficultyTableEntries.generation),
-        ),
-      )
+      .innerJoin(schema.difficultyTables, activeDifficultyGeneration())
       .where(hashCondition)
 
     rows.push(
@@ -223,6 +218,48 @@ export async function lookupDifficultyLabels(
   }
 
   return difficultyLabelsFromRows(normalized, rows)
+}
+
+function activeDifficultyGeneration() {
+  return and(
+    eq(schema.difficultyTables.id, schema.difficultyTableEntries.tableId),
+    eq(schema.difficultyTables.activeGeneration, schema.difficultyTableEntries.generation),
+  )
+}
+
+export function chartDifficultyCondition(filter: DifficultyFilter): SQL {
+  const entries = schema.difficultyTableEntries
+  const selectedLevel = and(
+    eq(entries.tableId, filter.difficulty_table),
+    eq(entries.level, filter.difficulty_level),
+  )
+  const md5Match = eq(entries.md5, sql`nullif(lower(${schema.charts.md5}), '')`)
+  const shaMatch = eq(entries.sha256, sql`lower(${schema.charts.sha256})`)
+
+  function activeEntries(condition: SQL | undefined) {
+    return db
+      .select({ found: sql`1` })
+      .from(entries)
+      .innerJoin(schema.difficultyTables, activeDifficultyGeneration())
+      .where(condition)
+  }
+
+  // An MD5 match in any active table suppresses every SHA-256 label for the chart.
+  return or(
+    exists(activeEntries(and(selectedLevel, md5Match))),
+    and(notExists(activeEntries(md5Match)), exists(activeEntries(and(selectedLevel, shaMatch)))),
+  )!
+}
+
+export async function difficultyFilterLabel(
+  filter: DifficultyFilter,
+): Promise<IrDifficultyLabel | null> {
+  const tables = schema.difficultyTables
+  const [table] = await db
+    .select({ table_id: tables.id, table_name: tables.name, symbol: tables.symbol })
+    .from(tables)
+    .where(eq(tables.id, filter.difficulty_table))
+  return table ? { ...table, level: filter.difficulty_level } : null
 }
 
 /** Synchronizes every configured table without letting one failure stop the rest. */

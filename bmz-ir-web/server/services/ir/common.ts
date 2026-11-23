@@ -1,3 +1,4 @@
+import { IR_RANKING_MAX_OFFSET } from '../../../shared/constants/ir'
 import type {
   IrAppliedDoubleOption,
   IrArrangeOptions,
@@ -147,7 +148,7 @@ export interface LocalBackfillDeleteResult {
 export function parseRankingQuery(query: Record<string, unknown>): RankingQuery {
   const scope = asScope(String(query.scope ?? 'global'))
   const limit = clampInteger(query.limit, 100, 1, 200)
-  const offset = clampInteger(query.offset, 0, 0, 100_000)
+  const offset = clampInteger(query.offset, 0, 0, IR_RANKING_MAX_OFFSET)
   const lnPolicy =
     typeof query.ln_policy === 'string' && query.ln_policy ? asLnPolicy(query.ln_policy) : undefined
   const doubleOption = normalizeDoubleOption(query.double_option)

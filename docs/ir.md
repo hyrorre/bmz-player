@@ -592,7 +592,7 @@ Workerの更新前にD1のmigration `0018_score_cleanup_consistency.sql`と`0019
 - score identityは`course_hash + gauge + ln_policy + rule_mode + scoring`です。段位（class系の制約）ではゲージが制約で決まりますが、通常のコースではユーザーが選ぶため、gaugeを含めます。`ln_policy`は、コース内の全譜面のLN情報とコースのLN制約から、単曲と同じ規則で正規化します。
 - bestは、EXスコア、クリア、BP（小さいほうが良い）、最大コンボの順で比べます。比較と更新を同じSQLで行います。
 - 同じプレイヤー・同じ`idempotency_key`の重複投稿には、既存の`course_score_id`を返します。bestの書き込みが完了していなければ再試行し、実際に更新した場合だけ`best_updated=true`を返します。
-- `GET /api/v1/courses/{course_hash}/ranking`はglobalだけで、`gauge` / `ln_policy` / `rule_mode`（それぞれ`ALL`で全体）と`limit`（1〜200、既定100）で絞り込めます。認証付きの取得では、`limit`の範囲外でも`ranking.self`に自分の順位を返します。`ranking.pagination.total`は条件に合う全プレイヤー数です。BMZ Playerは、ログイン済みならコースランキングも認証付きで取得し、Course Resultの自分の順位と参加人数に使います。
+- `GET /api/v1/courses/{course_hash}/ranking`はglobalだけで、`gauge` / `ln_policy` / `rule_mode`（それぞれ`ALL`で全体）で絞り込めます。`limit`（1〜200、既定100）と`offset`（0〜100000、既定0）でページを指定します。同点の順位はページをまたいでも同じです。認証付きの取得では、表示範囲外でも`ranking.self`に自分の順位を返します。`ranking.pagination.total`は条件に合う全プレイヤー数です。BMZ Playerは、ログイン済みならコースランキングも認証付きで取得し、Course Resultの自分の順位と参加人数に使います。
 - BMZ Playerは、コースの終了時に`CourseResultSummary`からpayloadを作り、`ir_score_jobs`へ`kind=course`のjobを入れます。`local_score_id`にはローカルのcourse score ID、`chart_sha256`にはcourse hashを入れます。
 - 未登録の譜面がコースに含まれる場合は、metadataなしでSHA-256だけを登録します。
 - 難易度表（tables）の専用の実装は、まだありません。
@@ -638,6 +638,7 @@ Workerの更新前にD1のmigration `0018_score_cleanup_consistency.sql`と`0019
 - 日次成果は`/api/v1/daily?player=<id>&date=YYYY-MM-DD&mode=all`で公開します。`player`を省略すると、ログイン中の本人を対象にします。
 - 成果日の切り替わりは、プロフィールの`daily_boundary_minutes`（JST 00:00からの分、既定0）で設定できます。
 - 難易度表は、運用側のallowlistを6時間ごとにD1へ世代単位で同期します。日次API、譜面の一覧・詳細APIではMD5を優先し、SHA-256をfallbackとして`difficulty_labels`を返します。
+- 譜面一覧APIは`difficulty_table`（`difficulty_labels[].table_id`）と`difficulty_level`（`difficulty_labels[].level`）を指定すると、そのバッジが付く公開譜面を返します。タイトル検索の`q`と組み合わせられます。
 - 難易度表を即時に同期する管理APIは、ログイン済みのユーザーのうち`NUXT_IR_ADMIN_USER_IDS`（カンマ区切り）に含まれるIDだけが実行できます。未設定の場合は全員を拒否します。
 - Cronと管理APIが重なった場合は、D1の期限付きのロックで片方を`already_running`としてスキップします。
 - 同期の失敗は、Cloudflare LogsへURLと原因を最大10件、各500文字まで記録します。全件が失敗した場合は、最初の原因を管理APIの502エラーにも含めます。
@@ -896,6 +897,8 @@ payloadと署名は次のとおりです。
 - `/rivals`では、自分をライバルに登録しているプレイヤーの一覧と、score identityごとのEX / BPの比較を表示します。
 - 譜面のランキングは、全体と「自分＋ライバル」を切り替えられます。
 - 譜面・コース・プレイヤーの一覧では検索語を`q`、ページ番号を`page`に保持します。ライバル比較では比較相手を`player`、ページ番号を`page`に保持します。譜面・コースの詳細にある一覧リンクでも検索語とページ番号を引き継ぎます。
+- 譜面・コースのランキングは現在の条件に合う参加者数を表示し、100人ずつ閲覧できます。ランキングのページ番号は`ranking_page`、LNとRULEの選択は`ln_policy`と`rule_mode`に保持します。単曲の表示範囲は`scope`に保持します。条件変更時はランキングの1ページ目を表示します。
+- 難易度表バッジから同じ表・レベルの譜面一覧を開けます。譜面一覧からバッジを選んだときはタイトル検索を引き継ぎます。難易度の絞り込みだけを外すこともできます。
 - 譜面・コースのランキングと自己スコア履歴は、EXスコア、満点、達成率、ランク、最も近いランク境界との差を表示します。単曲は該当するプレイの採点対象数、コースは投稿された`max_ex_score`を満点に使います。
 - LNのフィルターと列はLNを含む場合に表示します。LNフィルターの`AUTO`は定義LNと未定義LNが共存する場合に選べます。コースでは構成譜面のLN情報を集約します。
 - `OPTION`の配置は10K・14Kで両サイド、それ以外で1P側を表示します。コースは記録された配置を譜面順に表示し、同じ表記をまとめます。配置の保存に対応する前のコーススコアでは`-`を表示します。
