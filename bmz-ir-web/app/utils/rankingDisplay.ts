@@ -59,9 +59,11 @@ export function lnFilterItems(profile: RankingLnProfile | undefined) {
     profile.cn_notes ||
     profile.hcn_notes ||
     profile.hln_notes
-  if (!hasLn) return []
+  return availableLnFilterItems(Boolean(hasLn), profile.has_undefined_ln && hasDefined)
+}
 
-  const showAuto = profile.has_undefined_ln && hasDefined
+export function availableLnFilterItems(hasLn: boolean, showAuto: boolean) {
+  if (!hasLn) return []
   return [
     filterItem('ALL', 'ALL'),
     ...Object.entries(lnLabels)

@@ -1,6 +1,10 @@
-import { and, desc, eq, inArray } from 'drizzle-orm'
+import { and, count, desc, eq, or, sql } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/sqlite-core'
 import { getQuery } from 'h3'
 import { db, schema } from 'hub:db'
+import { IR_PLAYER_SCORE_PAGE_SIZE } from '../../../../../shared/constants/ir'
+import { lookupDifficultyLabels } from '../../../../services/difficulty_tables'
+import { arrangeOptionsFromPlayOptions, parseRankingQuery } from '../../../../services/ir/common'
 import {
   publicChartCondition,
   publicPlayerCondition,
@@ -14,7 +18,18 @@ export default defineEventHandler(async (event) => {
   }
 
   const query = getQuery(event)
-  const limit = Math.max(1, Math.min(200, Number(query.limit ?? 50) || 50))
+  let scoreQuery
+  try {
+    scoreQuery = parseRankingQuery({
+      limit: Number(query.limit) || IR_PLAYER_SCORE_PAGE_SIZE,
+      offset: query.offset,
+      ln_policy: query.ln_policy === 'ALL' ? undefined : query.ln_policy,
+      rule_mode: query.rule_mode,
+    })
+  } catch (error) {
+    throw createError({ statusCode: 400, statusMessage: (error as Error).message })
+  }
+  const { limit, offset, lnPolicy, ruleMode } = scoreQuery
 
   const profiles = await db
     .select({
@@ -60,50 +75,95 @@ export default defineEventHandler(async (event) => {
         ])
       : [[], []]
 
-  const bests = await db
+  const best = schema.bestScores
+  const chart = schema.charts
+  const publicBests = and(eq(best.playerId, playerId), publicChartCondition(best.chartSha256))
+  const chartJoin = eq(chart.sha256, best.chartSha256)
+  const hasDefinedLn = or(
+    chart.hasDefinedLn,
+    chart.hasDefinedCn,
+    chart.hasDefinedHcn,
+    chart.hasDefinedHln,
+  )
+  const hasMixedLn = and(chart.hasUndefinedLn, hasDefinedLn)
+  const hasLn = or(
+    hasDefinedLn,
+    chart.hasUndefinedLn,
+    chart.hasLn,
+    chart.hasCn,
+    chart.hasHcn,
+    chart.hasHln,
+    chart.lnNotes,
+    chart.cnNotes,
+    chart.hcnNotes,
+    chart.hlnNotes,
+  )
+  const [lnFilters] = await db
     .select({
-      score_id: schema.bestScores.scoreId,
-      chart_sha256: schema.bestScores.chartSha256,
-      ex_score: schema.bestScores.exScore,
-      clear_type: schema.bestScores.clearType,
-      clear_rank: schema.bestScores.clearRank,
-      max_combo: schema.bestScores.maxCombo,
-      min_bp: schema.bestScores.minBp,
-      min_cb: schema.bestScores.minCb,
-      device_type: schema.bestScores.deviceType,
-      gauge: schema.bestScores.gauge,
-      ln_policy: schema.bestScores.lnPolicy,
-      rule_mode: schema.bestScores.ruleMode,
-      scoring: schema.bestScores.scoring,
-      played_at: schema.bestScores.playedAt,
-      server_received_at: schema.bestScores.serverReceivedAt,
+      has_ln: sql`max(${hasLn})`.mapWith(Boolean),
+      has_mixed_ln: sql`max(${hasMixedLn})`.mapWith(Boolean),
     })
-    .from(schema.bestScores)
-    .where(
-      and(
-        eq(schema.bestScores.playerId, playerId),
-        publicChartCondition(schema.bestScores.chartSha256),
-      ),
-    )
-    .orderBy(desc(schema.bestScores.serverReceivedAt))
-    .limit(limit)
+    .from(best)
+    .leftJoin(chart, chartJoin)
+    .where(publicBests)
+  const autoLn = lnPolicy?.startsWith('Auto')
+  const filterLn = lnPolicy && (autoLn ? lnFilters?.has_mixed_ln : lnFilters?.has_ln)
+  const where = and(
+    publicBests,
+    filterLn ? and(eq(best.lnPolicy, lnPolicy), autoLn ? hasMixedLn : hasLn) : undefined,
+    ruleMode ? eq(best.ruleMode, ruleMode) : undefined,
+  )
 
-  const shaList = [...new Set(bests.map((row) => row.chart_sha256))]
-  const charts =
-    shaList.length > 0
-      ? await db
-          .select({
-            sha256: schema.charts.sha256,
-            title: schema.charts.title,
-            artist: schema.charts.artist,
-            mode: schema.charts.mode,
-            level: schema.charts.level,
-            difficulty: schema.charts.difficulty,
-          })
-          .from(schema.charts)
-          .where(inArray(schema.charts.sha256, shaList))
-      : []
-  const chartMap = new Map(charts.map((chart) => [chart.sha256, chart]))
+  const representative = alias(schema.scores, 'representative')
+  const exBest = alias(schema.scores, 'ex_best')
+  const [bests, counts] = await Promise.all([
+    db
+      .select({
+        id: best.id,
+        score_id: best.scoreId,
+        best_ex_score_id: best.bestExScoreId,
+        best_clear_score_id: best.bestClearScoreId,
+        chart_sha256: best.chartSha256,
+        ex_score: best.exScore,
+        clear_type: best.clearType,
+        clear_rank: best.clearRank,
+        max_combo: best.maxCombo,
+        min_bp: best.minBp,
+        min_cb: best.minCb,
+        device_type: best.deviceType,
+        gauge: best.gauge,
+        ln_policy: best.lnPolicy,
+        rule_mode: best.ruleMode,
+        scoring: best.scoring,
+        played_at: best.playedAt,
+        server_received_at: best.serverReceivedAt,
+        playOptions: representative.playOptions,
+        scoredNotes: exBest.notes,
+        hasLn: sql`${hasLn}`.mapWith(Boolean),
+        chart: {
+          sha256: chart.sha256,
+          md5: chart.md5,
+          title: chart.title,
+          subtitle: chart.subtitle,
+          artist: chart.artist,
+          mode: chart.mode,
+          level: chart.level,
+          difficulty: chart.difficulty,
+        },
+      })
+      .from(best)
+      .leftJoin(chart, chartJoin)
+      .leftJoin(representative, eq(representative.id, best.scoreId))
+      .leftJoin(exBest, eq(exBest.id, sql`coalesce(${best.bestExScoreId}, ${best.scoreId})`))
+      .where(where)
+      .orderBy(desc(best.serverReceivedAt), desc(best.id))
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: count() }).from(best).leftJoin(chart, chartJoin).where(where),
+  ])
+  const total = counts[0]?.total ?? 0
+  const charts = new Map(bests.flatMap(({ chart }) => (chart ? [[chart.sha256, chart]] : [])))
+  const difficultyLabels = await lookupDifficultyLabels([...charts.values()])
 
   return {
     player: profile,
@@ -112,9 +172,20 @@ export default defineEventHandler(async (event) => {
       is_rival: outgoingRelationship.length > 0,
       is_rivaled_by: incomingRelationship.length > 0,
     },
-    best_scores: bests.map((row) => ({
-      ...row,
-      chart: chartMap.get(row.chart_sha256) ?? null,
+    ln_filters: {
+      has_ln: lnFilters?.has_ln ?? false,
+      has_mixed_ln: lnFilters?.has_mixed_ln ?? false,
+    },
+    pagination: { limit, offset, total, has_more: offset + limit < total },
+    best_scores: bests.map(({ chart, hasLn, playOptions, scoredNotes, ...score }) => ({
+      ...score,
+      ...arrangeOptionsFromPlayOptions(playOptions),
+      max_ex_score: scoredNotes ? scoredNotes * 2 : null,
+      chart: chart && {
+        ...chart,
+        has_ln: Boolean(hasLn),
+        difficulty_labels: difficultyLabels.get(chart.sha256) ?? [],
+      },
     })),
   }
 })

@@ -39,6 +39,7 @@ const ja = {
       scoreCounts: '{charts} 譜面 / {courses} コース',
       player: 'プレイヤー',
       bestScores: 'ベストスコア',
+      totalScores: 'ベストスコア {total} 件',
       noScoresYet: 'まだスコアがありません。',
     },
     rivals: {
@@ -250,6 +251,7 @@ const en = {
       scoreCounts: '{charts} charts / {courses} courses',
       player: 'Player',
       bestScores: 'Best scores',
+      totalScores: 'Best scores: {total}',
       noScoresYet: 'No scores yet.',
     },
     rivals: {
@@ -462,6 +464,7 @@ const ko = {
       scoreCounts: '{charts} 차트 / {courses} 코스',
       player: '플레이어',
       bestScores: '베스트 스코어',
+      totalScores: '베스트 스코어 {total}건',
       noScoresYet: '아직 스코어가 없습니다.',
     },
     rivals: {
@@ -669,6 +672,7 @@ const zhCN = {
       scoreCounts: '{charts} 个谱面 / {courses} 个课程',
       player: '玩家',
       bestScores: '最佳成绩',
+      totalScores: '最佳成绩共 {total} 条',
       noScoresYet: '尚无成绩。',
     },
     rivals: {
@@ -875,6 +879,7 @@ const zhTW = {
       scoreCounts: '{charts} 個譜面 / {courses} 個課程',
       player: '玩家',
       bestScores: '最佳成績',
+      totalScores: '最佳成績共 {total} 筆',
       noScoresYet: '尚無成績。',
     },
     rivals: {

@@ -3,11 +3,13 @@ import { IR_RANKING_MAX_OFFSET } from '../../shared/constants/ir'
 import type { IrRuleMode, LnScorePolicy } from '../../shared/types/ir'
 import { type lnFilterItems, ruleModeItems } from '../utils/rankingDisplay'
 
-export function useRankingQuery(lnPolicies: Ref<ReturnType<typeof lnFilterItems>>) {
+export function useRankingQuery(
+  lnPolicies: Ref<ReturnType<typeof lnFilterItems>>,
+  { queryKey = 'ranking_page', pageSize = 100 } = {},
+) {
   const route = useRoute()
-  const queryKey = 'ranking_page'
   const pagination = useRoutePagination({
-    pageSize: 100,
+    pageSize,
     maxOffset: IR_RANKING_MAX_OFFSET,
     queryKey,
   })

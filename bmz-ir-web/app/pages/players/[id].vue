@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { IR_PLAYER_SCORE_PAGE_SIZE } from '~~/bmz-ir-web/shared/constants/ir'
+import type { IrArrangeOptions, IrDifficultyLabel, IrRanking } from '~~/bmz-ir-web/shared/types/ir'
+
 interface PlayerDetail {
   player: {
     id: string
@@ -10,41 +13,72 @@ interface PlayerDetail {
     is_rival: boolean
     is_rivaled_by: boolean
   }
-  best_scores: {
+  ln_filters: { has_ln: boolean; has_mixed_ln: boolean }
+  pagination: IrRanking['ranking']['pagination']
+  best_scores: (IrArrangeOptions & {
+    id: string
     score_id: string
+    best_ex_score_id: string | null
+    best_clear_score_id: string | null
     chart_sha256: string
     ex_score: number
+    max_ex_score: number | null
     clear_type: string
+    clear_rank: number
     max_combo: number
     min_bp: number
-    min_cb: number
     device_type: string
-    gauge: string
     ln_policy: string
     rule_mode: string
     played_at: string | null
     server_received_at: string
     chart: {
-      sha256: string
       title: string
+      subtitle: string | null
       artist: string | null
       mode: string
-      level: number | null
+      has_ln: boolean
+      difficulty_labels: IrDifficultyLabel[]
     } | null
-  }[]
+  })[]
 }
 
 const route = useRoute()
 const playerId = computed(() => String(route.params.id ?? ''))
 const localePath = useLocalePath()
+const listLocation = computed(() =>
+  localePath({ path: '/players', query: listReturnQuery(route.query) }),
+)
 const { user } = useUserSession()
 const { t } = useI18n()
-const { formatDateTime } = useLocaleFormat()
+const { formatDateTime, formatNumber } = useLocaleFormat()
 const { translateApiError } = useApiError()
 const toast = useToast()
 const rivalUpdating = ref(false)
+
+const selectableLnPolicies = availableLnFilterItems(true, true)
+const lnPolicies = computed(() =>
+  availableLnFilterItems(
+    data.value?.ln_filters.has_ln ?? false,
+    data.value?.ln_filters.has_mixed_ln ?? false,
+  ),
+)
+const { lnPolicy, ruleMode, page, pageSize, maxPage, offset, pageLocation } = useRankingQuery(
+  lnPolicies,
+  { queryKey: 'score_page', pageSize: IR_PLAYER_SCORE_PAGE_SIZE },
+)
+// A direct link can set an LN filter before the profile's available options arrive.
+const scoreQuery = computed(() => ({
+  limit: pageSize,
+  offset: offset.value,
+  ln_policy: selectableLnPolicies.find(
+    ({ value }) => value !== 'ALL' && value === route.query.ln_policy,
+  )?.value,
+  rule_mode: ruleMode.value === 'ALL' ? undefined : ruleMode.value,
+}))
 const { data, pending, error } = await useFetch<PlayerDetail>(
   () => `/api/v1/players/${playerId.value}`,
+  { key: () => `player-detail:${playerId.value}`, query: scoreQuery },
 )
 const errorDescription = computed(() =>
   error.value ? translateApiError(error.value, 'errors.playerLoadFailed') : '',
@@ -57,13 +91,17 @@ const canManageRival = computed(() =>
 async function toggleRival() {
   if (!data.value || !canManageRival.value) return
   rivalUpdating.value = true
+  const target = data.value.player.id
   const adding = !data.value.relationship.is_rival
   try {
     await $fetch('/api/v1/rivals', {
       method: 'POST',
-      body: { target_player_id: data.value.player.id, action: adding ? 'add' : 'remove' },
+      body: { target_player_id: target, action: adding ? 'add' : 'remove' },
     })
-    data.value.relationship.is_rival = adding
+    const current = data.value
+    if (current?.player.id === target) {
+      data.value = { ...current, relationship: { ...current.relationship, is_rival: adding } }
+    }
     toast.add({
       title: adding ? t('rivals.added') : t('rivals.removed'),
       color: 'success',
@@ -85,16 +123,16 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
 </script>
 
 <template>
-  <main>
-    <section class="mx-auto w-full max-w-4xl px-5 py-10">
+  <main class="min-w-0">
+    <section class="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
       <UAlert v-if="error" color="error" :description="errorDescription" />
-      <p v-else-if="pending" class="text-sm text-neutral-400">{{ t('common.loading') }}</p>
+      <p v-else-if="pending && data?.player.id !== playerId" class="text-sm text-muted">
+        {{ t('common.loading') }}
+      </p>
       <template v-else-if="data">
         <div class="mb-8">
           <p class="mb-2 text-sm font-medium text-primary-300">
-            <NuxtLink :to="localePath('/charts')" class="hover:underline">{{
-              t('charts.title')
-            }}</NuxtLink>
+            <NuxtLink :to="listLocation" class="hover:underline">{{ t('players.title') }}</NuxtLink>
           </p>
           <h1 class="text-3xl font-semibold">{{ data.player.display_name }}</h1>
           <p v-if="data.player.bio" class="mt-2 whitespace-pre-line text-sm text-neutral-300">
@@ -147,49 +185,100 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
           </div>
         </div>
 
-        <h2 class="mb-3 text-lg font-medium">{{ t('players.bestScores') }}</h2>
-        <p v-if="!data.best_scores.length" class="text-sm text-neutral-400">
-          {{ t('players.noScoresYet') }}
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h2 class="text-lg font-medium">{{ t('players.bestScores') }}</h2>
+          <div class="flex flex-wrap items-center gap-3">
+            <UFormField v-if="lnPolicies.length" label="LN" orientation="horizontal">
+              <USelect v-model="lnPolicy" :items="lnPolicies" class="w-28" />
+            </UFormField>
+            <UFormField label="RULE" orientation="horizontal">
+              <USelect v-model="ruleMode" :items="ruleModeItems" class="w-32" />
+            </UFormField>
+          </div>
+        </div>
+        <RankingPagination
+          v-if="!pending"
+          :page="page"
+          :page-size="pageSize"
+          :max-page="maxPage"
+          :total="data.pagination.total"
+          :total-label="t('players.totalScores', { total: formatNumber(data.pagination.total) })"
+          :page-location="pageLocation"
+        />
+        <p v-if="pending" class="text-sm text-muted">{{ t('common.loading') }}</p>
+        <p v-else-if="!data.best_scores.length" class="text-sm text-muted">
+          {{
+            t(
+              lnPolicy === 'ALL' && ruleMode === 'ALL' && page === 1
+                ? 'players.noScoresYet'
+                : 'ranking.noScores',
+            )
+          }}
         </p>
-        <div v-else class="overflow-x-auto rounded-lg border border-neutral-800">
+        <div v-else class="overflow-x-auto rounded-lg border border-default">
           <table class="w-full text-sm">
-            <thead class="bg-neutral-900 text-left text-neutral-300">
+            <thead class="bg-elevated text-left text-toned">
               <tr>
                 <th class="px-3 py-2">{{ t('table.chart') }}</th>
-                <th class="px-3 py-2 text-right">EX</th>
+                <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
                 <th class="px-3 py-2">{{ t('table.clear') }}</th>
+                <th v-if="lnPolicies.length" class="px-3 py-2">LN</th>
+                <th class="px-3 py-2">RULE</th>
+                <th class="px-3 py-2">OPTION</th>
                 <th class="px-3 py-2 text-right">COMBO</th>
                 <th class="px-3 py-2 text-right">BP</th>
-                <th class="px-3 py-2">GAUGE / LN</th>
+                <th class="px-3 py-2">{{ t('table.input') }}</th>
                 <th class="px-3 py-2">{{ t('table.date') }}</th>
               </tr>
             </thead>
             <tbody>
-              <tr
-                v-for="score in data.best_scores"
-                :key="`${score.chart_sha256}-${score.ln_policy}-${score.rule_mode}`"
-                class="border-t border-neutral-800"
-              >
-                <td class="max-w-64 px-3 py-2">
+              <tr v-for="score in data.best_scores" :key="score.id" class="border-t border-default">
+                <td class="min-w-48 px-3 py-2">
                   <NuxtLink
                     :to="localePath(`/charts/${score.chart_sha256}`)"
-                    class="block truncate hover:underline"
+                    class="font-medium hover:underline"
                   >
                     {{ score.chart?.title ?? score.chart_sha256.slice(0, 12) }}
+                    <span v-if="score.chart?.subtitle" class="text-muted">{{
+                      score.chart.subtitle
+                    }}</span>
+                  </NuxtLink>
+                  <p v-if="score.chart?.artist" class="text-xs text-muted">
+                    {{ score.chart.artist }}
+                  </p>
+                  <DifficultyTableBadges
+                    v-if="score.chart?.difficulty_labels.length"
+                    :labels="score.chart.difficulty_labels"
+                    class="mt-1"
+                  />
+                </td>
+                <td class="px-3 py-2 text-right">
+                  <NuxtLink
+                    :to="localePath(`/scores/${score.best_ex_score_id ?? score.score_id}`)"
+                    class="hover:underline"
+                  >
+                    <RankingExScore :score="score.ex_score" :max="score.max_ex_score" />
                   </NuxtLink>
                 </td>
-                <td class="px-3 py-2 text-right font-medium">
-                  <NuxtLink :to="localePath(`/scores/${score.score_id}`)" class="hover:underline">
-                    {{ score.ex_score }}
+                <td class="px-3 py-2">
+                  <NuxtLink
+                    :to="localePath(`/scores/${score.best_clear_score_id ?? score.score_id}`)"
+                    class="hover:underline"
+                  >
+                    <IrClearBadge :clear="score.clear_type" :rank="score.clear_rank" />
                   </NuxtLink>
                 </td>
-                <td class="px-3 py-2">{{ score.clear_type }}</td>
+                <td v-if="lnPolicies.length" class="px-3 py-2 text-muted">
+                  {{ score.chart?.has_ln ? lnPolicyLabel(score.ln_policy) : '-' }}
+                </td>
+                <td class="px-3 py-2 text-muted">{{ ruleModeLabel(score.rule_mode) }}</td>
+                <td class="px-3 py-2 text-xs whitespace-nowrap text-muted">
+                  {{ formatRankingArrange(score, score.chart?.mode ?? null) }}
+                </td>
                 <td class="px-3 py-2 text-right">{{ score.max_combo }}</td>
                 <td class="px-3 py-2 text-right">{{ score.min_bp }}</td>
-                <td class="px-3 py-2 text-neutral-400">
-                  {{ score.gauge }} / {{ score.ln_policy }} / {{ score.rule_mode }}
-                </td>
-                <td class="px-3 py-2 text-neutral-400">
+                <td class="px-3 py-2 text-muted">{{ score.device_type }}</td>
+                <td class="px-3 py-2 whitespace-nowrap text-muted">
                   {{ formatDateTime(score.played_at ?? score.server_received_at) }}
                 </td>
               </tr>

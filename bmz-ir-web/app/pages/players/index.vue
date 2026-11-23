@@ -19,7 +19,8 @@ interface PlayerListResult {
   }
 }
 
-const { search, page, pageSize, pageLocation, apiQuery, applySearch } = useSearchableListQuery()
+const { search, page, pageSize, pageLocation, listQuery, apiQuery, applySearch } =
+  useSearchableListQuery()
 const localePath = useLocalePath()
 const { t } = useI18n()
 const { formatDateTime } = useLocaleFormat()
@@ -80,7 +81,7 @@ useSeoMeta({ title: () => t('players.title') })
       <ul v-else class="divide-y divide-neutral-800 rounded-lg border border-neutral-800">
         <li v-for="player in data.players" :key="player.id">
           <NuxtLink
-            :to="localePath(`/players/${player.id}`)"
+            :to="localePath({ path: `/players/${player.id}`, query: listQuery })"
             class="flex items-center justify-between gap-4 px-4 py-3 hover:bg-neutral-900"
           >
             <div class="min-w-0">

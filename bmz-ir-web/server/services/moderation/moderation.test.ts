@@ -240,6 +240,73 @@ test('rival best scores page through identities, protect visibility, and use the
   )
 })
 
+test('player detail pages filter public bests and include each score source and difficulty labels', async () => {
+  const md5 = 'a'.repeat(32)
+  const ex = submission({ key: 'player-ex', md5, clear: 'Normal' })
+  ex.chart.ln_profile = { has_undefined_ln: true, has_defined_cn: true }
+  ex.chart.notes = { total: 114 }
+  ex.rule.ln_policy = 'AutoLn'
+  ex.rule.rule_mode = 'Dx'
+  ex.result.notes = 110
+  ex.play_options = { arrange_1p: 'random', arrange_2p: 'mirror' }
+  const exBest = await submitScore({ id: 'alice' }, ex, [], 10)
+  const clear = structuredClone(ex)
+  clear.idempotency_key = 'player-clear'
+  clear.result.clear = 'Hard'
+  clear.result.ex_score = 180
+  clear.result.judges.fast.pgreat = 90
+  clear.result.notes = 105
+  clear.play_options = { arrange_1p: 'mirror' }
+  const clearBest = await submitScore({ id: 'alice' }, clear, [], 10)
+  const noLn = await submitScore({ id: 'alice' }, submission({ sha256: CHART_B }), [], 10)
+  await db.insert(schema.difficultyTables).values({
+    id: 'player-fixture',
+    sourceUrl: 'https://example.invalid/player-table',
+    name: 'Fixture',
+    symbol: 'st',
+    activeGeneration: 'current',
+  })
+  await db.insert(schema.difficultyTableEntries).values({
+    tableId: 'player-fixture',
+    generation: 'current',
+    level: '1',
+    md5,
+  })
+
+  const load = (query = '') =>
+    playerDetailHandler(event({ path: `/api/v1/players/alice?${query}`, params: { id: 'alice' } }))
+  const [first, second] = await Promise.all([load('limit=1'), load('limit=1&offset=1')])
+  expect(first.pagination).toEqual({ limit: 1, offset: 0, total: 2, has_more: true })
+  expect(second.pagination).toEqual({ limit: 1, offset: 1, total: 2, has_more: false })
+  expect(new Set([...first.best_scores, ...second.best_scores].map((row) => row.score_id))).toEqual(
+    new Set([exBest.score_id, noLn.score_id]),
+  )
+  const filtered = await load('ln_policy=AutoLn&rule_mode=Dx')
+  expect(filtered.pagination.total).toBe(1)
+  expect(filtered.ln_filters).toEqual({ has_ln: true, has_mixed_ln: true })
+  expect(filtered.best_scores[0]).toMatchObject({
+    best_ex_score_id: exBest.score_id,
+    best_clear_score_id: clearBest.score_id,
+    ex_score: 200,
+    max_ex_score: 220,
+    clear_type: 'Hard',
+    arrange_1p: 'random',
+    arrange_2p: 'mirror',
+    ln_policy: 'AutoLn',
+    rule_mode: 'Dx',
+    chart: { has_ln: true, difficulty_labels: [{ symbol: 'st', level: '1' }] },
+  })
+  expect((await load('ln_policy=AutoLn&rule_mode=Beatoraja')).pagination.total).toBe(0)
+  expect((await load('ln_policy=ForceLn')).pagination.total).toBe(0)
+  expect((await load('rule_mode=Beatoraja')).best_scores[0].chart.has_ln).toBe(false)
+
+  await setChartStatus(CHART_A, 'hidden')
+  const remaining = await load('ln_policy=AutoLn')
+  expect(remaining.ln_filters).toEqual({ has_ln: false, has_mixed_ln: false })
+  expect(remaining.pagination.total).toBe(1)
+  expect(remaining.best_scores[0].score_id).toBe(noLn.score_id)
+})
+
 function submission(
   overrides: { sha256?: string; md5?: string; exScore?: number; key?: string; clear?: string } = {},
 ): IrScoreSubmission {

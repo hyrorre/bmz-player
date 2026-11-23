@@ -6,6 +6,7 @@ const props = defineProps<{
   pageSize: number
   maxPage: number
   total: number
+  totalLabel?: string
   pageLocation: (page: number) => RouteLocationRaw
 }>()
 const { t } = useI18n()
@@ -17,7 +18,7 @@ const lastPage = computed(() => Math.max(1, Math.ceil(navigationTotal.value / pr
 <template>
   <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
     <p class="text-sm text-muted">
-      {{ t('ranking.totalPlayers', { total: formatNumber(total) }) }}
+      {{ totalLabel ?? t('ranking.totalPlayers', { total: formatNumber(total) }) }}
     </p>
     <UPagination
       v-if="lastPage > 1 || page > 1"
