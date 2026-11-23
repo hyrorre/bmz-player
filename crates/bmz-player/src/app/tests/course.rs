@@ -203,6 +203,8 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
         judge_counts: crate::screens::result_model::ResultJudgeCounts {
             pgreat: 160,
             bad: 2,
+            poor: 30,
+            empty_poor: 5,
             ..Default::default()
         },
         trophy_results: Vec::new(),
@@ -269,6 +271,11 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
     course.entry_summaries[0].chart_md5 = Some([1; 16]);
     course.entry_summaries[1].chart_md5 = Some([2; 16]);
     course.entry_summaries[1].chart_sha256 = Some([3; 32]);
+    // Stage BP 7 + 30 and CB 2 + 30; the course BP 37 includes 5 empty POOR.
+    course.entry_summaries[0].bp = 7;
+    course.entry_summaries[0].cb = 2;
+    course.entry_summaries[1].bp = 30;
+    course.entry_summaries[1].cb = 30;
     let mut summary = course_result_summary_for_skin(&course);
     assert_eq!(summary.chart_md5, Some([2; 16]));
     assert_eq!(summary.chart_sha256, Some([3; 32]));
@@ -281,6 +288,8 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
     assert_eq!(summary.ex_score, 320);
     assert_eq!(summary.total_notes, 400);
     assert_eq!(summary.bp, 37);
+    // A cleared course CB is the stage CB sum.
+    assert_eq!(summary.cb, 32);
     assert!((summary.ex_score_rate() - 0.4).abs() < 0.001);
     assert_eq!(summary.max_combo, 170);
     assert_eq!(summary.score_history_id, 22);
@@ -303,9 +312,9 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
     assert_eq!(number_values.get(&74), Some(&400));
     assert_eq!(number_values.get(&110), Some(&160));
     assert_eq!(number_values.get(&113), Some(&2));
-    assert_eq!(number_values.get(&426), Some(&0));
+    assert_eq!(number_values.get(&426), Some(&35));
     assert_eq!(number_values.get(&178), Some(&25));
-    assert_eq!(number_values.get(&425).copied(), Some(i32::try_from(summary.cb).unwrap()));
+    assert_eq!(number_values.get(&425), Some(&32));
     assert_eq!(summary.replay_slots, [true, false, true, false]);
     assert_eq!(summary.saved_replay_slots, [false, false, true, false]);
     assert_eq!(summary.judge_counts.pgreat, 160);
@@ -353,6 +362,14 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
     assert_eq!(runtime_state.text_values.get(&3).map(String::as_str), Some("RANK AAA"));
     // Stage 3 was left unplayed after a FAILED; LR2 still shows its level.
     course.total_entries = 3;
+    course.final_clear_type = ClearType::Failed;
+    course.course_failed = true;
+    course.course_clear = false;
+    // 180 unplayed notes, 32 stage CB (including the failed stage's remainder), 5 empty POOR.
+    course.bp = 217;
+    let failed = course_result_summary_for_skin(&course);
+    assert_eq!((failed.bp, failed.cb), (217, 212));
+    assert_eq!(result_lua_runtime_number_values_for_summary(&failed)[&425], 212);
     course.stage_charts = [("12", "ANOTHER"), ("", ""), ("9", "HYPER")]
         .map(|(play_level, difficulty_name)| crate::screens::course_session::CourseStageChartInfo {
             play_level: play_level.to_string(),

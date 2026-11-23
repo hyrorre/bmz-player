@@ -309,6 +309,21 @@ fn failed_local_backfill_roundtrips_processed_notes_and_unprocessed_bp_cb() {
         .query_row("SELECT bp, cb FROM score_history", [], |row| Ok((row.get(0)?, row.get(1)?)))
         .unwrap();
     assert_eq!(stored_bp_cb, (11, 9));
+
+    // The BAD did not consume a note. A local course stage kept the nine
+    // remaining notes in its recorded metrics despite its NoPlay lamp.
+    row.source_kind = ScoreSourceKind::Local;
+    row.clear_type = "NoPlay".into();
+    row.bp = 12;
+    row.cb = 10;
+    let stage = build_local_score_submission(&row, &chart, None, None);
+    entry.clear = stage.result.clear;
+    entry.pass_notes = stage.result.pass_notes.unwrap();
+    entry.min_bp = stage.result.min_bp;
+    entry.min_cb = stage.result.min_cb;
+    let restored = crate::ir::download::score_record_from_ir_entry(&entry).unwrap();
+    assert_eq!(restored.score.past_notes, 11);
+    assert!(restored.count_unprocessed_notes);
 }
 
 #[test]

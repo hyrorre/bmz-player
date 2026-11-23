@@ -547,7 +547,7 @@ Workerの更新前にD1のmigration `0018_score_cleanup_consistency.sql`と`0019
 
 - EXスコアは`(FAST PGREAT + SLOW PGREAT) * 2 + FAST GREAT + SLOW GREAT`です。
 - 判定数はBMZの`ScoreState`のJudgeCountsと同じで、FAST / SLOWそれぞれの`pgreat` / `great` / `good` / `bad` / `poor` / `empty_poor`です。BMZでは「Miss」という判定名は使わず、見逃しは`poor`、空押しは`empty_poor`です。`empty_poor`にもFAST / SLOWがあるため、丸めずに保存します。
-- BPは`bad + poor + empty_poor`、CBは`bad + poor`です。`empty_poor`はコンボを切らないため、CBには含めません。IRの`min_bp` / `min_cb`は、送られたBP / CBの自己ベストの最小値です。
+- APIの`bp`は`bad + poor + empty_poor`、`cb`は`bad + poor`です。BMZはプレイ終了時の処理済みノーツ数を`pass_notes`で送り、途中FAILEDでは未処理ノーツを加えた記録値を`min_bp` / `min_cb`で送ります。単曲のスコア詳細にはそのプレイの`min_bp`を表示し、自己ベストは各プレイの記録値の最小を取ります。
 - `device_type`は、プレイ中の人による押下入力（`InputSource::Human`の`InputKind::Press`）を数え、コントローラーの押下数がキーボードより多ければ`controller`、それ以外は`keyboard`にします。`mixed`はありません。スクラッチだけをキーボード入力へ変換している環境でも、鍵盤がコントローラーなら`controller`になります。device情報のない古いリプレイは`keyboard`として扱います。
 - ローカルのscore DBは、`score_history` / `score_best` / `replay_slots`に`bp` / `cb`を、`score_history` / `score_best`に`device_type`を保存します。IRのpayloadは`score_history`の値から作ります。BMZでは`miss_count`という名前は使いません。
 
@@ -824,8 +824,8 @@ payloadと署名は次のとおりです。
 - 送信の直前にdevice keyで署名し、サーバーでは`signed_backfill`として保存します。
 - `source_kind`、1P / 2Pの配置、実際に適用したDPオプションも送り、ランキング用の`double_option`とは別に、個別のスコアの履歴に保持します。
 - `--include-replay`を付けると、score payloadにリプレイのupload intentを付け、scoreが成功した後にreplay jobを作ります。replay jobの送信は、upload-localでは行わず、通常のworkerか`ir sync`が処理します。
-- `pass_notes`は保存済みの判定数から作り、`empty_poor`は実ノーツの判定数に含めません。Failedのスコアでは、未処理のノーツの分を`min_bp` / `min_cb`に含めて送るため、download-scoresは同じ`pass_notes`からローカルの履歴を復元できます。
-- 以前のbackfillで`pass_notes == notes`のまま送ったFailedのスコアは、BP / CBの増分が同じ正の数で、そこから推定した処理済みの数が判定数と一致する場合だけ復元します。一致しない履歴は取り込まず、エラーにします。
+- 一括送信の`pass_notes`は保存済みの判定数から作り、`empty_poor`を除きます。BMZのローカル履歴でBP・CBに同数の未処理ノーツが記録されている場合は、総ノーツ数からその数を引きます。非消費BADなどで判定数と処理済み数が異なる途中FAILEDも、download-scoresで同じBP・CBに復元できます。
+- `pass_notes == notes`のまま保存されたFailedのスコアは、BP / CBの増分が同じ正の数で、そこから推定した処理済みの数が判定数と一致する場合だけ復元します。以前のbackfillと、`pass_notes`を省略していた以前の即時送信が対象です。非消費BADなどで判定数と処理済み数が異なる履歴は推定と一致しないため、取り込まずにエラーにします。
 - 履歴ごとのghostは、現在の`score_history`に保持していないため送りません。
 
 ### 送信済みscoreへの署名（attestation）
@@ -912,7 +912,7 @@ payloadと署名は次のとおりです。
 - 送信の対象は、Beatoraja / LR2orajaのルール、実際のLN / CN / HCN、Off / Flip / Battle / Battle ASの、4 / 5 / 6 / 7 / 8 / 9 / 10 / 14 / 24 / 48Kです。BattleとBattle ASは別の区分、G-BATTLEは通常の区分を使います。4 / 6 / 8KもBMS-IRの正規のキーモードとして送ります。
 - DX、full autoplay、リプレイ再生、プラクティス、実効アシスト、リプレイファイルの送受信、local backfillは対象外です。
 - クリアは`Failed` / `Easy` / `Normal` / `Hard` / `ExHard` / `FullCombo` / `Perfect` / `Max`と、`gauge`が`AssistEasy`の`LightAssistEasy`を送ります。後者はASSIST EASYゲージ（GASの最終ゲージを含む）のクリアで、実効アシストのプレイはqueueに入りません。実効Assistのランプである`AssistEasy`は送りません。ランプを`Easy`などへ置き換えて送ることもしません。
-- コース中の単曲のスコアには`course_stage=true`を付け、保存時と同じくNoPlay / FullCombo / Perfect / Maxへ丸めたランプだけを送ります。数値のスコアと判定は単曲の結果のままです。最後のコース / 段位のscoreは別のjobとして送ります。
+- コース中の単曲のスコアには`course_stage=true`を付け、保存時と同じくNoPlay / FullCombo / Perfect / Maxへ丸めたランプを送ります。ゲージ枯渇や手動中断でNoPlayとなった曲も、送信するBP・CBと`UpdateScore`の比較値にはその曲の未処理ノーツを含めます。最後のコース / 段位のscoreは別のjobとして送ります。
 - ローカルでの結合確認用のビルドだけは、`cargo build`の時に`BMZ_BMS_IR_BASE_URL`を指定すると、固定のendpointを差し替えられます。通常のビルドでは本番のURLに固定で、プロファイルの設定からgame tokenの送信先を変えることはできません。
 
 ### random seed
