@@ -89,10 +89,12 @@ python tools/legacy-compare/compare.py --poll-trace .local/openlr2-parity-trace/
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/legacy-compare/build_openlr2_oracle.ps1
-python tools/legacy-compare/oracle_vs_bmz.py --results .local/legacy-compare --oracle .local/openlr2-oracle/openlr2_oracle.exe --output .local/oracle-vs-bmz
+cargo build -p bmz-gameplay --example legacy_compare --locked --offline
+python tools/legacy-compare/oracle_vs_bmz.py --results .local/legacy-compare --oracle .local/openlr2-oracle/openlr2_oracle.exe --runner target/debug/examples/legacy_compare.exe --output .local/oracle-vs-bmz --tolerance 0
 ```
 
 - 入力はテキストで、譜面・鍵数・配置（RANDOM、seed、固定キー、皿配置、DPフリップ）・ゲージ・キーの押下/解放です。`replay_to_oracle.py`が`.lr2rep`から作ります。
 - 出力は判定（`J`）、地雷（`M`）、ポーリング後のゲージ6種・EX・コンボ・判定数（`S`）、全ノートの倍精度時刻（`N`）、閉店（`E`）です。判定は`ApplyJudgeNote` / `ApplyJudgeMine`のリプレイ記録フックから取るので、OpenLR2自身が記録する順序と同じです。
 - ゲージ確認と閉店はScene04_Playと同じく各ポーリングの前に行います。
-- `oracle_vs_bmz.py`は、compare.pyで比較したプレイごとに、BMZとオラクルの判定列、オラクルと記録の判定列、地雷の被弾数を比べます。現時点で比べているのは判定値の列と地雷の回数です。ゲージ・時刻・レーンの照合はまだです。
+- `oracle_vs_bmz.py`は、compare.pyで比較したプレイごとに、同じ入力をオラクルとBMZのランナー（`oracle_output_path`付き）へ与え、出力を1行ずつ比べます。対象は、判定のポーリング時刻・レーン・判定値、地雷の時刻・レーン・ダメージ、各ポーリング後のGROOVE / HARD / DEATH / EASYのHP・EX・コンボ・最大コンボ・判定数・処理済みノーツ数、閉店です。HPは`--tolerance`（既定1e-3、0で完全一致）以内を一致とします。
+- BMZ側はGameSessionのLEGACY 1msポーリングと同じく、レーン順に判定と地雷をスコア・ゲージへ反映し、ポーリング後に閉店を確認します。

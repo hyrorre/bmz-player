@@ -32,6 +32,8 @@ use serde_json::{Value, json};
 
 #[path = "legacy_compare/captured.rs"]
 mod captured;
+#[path = "legacy_compare/oracle_out.rs"]
+mod oracle_out;
 use captured::compare_poll_trace;
 
 #[derive(Deserialize)]
@@ -43,6 +45,9 @@ struct Request {
     poll_trace: Option<String>,
     #[serde(default)]
     analysis_only: bool,
+    /// Also write judgements, mines and score/gauge state in the
+    /// openlr2_oracle output format, stopping when the gauge closes play.
+    oracle_output_path: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -283,6 +288,11 @@ fn compare(req: &Request) -> Result<Value> {
             "index,bmz_ms,reference_ms,bmz_judge,reference_judge,bmz_lane,bmz_note_id,delta_us"
         )?;
     }
+    let mut oracle = match &req.oracle_output_path {
+        Some(path) => Some(oracle_out::OracleOut::new(Path::new(path), &chart, header(101)?)?),
+        None => None,
+    };
+    let mut closed_at = None;
     // Explicit 1ms polling model. Original OpenLR2 frame boundaries are not recorded.
     // This is a judge-engine diagnostic, not a full GameSession/gauge simulation.
     for ms in 0..=end_ms {
@@ -310,15 +320,18 @@ fn compare(req: &Request) -> Result<Value> {
                         scratch_direction: None,
                     },
                 );
-                mine_hits.extend(outcome.mine_hits.iter().map(|h| (ms, lane.index(), h.damage)));
-                events.extend(outcome.events);
+                record_lane(&mut oracle, ms, lane, &outcome, &mut mine_hits, &mut events)?;
             }
             if !has_input {
                 let outcome =
                     judge.process_legacy_lane_poll(&chart, lane, now, held[lane.index()], false);
-                mine_hits.extend(outcome.mine_hits.iter().map(|h| (ms, lane.index(), h.damage)));
-                events.extend(outcome.events);
+                record_lane(&mut oracle, ms, lane, &outcome, &mut mine_hits, &mut events)?;
             }
+        }
+        if let Some(oracle) = &mut oracle
+            && oracle.end_poll(ms)?
+        {
+            closed_at = Some(ms + 1);
         }
         for event in events.into_iter().filter(|e| e.affects_score) {
             let got = value(event.judge);
@@ -344,6 +357,15 @@ fn compare(req: &Request) -> Result<Value> {
             }
             counts[got] += 1;
             sequence.push(got as i32);
+        }
+        if closed_at.is_some() {
+            break;
+        }
+    }
+    if let Some(oracle) = oracle {
+        match closed_at {
+            Some(ms) => oracle.finish(ms, "closed")?,
+            None => oracle.finish(end_ms + 1, "end")?,
         }
     }
     let sequence_equal = sequence.iter().copied().eq(expected.iter().map(|r| r.value));
@@ -392,6 +414,26 @@ fn compare(req: &Request) -> Result<Value> {
         "arrange":arrange, "fixed_key":fixed_key, "seed":seed, "source_to_input_lanes":table, "import_warning_count":imported.warnings.len(),
         "model":"openlr2-sequential-timing-lane-polls-1ms", "full_session_verified":false}),
     )
+}
+
+/// Collects one lane's outcome and, in oracle mode, applies it to the score
+/// and gauges in lane order as GameSession does.
+fn record_lane(
+    oracle: &mut Option<oracle_out::OracleOut>,
+    ms: i64,
+    lane: Lane,
+    outcome: &bmz_gameplay::judge::model::JudgeOutcome,
+    mine_hits: &mut Vec<(i64, usize, f64)>,
+    events: &mut Vec<bmz_gameplay::judge::model::JudgementEvent>,
+) -> Result<()> {
+    mine_hits.extend(outcome.mine_hits.iter().map(|h| (ms, lane.index(), h.damage)));
+    if let Some(oracle) = oracle {
+        let scored: Vec<_> = outcome.events.iter().filter(|e| e.affects_score).cloned().collect();
+        let mines: Vec<_> = outcome.mine_hits.iter().map(|h| (lane, h.damage)).collect();
+        oracle.lane(ms, &scored, &mines, |e| value(e.judge))?;
+    }
+    events.extend(outcome.events.iter().cloned());
+    Ok(())
 }
 
 fn main() -> Result<()> {
