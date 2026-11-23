@@ -88,7 +88,7 @@ pub fn prepare(
         )?;
         play_options.session_mode = crate::select_options::SessionMode::Normal;
         play_options.autoplay = false;
-        play_options.assist = Default::default();
+        play_options.assist = profile.play.assist.replay_display_options();
         play_options.freq_semitones = file.recorded_freq_semitones();
         play_options.playback_rate_percent =
             crate::config::play::freq_playback_rate_percent(play_options.freq_semitones);

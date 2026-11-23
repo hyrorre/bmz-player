@@ -365,7 +365,13 @@ mod tests {
 
         let mut first = play(r"C:\譜面\_temp.bms", 12, true);
         if let ViewerCommand::Play { play_overrides, .. } = &mut first {
-            play_overrides.values.insert("show-invisible-notes".into(), true.into());
+            let flags = "chart.bms -P --show-invisible-notes on --mark-note off --judge-area on --show-ln-tail-cap off --green-number 275";
+            let crate::cli::Command::Run(options) =
+                crate::cli::parse_command(flags.split_whitespace()).unwrap()
+            else {
+                panic!()
+            };
+            *play_overrides = options.play_overrides;
         }
         for command in [
             first,

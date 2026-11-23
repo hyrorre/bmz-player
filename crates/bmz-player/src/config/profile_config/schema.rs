@@ -803,6 +803,11 @@ pub struct AssistOptionConfig {
 }
 
 impl AssistOptionConfig {
+    /// Replay playback can use these overlays independently of the recorded chart and judgement.
+    pub(crate) fn replay_display_options(self) -> Self {
+        Self { mark_note: self.mark_note, judge_area: self.judge_area, ..Self::default() }
+    }
+
     pub fn flags(self) -> [bool; 7] {
         [
             self.expand_judge,
