@@ -52,6 +52,11 @@ export function useAppNavigation() {
             icon: 'i-lucide-user',
             value: APP_NAV_ACCOUNT_VALUE,
             children: [
+              {
+                label: t('nav.myPage'),
+                to: localePath(`/players/${user.value.id}`),
+                icon: 'i-lucide-circle-user-round',
+              },
               { label: t('nav.daily'), to: localePath('/daily'), icon: 'i-lucide-calendar-days' },
               { label: t('nav.rivals'), to: localePath('/rivals'), icon: 'i-lucide-users-round' },
               { label: t('nav.profile'), to: localePath('/profile'), icon: 'i-lucide-user-pen' },

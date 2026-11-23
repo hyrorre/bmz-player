@@ -25,6 +25,7 @@ export default defineI18nLocale(() =>
         charts: '譜面',
         courses: 'コース',
         players: 'ユーザー',
+        myPage: 'マイページ',
         daily: '本日の成果',
         rivals: 'ライバル',
         profile: 'プロフィール',

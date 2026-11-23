@@ -22,6 +22,7 @@ export default defineI18nLocale(() =>
         charts: '谱面',
         courses: '课程',
         players: '玩家',
+        myPage: '我的主页',
         daily: '今日成果',
         rivals: '对手',
         profile: '个人资料',

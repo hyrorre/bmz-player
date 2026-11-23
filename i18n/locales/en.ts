@@ -25,6 +25,7 @@ export default defineI18nLocale(() =>
         charts: 'Charts',
         courses: 'Courses',
         players: 'Players',
+        myPage: 'My page',
         daily: "Today's results",
         rivals: 'Rivals',
         profile: 'Profile',
