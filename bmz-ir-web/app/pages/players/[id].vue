@@ -220,9 +220,6 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
           <table class="w-full text-sm">
             <thead class="bg-elevated text-left text-toned">
               <tr>
-                <th scope="col" class="w-px px-1">
-                  <span class="sr-only">{{ t('score.title') }}</span>
-                </th>
                 <th class="px-3 py-2">{{ t('table.chart') }}</th>
                 <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
                 <th class="px-3 py-2">{{ t('table.clear') }}</th>
@@ -233,18 +230,14 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
                 <th class="px-3 py-2 text-right">BP</th>
                 <th class="px-3 py-2">{{ t('table.input') }}</th>
                 <th class="px-3 py-2">{{ t('table.date') }}</th>
+                <th scope="col" class="sticky right-0 z-10 w-px bg-elevated px-1">
+                  <span class="sr-only">{{ t('score.title') }}</span>
+                </th>
               </tr>
             </thead>
             <tbody>
               <template v-for="score in data.best_scores" :key="score.id">
                 <tr class="border-t border-default">
-                  <td class="px-1 py-1">
-                    <ScoreDetailToggle
-                      :expanded="expandedScoreRow === score.id"
-                      :controls="scoreDetailsId"
-                      @toggle="toggleScoreDetails(score.id)"
-                    />
-                  </td>
                   <td class="min-w-48 px-3 py-2">
                     <NuxtLink
                       :to="localePath(`/charts/${score.chart_sha256}`)"
@@ -282,6 +275,13 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
                   <td class="px-3 py-2 text-muted">{{ score.device_type }}</td>
                   <td class="px-3 py-2 whitespace-nowrap text-muted">
                     {{ formatDateTime(score.played_at ?? score.server_received_at) }}
+                  </td>
+                  <td class="sticky right-0 z-10 bg-default px-1 py-1">
+                    <ScoreDetailToggle
+                      :expanded="expandedScoreRow === score.id"
+                      :controls="scoreDetailsId"
+                      @toggle="toggleScoreDetails(score.id)"
+                    />
                   </td>
                 </tr>
                 <tr

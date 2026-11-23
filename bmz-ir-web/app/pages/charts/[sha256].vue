@@ -258,11 +258,6 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                 <IrClearBadge :clear="selfBestEntry.score.clear" />
                 <p class="text-sm">COMBO {{ selfBestEntry.score.max_combo }}</p>
                 <p class="text-sm">BP {{ selfBestEntry.score.min_bp }}</p>
-                <ScoreDetailToggle
-                  :expanded="expandedScoreRow === 'personal-best'"
-                  :controls="scoreDetailsId"
-                  @toggle="toggleScoreDetails('personal-best')"
-                />
               </div>
               <p class="mt-1 text-xs text-neutral-500">
                 {{ selfBestEntry.score.gauge }} ·
@@ -274,15 +269,17 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
               </p>
             </div>
             <p v-else class="text-sm text-neutral-400">{{ t('ranking.noPersonalBest') }}</p>
-            <UButton
-              icon="i-lucide-list"
-              color="neutral"
-              variant="subtle"
-              class="shrink-0"
-              @click="openHistory"
-            >
-              {{ t('ranking.selfHistory') }}
-            </UButton>
+            <div class="flex shrink-0 items-center justify-end gap-2">
+              <UButton icon="i-lucide-list" color="neutral" variant="subtle" @click="openHistory">
+                {{ t('ranking.selfHistory') }}
+              </UButton>
+              <ScoreDetailToggle
+                v-if="selfBestEntry"
+                :expanded="expandedScoreRow === 'personal-best'"
+                :controls="scoreDetailsId"
+                @toggle="toggleScoreDetails('personal-best')"
+              />
+            </div>
           </div>
           <ScoreInlineDetails
             v-if="selfBestEntry && expandedScoreRow === 'personal-best'"
@@ -315,9 +312,6 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
           <table class="w-full text-sm">
             <thead class="bg-elevated text-left text-toned">
               <tr>
-                <th scope="col" class="w-px px-1">
-                  <span class="sr-only">{{ t('score.title') }}</span>
-                </th>
                 <th class="px-3 py-2">#</th>
                 <th class="px-3 py-2">{{ t('table.player') }}</th>
                 <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
@@ -329,18 +323,14 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                 <th class="px-3 py-2 text-right">BP</th>
                 <th class="px-3 py-2">{{ t('table.input') }}</th>
                 <th class="px-3 py-2">{{ t('table.date') }}</th>
+                <th scope="col" class="sticky right-0 z-10 w-px bg-elevated px-1">
+                  <span class="sr-only">{{ t('score.title') }}</span>
+                </th>
               </tr>
             </thead>
             <tbody>
               <template v-for="entry in ranking.ranking.entries" :key="entry.score.score_id">
                 <tr class="border-t border-default">
-                  <td class="px-1 py-1">
-                    <ScoreDetailToggle
-                      :expanded="expandedScoreRow === entry.score.score_id"
-                      :controls="scoreDetailsId"
-                      @toggle="toggleScoreDetails(entry.score.score_id)"
-                    />
-                  </td>
                   <td class="px-3 py-2 text-toned">{{ entry.rank }}</td>
                   <td class="px-3 py-2">
                     <NuxtLink
@@ -376,6 +366,13 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                   <td class="px-3 py-2 text-neutral-400">{{ entry.score.device_type }}</td>
                   <td class="px-3 py-2 text-neutral-400">
                     {{ formatScoreDate(entry.score.played_at) }}
+                  </td>
+                  <td class="sticky right-0 z-10 bg-default px-1 py-1">
+                    <ScoreDetailToggle
+                      :expanded="expandedScoreRow === entry.score.score_id"
+                      :controls="scoreDetailsId"
+                      @toggle="toggleScoreDetails(entry.score.score_id)"
+                    />
                   </td>
                 </tr>
                 <tr

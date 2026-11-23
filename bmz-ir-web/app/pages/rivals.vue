@@ -146,7 +146,7 @@ useSeoMeta({ title: () => t('rivals.title') })
 </script>
 
 <template>
-  <main>
+  <main class="min-w-0">
     <section class="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
       <div class="mb-8">
         <p class="mb-2 text-sm font-medium text-primary">BMZ Internet Ranking</p>
@@ -265,9 +265,6 @@ useSeoMeta({ title: () => t('rivals.title') })
               <table class="w-full min-w-[980px] text-sm">
                 <thead class="bg-elevated text-left text-muted">
                   <tr>
-                    <th scope="col" class="w-px px-1">
-                      <span class="sr-only">{{ t('score.title') }}</span>
-                    </th>
                     <th class="w-28 px-4 py-3">LV</th>
                     <th class="px-4 py-3">{{ t('table.chart') }}</th>
                     <th class="w-44 px-4 py-3">{{ t('table.conditions') }}</th>
@@ -277,6 +274,9 @@ useSeoMeta({ title: () => t('rivals.title') })
                     <th class="w-20 px-4 py-3 text-right">{{ t('rivals.myBp') }}</th>
                     <th class="w-20 px-4 py-3 text-right">{{ t('rivals.rivalBp') }}</th>
                     <th class="w-20 px-4 py-3 text-right">{{ t('rivals.difference') }}</th>
+                    <th scope="col" class="sticky right-0 z-10 w-px bg-elevated px-1">
+                      <span class="sr-only">{{ t('score.title') }}</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -285,13 +285,6 @@ useSeoMeta({ title: () => t('rivals.title') })
                     :key="`${row.chart.sha256}-${row.rule.ln_policy}-${row.rule.double_option}-${row.rule.rule_mode}-${row.rule.scoring}`"
                   >
                     <tr class="border-t border-muted">
-                      <td class="px-1 py-1 align-top">
-                        <ScoreDetailToggle
-                          :expanded="expandedScoreRow === row.self.score_id"
-                          :controls="scoreDetailsId"
-                          @toggle="toggleScoreDetails(row.self.score_id)"
-                        />
-                      </td>
                       <td class="px-4 py-3 align-top">
                         <DifficultyTableBadges
                           v-if="row.difficulty_labels.length"
@@ -336,6 +329,13 @@ useSeoMeta({ title: () => t('rivals.title') })
                         :class="outcomeClass(row.outcome.min_bp)"
                       >
                         {{ signed(row.difference.min_bp) }}
+                      </td>
+                      <td class="sticky right-0 z-10 bg-default px-1 py-1 align-top">
+                        <ScoreDetailToggle
+                          :expanded="expandedScoreRow === row.self.score_id"
+                          :controls="scoreDetailsId"
+                          @toggle="toggleScoreDetails(row.self.score_id)"
+                        />
                       </td>
                     </tr>
                     <tr

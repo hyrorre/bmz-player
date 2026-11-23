@@ -38,9 +38,6 @@ function formatScoreDate(value: string | null) {
         <table class="w-full text-sm">
           <thead class="bg-elevated text-left text-toned">
             <tr>
-              <th v-if="scoreDetailId" scope="col" class="w-px px-1">
-                <span class="sr-only">{{ t('score.title') }}</span>
-              </th>
               <th class="px-3 py-2">{{ t('table.date') }}</th>
               <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
               <th class="px-3 py-2">{{ t('table.clear') }}</th>
@@ -49,18 +46,18 @@ function formatScoreDate(value: string | null) {
               <th class="px-3 py-2">OPTION</th>
               <th class="px-3 py-2 text-right">COMBO</th>
               <th class="px-3 py-2 text-right">BP</th>
+              <th
+                v-if="scoreDetailId"
+                scope="col"
+                class="sticky right-0 z-10 w-px bg-elevated px-1"
+              >
+                <span class="sr-only">{{ t('score.title') }}</span>
+              </th>
             </tr>
           </thead>
           <tbody>
             <template v-for="score in history.scores" :key="scoreKey(score)">
               <tr class="border-t border-default">
-                <td v-if="scoreDetailId" class="px-1 py-1">
-                  <ScoreDetailToggle
-                    :expanded="expandedScoreRow === scoreKey(score)"
-                    :controls="scoreDetailsId"
-                    @toggle="toggleScoreDetails(scoreKey(score))"
-                  />
-                </td>
                 <td class="px-3 py-2 text-muted">
                   {{ formatScoreDate(score.played_at ?? score.server_received_at) }}
                 </td>
@@ -75,6 +72,13 @@ function formatScoreDate(value: string | null) {
                 <td class="px-3 py-2 text-xs text-muted">{{ scoreOption(score) }}</td>
                 <td class="px-3 py-2 text-right">{{ score.max_combo }}</td>
                 <td class="px-3 py-2 text-right">{{ scoreBp(score) }}</td>
+                <td v-if="scoreDetailId" class="sticky right-0 z-10 bg-default px-1 py-1">
+                  <ScoreDetailToggle
+                    :expanded="expandedScoreRow === scoreKey(score)"
+                    :controls="scoreDetailsId"
+                    @toggle="toggleScoreDetails(scoreKey(score))"
+                  />
+                </td>
               </tr>
               <tr
                 v-if="scoreDetailId && expandedScoreRow === scoreKey(score)"
