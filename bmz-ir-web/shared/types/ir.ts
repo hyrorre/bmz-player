@@ -417,6 +417,30 @@ export interface IrDifficultyLabel {
   level: string
 }
 
+export interface IrLampTable {
+  id: string
+  name: string
+  symbol: string
+}
+
+export type IrDistributionMode = 'lamp' | 'score'
+
+export interface IrDifficultyDistribution {
+  player: { id: string; display_name: string }
+  tables: IrLampTable[]
+  table: IrLampTable | null
+  levels: {
+    level: string
+    total: number
+    segments: { rank: number; count: number }[]
+  }[]
+}
+
+export interface IrDistributionCharts {
+  charts: { sha256: string; title: string; subtitle: string | null; artist: string | null }[]
+  pagination: IrRanking['ranking']['pagination']
+}
+
 export interface IrDailyRuleResult {
   rule: {
     ln_policy: string

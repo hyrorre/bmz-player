@@ -1,22 +1,10 @@
 <script setup lang="ts">
-import { CLEAR_RANK } from '../../shared/constants/ir'
+import { CLEAR_RANK, IR_CLEAR_LABELS } from '../../shared/constants/ir'
 
 const props = defineProps<{ clear?: string; rank?: number }>()
-const labels = [
-  'NO PLAY',
-  'FAILED',
-  'ASSIST',
-  'EASY',
-  'CLEAR',
-  'HARD',
-  'EX HARD',
-  'FULL COMBO',
-  'PERFECT',
-  'MAX',
-]
 const label = computed(() => {
   if (!props.clear) return '-'
-  return labels[CLEAR_RANK[props.clear] ?? -1] ?? props.clear.toUpperCase()
+  return IR_CLEAR_LABELS[CLEAR_RANK[props.clear] ?? -1] ?? props.clear.toUpperCase()
 })
 const color = computed(() => {
   const rank = props.rank ?? CLEAR_RANK[props.clear ?? ''] ?? 0

@@ -4,6 +4,7 @@ import { and, eq, exists, inArray, ne, notExists, or, sql, type SQL } from 'driz
 import { db, schema } from 'hub:db'
 import type { IrDifficultyLabel } from '../../shared/types/ir'
 import type { DifficultyFilter } from '../../shared/utils/difficulty_filter'
+import { publicChartCondition } from './moderation/visibility'
 
 const DEFAULT_TIMEOUT_MS = 15_000
 const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -227,28 +228,60 @@ function activeDifficultyGeneration() {
   )
 }
 
+function chartMd5Match() {
+  return eq(schema.difficultyTableEntries.md5, sql`nullif(lower(${schema.charts.md5}), '')`)
+}
+
+function chartSha256Match() {
+  return eq(schema.difficultyTableEntries.sha256, sql`lower(${schema.charts.sha256})`)
+}
+
+function activeDifficultyEntries(condition: SQL | undefined) {
+  return db
+    .select({ found: sql`1` })
+    .from(schema.difficultyTableEntries)
+    .innerJoin(schema.difficultyTables, activeDifficultyGeneration())
+    .where(condition)
+}
+
 export function chartDifficultyCondition(filter: DifficultyFilter): SQL {
   const entries = schema.difficultyTableEntries
   const selectedLevel = and(
     eq(entries.tableId, filter.difficulty_table),
     eq(entries.level, filter.difficulty_level),
   )
-  const md5Match = eq(entries.md5, sql`nullif(lower(${schema.charts.md5}), '')`)
-  const shaMatch = eq(entries.sha256, sql`lower(${schema.charts.sha256})`)
-
-  function activeEntries(condition: SQL | undefined) {
-    return db
-      .select({ found: sql`1` })
-      .from(entries)
-      .innerJoin(schema.difficultyTables, activeDifficultyGeneration())
-      .where(condition)
-  }
+  const md5Match = chartMd5Match()
 
   // An MD5 match in any active table suppresses every SHA-256 label for the chart.
   return or(
-    exists(activeEntries(and(selectedLevel, md5Match))),
-    and(notExists(activeEntries(md5Match)), exists(activeEntries(and(selectedLevel, shaMatch)))),
+    exists(activeDifficultyEntries(and(selectedLevel, md5Match))),
+    and(
+      notExists(activeDifficultyEntries(md5Match)),
+      exists(activeDifficultyEntries(and(selectedLevel, chartSha256Match()))),
+    ),
   )!
+}
+
+/** One row per public chart and level, using the same hash precedence as difficulty badges. */
+export function difficultyTableCharts(tableId: string, level?: string) {
+  const { charts, difficultyTableEntries: entries, difficultyTables: tables } = schema
+  const md5Match = chartMd5Match()
+  return db
+    .selectDistinct({ sha256: charts.sha256, level: entries.level })
+    .from(charts)
+    .innerJoin(
+      entries,
+      or(md5Match, and(chartSha256Match(), notExists(activeDifficultyEntries(md5Match))))!,
+    )
+    .innerJoin(tables, activeDifficultyGeneration())
+    .where(
+      and(
+        eq(entries.tableId, tableId),
+        level === undefined ? undefined : eq(entries.level, level),
+        publicChartCondition(charts.sha256),
+      ),
+    )
+    .as('difficulty_charts')
 }
 
 export async function difficultyFilterLabel(

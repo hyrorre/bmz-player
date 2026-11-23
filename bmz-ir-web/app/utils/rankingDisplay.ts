@@ -1,3 +1,4 @@
+import { IR_SCORE_GRADES } from '../../shared/constants/ir'
 import type {
   IrArrangeOptions,
   IrChartLnProfile,
@@ -99,22 +100,20 @@ export function formatCourseArrange(
   return [...new Set(labels)].join(' · ') || '-'
 }
 
-const scoreGrades = ['F', 'E', 'D', 'C', 'B', 'A', 'AA', 'AAA', 'MAX'] as const
-
 // Match the ceil-based grade borders and nearest-grade display in BMZ Player.
 export function rankingScoreDisplay(score: number, max: number | null | undefined) {
   if (max == null || max <= 0 || score < 0 || max < score) return null
-  const borders = scoreGrades.map((_, index) =>
+  const borders = IR_SCORE_GRADES.map((_, index) =>
     index === 0 ? 0 : Math.ceil((max * (index + 1)) / 9),
   )
   const current = borders.findLastIndex((border) => border <= score)
-  const next = Math.min(current + 1, scoreGrades.length - 1)
+  const next = Math.min(current + 1, IR_SCORE_GRADES.length - 1)
   const nearest = score - borders[current]! <= borders[next]! - score ? current : next
   const difference = score - borders[nearest]!
   return {
     max,
     rate: (score / max) * 100,
-    grade: scoreGrades[current],
-    difference: `${scoreGrades[nearest]}${difference < 0 ? '' : '+'}${difference}`,
+    grade: IR_SCORE_GRADES[current],
+    difference: `${IR_SCORE_GRADES[nearest]}${difference < 0 ? '' : '+'}${difference}`,
   }
 }

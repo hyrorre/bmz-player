@@ -90,6 +90,8 @@ const logoutHandler = (await import('../../api/v1/auth/logout.post')).default as
 const registerHandler = (await import('../../api/v1/auth/register.post')).default as Handler
 const scoresPostHandler = (await import('../../api/v1/scores.post')).default as Handler
 const chartsIndexHandler = (await import('../../api/v1/charts/index.get')).default as Handler
+const lampsHandler = (await import('../../api/v1/lamps/index.get')).default as Handler
+const lampChartsHandler = (await import('../../api/v1/lamps/charts.get')).default as Handler
 const chartDetailHandler = (await import('../../api/v1/charts/[sha256]/index.get'))
   .default as Handler
 const playersIndexHandler = (await import('../../api/v1/players/index.get')).default as Handler
@@ -1505,6 +1507,69 @@ describe('rankings, courses, and aggregates', () => {
       event({ path: url.replace('q=Stella', 'q=Other') }),
     )
     expect(noTitleMatch.pagination.total).toBe(0)
+    const distribution = await lampsHandler(
+      event({ path: '/api/v1/lamps?player=alice&table=stella' }),
+    )
+    expect(distribution.levels).toEqual([
+      { level: '1+', total: 2, segments: [{ rank: 0, count: 2 }] },
+    ])
+  })
+
+  test('difficulty distributions show best lamps and score grades and page through the selected segment', async () => {
+    const thirdChart = 'c'.repeat(64)
+    const md5 = 'a'.repeat(32)
+    const bestLamp = submission({ md5, exScore: 176, clear: 'Hard', key: 'high-lamp' })
+    await submitScore({ id: 'alice' }, bestLamp, [], 10)
+    const bestRate = submission({ md5, exScore: 160, clear: 'Normal', key: 'high-rate' })
+    bestRate.chart.notes = { total: 100 }
+    bestRate.result.notes = 90
+    bestRate.result.max_combo = 90
+    await submitScore({ id: 'alice' }, bestRate, [], 10)
+    const battle = submission({ md5, clear: 'Max', key: 'battle' })
+    battle.play_options.double_option = 'battle'
+    await submitScore({ id: 'alice' }, battle, [], 10)
+    await submitScore({ id: 'bob' }, submission({ sha256: CHART_B, md5: MD5_B }), [], 10)
+    await db.insert(schema.charts).values({ sha256: thirdChart, title: 'Third chart', mode: '7K' })
+    await db.insert(schema.difficultyTables).values({
+      id: 'fixture',
+      sourceUrl: 'https://example.invalid/table',
+      symbol: 'st',
+      name: 'Fixture',
+      activeGeneration: 'current',
+      levelOrder: ['10', '2'],
+    })
+    const level2 = { tableId: 'fixture', level: '2', generation: 'current' }
+    await db.insert(schema.difficultyTableEntries).values([
+      { ...level2, md5 },
+      { ...level2, md5, sha256: CHART_A },
+      { ...level2, level: '10', sha256: CHART_A },
+      { ...level2, level: '10', md5: MD5_B },
+      { ...level2, level: '10', sha256: thirdChart },
+    ])
+
+    const token = (await createAuthTokens('alice')).accessToken
+    await expectHttpError(lampsHandler(event({ path: '/api/v1/lamps' })), 401)
+    const lamps = await lampsHandler(event({ path: '/api/v1/lamps', token }))
+    expect(lamps.player.id).toBe('alice')
+    expect(lamps.table.id).toBe('fixture')
+    expect(lamps.levels).toEqual([
+      { level: '10', total: 2, segments: [{ rank: 0, count: 2 }] },
+      { level: '2', total: 1, segments: [{ rank: 5, count: 1 }] },
+    ])
+    const grades = await lampsHandler(event({ path: '/api/v1/lamps?player=alice&mode=score' }))
+    expect(grades.levels[1]).toEqual({ level: '2', total: 1, segments: [{ rank: 8, count: 1 }] })
+    const url = '/api/v1/lamps/charts?player=alice&table=fixture'
+    const aaa = await lampChartsHandler(event({ path: `${url}&level=2&rank=8&mode=score` }))
+    expect(aaa.charts).toMatchObject([{ sha256: CHART_A }])
+    const noPlay = await lampChartsHandler(
+      event({ path: `${url}&level=10&rank=0&limit=1&offset=1` }),
+    )
+    expect(noPlay.charts).toMatchObject([{ sha256: thirdChart }])
+    expect(noPlay.pagination).toEqual({ limit: 1, offset: 1, total: 2, has_more: false })
+    await expectHttpError(lampChartsHandler(event({ path: `${url}&level=2&rank=10` })), 400)
+    await setUserStatus('alice', 'banned')
+    await expectHttpError(lampsHandler(event({ path: '/api/v1/lamps?player=alice' })), 404)
+    await expectHttpError(lampChartsHandler(event({ path: `${url}&level=2&rank=5` })), 404)
   })
 
   test('course ranking pages keep ties and the signed-in player outside the page', async () => {

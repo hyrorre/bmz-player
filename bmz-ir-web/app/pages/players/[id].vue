@@ -110,6 +110,14 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
               {{ t('nav.daily') }}
             </UButton>
             <UButton
+              color="neutral"
+              icon="i-lucide-chart-bar-stacked"
+              :to="localePath({ path: '/lamps', query: { player: data.player.id } })"
+              variant="subtle"
+            >
+              {{ t('lamps.nav') }}
+            </UButton>
+            <UButton
               v-if="canManageRival"
               :color="data.relationship.is_rival ? 'error' : 'primary'"
               :icon="data.relationship.is_rival ? 'i-lucide-user-minus' : 'i-lucide-user-plus'"

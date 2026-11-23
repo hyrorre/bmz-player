@@ -9,6 +9,22 @@ export const MAX_REPLAY_BYTES = 4 * 1024 * 1024
 
 export const IR_RANKING_MAX_OFFSET = 100_000
 
+export const IR_CLEAR_LABELS = [
+  'NO PLAY',
+  'FAILED',
+  'ASSIST',
+  'EASY',
+  'CLEAR',
+  'HARD',
+  'EX HARD',
+  'FULL COMBO',
+  'PERFECT',
+  'MAX',
+] as const
+
+export const IR_SCORE_GRADES = ['F', 'E', 'D', 'C', 'B', 'A', 'AA', 'AAA', 'MAX'] as const
+export const IR_SCORE_RANK_LABELS = ['NO PLAY', ...IR_SCORE_GRADES] as const
+
 export const CLEAR_RANK: Record<string, number> = {
   no_play: 0,
   NoPlay: 0,
