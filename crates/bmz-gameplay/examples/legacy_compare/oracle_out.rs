@@ -75,7 +75,7 @@ impl OracleOut {
     fn hp(&self, gauge_type: GaugeType) -> String {
         self.gauge.gauges.iter().find(|g| g.definition.gauge_type == gauge_type).map_or_else(
             || "nan".to_string(),
-            |g| format!("{:.17}", g.legacy_hp.unwrap_or(f64::from(g.value))),
+            |g| format!("{:?}", g.legacy_hp.unwrap_or(f64::from(g.value))),
         )
     }
 

@@ -23,7 +23,7 @@
 //
 // Output (stdout, CSV):
 //   H,<key>,<value>                      header (totals, judge widths, ...)
-//   N,<lane>,<index>,<realTiming>,<realTiming_ln>,<mine>
+//   N,<lane>,<index>,<realTiming>,<realTiming_ln>,<mine>,<bmsTiming>,<wav>
 //   J,<ms>,<lane>,<judge 0..5>           in ApplyJudgeNote order
 //   M,<ms>,<lane>,<damage>               in ApplyJudgeMine order
 //   S,<ms>,<hp0..hp5>,<ex>,<combo>,<maxcombo>,<jc0..jc5>,<note_current>
@@ -147,10 +147,15 @@ int main() {
         const auto& column = g->gameplay.bmsobj_note[lane];
         for (int i = 0; i < column.count; ++i) {
             const auto& n = column.notes[i];
-            std::printf("N,%d,%d,%.17g,%.17g,%d\n", lane, i, n.realTiming, n.realTiming_ln, n.mine);
+            std::printf("N,%d,%d,%.17g,%.17g,%d,%.17g,%d\n", lane, i, n.realTiming, n.realTiming_ln, n.mine,
+                        n.bmsTiming, static_cast<int>(n.val));
             if (n.realTiming > last) last = n.realTiming;
             if (n.realTiming_ln > last) last = n.realTiming_ln;
         }
+    }
+    for (int i = 0; i < g->gameplay.bmsobj_line.count; ++i) {
+        const auto& n = g->gameplay.bmsobj_line.notes[i];
+        std::printf("L,%d,%.17g\n", i, n.realTiming);
     }
     if (end_ms < 0) end_ms = static_cast<int>(last) + 3000;
     print_state(*g, -1);

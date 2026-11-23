@@ -32,6 +32,8 @@ use serde_json::{Value, json};
 
 #[path = "legacy_compare/captured.rs"]
 mod captured;
+#[path = "legacy_compare/dump.rs"]
+mod dump;
 #[path = "legacy_compare/oracle_out.rs"]
 mod oracle_out;
 use captured::compare_poll_trace;
@@ -48,6 +50,15 @@ struct Request {
     /// Also write judgements, mines and score/gauge state in the
     /// openlr2_oracle output format, stopping when the gauge closes play.
     oracle_output_path: Option<String>,
+    /// Loader dump only (NORMAL arrangement): write `H` / `N` lines here.
+    dump_path: Option<String>,
+    /// LR2 random seed for a loader dump.
+    #[serde(default = "default_seed")]
+    seed: u32,
+}
+
+fn default_seed() -> u32 {
+    1
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -99,6 +110,10 @@ fn input_lane(op: u8, keys: usize, sides: usize) -> Option<Lane> {
 }
 
 fn compare(req: &Request) -> Result<Value> {
+    if let Some(path) = &req.dump_path {
+        dump::dump_chart(&req.chart_path, &req.md5, req.seed, path)?;
+        return Ok(json!({"status":"dumped"}));
+    }
     let replay = if let Some(path) = &req.poll_trace {
         captured::headers_from_trace(Path::new(path), &req.md5)?
     } else {
