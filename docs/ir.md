@@ -825,7 +825,7 @@ payloadと署名は次のとおりです。
 - `source_kind`、1P / 2Pの配置、実際に適用したDPオプションも送り、ランキング用の`double_option`とは別に、個別のスコアの履歴に保持します。
 - `--include-replay`を付けると、score payloadにリプレイのupload intentを付け、scoreが成功した後にreplay jobを作ります。replay jobの送信は、upload-localでは行わず、通常のworkerか`ir sync`が処理します。
 - 一括送信の`pass_notes`は保存済みの判定数から作り、`empty_poor`を除きます。BMZのローカル履歴でBP・CBに同数の未処理ノーツが記録されている場合は、総ノーツ数からその数を引きます。非消費BADなどで判定数と処理済み数が異なる途中FAILEDも、download-scoresで同じBP・CBに復元できます。
-- 以前のbackfillで`pass_notes == notes`のまま送ったFailedのスコアは、BP / CBの増分が同じ正の数で、そこから推定した処理済みの数が判定数と一致する場合だけ復元します。一致しない履歴は取り込まず、エラーにします。
+- `pass_notes == notes`のまま保存されたFailedのスコアは、BP / CBの増分が同じ正の数で、そこから推定した処理済みの数が判定数と一致する場合だけ復元します。以前のbackfillと、`pass_notes`を省略していた以前の即時送信が対象です。非消費BADなどで判定数と処理済み数が異なる履歴は推定と一致しないため、取り込まずにエラーにします。
 - 履歴ごとのghostは、現在の`score_history`に保持していないため送りません。
 
 ### 送信済みscoreへの署名（attestation）

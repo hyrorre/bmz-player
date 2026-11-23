@@ -563,12 +563,14 @@ fn hydrate_course_best_judges(conn: &Connection, best: &mut Option<CourseBestSco
             COALESCE(SUM(fast_empty_poor), 0), COALESCE(SUM(slow_empty_poor), 0),
             CASE WHEN ?2 AND COUNT(*) > 0 AND COUNT(*) = (
                 SELECT COUNT(*) FROM course_score_charts WHERE course_score_id = ?1
-            ) THEN MAX(0, ?3 - SUM(fast_empty_poor + slow_empty_poor))
+            ) THEN MAX(SUM(cb), ?3 - SUM(fast_empty_poor + slow_empty_poor))
               ELSE COALESCE(SUM(cb), 0) END
          FROM score_history
          WHERE course_score_id = ?1",
         // The failed course BP includes unplayed stages. Subtract empty POOR
-        // only when every played stage has linked judgement counts.
+        // only when every played stage has linked judgement counts. Attempts
+        // saved before 2026-07-16 stored a judgement-only BP; keep at least
+        // their linked stage CB, which already counts the failed remainder.
         params![best.course_score_id, best.course_failed, best.bp],
         |row| {
             Ok((
