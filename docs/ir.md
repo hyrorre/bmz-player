@@ -909,7 +909,7 @@ payloadと署名は次のとおりです。
 - 選曲では、Kaleid解析情報が未記録の旧ライブラリでも、単曲・コースのランキングを取得できます。旧プレイのスコア送信には、プレイ時のKaleid解析情報が必要です。
 - オートプレイ・リプレイ再生のResultで選曲キャッシュを使えない場合は、コース中間の単曲Resultを含め、実際に再生した譜面のKaleid解析情報でランキング取得可否を判定します。
 - BMS / PMSはMD5、BMSONはBMS-IR互換のSHA hashで照合します。
-- 単曲ランキングの取得要求には、譜面のファイルMD5が分かるときだけ`chart_md5`（小文字32桁の16進）を`chart_sha256`と一緒に送ります。サーバーが旧IRの記録を引くときの補助です。BMSONなどMD5が無い譜面とCLIの`ir ranking`では送りません。
+- 単曲ランキングの取得要求には、譜面のファイルMD5が分かるときだけ`chart_md5`（小文字32桁の16進）を`chart_sha256`と一緒に送ります。サーバーが旧IRの記録を引くときの補助です。BMSONもファイルMD5を計算するため送ります。送らないのは、選曲でライブラリに無く表データにもMD5が無い譜面と、sha256だけを受け取るCLIの`ir ranking`です。
 - 送信の対象は、Beatoraja / LR2orajaのルール、実際のLN / CN / HCN、Off / Flip / Battle / Battle ASの、4 / 5 / 6 / 7 / 8 / 9 / 10 / 14 / 24 / 48Kです。BattleとBattle ASは別の区分、G-BATTLEは通常の区分を使います。4 / 6 / 8KもBMS-IRの正規のキーモードとして送ります。
 - DX、full autoplay、リプレイ再生、プラクティス、実効アシスト、リプレイファイルの送受信、local backfillは対象外です。
 - クリアは`Failed` / `Easy` / `Normal` / `Hard` / `ExHard` / `FullCombo` / `Perfect` / `Max`と、`gauge`が`AssistEasy`の`LightAssistEasy`を送ります。後者はASSIST EASYゲージ（GASの最終ゲージを含む）のクリアで、実効アシストのプレイはqueueに入りません。実効Assistのランプである`AssistEasy`は送りません。ランプを`Easy`などへ置き換えて送ることもしません。

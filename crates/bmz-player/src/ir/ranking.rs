@@ -13,7 +13,9 @@ pub struct ChartRankingQuery {
     pub provider: String,
     pub base_url: String,
     pub chart_sha256_hex: String,
-    /// Lowercase 32-digit MD5 of the chart file; `None` when unknown (e.g. BMSON).
+    /// Lowercase 32-digit MD5 of the chart file, including BMSON. `None` only when
+    /// the file MD5 is unknown, e.g. a select row outside the library whose table
+    /// data has no MD5.
     pub chart_md5_hex: Option<String>,
     pub ln_policy: LnScorePolicy,
     pub double_option: DoubleOptionScoreBucket,
