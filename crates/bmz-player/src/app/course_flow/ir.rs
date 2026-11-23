@@ -114,6 +114,7 @@ impl WinitApp {
             &self.boot.profile_config.ir,
             finished.stored.score_history_id,
             chart_sha256_hex,
+            finished.summary.chart_md5.as_ref().map(|md5| crate::storage::common::hash_to_hex(md5)),
             finished.ln_policy,
             finished.double_option,
             finished.rule_mode,
