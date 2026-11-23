@@ -34,7 +34,7 @@ export default defineEventHandler(async (event) => {
     })
     .from(schema.profiles)
     .where(and(...conditions))
-    .orderBy(desc(schema.profiles.updatedAt))
+    .orderBy(desc(schema.profiles.updatedAt), schema.profiles.id)
     .limit(limit)
     .offset(offset)
   const countRequest = db

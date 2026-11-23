@@ -1,5 +1,10 @@
 <script setup lang="ts">
-import type { IrRuleMode, LnScorePolicy } from '../../../shared/types/ir'
+import type {
+  IrArrangeOptions,
+  IrChartLnProfile,
+  IrRuleMode,
+  LnScorePolicy,
+} from '../../../shared/types/ir'
 
 interface CourseDetail {
   course: {
@@ -16,6 +21,7 @@ interface CourseDetail {
       difficulty: string | null
     }[]
     chart_count: number
+    ln_profile: IrChartLnProfile & { has_ln: boolean }
     constraints: Record<string, unknown>
   }
   stats: { play_count: number }
@@ -29,10 +35,13 @@ interface CourseRankingEntry {
     clear: string
     course_clear: boolean
     ex_score: number
+    max_ex_score: number
     max_combo: number
     bp: number
     device_type: string
+    ln_policy: string
     rule_mode: string
+    arrange_options: (IrArrangeOptions | null)[]
     played_at: string | null
     verification: string
   }
@@ -57,11 +66,13 @@ interface CourseSelfScoresResult {
     clear: string
     course_clear: boolean
     ex_score: number
+    max_ex_score: number
     max_combo: number
     bp: number
     gauge: string
     ln_policy: string
     rule_mode: string
+    arrange_options: (IrArrangeOptions | null)[]
     device_type: string
     played_at: string | null
     server_received_at: string
@@ -78,41 +89,33 @@ interface CourseSelfScoresResult {
 const route = useRoute()
 const { user } = useUserSession()
 const localePath = useLocalePath()
+const listLocation = computed(() =>
+  localePath({ path: '/courses', query: listReturnQuery(route.query) }),
+)
 const { t } = useI18n()
 const { formatDateTime } = useLocaleFormat()
 const { translateApiError } = useApiError()
 const courseHash = computed(() => String(route.params.hash ?? ''))
 
-type CourseGaugeFilter = 'ALL' | 'Class' | 'ExClass' | 'ExHardClass' | 'Normal' | 'Hard'
 type CourseLnPolicyFilter = 'ALL' | LnScorePolicy
 type CourseRuleModeFilter = 'ALL' | IrRuleMode
 
-const gauge = ref<CourseGaugeFilter>('ALL')
 const lnPolicy = ref<CourseLnPolicyFilter>('ALL')
 const ruleMode = ref<CourseRuleModeFilter>('ALL')
-const gauges: CourseGaugeFilter[] = ['ALL', 'Class', 'ExClass', 'ExHardClass', 'Normal', 'Hard']
-const lnPolicies: CourseLnPolicyFilter[] = [
-  'ALL',
-  'AutoLn',
-  'AutoCn',
-  'AutoHcn',
-  'ForceLn',
-  'ForceCn',
-  'ForceHcn',
-  'ForceHln',
-]
-const ruleModes: CourseRuleModeFilter[] = ['ALL', 'Beatoraja', 'Lr2Oraja', 'Dx']
 
 const { data: detail, error: detailError } = await useFetch<CourseDetail>(
   () => `/api/v1/courses/${courseHash.value}`,
 )
+const lnPolicies = computed(() => lnFilterItems(detail.value?.course.ln_profile))
+watch(lnPolicies, (items) => {
+  if (!items.some((item) => item.value === lnPolicy.value)) lnPolicy.value = 'ALL'
+})
 const {
   data: ranking,
   pending: rankingPending,
   error: rankingError,
 } = await useFetch<CourseRanking>(() => `/api/v1/courses/${courseHash.value}/ranking`, {
   query: computed(() => ({
-    ...(gauge.value === 'ALL' ? {} : { gauge: gauge.value }),
     ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
     ...(ruleMode.value === 'ALL' ? {} : { rule_mode: ruleMode.value }),
   })),
@@ -136,7 +139,6 @@ const {
 } = useSelfScoreHistory<CourseSelfScoresResult>(
   () => `/api/v1/courses/${courseHash.value}/self-scores`,
   () => ({
-    ...(gauge.value === 'ALL' ? {} : { gauge: gauge.value }),
     ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
     ...(ruleMode.value === 'ALL' ? {} : { rule_mode: ruleMode.value }),
   }),
@@ -161,6 +163,10 @@ function formatScoreDate(value: string | null) {
   return value ? formatDateTime(value) : '-'
 }
 
+function scoreOption(score: { arrange_options: (IrArrangeOptions | null)[] }) {
+  return formatCourseArrange(score.arrange_options, detail.value?.course.charts ?? [])
+}
+
 const detailErrorDescription = computed(() =>
   detailError.value ? translateApiError(detailError.value, 'errors.courseLoadFailed') : '',
 )
@@ -176,15 +182,13 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
 </script>
 
 <template>
-  <main>
-    <section class="mx-auto w-full max-w-4xl px-5 py-10">
+  <main class="min-w-0">
+    <section class="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
       <UAlert v-if="detailError" color="error" :description="detailErrorDescription" class="mb-6" />
       <template v-else-if="detail">
         <div class="mb-8">
           <p class="mb-2 text-sm font-medium text-primary-300">
-            <NuxtLink :to="localePath('/courses')" class="hover:underline">{{
-              t('courses.title')
-            }}</NuxtLink>
+            <NuxtLink :to="listLocation" class="hover:underline">{{ t('courses.title') }}</NuxtLink>
           </p>
           <h1 class="text-3xl font-semibold">
             {{ detail.course.title || t('common.untitled') }}
@@ -208,7 +212,7 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
 
         <h2 class="mb-2 text-lg font-medium">{{ t('course.charts') }}</h2>
         <ol class="mb-8 list-inside list-decimal space-y-1 text-sm">
-          <li v-for="chart in detail.course.charts" :key="chart.sha256">
+          <li v-for="(chart, index) in detail.course.charts" :key="index">
             <NuxtLink :to="localePath(`/charts/${chart.sha256}`)" class="hover:underline">
               {{ chartTitle(chart) }}
               <span v-if="chart.subtitle" class="text-neutral-400">{{ chart.subtitle }}</span>
@@ -219,10 +223,13 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
           </li>
         </ol>
 
-        <div class="mb-4 flex flex-wrap gap-3">
-          <USelect v-model="gauge" :items="gauges" class="w-44" />
-          <USelect v-model="lnPolicy" :items="lnPolicies" class="w-40" />
-          <USelect v-model="ruleMode" :items="ruleModes" class="w-40" />
+        <div class="mb-4 flex flex-wrap items-center gap-3">
+          <UFormField v-if="lnPolicies.length" label="LN" orientation="horizontal">
+            <USelect v-model="lnPolicy" :items="lnPolicies" class="w-28" />
+          </UFormField>
+          <UFormField label="RULE" orientation="horizontal">
+            <USelect v-model="ruleMode" :items="ruleModeItems" class="w-32" />
+          </UFormField>
         </div>
 
         <div
@@ -233,13 +240,20 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
             <p class="text-xs text-neutral-500">{{ t('ranking.personalBest') }}</p>
             <div class="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1">
               <p class="text-sm text-neutral-300">#{{ selfBestEntry.rank }}</p>
-              <p class="text-xl font-semibold">EX {{ selfBestEntry.score.ex_score }}</p>
-              <p class="text-sm">CLEAR {{ selfBestEntry.score.clear }}</p>
+              <RankingExScore
+                :score="selfBestEntry.score.ex_score"
+                :max="selfBestEntry.score.max_ex_score"
+              />
+              <IrClearBadge :clear="selfBestEntry.score.clear" />
               <p class="text-sm">COMBO {{ selfBestEntry.score.max_combo }}</p>
               <p class="text-sm">BP {{ selfBestEntry.score.bp }}</p>
             </div>
             <p class="mt-1 text-xs text-neutral-500">
-              {{ selfBestEntry.score.rule_mode }} / {{ selfBestEntry.score.device_type }}
+              <template v-if="lnPolicies.length"
+                >{{ lnPolicyLabel(selfBestEntry.score.ln_policy) }} ·</template
+              >
+              {{ ruleModeLabel(selfBestEntry.score.rule_mode) }} ·
+              {{ scoreOption(selfBestEntry.score) }} · {{ selfBestEntry.score.device_type }}
             </p>
           </div>
           <p v-else class="text-sm text-neutral-400">{{ t('ranking.noPersonalBest') }}</p>
@@ -261,14 +275,17 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
         <p v-else-if="!ranking?.ranking.entries.length" class="text-sm text-neutral-400">
           {{ t('ranking.noScores') }}
         </p>
-        <div v-else class="overflow-x-auto rounded-lg border border-neutral-800">
+        <div v-else class="overflow-x-auto rounded-lg border border-default">
           <table class="w-full text-sm">
-            <thead class="bg-neutral-900 text-left text-neutral-300">
+            <thead class="bg-elevated text-left text-toned">
               <tr>
                 <th class="px-3 py-2">#</th>
                 <th class="px-3 py-2">{{ t('table.player') }}</th>
-                <th class="px-3 py-2 text-right">EX</th>
+                <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
                 <th class="px-3 py-2">{{ t('table.clear') }}</th>
+                <th v-if="lnPolicies.length" class="px-3 py-2">LN</th>
+                <th class="px-3 py-2">RULE</th>
+                <th class="px-3 py-2">OPTION</th>
                 <th class="px-3 py-2 text-right">COMBO</th>
                 <th class="px-3 py-2 text-right">BP</th>
                 <th class="px-3 py-2">{{ t('table.date') }}</th>
@@ -278,26 +295,25 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
               <tr
                 v-for="entry in ranking.ranking.entries"
                 :key="entry.score.course_score_id"
-                class="border-t border-neutral-800"
+                class="border-t border-default"
               >
-                <td class="px-3 py-2 text-neutral-300">{{ entry.rank }}</td>
+                <td class="px-3 py-2 text-toned">{{ entry.rank }}</td>
                 <td class="px-3 py-2">
                   <NuxtLink :to="localePath(`/players/${entry.player.id}`)" class="hover:underline">
                     {{ entry.player.display_name }}
                   </NuxtLink>
                 </td>
-                <td class="px-3 py-2 text-right font-medium">{{ entry.score.ex_score }}</td>
-                <td class="px-3 py-2">
-                  {{ entry.score.clear }}
-                  <UBadge
-                    v-if="entry.score.course_clear"
-                    color="success"
-                    size="sm"
-                    variant="subtle"
-                  >
-                    CLEAR
-                  </UBadge>
+                <td class="px-3 py-2 text-right">
+                  <RankingExScore :score="entry.score.ex_score" :max="entry.score.max_ex_score" />
                 </td>
+                <td class="px-3 py-2">
+                  <IrClearBadge :clear="entry.score.clear" />
+                </td>
+                <td v-if="lnPolicies.length" class="px-3 py-2 text-muted">
+                  {{ lnPolicyLabel(entry.score.ln_policy) }}
+                </td>
+                <td class="px-3 py-2 text-muted">{{ ruleModeLabel(entry.score.rule_mode) }}</td>
+                <td class="px-3 py-2 text-xs text-muted">{{ scoreOption(entry.score) }}</td>
                 <td class="px-3 py-2 text-right">{{ entry.score.max_combo }}</td>
                 <td class="px-3 py-2 text-right">{{ entry.score.bp }}</td>
                 <td class="px-3 py-2 text-neutral-400">
@@ -317,6 +333,8 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
           :limit="historyLimit"
           :score-key="(score) => score.course_score_id"
           :score-bp="(score) => score.bp"
+          :show-ln="Boolean(lnPolicies.length)"
+          :score-option="scoreOption"
         />
       </template>
     </section>

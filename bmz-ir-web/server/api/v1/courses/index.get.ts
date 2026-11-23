@@ -27,7 +27,7 @@ export default defineEventHandler(async (event) => {
     })
     .from(schema.irCourses)
     .where(and(...conditions))
-    .orderBy(desc(schema.irCourses.updatedAt))
+    .orderBy(desc(schema.irCourses.updatedAt), schema.irCourses.courseHash)
     .limit(limit)
     .offset(offset)
   const countRequest = db

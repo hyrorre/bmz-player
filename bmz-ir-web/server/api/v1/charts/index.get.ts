@@ -1,6 +1,7 @@
 import { and, desc, sql, type SQL } from 'drizzle-orm'
 import { getQuery } from 'h3'
 import { db, schema } from 'hub:db'
+import { lookupDifficultyLabels } from '../../../services/difficulty_tables'
 import { publicChartCondition } from '../../../services/moderation/visibility'
 
 export default defineEventHandler(async (event) => {
@@ -18,6 +19,7 @@ export default defineEventHandler(async (event) => {
   const listRequest = db
     .select({
       sha256: schema.charts.sha256,
+      md5: schema.charts.md5,
       title: schema.charts.title,
       subtitle: schema.charts.subtitle,
       genre: schema.charts.genre,
@@ -30,7 +32,7 @@ export default defineEventHandler(async (event) => {
     })
     .from(schema.charts)
     .where(and(...conditions))
-    .orderBy(desc(schema.charts.updatedAt))
+    .orderBy(desc(schema.charts.updatedAt), schema.charts.sha256)
     .limit(limit)
     .offset(offset)
   const countRequest = db
@@ -39,10 +41,14 @@ export default defineEventHandler(async (event) => {
     .where(and(...conditions))
 
   const [charts, countRows] = await Promise.all([listRequest, countRequest])
+  const labels = await lookupDifficultyLabels(charts)
   const total = Number(countRows[0]?.total ?? 0)
 
   return {
-    charts,
+    charts: charts.map(({ md5: _md5, ...chart }) => ({
+      ...chart,
+      difficulty_labels: labels.get(chart.sha256) ?? [],
+    })),
     pagination: {
       limit,
       offset,

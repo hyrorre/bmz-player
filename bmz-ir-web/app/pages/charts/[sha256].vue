@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import type {
+  IrChartLnProfile,
+  IrDifficultyLabel,
   IrRanking,
   IrRankingEntry,
   IrRankingScope,
@@ -9,7 +11,7 @@ import type {
 } from '~~/bmz-ir-web/shared/types/ir'
 
 interface ChartDetail {
-  chart: {
+  chart: IrChartLnProfile & {
     sha256: string
     md5: string
     title: string
@@ -27,16 +29,15 @@ interface ChartDetail {
     ln_notes: number
     cn_notes: number
     hcn_notes: number
+    hln_notes: number
     mine_notes: number
     has_random: boolean
     has_stop: boolean
-    has_undefined_ln: boolean
-    has_defined_ln: boolean
-    has_defined_cn: boolean
-    has_defined_hcn: boolean
     has_ln: boolean
     has_cn: boolean
     has_hcn: boolean
+    has_hln: boolean
+    difficulty_labels: IrDifficultyLabel[]
     has_mine: boolean
     source_url: string | null
     append_url: string | null
@@ -52,6 +53,9 @@ interface ChartDetail {
 
 const route = useRoute()
 const localePath = useLocalePath()
+const listLocation = computed(() =>
+  localePath({ path: '/charts', query: listReturnQuery(route.query) }),
+)
 const { user } = useUserSession()
 const { t } = useI18n()
 const { formatDateTime } = useLocaleFormat()
@@ -68,7 +72,10 @@ if (/^[0-9a-f]{32}$/.test(chartParam.value)) {
     const lookup = await $fetch<{ sha256: string }>('/api/v1/charts/lookup', {
       query: { md5: chartParam.value },
     })
-    await navigateTo(localePath(`/charts/${lookup.sha256}`), { redirectCode: 301, replace: true })
+    await navigateTo(
+      localePath({ path: `/charts/${lookup.sha256}`, query: listReturnQuery(route.query) }),
+      { redirectCode: 301, replace: true },
+    )
   } catch {
     paramError.value = t('chart.md5NotFound')
   }
@@ -84,18 +91,7 @@ type RuleModeFilter = 'ALL' | IrRuleMode
 type RankingScopeFilter = Extract<IrRankingScope, 'global' | 'self_and_rivals'>
 
 const lnPolicy = ref<LnPolicyFilter>('ALL')
-const lnPolicies: LnPolicyFilter[] = [
-  'ALL',
-  'AutoLn',
-  'AutoCn',
-  'AutoHcn',
-  'ForceLn',
-  'ForceCn',
-  'ForceHcn',
-  'ForceHln',
-]
 const ruleMode = ref<RuleModeFilter>('ALL')
-const ruleModes: RuleModeFilter[] = ['ALL', 'Beatoraja', 'Lr2Oraja', 'Dx']
 const rankingScope = ref<RankingScopeFilter>('global')
 const rankingScopes = computed(() => [
   { label: t('ranking.global'), value: 'global' as const },
@@ -106,6 +102,10 @@ const { data: detail, error: detailError } = await useFetch<ChartDetail>(
   () => `/api/v1/charts/${sha256.value}`,
   { immediate: canLoadChart.value, watch: [sha256] },
 )
+const lnPolicies = computed(() => lnFilterItems(detail.value?.chart))
+watch(lnPolicies, (items) => {
+  if (!items.some((item) => item.value === lnPolicy.value)) lnPolicy.value = 'ALL'
+})
 const {
   data: ranking,
   pending: rankingPending,
@@ -165,14 +165,6 @@ function formatScoreDate(value: string | null) {
   return value ? formatDateTime(value) : '-'
 }
 
-function formatArrange(value: string | null | undefined) {
-  return value ? value.toUpperCase() : '-'
-}
-
-function formatArrangePair(score: { arrange_1p?: string | null; arrange_2p?: string | null }) {
-  return `ARRANGE 1P ${formatArrange(score.arrange_1p)} / 2P ${formatArrange(score.arrange_2p)}`
-}
-
 const detailErrorDescription = computed(() =>
   detailError.value ? translateApiError(detailError.value, 'errors.chartLoadFailed') : '',
 )
@@ -188,8 +180,8 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
 </script>
 
 <template>
-  <main>
-    <section class="mx-auto w-full max-w-4xl px-5 py-10">
+  <main class="min-w-0">
+    <section class="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
       <UAlert v-if="paramError" color="error" :description="paramError" class="mb-6" />
       <UAlert
         v-else-if="detailError"
@@ -200,9 +192,7 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
       <template v-else-if="detail">
         <div class="mb-8">
           <p class="mb-2 text-sm font-medium text-primary-300">
-            <NuxtLink :to="localePath('/charts')" class="hover:underline">{{
-              t('charts.title')
-            }}</NuxtLink>
+            <NuxtLink :to="listLocation" class="hover:underline">{{ t('charts.title') }}</NuxtLink>
           </p>
           <p>{{ detail.chart.genre }}</p>
           <h1 class="text-3xl font-semibold">
@@ -228,13 +218,14 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
               })
             }}
           </p>
-          <p class="mt-3 text-sm text-neutral-400">
+          <DifficultyTableBadges :labels="detail.chart.difficulty_labels" class="mt-2" />
+          <p class="mt-3 text-sm break-all text-neutral-400">
             md5 {{ detail.chart.md5 }}
             <UButton size="xs" variant="subtle" color="neutral" @click="copyMd5">{{
               t('chart.copy')
             }}</UButton>
           </p>
-          <p class="mt-1 text-sm text-neutral-400">
+          <p class="mt-1 text-sm break-all text-neutral-400">
             sha256 {{ detail.chart.sha256 }}
             <UButton size="xs" variant="subtle" color="neutral" @click="copySha256">{{
               t('chart.copy')
@@ -243,12 +234,15 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
         </div>
 
         <div class="mb-4 flex flex-wrap items-center gap-3">
-          <template v-if="user">
-            {{ t('ranking.scope') }}
+          <UFormField v-if="user" :label="t('ranking.scope')" orientation="horizontal">
             <USelect v-model="rankingScope" :items="rankingScopes" class="w-48" />
-          </template>
-          LN <USelect v-model="lnPolicy" :items="lnPolicies" class="w-40" /> RULE
-          <USelect v-model="ruleMode" :items="ruleModes" class="w-40" />
+          </UFormField>
+          <UFormField v-if="lnPolicies.length" label="LN" orientation="horizontal">
+            <USelect v-model="lnPolicy" :items="lnPolicies" class="w-28" />
+          </UFormField>
+          <UFormField label="RULE" orientation="horizontal">
+            <USelect v-model="ruleMode" :items="ruleModeItems" class="w-32" />
+          </UFormField>
         </div>
 
         <div
@@ -259,37 +253,35 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
             <p class="text-xs text-neutral-500">{{ t('ranking.personalBest') }}</p>
             <div class="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1">
               <p class="text-sm text-neutral-300">#{{ selfBestEntry.rank }}</p>
-              <p class="text-xl font-semibold">
-                EX
-                <NuxtLink
-                  :to="localePath(`/scores/${selfBestEntry.score.score_id}`)"
-                  class="hover:underline"
-                >
-                  {{ selfBestEntry.score.ex_score }}
-                </NuxtLink>
-              </p>
-              <p class="text-sm">
-                CLEAR
-                <NuxtLink
-                  :to="
-                    localePath(
-                      `/scores/${selfBestEntry.score.source_score_ids?.clear ?? selfBestEntry.score.score_id}`,
-                    )
-                  "
-                  class="hover:underline"
-                >
-                  {{ selfBestEntry.score.clear }}
-                </NuxtLink>
-              </p>
+              <NuxtLink
+                :to="localePath(`/scores/${selfBestEntry.score.score_id}`)"
+                class="hover:underline"
+              >
+                <RankingExScore
+                  :score="selfBestEntry.score.ex_score"
+                  :max="selfBestEntry.score.max_ex_score"
+                />
+              </NuxtLink>
+              <NuxtLink
+                :to="
+                  localePath(
+                    `/scores/${selfBestEntry.score.source_score_ids?.clear ?? selfBestEntry.score.score_id}`,
+                  )
+                "
+                class="hover:underline"
+              >
+                <IrClearBadge :clear="selfBestEntry.score.clear" />
+              </NuxtLink>
               <p class="text-sm">COMBO {{ selfBestEntry.score.max_combo }}</p>
               <p class="text-sm">BP {{ selfBestEntry.score.min_bp }}</p>
             </div>
             <p class="mt-1 text-xs text-neutral-500">
-              {{ selfBestEntry.score.gauge }} / {{ selfBestEntry.score.ln_policy }} /
-              {{ selfBestEntry.score.rule_mode }}
-            </p>
-            <p class="mt-1 text-xs text-neutral-500">
-              {{ formatArrangePair(selfBestEntry.score) }}
+              {{ selfBestEntry.score.gauge }} ·
+              <template v-if="lnPolicies.length"
+                >{{ lnPolicyLabel(selfBestEntry.score.ln_policy) }} ·</template
+              >
+              {{ ruleModeLabel(selfBestEntry.score.rule_mode) }} ·
+              {{ formatRankingArrange(selfBestEntry.score, detail.chart.mode) }}
             </p>
           </div>
           <p v-else class="text-sm text-neutral-400">{{ t('ranking.noPersonalBest') }}</p>
@@ -311,15 +303,17 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
         <p v-else-if="!ranking?.ranking.entries.length" class="text-sm text-neutral-400">
           {{ t('ranking.noScores') }}
         </p>
-        <div v-else class="overflow-x-auto rounded-lg border border-neutral-800">
+        <div v-else class="overflow-x-auto rounded-lg border border-default">
           <table class="w-full text-sm">
-            <thead class="bg-neutral-900 text-left text-neutral-300">
+            <thead class="bg-elevated text-left text-toned">
               <tr>
                 <th class="px-3 py-2">#</th>
                 <th class="px-3 py-2">{{ t('table.player') }}</th>
-                <th class="px-3 py-2 text-right">EX</th>
+                <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
                 <th class="px-3 py-2">{{ t('table.clear') }}</th>
-                <th class="px-3 py-2">{{ t('table.conditions') }}</th>
+                <th v-if="lnPolicies.length" class="px-3 py-2">LN</th>
+                <th class="px-3 py-2">RULE</th>
+                <th class="px-3 py-2">OPTION</th>
                 <th class="px-3 py-2 text-right">COMBO</th>
                 <th class="px-3 py-2 text-right">BP</th>
                 <th class="px-3 py-2">{{ t('table.input') }}</th>
@@ -330,9 +324,9 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
               <tr
                 v-for="entry in ranking.ranking.entries"
                 :key="entry.score.score_id"
-                class="border-t border-neutral-800"
+                class="border-t border-default"
               >
-                <td class="px-3 py-2 text-neutral-300">{{ entry.rank }}</td>
+                <td class="px-3 py-2 text-toned">{{ entry.rank }}</td>
                 <td class="px-3 py-2">
                   <NuxtLink :to="localePath(`/players/${entry.player.id}`)" class="hover:underline">
                     {{ entry.player.display_name }}
@@ -341,12 +335,12 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                     rival
                   </UBadge>
                 </td>
-                <td class="px-3 py-2 text-right font-medium">
+                <td class="px-3 py-2 text-right">
                   <NuxtLink
                     :to="localePath(`/scores/${entry.score.score_id}`)"
                     class="hover:underline"
                   >
-                    {{ entry.score.ex_score }}
+                    <RankingExScore :score="entry.score.ex_score" :max="entry.score.max_ex_score" />
                   </NuxtLink>
                 </td>
                 <td class="px-3 py-2">
@@ -358,17 +352,15 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                     "
                     class="hover:underline"
                   >
-                    {{ entry.score.clear }}
+                    <IrClearBadge :clear="entry.score.clear" />
                   </NuxtLink>
                 </td>
-                <td class="px-3 py-2 text-neutral-400">
-                  <p>
-                    {{ entry.score.gauge }} / {{ entry.score.ln_policy }} /
-                    {{ entry.score.rule_mode }}
-                  </p>
-                  <p class="text-xs text-neutral-500">
-                    {{ formatArrangePair(entry.score) }}
-                  </p>
+                <td v-if="lnPolicies.length" class="px-3 py-2 text-muted">
+                  {{ lnPolicyLabel(entry.score.ln_policy) }}
+                </td>
+                <td class="px-3 py-2 text-muted">{{ ruleModeLabel(entry.score.rule_mode) }}</td>
+                <td class="px-3 py-2 text-xs text-muted">
+                  {{ formatRankingArrange(entry.score, detail.chart.mode) }}
                 </td>
                 <td class="px-3 py-2 text-right">{{ entry.score.max_combo }}</td>
                 <td class="px-3 py-2 text-right">{{ entry.score.min_bp }}</td>
@@ -391,11 +383,9 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
           :score-key="(score) => score.score_id"
           :score-bp="(score) => score.min_bp"
           :score-to="(score) => localePath(`/scores/${score.score_id}`)"
-        >
-          <template #conditions="{ score }">
-            <p class="text-xs text-dimmed">{{ formatArrangePair(score) }}</p>
-          </template>
-        </ScoreHistoryModal>
+          :show-ln="Boolean(lnPolicies.length)"
+          :score-option="(score) => formatRankingArrange(score, detail?.chart.mode ?? null)"
+        />
       </template>
     </section>
   </main>

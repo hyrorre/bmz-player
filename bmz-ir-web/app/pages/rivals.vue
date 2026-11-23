@@ -24,15 +24,29 @@ const {
   refresh: refreshRivals,
 } = await useFetch<IrRivalsResponse>('/api/v1/rivals')
 
-const requestedPlayerId = queryString(route.query.player)
-const selectedRivalId = ref(
-  rivalLists.value?.rivals.some((entry) => entry.player_id === requestedPlayerId)
-    ? requestedPlayerId!
-    : (rivalLists.value?.rivals[0]?.player_id ?? ''),
-)
-const page = ref(1)
-const pageSize = 50
-const offset = computed(() => (page.value - 1) * pageSize)
+const selectedRivalId = computed({
+  get() {
+    const requestedPlayerId = queryString(route.query.player)
+    return (
+      rivalLists.value?.rivals.find((entry) => entry.player_id === requestedPlayerId)?.player_id ??
+      rivalLists.value?.rivals[0]?.player_id ??
+      ''
+    )
+  },
+  set(playerId) {
+    if (playerId !== selectedRivalId.value) {
+      void navigateTo({
+        path: route.path,
+        query: { ...route.query, player: playerId, page: undefined },
+      })
+    }
+  },
+})
+const { page, pageSize, maxPage, offset, pageLocation } = useRoutePagination(100_000)
+function comparisonPageLocation(nextPage: number) {
+  const location = pageLocation(nextPage)
+  return { ...location, query: { ...location.query, player: selectedRivalId.value } }
+}
 const rivalOptions = computed(() =>
   (rivalLists.value?.rivals ?? []).map((entry) => ({
     label: rivalName(entry),
@@ -66,21 +80,12 @@ const comparisonErrorDescription = computed(() =>
     : '',
 )
 
-watch(selectedRivalId, async (playerId) => {
-  if (!playerId) {
+watch([selectedRivalId, page], () => {
+  if (selectedRivalId.value) {
+    void loadComparison()
+  } else {
     clearComparison()
-    return
   }
-  await navigateTo({ path: localePath('/rivals'), query: { player: playerId } }, { replace: true })
-  if (page.value !== 1) {
-    page.value = 1
-    return
-  }
-  await loadComparison()
-})
-
-watch(page, async () => {
-  if (selectedRivalId.value) await loadComparison()
 })
 
 async function removeSelectedRival() {
@@ -95,12 +100,17 @@ async function removeSelectedRival() {
       color: 'success',
       icon: 'i-lucide-circle-check',
     })
-    clearComparison()
+    const remainingRival = rivalLists.value?.rivals.find(
+      (entry) => entry.player_id !== selectedRivalId.value,
+    )
+    await navigateTo(
+      {
+        path: route.path,
+        query: { ...route.query, player: remainingRival?.player_id, page: undefined },
+      },
+      { replace: true },
+    )
     await refreshRivals()
-    selectedRivalId.value = rivalLists.value?.rivals[0]?.player_id ?? ''
-    if (!selectedRivalId.value) {
-      await navigateTo(localePath('/rivals'), { replace: true })
-    }
   } catch (requestError) {
     toast.add({
       title: t('rivals.updateFailed'),
@@ -349,11 +359,18 @@ useSeoMeta({ title: () => t('rivals.title') })
               <p class="font-medium">{{ t('rivals.noCommonScores') }}</p>
             </div>
 
-            <div v-if="comparison.pagination.total > pageSize" class="mt-5 flex justify-end">
+            <div
+              v-if="comparison.pagination.total > pageSize || page > 1"
+              class="mt-5 flex justify-end"
+            >
               <UPagination
-                v-model:page="page"
+                :page="
+                  Math.min(page, Math.max(1, Math.ceil(comparison.pagination.total / pageSize)))
+                "
+                :to="comparisonPageLocation"
+                :sibling-count="1"
                 :items-per-page="pageSize"
-                :total="comparison.pagination.total"
+                :total="Math.min(maxPage * pageSize, Math.max(1, comparison.pagination.total))"
               />
             </div>
           </template>

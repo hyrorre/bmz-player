@@ -5,6 +5,7 @@ import {
   MODERATION_ACTIONS,
   USER_MODERATION_STATUSES,
 } from '../../shared/constants/moderation'
+import type { IrArrangeOptions } from '../../shared/types/ir'
 
 const jsonText = <T>(name: string, fallback: string) =>
   text(name, { mode: 'json' })
@@ -521,6 +522,7 @@ export const courseScores = sqliteTable(
     judges: jsonText<Record<string, unknown>>('judges', '{}'),
     gaugeValue: integer('gauge_value').notNull(),
     entries: jsonText<Record<string, unknown>[]>('entries', '[]'),
+    arrangeOptions: jsonText<(IrArrangeOptions | null)[]>('arrange_options', '[]'),
     playedAt: integer('played_at', { mode: 'timestamp_ms' }),
     serverReceivedAt: integer('server_received_at', { mode: 'timestamp_ms' })
       .notNull()

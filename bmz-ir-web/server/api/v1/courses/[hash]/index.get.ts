@@ -42,6 +42,17 @@ export default defineEventHandler(async (event) => {
             mode: schema.charts.mode,
             level: schema.charts.level,
             difficulty: schema.charts.difficulty,
+            has_undefined_ln: schema.charts.hasUndefinedLn,
+            has_defined_ln: schema.charts.hasDefinedLn,
+            has_defined_cn: schema.charts.hasDefinedCn,
+            has_defined_hcn: schema.charts.hasDefinedHcn,
+            has_defined_hln: schema.charts.hasDefinedHln,
+            has_ln: sql<boolean>`(
+              ${schema.charts.hasLn} or ${schema.charts.hasCn} or ${schema.charts.hasHcn}
+              or ${schema.charts.hasHln} or ${schema.charts.lnNotes} > 0
+              or ${schema.charts.cnNotes} > 0 or ${schema.charts.hcnNotes} > 0
+              or ${schema.charts.hlnNotes} > 0
+            )`.mapWith(Boolean),
           })
           .from(schema.charts)
           .where(inArray(schema.charts.sha256, course.charts))
@@ -58,6 +69,7 @@ function courseToResponse(
   course: typeof schema.irCourses.$inferSelect,
   chartMap: Map<string, CourseChartResponse>,
 ) {
+  const charts = [...chartMap.values()]
   return {
     course_hash: course.courseHash,
     title: course.title,
@@ -75,6 +87,14 @@ function courseToResponse(
       }
     }),
     chart_count: course.chartCount,
+    ln_profile: {
+      has_undefined_ln: charts.some((chart) => chart.has_undefined_ln),
+      has_defined_ln: charts.some((chart) => chart.has_defined_ln),
+      has_defined_cn: charts.some((chart) => chart.has_defined_cn),
+      has_defined_hcn: charts.some((chart) => chart.has_defined_hcn),
+      has_defined_hln: charts.some((chart) => chart.has_defined_hln),
+      has_ln: charts.some((chart) => chart.has_ln),
+    },
     constraints: course.constraints,
     source_url: course.sourceUrl,
     created_at: course.createdAt,
@@ -90,4 +110,10 @@ interface CourseChartResponse {
   mode: string
   level: number | null
   difficulty: string | null
+  has_undefined_ln: boolean
+  has_defined_ln: boolean
+  has_defined_cn: boolean
+  has_defined_hcn: boolean
+  has_defined_hln: boolean
+  has_ln: boolean
 }

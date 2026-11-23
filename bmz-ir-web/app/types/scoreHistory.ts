@@ -3,6 +3,7 @@ export interface HistoryScore {
   played_at: string | null
   server_received_at: string
   ex_score: number
+  max_ex_score?: number | null
   clear: string
   max_combo: number
   gauge: string

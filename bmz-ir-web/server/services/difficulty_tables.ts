@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { BatchItem } from 'drizzle-orm/batch'
 import { and, eq, inArray, ne, or } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
+import type { IrDifficultyLabel } from '../../shared/types/ir'
 
 const DEFAULT_TIMEOUT_MS = 15_000
 const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -105,14 +106,7 @@ export interface DifficultyLabelChart {
   md5?: string | null
 }
 
-export interface DifficultyTableLabel {
-  table_id: string
-  table_name: string
-  symbol: string
-  level: string
-}
-
-interface DifficultyLabelRow extends DifficultyTableLabel {
+interface DifficultyLabelRow extends IrDifficultyLabel {
   priority: number
   levelOrder: string[]
   md5: string
@@ -175,7 +169,7 @@ export async function syncDifficultyTable(
  */
 export async function lookupDifficultyLabels(
   charts: readonly DifficultyLabelChart[],
-): Promise<Map<string, DifficultyTableLabel[]>> {
+): Promise<Map<string, IrDifficultyLabel[]>> {
   const normalized = charts.map((chart) => ({
     sha256: chart.sha256.toLowerCase(),
     md5: chart.md5?.toLowerCase() || null,
@@ -729,10 +723,10 @@ function normalizeDiagnosticText(value: string): string {
 function difficultyLabelsFromRows(
   charts: readonly { sha256: string; md5: string | null }[],
   rows: readonly DifficultyLabelRow[],
-): Map<string, DifficultyTableLabel[]> {
+): Map<string, IrDifficultyLabel[]> {
   const byMd5 = groupDifficultyRows(rows, (row) => row.md5)
   const bySha256 = groupDifficultyRows(rows, (row) => row.sha256)
-  const result = new Map<string, DifficultyTableLabel[]>()
+  const result = new Map<string, IrDifficultyLabel[]>()
 
   for (const chart of charts) {
     const md5Matches = chart.md5 ? (byMd5.get(chart.md5) ?? []) : []

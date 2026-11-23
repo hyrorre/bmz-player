@@ -185,6 +185,7 @@ test('keeps independent bests and their details when falling back to history', a
   bestClear.rule.effective_ln_mode = 'cn'
   bestClear.result.clear = 'Hard'
   bestClear.result.ex_score = 100
+  bestClear.result.notes = 110
   bestClear.result.judges.fast.pgreat = 0
   bestClear.result.judges.fast.great = 100
   bestClear.play_options.arrange_1p = 'mirror'
@@ -196,6 +197,7 @@ test('keeps independent bests and their details when falling back to history', a
     score: {
       score_id: ex.score_id,
       clear: 'Hard',
+      max_ex_score: 200,
       arrange_1p: 'random',
       judges: bestEx.result.judges,
       source_score_ids: { ex_score: ex.score_id, clear: clear.score_id },
@@ -236,6 +238,29 @@ function courseSubmission() {
     idempotency_key: 'course-test',
   }
 }
+
+test('course ranking reads recorded arrangements and accepts retries of legacy scores', async () => {
+  const payload: CourseScoreSubmission = courseSubmission()
+  payload.play_options = {
+    device_type: 'keyboard',
+    option: 'normal',
+    entry_randomizations: [{ arrange_1p: 'random', arrange_2p: 'mirror', seed: '5' }],
+  }
+  const submitted = await submitCourseScore(user, validateCourseScoreSubmission(payload))
+  const conditions = [eq(schema.courseScores.courseHash, payload.course.course_hash)]
+  expect((await fetchCourseRankingRows(conditions))[0]).toMatchObject({
+    max_ex_score: 200,
+    ln_policy: 'AutoLn',
+  })
+  expect((await db.select().from(schema.courseScores))[0]?.arrangeOptions).toEqual([
+    { arrange_1p: 'random', arrange_2p: 'mirror' },
+  ])
+  await db.update(schema.courseScores).set({ arrangeOptions: [] })
+  expect(await submitCourseScore(user, validateCourseScoreSubmission(payload))).toMatchObject({
+    course_score_id: submitted.course_score_id,
+  })
+  expect((await db.select().from(schema.courseScores))[0]?.arrangeOptions).toEqual([])
+})
 
 test.each([false, true])(
   'keeps a concurrent score when cleanup commits first=%s',

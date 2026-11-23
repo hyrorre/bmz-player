@@ -1,12 +1,6 @@
 // ForceHln is a canonical native-HLN score bucket, not an additional player setting.
 export type LnScorePolicy =
-  | 'AutoLn'
-  | 'AutoCn'
-  | 'AutoHcn'
-  | 'ForceLn'
-  | 'ForceCn'
-  | 'ForceHcn'
-  | 'ForceHln'
+  'AutoLn' | 'AutoCn' | 'AutoHcn' | 'ForceLn' | 'ForceCn' | 'ForceHcn' | 'ForceHln'
 
 export type EffectiveLnMode = 'ln' | 'cn' | 'hcn' | 'hln'
 
@@ -30,6 +24,11 @@ export interface IrChartLnProfile {
   has_defined_cn: boolean
   has_defined_hcn: boolean
   has_defined_hln: boolean
+}
+
+export interface IrArrangeOptions {
+  arrange_1p?: string
+  arrange_2p?: string
 }
 
 export interface KaleidProvenance {
@@ -220,6 +219,8 @@ export interface IrRankingEntry {
     score_id: string
     clear: string
     ex_score: number
+    /** Maximum EX score of the attempt that supplied ex_score. */
+    max_ex_score?: number | null
     max_combo: number
     min_bp: number
     min_cb: number
@@ -280,6 +281,7 @@ export interface IrScoreHistoryEntry {
   score_id: string
   clear: string
   ex_score: number
+  max_ex_score?: number | null
   max_combo: number
   min_bp: number
   min_cb: number
@@ -404,11 +406,11 @@ export interface IrDailyChartResult {
     notes: number
   }
   /** 難易度表同期データとの突合結果。未同期時は空配列。 */
-  difficulty_labels: IrDailyDifficultyLabel[]
+  difficulty_labels: IrDifficultyLabel[]
   rules: IrDailyRuleResult[]
 }
 
-export interface IrDailyDifficultyLabel {
+export interface IrDifficultyLabel {
   table_id: string
   table_name: string
   symbol: string
@@ -503,7 +505,7 @@ export interface IrRivalComparison {
       level: number | null
       difficulty: string | null
     }
-    difficulty_labels: IrDailyDifficultyLabel[]
+    difficulty_labels: IrDifficultyLabel[]
     rule: {
       ln_policy: LnScorePolicy
       double_option: IrDoubleOption

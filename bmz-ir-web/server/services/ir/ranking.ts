@@ -220,6 +220,7 @@ async function loadRankingEntryDetails(entries: IrRankingEntry[]): Promise<void>
       displayName: schema.profiles.displayName,
       playOptions: representative.playOptions,
       judges: exBest.judges,
+      notes: exBest.notes,
     })
     .from(sql`json_each(${sources}) as ranking_sources`)
     .leftJoin(schema.profiles, eq(schema.profiles.id, playerId))
@@ -235,6 +236,7 @@ async function loadRankingEntryDetails(entries: IrRankingEntry[]): Promise<void>
     entry.player.display_name = details?.displayName || 'Player'
     Object.assign(entry.score, arrangeOptionsFromPlayOptions(details?.playOptions), {
       judges: rankingJudges(details?.judges),
+      max_ex_score: details?.notes ? details.notes * 2 : null,
     })
   }
 }

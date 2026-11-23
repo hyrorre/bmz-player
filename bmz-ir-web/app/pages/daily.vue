@@ -129,39 +129,6 @@ function displayDate(value: string): string {
   return formatDate(new Date(`${value}T12:00:00+09:00`))
 }
 
-function clearLabel(value: string | undefined): string {
-  const labels: Record<string, string> = {
-    no_play: 'NO PLAY',
-    NoPlay: 'NO PLAY',
-    failed: 'FAILED',
-    Failed: 'FAILED',
-    assisted_easy_clear: 'ASSIST',
-    AssistEasy: 'ASSIST',
-    LightAssistEasy: 'ASSIST',
-    easy_clear: 'EASY',
-    Easy: 'EASY',
-    clear: 'CLEAR',
-    Normal: 'CLEAR',
-    hard_clear: 'HARD',
-    Hard: 'HARD',
-    ex_hard_clear: 'EX HARD',
-    ExHard: 'EX HARD',
-    full_combo: 'FULL COMBO',
-    FullCombo: 'FULL COMBO',
-    perfect: 'PERFECT',
-    Perfect: 'PERFECT',
-    Max: 'MAX',
-  }
-  return value ? (labels[value] ?? value.toUpperCase()) : '-'
-}
-
-function clearColor(rank: number | undefined) {
-  if ((rank ?? 0) >= 7) return 'warning' as const
-  if ((rank ?? 0) >= 5) return 'error' as const
-  if ((rank ?? 0) >= 3) return 'success' as const
-  return 'neutral' as const
-}
-
 function scoreRate(result: IrDailyRuleResult): number | null {
   return scoreRateForSnapshot(result.after)
 }
@@ -315,18 +282,10 @@ useSeoMeta({ title: () => t('daily.title') })
                   class="border-t border-muted"
                 >
                   <td class="px-4 py-3 align-top">
-                    <div v-if="row.difficultyLabels.length" class="flex flex-wrap gap-1">
-                      <UBadge
-                        v-for="label in row.difficultyLabels"
-                        :key="`${label.table_id}-${label.level}`"
-                        color="primary"
-                        size="sm"
-                        variant="subtle"
-                        :title="label.table_name"
-                      >
-                        {{ difficultyLabel(label) }}
-                      </UBadge>
-                    </div>
+                    <DifficultyTableBadges
+                      v-if="row.difficultyLabels.length"
+                      :labels="row.difficultyLabels"
+                    />
                     <UBadge v-else color="neutral" size="sm" variant="subtle">
                       ☆{{ row.chart.level ?? '?' }}
                     </UBadge>
@@ -348,14 +307,16 @@ useSeoMeta({ title: () => t('daily.title') })
                   <td class="px-4 py-3 align-top">
                     <div class="flex flex-wrap items-center gap-1.5">
                       <template v-if="row.result.updated_fields.clear && row.result.before.clear">
-                        <UBadge :color="clearColor(row.result.before.clear.rank)" variant="subtle">
-                          {{ clearLabel(row.result.before.clear.type) }}
-                        </UBadge>
+                        <IrClearBadge
+                          :clear="row.result.before.clear.type"
+                          :rank="row.result.before.clear.rank"
+                        />
                         <span class="text-muted">»</span>
                       </template>
-                      <UBadge :color="clearColor(row.result.after.clear?.rank)" variant="subtle">
-                        {{ clearLabel(row.result.after.clear?.type) }}
-                      </UBadge>
+                      <IrClearBadge
+                        :clear="row.result.after.clear?.type"
+                        :rank="row.result.after.clear?.rank"
+                      />
                     </div>
                   </td>
                   <td class="px-4 py-3 align-top">

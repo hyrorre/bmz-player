@@ -1,4 +1,4 @@
-import { eq, inArray } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { getQuery } from 'h3'
 import { db, schema } from 'hub:db'
 import { asRuleMode, normalizeGaugeName, requireHex } from '../../../../services/ir'
@@ -54,29 +54,42 @@ export default defineEventHandler(async (event) => {
   }
 
   const ranked = rankCourseRows(await fetchCourseRankingRows(conditions), user?.id ?? null, limit)
-  const visibleRows = ranked.self ? [...ranked.entries, ranked.self] : ranked.entries
-  const playerIds = [...new Set(visibleRows.map(({ row }) => row.player_id))]
-  const profiles =
-    playerIds.length > 0
+  const visibleIds = new Set(ranked.entries.map(({ row }) => row.course_score_id))
+  if (ranked.self) visibleIds.add(ranked.self.row.course_score_id)
+  const details =
+    visibleIds.size > 0
       ? await db
-          .select({ id: schema.profiles.id, display_name: schema.profiles.displayName })
-          .from(schema.profiles)
-          .where(inArray(schema.profiles.id, playerIds))
+          .select({
+            id: schema.courseScores.id,
+            display_name: schema.profiles.displayName,
+            arrange_options: schema.courseScores.arrangeOptions,
+          })
+          .from(schema.courseScores)
+          .leftJoin(schema.profiles, eq(schema.profiles.id, schema.courseScores.playerId))
+          .where(
+            sql`${schema.courseScores.id} in (select value from json_each(${JSON.stringify([...visibleIds])}))`,
+          )
       : []
-  const names = new Map(profiles.map((profile) => [profile.id, profile.display_name]))
+  const detailsById = new Map(details.map((detail) => [detail.id, detail]))
 
   const toEntry = ({ rank, row }: RankedCourseRow) => ({
     rank,
-    player: { id: row.player_id, display_name: names.get(row.player_id) || 'Player' },
+    player: {
+      id: row.player_id,
+      display_name: detailsById.get(row.course_score_id)?.display_name || 'Player',
+    },
     score: {
       course_score_id: row.course_score_id,
       clear: row.clear_type,
       course_clear: row.course_clear,
       ex_score: row.ex_score,
+      max_ex_score: row.max_ex_score,
       max_combo: row.max_combo,
       bp: row.bp,
       device_type: row.device_type,
+      ln_policy: row.ln_policy,
       rule_mode: row.rule_mode,
+      arrange_options: detailsById.get(row.course_score_id)?.arrange_options ?? [],
       played_at: row.played_at,
       verification: row.verification,
     },

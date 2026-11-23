@@ -17,40 +17,19 @@ interface CourseListResult {
   }
 }
 
-const search = ref('')
-const appliedSearch = ref('')
-const page = ref(1)
-const pageSize = 50
-const offset = computed(() => (page.value - 1) * pageSize)
+const { search, page, pageSize, pageLocation, listQuery, apiQuery, applySearch } =
+  useSearchableListQuery()
 const localePath = useLocalePath()
 const { t } = useI18n()
 const { translateApiError } = useApiError()
 const { data, pending, error, refresh } = await useFetch<CourseListResult>('/api/v1/courses', {
-  query: computed(() => ({
-    limit: pageSize,
-    offset: offset.value,
-    ...(appliedSearch.value ? { q: appliedSearch.value } : {}),
-  })),
-  watch: false,
+  query: apiQuery,
 })
 
 const errorDescription = computed(() =>
   error.value ? translateApiError(error.value, 'errors.coursesLoadFailed') : '',
 )
 useSeoMeta({ title: () => t('courses.title') })
-
-function applySearch() {
-  appliedSearch.value = search.value.trim()
-  if (page.value === 1) {
-    refresh()
-  } else {
-    page.value = 1
-  }
-}
-
-watch(page, () => {
-  refresh()
-})
 </script>
 
 <template>
@@ -64,29 +43,35 @@ watch(page, () => {
         </p>
       </div>
 
-      <div class="mb-6 flex gap-3">
+      <form class="mb-6 flex gap-3" @submit.prevent="applySearch(refresh)">
         <UInput
           v-model="search"
           class="flex-1"
           icon="i-lucide-search"
           :placeholder="t('courses.searchPlaceholder')"
-          @keydown.enter="applySearch"
+          :aria-label="t('courses.searchPlaceholder')"
         />
-        <UButton color="primary" variant="subtle" @click="applySearch">{{
-          t('common.search')
-        }}</UButton>
-      </div>
+        <UButton type="submit" color="primary" variant="subtle">{{ t('common.search') }}</UButton>
+      </form>
 
       <UAlert v-if="error" color="error" :description="errorDescription" class="mb-6" />
       <p v-else-if="pending" class="text-sm text-neutral-400">{{ t('common.loading') }}</p>
-      <p v-else-if="!data?.courses.length" class="text-sm text-neutral-400">
-        {{ t('courses.empty') }}
-      </p>
+      <div v-else-if="!data?.courses.length" class="text-sm text-muted">
+        <p>{{ t('courses.empty') }}</p>
+        <UPagination
+          v-if="page > 1"
+          :page="1"
+          :to="pageLocation"
+          :total="1"
+          :show-controls="false"
+          class="mt-3"
+        />
+      </div>
 
       <ul v-else class="divide-y divide-neutral-800 rounded-lg border border-neutral-800">
         <li v-for="course in data.courses" :key="course.course_hash">
           <NuxtLink
-            :to="localePath(`/courses/${course.course_hash}`)"
+            :to="localePath({ path: `/courses/${course.course_hash}`, query: listQuery })"
             class="flex items-center justify-between gap-4 px-4 py-3 hover:bg-neutral-900"
           >
             <div class="min-w-0">
@@ -106,9 +91,14 @@ watch(page, () => {
         </li>
       </ul>
 
-      <div v-if="data && data.pagination.total > pageSize" class="mt-6 flex justify-end">
+      <div
+        v-if="data?.courses.length && data.pagination.total > pageSize"
+        class="mt-6 flex justify-end"
+      >
         <UPagination
-          v-model:page="page"
+          :page="page"
+          :to="pageLocation"
+          :sibling-count="1"
           :items-per-page="pageSize"
           :total="data.pagination.total"
         />

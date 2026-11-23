@@ -9,6 +9,8 @@ defineProps<{
   scoreKey: (score: T) => string
   scoreBp: (score: T) => number
   scoreTo?: (score: T) => string
+  showLn: boolean
+  scoreOption: (score: T) => string
 }>()
 const open = defineModel<boolean>('open', { required: true })
 const page = defineModel<number>('page', { required: true })
@@ -21,7 +23,7 @@ function formatScoreDate(value: string | null) {
 </script>
 
 <template>
-  <UModal v-model:open="open" :title="t('ranking.selfHistory')">
+  <UModal v-model:open="open" :title="t('ranking.selfHistory')" :ui="{ content: 'sm:max-w-4xl' }">
     <template #body>
       <UAlert v-if="errorDescription" color="error" :description="errorDescription" class="mb-4" />
       <p v-else-if="pending" class="text-sm text-muted">{{ t('common.loading') }}</p>
@@ -33,11 +35,13 @@ function formatScoreDate(value: string | null) {
           <thead class="bg-elevated text-left text-toned">
             <tr>
               <th class="px-3 py-2">{{ t('table.date') }}</th>
-              <th class="px-3 py-2 text-right">EX</th>
+              <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
               <th class="px-3 py-2">{{ t('table.clear') }}</th>
+              <th v-if="showLn" class="px-3 py-2">LN</th>
+              <th class="px-3 py-2">RULE</th>
+              <th class="px-3 py-2">OPTION</th>
               <th class="px-3 py-2 text-right">COMBO</th>
               <th class="px-3 py-2 text-right">BP</th>
-              <th class="px-3 py-2">{{ t('table.conditions') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -49,19 +53,20 @@ function formatScoreDate(value: string | null) {
               <td class="px-3 py-2 text-muted">
                 {{ formatScoreDate(score.played_at ?? score.server_received_at) }}
               </td>
-              <td class="px-3 py-2 text-right font-medium">
-                <NuxtLink v-if="scoreTo" :to="scoreTo(score)" class="hover:underline">{{
-                  score.ex_score
-                }}</NuxtLink>
-                <template v-else>{{ score.ex_score }}</template>
+              <td class="px-3 py-2 text-right">
+                <NuxtLink v-if="scoreTo" :to="scoreTo(score)" class="hover:underline">
+                  <RankingExScore :score="score.ex_score" :max="score.max_ex_score" />
+                </NuxtLink>
+                <RankingExScore v-else :score="score.ex_score" :max="score.max_ex_score" />
               </td>
-              <td class="px-3 py-2">{{ score.clear }}</td>
+              <td class="px-3 py-2"><IrClearBadge :clear="score.clear" /></td>
+              <td v-if="showLn" class="px-3 py-2 text-muted">
+                {{ lnPolicyLabel(score.ln_policy) }}
+              </td>
+              <td class="px-3 py-2 text-muted">{{ ruleModeLabel(score.rule_mode) }}</td>
+              <td class="px-3 py-2 text-xs text-muted">{{ scoreOption(score) }}</td>
               <td class="px-3 py-2 text-right">{{ score.max_combo }}</td>
               <td class="px-3 py-2 text-right">{{ scoreBp(score) }}</td>
-              <td class="px-3 py-2 text-muted">
-                <p>{{ score.gauge }} / {{ score.ln_policy }} / {{ score.rule_mode }}</p>
-                <slot name="conditions" :score="score" />
-              </td>
             </tr>
           </tbody>
         </table>

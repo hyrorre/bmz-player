@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { IrDifficultyLabel } from '../../../shared/types/ir'
+
 interface ChartListItem {
   sha256: string
   title: string
@@ -8,6 +10,7 @@ interface ChartListItem {
   mode: string
   level: number | null
   notes: number
+  difficulty_labels: IrDifficultyLabel[]
   updated_at: string
 }
 
@@ -21,34 +24,13 @@ interface ChartListResult {
   }
 }
 
-const search = ref('')
-const appliedSearch = ref('')
-const page = ref(1)
-const pageSize = 50
-const offset = computed(() => (page.value - 1) * pageSize)
+const { search, page, pageSize, pageLocation, listQuery, apiQuery, applySearch } =
+  useSearchableListQuery()
 const localePath = useLocalePath()
 const { t } = useI18n()
 const { translateApiError } = useApiError()
 const { data, pending, error, refresh } = await useFetch<ChartListResult>('/api/v1/charts', {
-  query: computed(() => ({
-    limit: pageSize,
-    offset: offset.value,
-    ...(appliedSearch.value ? { q: appliedSearch.value } : {}),
-  })),
-  watch: false,
-})
-
-function applySearch() {
-  appliedSearch.value = search.value.trim()
-  if (page.value === 1) {
-    refresh()
-  } else {
-    page.value = 1
-  }
-}
-
-watch(page, () => {
-  refresh()
+  query: apiQuery,
 })
 
 const errorDescription = computed(() =>
@@ -68,29 +50,35 @@ useSeoMeta({ title: () => t('charts.title') })
         </p>
       </div>
 
-      <div class="mb-6 flex gap-3">
+      <form class="mb-6 flex gap-3" @submit.prevent="applySearch(refresh)">
         <UInput
           v-model="search"
           class="flex-1"
           icon="i-lucide-search"
           :placeholder="t('charts.searchPlaceholder')"
-          @keydown.enter="applySearch"
+          :aria-label="t('charts.searchPlaceholder')"
         />
-        <UButton color="primary" variant="subtle" @click="applySearch">{{
-          t('common.search')
-        }}</UButton>
-      </div>
+        <UButton type="submit" color="primary" variant="subtle">{{ t('common.search') }}</UButton>
+      </form>
 
       <UAlert v-if="error" color="error" :description="errorDescription" class="mb-6" />
       <p v-else-if="pending" class="text-sm text-neutral-400">{{ t('common.loading') }}</p>
-      <p v-else-if="!data?.charts.length" class="text-sm text-neutral-400">
-        {{ t('charts.empty') }}
-      </p>
+      <div v-else-if="!data?.charts.length" class="text-sm text-muted">
+        <p>{{ t('charts.empty') }}</p>
+        <UPagination
+          v-if="page > 1"
+          :page="1"
+          :to="pageLocation"
+          :total="1"
+          :show-controls="false"
+          class="mt-3"
+        />
+      </div>
 
       <ul v-else class="divide-y divide-neutral-800 rounded-lg border border-neutral-800">
         <li v-for="chart in data.charts" :key="chart.sha256">
           <NuxtLink
-            :to="localePath(`/charts/${chart.sha256}`)"
+            :to="localePath({ path: `/charts/${chart.sha256}`, query: listQuery })"
             class="flex items-center justify-between gap-4 px-4 py-3 hover:bg-neutral-900"
           >
             <div class="min-w-0">
@@ -101,6 +89,7 @@ useSeoMeta({ title: () => t('charts.title') })
               <p class="truncate text-sm text-neutral-400">
                 {{ chart.artist ?? '' }}<span v-if="chart.genre"> / {{ chart.genre }}</span>
               </p>
+              <DifficultyTableBadges :labels="chart.difficulty_labels" class="mt-1.5" />
             </div>
             <div class="shrink-0 text-right text-sm text-neutral-300">
               <p>
@@ -112,9 +101,14 @@ useSeoMeta({ title: () => t('charts.title') })
         </li>
       </ul>
 
-      <div v-if="data && data.pagination.total > pageSize" class="mt-6 flex justify-end">
+      <div
+        v-if="data?.charts.length && data.pagination.total > pageSize"
+        class="mt-6 flex justify-end"
+      >
         <UPagination
-          v-model:page="page"
+          :page="page"
+          :to="pageLocation"
+          :sibling-count="1"
           :items-per-page="pageSize"
           :total="data.pagination.total"
         />

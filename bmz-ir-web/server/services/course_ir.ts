@@ -13,6 +13,7 @@ import {
   validateSubmissionJsonLimits,
 } from './ir/input_limits'
 import {
+  arrangeOptionsFromPlayOptions,
   asRuleMode,
   CLEAR_RANK,
   isRecord,
@@ -25,7 +26,7 @@ import {
   validateSeedOptions,
   type IrRequestUser,
 } from './ir'
-import type { IrRuleMode, IrVerificationStatus } from '../../shared/types/ir'
+import type { IrArrangeOptions, IrRuleMode, IrVerificationStatus } from '../../shared/types/ir'
 
 const LN_POLICY_ALIASES = new Map([
   ['AutoLn', 'AutoLn'],
@@ -231,6 +232,25 @@ function normalizeCourseLnPolicy(value: unknown): string {
   return normalized
 }
 
+function courseArrangeOptions(
+  playOptions: CourseScoreSubmission['play_options'],
+  chartCount: number,
+): (IrArrangeOptions | null)[] {
+  function arrangement(options: Record<string, unknown> | undefined) {
+    const value = arrangeOptionsFromPlayOptions(options)
+    return value.arrange_1p || value.arrange_2p ? value : null
+  }
+
+  const fallback = arrangement(playOptions)
+  const entries = playOptions.entry_randomizations
+  const options = Array.isArray(entries)
+    ? entries.slice(0, chartCount).map((entry) => arrangement(isRecord(entry) ? entry : undefined))
+    : []
+  if (!options.some(Boolean)) return fallback ? [fallback] : []
+  options[0] ??= fallback
+  return options
+}
+
 export async function submitCourseScore(
   user: IrRequestUser,
   payload: CourseScoreSubmission,
@@ -271,6 +291,7 @@ export async function submitCourseScore(
     judges: payload.result.judges,
     gaugeValue: payload.result.gauge_value,
     entries: payload.result.entries,
+    arrangeOptions: courseArrangeOptions(payload.play_options, payload.course.charts.length),
     playedAt: playedAtDate(payload.result.played_at),
     deviceType,
     evidence: payload.evidence ?? {},
@@ -299,6 +320,8 @@ export async function submitCourseScore(
     ])
     for (const key of Object.keys(insert) as (keyof typeof insert)[]) {
       if (ignored.has(key)) continue
+      // Older rows have no saved arrangements. A retry must still recover their best.
+      if (key === 'arrangeOptions' && existing.arrangeOptions.length === 0) continue
       const actual = existing[key]
       const expected = insert[key]
       const normalize = (value: unknown) => (value instanceof Date ? value.getTime() : value)
