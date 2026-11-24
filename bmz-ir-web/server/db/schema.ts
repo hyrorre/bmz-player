@@ -150,7 +150,11 @@ export const charts = sqliteTable(
       .notNull()
       .default(sql`(unixepoch('subsec') * 1000)`),
   },
-  (table) => [index('idx_charts_md5').on(table.md5), index('idx_charts_title').on(table.title)],
+  (table) => [
+    index('idx_charts_md5').on(table.md5),
+    index('idx_charts_md5_nocase').on(sql`${table.md5} collate nocase`),
+    index('idx_charts_title').on(table.title),
+  ],
 )
 
 export const difficultyTables = sqliteTable(

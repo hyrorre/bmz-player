@@ -11,6 +11,9 @@ const props = defineProps<{
 const { t } = useI18n()
 const { translateApiError } = useApiError()
 const selectedScore = ref(props.scoreId)
+watch([() => props.scoreId, () => props.otherScoreId], ([scoreId]) => {
+  selectedScore.value = scoreId
+})
 const scoreChoices = computed(() =>
   props.otherScoreId && props.otherScoreId !== props.scoreId
     ? [
@@ -19,14 +22,11 @@ const scoreChoices = computed(() =>
       ]
     : [],
 )
-const activeScoreId = computed(() =>
-  selectedScore.value === props.otherScoreId ? selectedScore.value : props.scoreId,
-)
 const { data, status, error, refresh } = useFetch<{
   score: ScoreClient & { id: string; judges: Partial<IrJudges> | null }
   replay: ScoreReplay | null
-}>(() => `/api/v1/scores/${encodeURIComponent(activeScoreId.value)}`, { lazy: true })
-const detail = computed(() => (data.value?.score.id === activeScoreId.value ? data.value : null))
+}>(() => `/api/v1/scores/${encodeURIComponent(selectedScore.value)}`, { lazy: true })
+const detail = computed(() => (data.value?.score.id === selectedScore.value ? data.value : null))
 </script>
 
 <template>

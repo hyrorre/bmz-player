@@ -1,19 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { BatchItem } from 'drizzle-orm/batch'
-import {
-  and,
-  asc,
-  eq,
-  exists,
-  inArray,
-  isNotNull,
-  ne,
-  notExists,
-  notInArray,
-  or,
-  sql,
-  type SQL,
-} from 'drizzle-orm'
+import { and, asc, eq, exists, inArray, ne, notExists, or, sql, type SQL } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/sqlite-core'
 import { db, schema } from 'hub:db'
 import type { IrDifficultyLabel, IrDifficultyTableOption } from '../../shared/types/ir'
@@ -297,11 +284,15 @@ export function compareDifficultyLevels(levelOrder: string[]) {
 }
 
 function chartMd5Match() {
-  return eq(schema.difficultyTableEntries.md5, sql`nullif(lower(${schema.charts.md5}), '')`)
+  return eq(schema.difficultyTableEntries.md5, sql`lower(${schema.charts.md5})`)
+}
+
+function chartMd5Lookup(hash: SQL | typeof schema.difficultyTableEntries.md5) {
+  return eq(sql`${schema.charts.md5} collate nocase`, hash)
 }
 
 function chartSha256Match() {
-  return eq(schema.difficultyTableEntries.sha256, sql`lower(${schema.charts.sha256})`)
+  return eq(schema.difficultyTableEntries.sha256, schema.charts.sha256)
 }
 
 function activeDifficultyEntries(hash: 'md5' | 'sha256', condition?: SQL, value = sql`1`) {
@@ -313,7 +304,7 @@ function activeDifficultyEntries(hash: 'md5' | 'sha256', condition?: SQL, value 
     .select({ value })
     .from(sql`${entries} indexed by ${index}`)
     .innerJoin(schema.difficultyTables, activeDifficultyGeneration())
-    .where(and(match, condition))
+    .where(and(match, ne(entries[hash], ''), condition))
 }
 
 function selectedDifficultyEntries(filter: DifficultyFilter) {
@@ -354,33 +345,38 @@ export function chartDifficultyLevelOrder(filter: DifficultyFilter): SQL {
 /** One row per registered public chart or unresolved table entry at each level. */
 export function difficultyTableCharts(tableId: string, level?: string) {
   const { charts, difficultyTableEntries: entries, difficultyTables: tables } = schema
-  const md5Match = chartMd5Match()
-  function registered(match: SQL, fallback?: SQL) {
-    return db
-      .selectDistinct({
-        id: sql<string>`${charts.sha256}`.as('chart_key'),
-        sha256: sql<string | null>`${charts.sha256}`.as('sha256'),
-        level: entries.level,
-        title: charts.title,
-        subtitle: charts.subtitle,
-        artist: charts.artist,
-      })
-      .from(charts)
-      .innerJoin(entries, match)
-      .innerJoin(tables, activeDifficultyGeneration())
-      .where(
-        and(
-          eq(entries.tableId, tableId),
-          level === undefined ? undefined : eq(entries.level, level),
-          publicChartCondition(charts.sha256),
-          fallback,
-        ),
-      )
+  function registered(hash: 'md5' | 'sha256', fallback?: SQL) {
+    const match = hash === 'md5' ? chartMd5Lookup(entries.md5) : chartSha256Match()
+    return (
+      db
+        .selectDistinct({
+          id: sql<string>`${charts.sha256}`.as('chart_key'),
+          sha256: sql<string | null>`${charts.sha256}`.as('sha256'),
+          level: entries.level,
+          title: charts.title,
+          subtitle: charts.subtitle,
+          artist: charts.artist,
+        })
+        .from(entries)
+        .innerJoin(tables, activeDifficultyGeneration())
+        // Keep the selected generation outermost, then look up each digest by index.
+        .crossJoin(charts)
+        .where(
+          and(
+            eq(entries.tableId, tableId),
+            level === undefined ? undefined : eq(entries.level, level),
+            ne(entries[hash], ''),
+            match,
+            publicChartCondition(charts.sha256),
+            fallback,
+          ),
+        )
+    )
   }
 
   // Separate equality joins let SQLite use the digest indexes for both branches.
-  return registered(md5Match)
-    .unionAll(registered(chartSha256Match(), notExists(activeDifficultyEntries('md5'))))
+  return registered('md5')
+    .unionAll(registered('sha256', notExists(activeDifficultyEntries('md5'))))
     .unionAll(unregisteredDifficultyCharts(tableId, level))
     .as('difficulty_charts')
 }
@@ -408,6 +404,7 @@ function unregisteredDifficultyCharts(tableId: string, level?: string) {
   }
 
   // Rows with both digests can resolve hash-only duplicates from the same generation.
+  const resolvedName = 'resolved_table_entries'
   const resolved = db
     .select({
       md5: sql<string>`coalesce(nullif(${entries.md5}, ''), (${pairedHash('md5', 'sha256')}), '')`.as(
@@ -426,12 +423,18 @@ function unregisteredDifficultyCharts(tableId: string, level?: string) {
     .where(
       and(eq(entries.tableId, tableId), level === undefined ? undefined : eq(entries.level, level)),
     )
-    .as('resolved_table_entries')
-  const knownMd5s = db
-    .select({ hash: sql`lower(${charts.md5})` })
+    .as(resolvedName)
+  // SQL aliases are unqualified unless explicitly scoped inside the chart lookups.
+  const resolvedMd5 = sql`${sql.identifier(resolvedName)}.${resolved.md5}`
+  const resolvedSha256 = sql`${sql.identifier(resolvedName)}.${resolved.sha256}`
+  const knownMd5 = db
+    .select({ value: sql`1` })
     .from(charts)
-    .where(and(isNotNull(charts.md5), ne(charts.md5, '')))
-  const knownSha256s = db.select({ hash: charts.sha256 }).from(charts)
+    .where(and(ne(resolvedMd5, ''), chartMd5Lookup(resolvedMd5)))
+  const knownSha256 = db
+    .select({ value: sql`1` })
+    .from(charts)
+    .where(eq(charts.sha256, resolvedSha256))
   const identity = sql`coalesce(nullif(${resolved.md5}, ''), ${resolved.sha256})`
 
   return db
@@ -451,8 +454,8 @@ function unregisteredDifficultyCharts(tableId: string, level?: string) {
       and(
         sql`${identity} <> ''`,
         // Registered charts with hidden or suppressed labels must not reappear as unregistered.
-        notInArray(resolved.md5, knownMd5s),
-        notInArray(resolved.sha256, knownSha256s),
+        notExists(knownMd5),
+        notExists(knownSha256),
         publicChartCondition(sql`${resolved.sha256}`),
       ),
     )

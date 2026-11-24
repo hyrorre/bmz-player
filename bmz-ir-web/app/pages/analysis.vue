@@ -2,6 +2,7 @@
 import { NuxtLink } from '#components'
 import {
   IR_CLEAR_LABELS,
+  IR_DIFFICULTY_TABLE_NOT_FOUND,
   IR_DISTRIBUTION_PAGE_SIZE,
   IR_SCORE_RANK_LABELS,
 } from '../../shared/constants/ir'
@@ -10,6 +11,7 @@ import type {
   IrDistributionCharts,
   IrDistributionMode,
 } from '../../shared/types/ir'
+import { extractApiMessage } from '../composables/useApiError'
 
 const route = useRoute()
 const localePath = useLocalePath()
@@ -22,7 +24,7 @@ const preferenceCookieOptions = {
   maxAge: 60 * 60 * 24 * 365,
   sameSite: 'lax',
 } as const
-const preferredTable = useCookie<string>('ir-analysis-table', preferenceCookieOptions)
+const preferredTable = useCookie<string | null>('ir-analysis-table', preferenceCookieOptions)
 const preferredMode = useCookie<IrDistributionMode>('ir-analysis-mode', preferenceCookieOptions)
 
 function queryText(value: unknown) {
@@ -30,7 +32,7 @@ function queryText(value: unknown) {
 }
 
 const playerId = computed(() => queryText(route.query.player) ?? user.value?.id)
-const tableId = computed(() => queryText(route.query.table) ?? queryText(preferredTable.value))
+const tableId = computed(() => queryText(route.query.table))
 const mode = computed<IrDistributionMode>(() => {
   const { mode, level, rank } = route.query
   if (mode === 'lamp' || mode === 'score') return mode
@@ -51,16 +53,31 @@ const reportQuery = computed(() => ({
 }))
 const reportKey = (query: typeof reportQuery.value) => `analysis:${JSON.stringify(query)}`
 let reportForSelection: { key: string; report: IrDifficultyDistribution } | undefined
-const { data, status, error } = await useAsyncData(
+const { data, status, error } = await useAsyncData<{
+  report: IrDifficultyDistribution | null
+  removedPreference?: string
+}>(
   () => reportKey(reportQuery.value),
-  async (_nuxtApp, { signal }) => ({
-    report: reportQuery.value.player
-      ? await requestFetch<IrDifficultyDistribution>('/api/v1/analysis', {
-          query: reportQuery.value,
-          signal,
-        })
-      : null,
-  }),
+  async (_nuxtApp, { signal }) => {
+    const query = reportQuery.value
+    if (!query.player) return { report: null }
+    // The route identifies the report. Clearing a stale preference must not change its key.
+    const savedTable = query.table === undefined ? queryText(preferredTable.value) : undefined
+    try {
+      const report = await requestFetch<IrDifficultyDistribution>('/api/v1/analysis', {
+        query: { ...query, table: query.table ?? savedTable },
+        signal,
+      })
+      return { report }
+    } catch (error) {
+      if (!savedTable || extractApiMessage(error) !== IR_DIFFICULTY_TABLE_NOT_FOUND) throw error
+      const report = await requestFetch<IrDifficultyDistribution>('/api/v1/analysis', {
+        query,
+        signal,
+      })
+      return { report, removedPreference: savedTable }
+    }
+  },
   {
     getCachedData(key, nuxtApp, { cause }) {
       if (cause === 'initial') {
@@ -72,7 +89,21 @@ const { data, status, error } = await useAsyncData(
     },
   },
 )
+watch(
+  () => data.value?.removedPreference,
+  (removed) => {
+    if (removed && !tableId.value && queryText(preferredTable.value) === removed) {
+      preferredTable.value = null
+    }
+  },
+  { immediate: true },
+)
 const report = computed(() => data.value?.report)
+const analysisErrorDescription = computed(() =>
+  extractApiMessage(error.value) === IR_DIFFICULTY_TABLE_NOT_FOUND
+    ? t('analysis.tableNotFound')
+    : translateApiError(error.value, 'errors.analysisLoadFailed'),
+)
 const reportCapture = useTemplateRef<HTMLElement>('reportCapture')
 const sharePath = computed(() => {
   const current = report.value
@@ -99,7 +130,7 @@ async function setView(query: { table?: string; mode?: IrDistributionMode }) {
     path: route.path,
     query: {
       ...route.query,
-      table: tableId.value,
+      table: report.value?.table?.id ?? tableId.value,
       mode: mode.value,
       ...query,
       level: undefined,
@@ -254,11 +285,7 @@ useSeoMeta({ title: () => t('analysis.title') })
         </div>
       </div>
       <p v-else-if="status === 'pending'" class="text-sm text-muted">{{ t('common.loading') }}</p>
-      <UAlert
-        v-else-if="error"
-        color="error"
-        :description="translateApiError(error, 'errors.analysisLoadFailed')"
-      />
+      <UAlert v-else-if="error" color="error" :description="analysisErrorDescription" />
       <article v-else-if="report" ref="reportCapture">
         <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
           <NuxtLink

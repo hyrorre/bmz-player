@@ -10,6 +10,7 @@ export const MAX_REPLAY_BYTES = 4 * 1024 * 1024
 export const IR_RANKING_MAX_OFFSET = 100_000
 export const IR_PLAYER_SCORE_PAGE_SIZE = 50
 export const IR_DISTRIBUTION_PAGE_SIZE = 50
+export const IR_DIFFICULTY_TABLE_NOT_FOUND = 'Difficulty table not found'
 
 export const IR_CLEAR_LABELS = [
   'NO PLAY',

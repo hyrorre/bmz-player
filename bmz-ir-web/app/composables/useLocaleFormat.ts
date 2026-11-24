@@ -1,5 +1,7 @@
 type DateInput = Date | string | number
 
+const timeZone = 'Asia/Tokyo'
+
 const dateAndTimeFormats = new Map<
   string,
   { date: Intl.DateTimeFormat; time: Intl.DateTimeFormat }
@@ -28,14 +30,15 @@ export function useLocaleFormat() {
     return new Intl.DateTimeFormat(localeTag.value, {
       dateStyle: 'medium',
       timeStyle: 'medium',
+      timeZone,
     }).format(new Date(value))
   }
 
   function formatDate(value: DateInput, options?: Intl.DateTimeFormatOptions) {
-    return new Intl.DateTimeFormat(
-      localeTag.value,
-      options ?? { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Tokyo' },
-    ).format(new Date(value))
+    return new Intl.DateTimeFormat(localeTag.value, {
+      timeZone,
+      ...(options ?? { year: 'numeric', month: 'long', day: 'numeric' }),
+    }).format(new Date(value))
   }
 
   function formatDateAndTime(value: DateInput) {
@@ -43,8 +46,8 @@ export function useLocaleFormat() {
     let formats = dateAndTimeFormats.get(locale)
     if (!formats) {
       formats = {
-        date: new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }),
-        time: new Intl.DateTimeFormat(locale, { timeStyle: 'medium' }),
+        date: new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeZone }),
+        time: new Intl.DateTimeFormat(locale, { timeStyle: 'medium', timeZone }),
       }
       dateAndTimeFormats.set(locale, formats)
     }

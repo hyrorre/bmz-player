@@ -1864,6 +1864,8 @@ describe('rankings, courses, and aggregates', () => {
     const blockedSha256 = 'c'.repeat(64)
     const registeredMd5 = 'a'.repeat(32)
     await submitScore({ id: 'bob' }, submission({ md5: registeredMd5 }), [], 10)
+    // Older imports can contain uppercase MD5 values.
+    await db.update(schema.charts).set({ md5: registeredMd5.toUpperCase() })
     await setChartStatus(blockedSha256, 'blocked')
     await db.insert(schema.difficultyTables).values({
       id: 'fixture',
@@ -1971,7 +1973,31 @@ describe('rankings, courses, and aggregates', () => {
     }
   })
 
-  test('score distribution first pages look up history by player and chart', async () => {
+  test('distribution endpoints return 404 for unknown and inactive tables', async () => {
+    await db.insert(schema.difficultyTables).values([
+      { id: 'inactive', sourceUrl: 'https://example.invalid/inactive' },
+      { id: 'fixture', sourceUrl: 'https://example.invalid/table', activeGeneration: 'current' },
+    ])
+    const summary = '/api/v1/analysis?player=alice'
+    const charts = '/api/v1/analysis/charts?player=alice&level=1&rank=0'
+    for (const table of ['unknown', 'inactive']) {
+      for (const [handler, path] of [
+        [analysisHandler, summary],
+        [analysisChartsHandler, charts],
+      ] as const) {
+        await expect(handler(event({ path: `${path}&table=${table}` }))).rejects.toMatchObject({
+          statusCode: 404,
+          statusMessage: 'Difficulty table not found',
+        })
+      }
+    }
+    expect((await analysisHandler(event({ path: summary }))).table.id).toBe('fixture')
+    expect(
+      (await analysisChartsHandler(event({ path: `${charts}&table=fixture` }))).charts,
+    ).toEqual([])
+  })
+
+  test('distribution uses chart digest indexes and looks up history by player and chart', async () => {
     await db.insert(schema.difficultyTables).values({
       id: 'fixture',
       sourceUrl: 'https://example.invalid/table',
@@ -1982,20 +2008,28 @@ describe('rankings, courses, and aggregates', () => {
       await analysisHandler(
         event({ path: '/api/v1/analysis?player=alice&mode=score&include=first_pages' }),
       )
+      await analysisChartsHandler(
+        event({
+          path: '/api/v1/analysis/charts?player=alice&table=fixture&level=1&rank=0&mode=score',
+        }),
+      )
       const queries = execute.mock.calls.flatMap(([statement]) =>
         typeof statement === 'object' && statement.sql.includes('as "rank_index"')
           ? [statement]
           : [],
       )
-      expect(queries).toHaveLength(1)
-      const { sql, args } = queries[0]!
-      const plan = await client.execute({ sql: `EXPLAIN QUERY PLAN ${sql}`, args })
-      const historyLookups = plan.rows
-        .map((row) => String(row.detail))
-        .filter((step) => step.startsWith('SEARCH scores '))
-      expect(historyLookups.length).toBeGreaterThan(0)
-      for (const lookup of historyLookups) {
-        expect(lookup).toMatch(/player_id=\? AND chart_sha256=\?/)
+      expect(queries).toHaveLength(3)
+      for (const { sql, args } of queries) {
+        const plan = await client.execute({ sql: `EXPLAIN QUERY PLAN ${sql}`, args })
+        const steps = plan.rows.map((row) => String(row.detail))
+        expect(steps.filter((step) => /^SCAN charts\b/.test(step))).toEqual([])
+        expect(steps.some((step) => step.includes('idx_charts_md5_nocase'))).toBeTrue()
+        expect(steps.some((step) => step.includes('sqlite_autoindex_charts_1'))).toBeTrue()
+        const historyLookups = steps.filter((step) => step.startsWith('SEARCH scores '))
+        expect(historyLookups.length).toBeGreaterThan(0)
+        for (const lookup of historyLookups) {
+          expect(lookup).toMatch(/player_id=\? AND chart_sha256=\?/)
+        }
       }
     } finally {
       execute.mockRestore()

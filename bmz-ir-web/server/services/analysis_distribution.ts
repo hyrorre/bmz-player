@@ -1,7 +1,12 @@
 import { and, asc, count, eq, isNotNull, lte, max, sql, type SQL } from 'drizzle-orm'
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
+import { createError } from 'h3'
 import { db, schema } from 'hub:db'
-import { IR_DISTRIBUTION_PAGE_SIZE, IR_SCORE_GRADES } from '../../shared/constants/ir'
+import {
+  IR_DIFFICULTY_TABLE_NOT_FOUND,
+  IR_DISTRIBUTION_PAGE_SIZE,
+  IR_SCORE_GRADES,
+} from '../../shared/constants/ir'
 import type {
   IrDifficultyDistribution,
   IrDistributionChart,
@@ -15,6 +20,10 @@ import {
   difficultyTableStorageId,
 } from './difficulty_tables'
 import { isPublicPlayer, publicPlayerCondition } from './moderation/visibility'
+
+function difficultyTableNotFound() {
+  return createError({ statusCode: 404, statusMessage: IR_DIFFICULTY_TABLE_NOT_FOUND })
+}
 
 export async function loadDifficultyDistribution(
   playerId: string,
@@ -40,9 +49,14 @@ export async function loadDifficultyDistribution(
     .from(tables)
     .where(isNotNull(tables.activeGeneration))
     .orderBy(asc(tables.priority), asc(tables.name), asc(tables.id))
-  const storageId = tableId === undefined ? undefined : difficultyTableStorageId(tableId)
-  const table = activeTables.find(({ id }) => id === storageId) ?? activeTables[0]
-  if (!table) return { player, tables: [], table: null, levels: [] }
+  const table =
+    tableId === undefined
+      ? activeTables[0]
+      : activeTables.find(({ id }) => id === difficultyTableStorageId(tableId))
+  if (!table) {
+    if (tableId !== undefined) throw difficultyTableNotFound()
+    return { player, tables: [], table: null, levels: [] }
+  }
 
   const ranks = chartRanks(playerId, mode, table.id)
   const rows: { level: string; rank: number; count: number; chart?: IrDistributionChart }[] =
@@ -93,7 +107,15 @@ export async function loadDistributionCharts(
 ): Promise<IrDistributionCharts | null> {
   if (!(await isPublicPlayer(playerId))) return null
   const { mode, table, level, rank, limit, offset } = options
-  const ranks = chartRanks(playerId, mode, difficultyTableStorageId(table), level)
+  const tableId = difficultyTableStorageId(table)
+  const tables = schema.difficultyTables
+  const [activeTable] = await db
+    .select({ id: tables.id })
+    .from(tables)
+    .where(and(eq(tables.id, tableId), isNotNull(tables.activeGeneration)))
+  if (!activeTable) throw difficultyTableNotFound()
+
+  const ranks = chartRanks(playerId, mode, tableId, level)
   const [items, counts] = await Promise.all([
     db
       .select(distributionChartColumns(ranks))
