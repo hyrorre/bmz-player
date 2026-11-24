@@ -326,15 +326,14 @@ useSeoMeta({ title: () => t('daily.title') })
                           row.result.updated_fields.ex_score && row.result.before.ex_score !== null
                         "
                       >
-                        <UBadge color="neutral" size="sm" variant="subtle">
-                          {{ scoreGrade(scoreRateForSnapshot(row.result.before)) }}
-                        </UBadge>
+                        <IrRankBadge
+                          :label="scoreGrade(scoreRateForSnapshot(row.result.before))"
+                          size="sm"
+                        />
                         <span class="text-muted">{{ row.result.before.ex_score }}</span>
                         <span class="mx-1.5 text-muted">»</span>
                       </template>
-                      <UBadge color="warning" size="sm" variant="subtle">
-                        {{ scoreGrade(scoreRate(row.result)) }}
-                      </UBadge>
+                      <IrRankBadge :label="scoreGrade(scoreRate(row.result))" size="sm" />
                       <span class="ml-1.5">{{ row.result.after.ex_score ?? '-' }}</span>
                     </div>
                     <div class="mt-1 text-xs text-muted">

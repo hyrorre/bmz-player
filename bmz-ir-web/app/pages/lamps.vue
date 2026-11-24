@@ -378,7 +378,7 @@ useSeoMeta({ title: () => t('lamps.title') })
   inline-size: 0.65rem;
   block-size: 0.65rem;
   border-radius: 0.2rem;
-  background: var(--rank-fill);
+  background: var(--ir-rank-fill);
 }
 
 .rank-segment {
@@ -386,8 +386,8 @@ useSeoMeta({ title: () => t('lamps.title') })
   min-inline-size: 1.25rem;
   overflow: hidden;
   cursor: pointer;
-  background: var(--rank-fill);
-  color: var(--rank-text, #172033);
+  background: var(--ir-rank-fill);
+  color: var(--ir-rank-text);
   font-size: 0.75rem;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
@@ -398,39 +398,6 @@ useSeoMeta({ title: () => t('lamps.title') })
   outline: 2px solid currentColor;
   outline-offset: -2px;
   z-index: 1;
-}
-
-[data-rank='0'] {
-  --rank-fill: #778397;
-  --rank-text: #101827;
-}
-[data-rank='1'] {
-  --rank-fill: #d27b86;
-  --rank-text: #101827;
-}
-[data-rank='2'] {
-  --rank-fill: #d5a0b9;
-}
-[data-rank='3'] {
-  --rank-fill: #91d989;
-}
-[data-rank='4'] {
-  --rank-fill: #80bbfb;
-}
-[data-rank='5'] {
-  --rank-fill: #ff8181;
-}
-[data-rank='6'] {
-  --rank-fill: #ffd685;
-}
-[data-rank='7'] {
-  --rank-fill: #8de2de;
-}
-[data-rank='8'] {
-  --rank-fill: #c1b4fb;
-}
-[data-rank='9'] {
-  --rank-fill: #f4f2d2;
 }
 
 @media (min-width: 640px) {

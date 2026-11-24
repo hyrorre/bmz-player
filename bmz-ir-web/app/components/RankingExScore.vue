@@ -10,7 +10,7 @@ const display = computed(() => rankingScoreDisplay(props.score, props.max))
     </p>
     <p v-if="display" class="mt-0.5 flex items-center justify-end gap-1.5 text-xs text-muted">
       <span>({{ display.rate.toFixed(1) }}%)</span>
-      <UBadge color="warning" size="sm" variant="subtle">{{ display.grade }}</UBadge>
+      <IrRankBadge :label="display.grade ?? '-'" size="sm" />
       <span>({{ display.difference }})</span>
     </p>
   </div>
