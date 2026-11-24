@@ -268,6 +268,11 @@ pub const SKIN_REF_BMZ_CHART_TOTAL_MINUTES: i32 = 19_262;
 /// Current BMZ FREQ playback multiplier, integer and hundredths.
 pub const SKIN_REF_BMZ_PLAYBACK_INTEGER: i32 = 19_263;
 pub const SKIN_REF_BMZ_PLAYBACK_FRACTION: i32 = 19_264;
+
+/// Selected or played chart's note count, indexed by BMZ lane.
+pub const SKIN_REF_BMZ_LANE_NOTES_BASE: i32 = 19_270;
+pub const SKIN_REF_BMZ_LANE_NOTES_LAST: i32 =
+    SKIN_REF_BMZ_LANE_NOTES_BASE + bmz_core::lane::LANE_COUNT as i32 - 1;
 /// DETAIL OPTIONS v1. Number/text/option are independent namespaces.
 pub const SKIN_REF_DETAIL_OPTIONS_BASE: i32 = 19_300;
 pub const SKIN_REF_DETAIL_OPTIONS_LAST: i32 = 19_312;

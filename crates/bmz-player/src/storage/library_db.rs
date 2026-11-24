@@ -161,6 +161,7 @@ pub struct ChartAnalysisSummary {
 pub struct ChartGraphData {
     pub distribution: Vec<ChartDistributionSecond>,
     pub speed_changes: Vec<ChartSpeedChange>,
+    pub lane_notes: Vec<ChartLaneNotes>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

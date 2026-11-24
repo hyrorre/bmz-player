@@ -133,6 +133,16 @@ impl WinitApp {
                     .result_skin_document()
                     .map(|document| document.result_ir_scope_binding)
                     .unwrap_or_default();
+                let lane_note_counts = if self.result.finished_course.is_some() {
+                    Default::default()
+                } else {
+                    self.result
+                        .finished_play
+                        .as_ref()
+                        .and_then(|play| play.lane_details.as_deref())
+                        .map(|details| details.note_counts())
+                        .unwrap_or_default()
+                };
                 AppSceneSnapshot::Result(ResultSnapshot {
                     chart_md5: summary.chart_md5,
                     chart_sha256: summary.chart_sha256,
@@ -182,6 +192,7 @@ impl WinitApp {
                     gauge_value: summary.gauge_value,
                     gauge_type: summary.gauge_type as i32,
                     total_notes: summary.total_notes,
+                    lane_note_counts,
                     duration_ms: summary.duration_ms,
                     note_display_duration_ms: Some(Self::select_note_display_duration_ms_for_skin(
                         &self.boot.profile_config,

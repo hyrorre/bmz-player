@@ -7,6 +7,7 @@ pub(in crate::app) const SELECT_VISIBLE_ROWS: usize = 25;
 #[derive(Default)]
 pub(in crate::app) struct CachedSelectChartDistribution {
     pub notes: Vec<ChartDistributionSecond>,
+    pub lane_note_counts: [Option<u32>; LANE_COUNT],
     pub end_density: Option<f64>,
     pub bpm_graph_segments: Vec<bmz_render::chart_graph::BpmGraphSegment>,
 }
@@ -25,7 +26,18 @@ impl CachedSelectChartDistribution {
             )
         });
         let bpm_graph_segments = select_bpm_graph_segments(&graph.speed_changes, chart.length_ms);
-        Self { notes, end_density, bpm_graph_segments }
+        let mut lane_note_counts = [None; LANE_COUNT];
+        if let Some(mode) = KeyMode::from_str_opt(&chart.mode) {
+            for lane in mode.active_lanes() {
+                let index = lane.index();
+                lane_note_counts[index] = graph
+                    .lane_notes
+                    .iter()
+                    .find(|counts| usize::from(counts.lane_index) == index)
+                    .map(|counts| counts.normal_notes.saturating_add(counts.long_notes));
+            }
+        }
+        Self { notes, lane_note_counts, end_density, bpm_graph_segments }
     }
 }
 

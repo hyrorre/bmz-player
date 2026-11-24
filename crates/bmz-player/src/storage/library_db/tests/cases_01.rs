@@ -547,6 +547,7 @@ fn upsert_chart_import_persists_chart_analysis_distribution() {
     assert_eq!(lane_storage, "blob");
     let graphs = db.chart_graphs_by_chart_ids(&[chart_id]).unwrap();
     assert_eq!(graphs[&chart_id].distribution, analysis.distribution);
+    assert_eq!(graphs[&chart_id].lane_notes, analysis.lane_notes);
 }
 
 #[test]

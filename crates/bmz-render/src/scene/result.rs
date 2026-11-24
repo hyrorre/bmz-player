@@ -207,6 +207,8 @@ pub struct ResultSnapshot {
     pub gauge_value: f32,
     pub gauge_type: i32,
     pub total_notes: u32,
+    /// Played note counts shown in Result Details, in BMZ lane order.
+    pub lane_note_counts: [Option<u32>; LANE_COUNT],
     pub duration_ms: i32,
     /// NUMBER_DURATION に渡す設定済みノーツ表示時間 ms。
     /// NUMBER_DURATION_GREEN は描画state構築時にこの値から導出する。

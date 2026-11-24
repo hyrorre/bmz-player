@@ -122,6 +122,10 @@ fn lane_details_count_missed_cn_end_but_ignore_auto_scratch() {
         (scratch.notes, scratch.ex_score, scratch.bp, scratch.auto_scratch),
         (0, 0, 0, true)
     );
+    let counts = details.note_counts();
+    assert_eq!(counts[Lane::Key2.index()], Some(2));
+    assert_eq!(counts[Lane::Scratch.index()], Some(0));
+    assert_eq!(counts[Lane::Key8.index()], None);
 }
 
 #[test]

@@ -34,6 +34,15 @@ pub struct ResultLaneDetails {
 }
 
 impl ResultLaneDetails {
+    pub(crate) fn note_counts(&self) -> [Option<u32>; LANE_COUNT] {
+        let mut counts = [None; LANE_COUNT];
+        for lane in self.key_mode.active_lanes() {
+            let index = lane.index();
+            counts[index] = Some(self.lanes[index].notes);
+        }
+        counts
+    }
+
     pub(crate) fn new(
         chart: &PlayableChart,
         result: &PlayResult,

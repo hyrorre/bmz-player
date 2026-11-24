@@ -49,6 +49,8 @@ pub struct SelectSnapshot {
     /// Logical selection data remains in `rows` for skin refs and actions.
     pub bar_scroll_rows: Option<Vec<SelectRowSnapshot>>,
     pub selected_chart_id: Option<i64>,
+    /// Note counts for the selected chart in BMZ lane order. Missing lanes are unavailable.
+    pub lane_note_counts: [Option<u32>; LANE_COUNT],
     /// Currently selected replay slot (0..=3), normalized to an existing slot.
     pub selected_replay_slot: Option<u8>,
     pub selected_title: String,
@@ -306,6 +308,7 @@ impl Default for SelectSnapshot {
             bar_scroll_progress: 0.0,
             bar_scroll_rows: None,
             selected_chart_id: None,
+            lane_note_counts: [None; LANE_COUNT],
             selected_replay_slot: None,
             selected_title: String::new(),
             battle: None,

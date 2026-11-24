@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn result_lane_note_refs_keep_zero_and_report_missing_data() {
+    let crate::scene::AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene()
+    else {
+        unreachable!();
+    };
+    snapshot.lane_note_counts[Lane::Scratch.index()] = Some(0);
+    snapshot.lane_note_counts[Lane::Scratch2.index()] = Some(51);
+    let state = crate::plan::result_skin_draw_state(&snapshot, 0);
+
+    assert_eq!(lua_main_state_number(SKIN_REF_BMZ_LANE_NOTES_BASE, &state), 0);
+    assert_eq!(lua_main_state_number(SKIN_REF_BMZ_LANE_NOTES_LAST, &state), 51);
+    let value = serde_json::from_str(r#"{"value": "bmz_lane_notes_scratch2"}"#).unwrap();
+    assert_eq!(skin_value_number_for_destination(&value, &state), Some(51));
+    let missing = SKIN_REF_BMZ_LANE_NOTES_BASE + Lane::Key1 as i32;
+    assert_eq!(skin_state_number(missing, &state), None);
+    assert_eq!(lua_main_state_number(missing, &state), i64::from(i32::MIN));
+}
+
+#[test]
 fn result_destination_negative_image_id_renders_runtime_stagefile_source() {
     let document: SkinDocument = serde_json::from_str(
         r#"

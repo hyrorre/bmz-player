@@ -547,8 +547,11 @@ pub(in crate::skin) fn lua_missing_number(ref_id: i32, state: &SkinDrawState) ->
         // beatorajaでは難易度表の未所持譜面にも譜面情報があり、譜面長の初期値は0。
         return Some(0);
     }
-    (matches!(ref_id, 243..=249 | 380..=399 | 1163 | 1164)
-        || (state.result_failed.is_some() && matches!(ref_id, 176 | 178)))
+    (matches!(
+        ref_id,
+        243..=249 | 380..=399 | 1163 | 1164
+            | SKIN_REF_BMZ_LANE_NOTES_BASE..=SKIN_REF_BMZ_LANE_NOTES_LAST
+    ) || (state.result_failed.is_some() && matches!(ref_id, 176 | 178)))
     .then_some(i64::from(i32::MIN))
 }
 

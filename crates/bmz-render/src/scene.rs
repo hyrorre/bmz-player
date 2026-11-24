@@ -3,7 +3,7 @@ use std::sync::Arc;
 pub mod detail_options;
 
 use bmz_core::clear::ClearType;
-use bmz_core::lane::KeyMode;
+use bmz_core::lane::{KeyMode, LANE_COUNT};
 use bmz_core::time::TimeUs;
 
 use crate::chart_graph::BpmGraphSegment;
@@ -135,6 +135,7 @@ mod tests {
             gauge_value: 100.0,
             gauge_type: 2,
             total_notes: 10,
+            lane_note_counts: Default::default(),
             duration_ms: 0,
             note_display_duration_ms: None,
             initial_bpm: 0.0,
@@ -238,6 +239,7 @@ mod tests {
             gauge_value: 100.0,
             gauge_type: 2,
             total_notes: 0,
+            lane_note_counts: Default::default(),
             duration_ms: 0,
             note_display_duration_ms: None,
             initial_bpm: 0.0,
