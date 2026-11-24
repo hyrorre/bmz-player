@@ -88,6 +88,7 @@ export default defineI18nLocale(() =>
           '이메일 비밀번호 재설정은 아직 지원하지 않습니다. 로그인 후 계정 설정에서 변경하세요.',
       },
       manual: {
+        contents: '목차',
         chapters: '장 선택',
         title: '매뉴얼',
         description: 'BMZ Player 시작 방법, 조작 방법, 문제 해결 방법을 정리했습니다.',

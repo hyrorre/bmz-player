@@ -1,10 +1,13 @@
-import type { DropdownMenuItem, NavigationMenuItem } from '@nuxt/ui'
+import type { NavigationMenuItem } from '@nuxt/ui'
+
+type AppMenuItem = Pick<NavigationMenuItem, 'label' | 'icon' | 'to' | 'onSelect'>
 
 export function useAppNavigation() {
   const { user, clear } = useUserSession()
   const localePath = useLocalePath()
   const { t } = useI18n()
   const { isAdmin } = useIrAccount()
+  const { pages, pagePath } = useManual()
 
   const logout = async () => {
     await $fetch('/api/v1/auth/logout', { method: 'POST' })
@@ -12,15 +15,19 @@ export function useAppNavigation() {
     await navigateTo(localePath('/'))
   }
 
-  const navigationItems = computed<NavigationMenuItem[]>(() => [
+  const navigationItems = computed<AppMenuItem[]>(() => [
     { label: t('nav.charts'), icon: 'i-lucide-list-music', to: localePath('/charts') },
     { label: t('lamps.nav'), icon: 'i-lucide-chart-bar-stacked', to: localePath('/lamps') },
     { label: t('nav.courses'), icon: 'i-lucide-medal', to: localePath('/courses') },
     { label: t('nav.players'), icon: 'i-lucide-users', to: localePath('/players') },
-    { label: t('nav.manual'), icon: 'i-lucide-book-open', to: localePath('/manual') },
   ])
 
-  const accountItems = computed<DropdownMenuItem[]>(() =>
+  const manualItems = computed<AppMenuItem[]>(() => [
+    { label: t('manual.contents'), icon: 'i-lucide-list', to: localePath('/manual') },
+    ...pages.value.map((page) => ({ label: page.title, to: pagePath(page.slug) })),
+  ])
+
+  const accountItems = computed<AppMenuItem[]>(() =>
     user.value
       ? [
           {
@@ -53,5 +60,5 @@ export function useAppNavigation() {
         ],
   )
 
-  return { navigationItems, accountItems }
+  return { navigationItems, manualItems, accountItems }
 }

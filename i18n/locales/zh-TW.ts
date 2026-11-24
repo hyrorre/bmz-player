@@ -85,6 +85,7 @@ export default defineI18nLocale(() =>
         unsupported: '尚未支援透過郵件重設密碼。請登入後在帳號設定中變更。',
       },
       manual: {
+        contents: '目錄',
         chapters: '選擇章節',
         title: '使用手冊',
         description: '介紹 BMZ Player 的入門方式、操作方法以及常見問題的處理方式。',

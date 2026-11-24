@@ -85,6 +85,7 @@ export default defineI18nLocale(() =>
         unsupported: '暂不支持通过邮件重置密码。请登录后在账户设置中修改。',
       },
       manual: {
+        contents: '目录',
         chapters: '选择章节',
         title: '使用手册',
         description: '介绍 BMZ Player 的入门方法、操作方式以及常见问题的解决办法。',

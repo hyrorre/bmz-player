@@ -90,6 +90,7 @@ export default defineI18nLocale(() =>
           'Password reset by email is not supported yet. Change it from Account settings while logged in.',
       },
       manual: {
+        contents: 'All chapters',
         chapters: 'Select a chapter',
         title: 'Manual',
         description:
