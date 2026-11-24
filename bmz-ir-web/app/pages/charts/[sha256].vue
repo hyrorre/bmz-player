@@ -174,8 +174,22 @@ const canShowSelfArea = computed(() => Boolean(selfBestEntry.value || detail.val
 const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclosure()
 const wideScoreTable = useWideScoreTable()
 
-function copyHash(hash: string) {
-  return navigator.clipboard.writeText(hash)
+const copiedHash = shallowRef<{ hash: string }>()
+watch(copiedHash, (copied, _, onCleanup) => {
+  if (!copied) return
+  const timeout = window.setTimeout(() => {
+    copiedHash.value = undefined
+  }, 1500)
+  onCleanup(() => window.clearTimeout(timeout))
+})
+
+async function copyHash(hash: string) {
+  try {
+    await navigator.clipboard.writeText(hash)
+  } catch {
+    return
+  }
+  copiedHash.value = { hash }
 }
 
 function formatScoreDate(value: string | null) {
@@ -242,8 +256,10 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
               :key="hash.label"
               type="button"
               :title="t('chart.copy')"
-              trailing-icon="i-lucide-copy"
-              :ui="{ trailingIcon: 'text-muted' }"
+              :trailing-icon="copiedHash?.hash === hash.value ? 'i-lucide-check' : 'i-lucide-copy'"
+              :ui="{
+                trailingIcon: copiedHash?.hash === hash.value ? 'text-success' : 'text-muted',
+              }"
               color="neutral"
               variant="subtle"
               size="sm"
@@ -253,6 +269,7 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
               <span class="shrink-0 font-semibold">{{ hash.label }}</span>
               <span class="min-w-0 font-mono text-xs break-all text-toned">{{ hash.value }}</span>
             </UButton>
+            <span class="sr-only" role="status">{{ copiedHash ? t('chart.copied') : '' }}</span>
           </div>
           <nav
             aria-labelledby="chart-external-services"
