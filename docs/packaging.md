@@ -626,6 +626,8 @@ release tagは`v0.1.0`のように`v` prefix付きでもよいが、数値部分
 `Cargo.toml`のworkspace versionと一致する必要があります。手動実行では`tag` input
 を指定します。`upload_to_release=false`ではブランチやコミットSHAも指定でき、
 workspace versionを使って各OSの配布物をActions artifactとして生成します。
+公開時は`tag`をGitタグとして解決します。メタデータ生成と成果物の取りまとめは読み取り権限で行い、
+GitHub Releaseと更新フィードへの書き込みは公開ジョブが担当します。
 
 Windows jobは`scripts/package-windows.ps1`をdefault featuresで実行するため、
 release artifactはASIO対応を含みます。`cpal/asio`が使う`asio-sys` build scriptは
@@ -649,6 +651,7 @@ Developer ID署名・公証を利用する場合だけ、次の任意secretsを�
 公開時に署名用secretsが揃っている場合はDeveloper ID署名を使い、公証用secretsも揃っている場合は
 notarization、stapling、`spctl`検証を行ってから`.app.zip`を作ります。
 secretsが未設定の場合と公開しない検証では、ad-hoc署名で作成します。
+Developer ID署名と公証のsecretsは、公開時に使う各ステップに渡します。
 公開するZIPにはSparkleのEdDSA署名を付け、埋込み公開鍵との照合に成功してから公開します。
 
 macOSのarm64 runnerは`macos-15`、x64 runnerは`macos-15-intel`を使います。

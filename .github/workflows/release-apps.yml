@@ -59,9 +59,10 @@ jobs:
       - name: Checkout release ref
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: ${{ (github.event_name == 'release' || (inputs.upload_to_release && !inputs.windows_only)) && format('refs/tags/{0}', github.event.release.tag_name || inputs.tag) || inputs.tag }}
           fetch-depth: 0
           submodules: recursive
+          persist-credentials: false
 
       - name: Resolve release metadata
         id: meta
@@ -110,6 +111,7 @@ jobs:
 
       - name: Test update metadata generators
         run: |
+          ruby scripts/test-release-workflow.rb
           node --test scripts/generate-update-metadata.test.mjs
           node --test scripts/verify-sparkle-signature.test.mjs
           python3 scripts/test_sparkle_appcast.py
@@ -373,13 +375,6 @@ jobs:
       BMZ_MACOS_ARCH: ${{ matrix.arch }}
       BMZ_MACOS_DEPLOYMENT_TARGET: ${{ matrix.minimum_system_version }}
       MACOSX_DEPLOYMENT_TARGET: ${{ matrix.minimum_system_version }}
-      BMZ_MACOS_CODESIGN_IDENTITY: ${{ secrets.BMZ_MACOS_CODESIGN_IDENTITY }}
-      BMZ_MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.BMZ_MACOS_CERTIFICATE_P12_BASE64 }}
-      BMZ_MACOS_CERTIFICATE_PASSWORD: ${{ secrets.BMZ_MACOS_CERTIFICATE_PASSWORD }}
-      BMZ_MACOS_KEYCHAIN_PASSWORD: ${{ secrets.BMZ_MACOS_KEYCHAIN_PASSWORD }}
-      BMZ_MACOS_NOTARY_APPLE_ID: ${{ secrets.BMZ_MACOS_NOTARY_APPLE_ID }}
-      BMZ_MACOS_NOTARY_PASSWORD: ${{ secrets.BMZ_MACOS_NOTARY_PASSWORD }}
-      BMZ_MACOS_NOTARY_TEAM_ID: ${{ secrets.BMZ_MACOS_NOTARY_TEAM_ID }}
       BMZ_SPARKLE_PUBLIC_KEY: ${{ vars.BMZ_SPARKLE_PUBLIC_KEY }}
     steps:
       - name: Checkout release ref
@@ -441,12 +436,12 @@ jobs:
 
       - name: Import macOS signing certificate
         if: needs.metadata.outputs.should_upload == 'true'
+        env:
+          BMZ_MACOS_CODESIGN_IDENTITY: ${{ secrets.BMZ_MACOS_CODESIGN_IDENTITY }}
+          BMZ_MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.BMZ_MACOS_CERTIFICATE_P12_BASE64 }}
+          BMZ_MACOS_CERTIFICATE_PASSWORD: ${{ secrets.BMZ_MACOS_CERTIFICATE_PASSWORD }}
+          BMZ_MACOS_KEYCHAIN_PASSWORD: ${{ secrets.BMZ_MACOS_KEYCHAIN_PASSWORD }}
         run: |
-          {
-            echo "BMZ_MACOS_SIGNING_READY=0"
-            echo "BMZ_MACOS_NOTARIZATION_READY=0"
-          } >> "${GITHUB_ENV}"
-
           if [[ -z "${BMZ_MACOS_CODESIGN_IDENTITY}" || -z "${BMZ_MACOS_CERTIFICATE_P12_BASE64}" || -z "${BMZ_MACOS_CERTIFICATE_PASSWORD}" || -z "${BMZ_MACOS_KEYCHAIN_PASSWORD}" ]]; then
             echo "Developer ID signing secrets are not configured; using ad-hoc signing."
             exit 0
@@ -477,12 +472,6 @@ jobs:
             echo "BMZ_MACOS_KEYCHAIN_PATH=${keychain_path}"
           } >> "${GITHUB_ENV}"
 
-          if [[ -n "${BMZ_MACOS_NOTARY_APPLE_ID}" && -n "${BMZ_MACOS_NOTARY_PASSWORD}" && -n "${BMZ_MACOS_NOTARY_TEAM_ID}" ]]; then
-            echo "BMZ_MACOS_NOTARIZATION_READY=1" >> "${GITHUB_ENV}"
-          else
-            echo "Notarization secrets are not configured; the app will be signed but not notarized."
-          fi
-
       - name: Record macOS dependency provenance
         run: |
           mkdir -p dist/release
@@ -502,6 +491,8 @@ jobs:
           fi
 
       - name: Package macOS app
+        env:
+          BMZ_MACOS_CODESIGN_IDENTITY: ${{ needs.metadata.outputs.should_upload == 'true' && secrets.BMZ_MACOS_CODESIGN_IDENTITY || '' }}
         run: |
           if [[ "${{ needs.metadata.outputs.should_upload }}" == "true" ]]; then
             # Sparkle's EdDSA signing is independent of optional Developer ID signing/notarization.
@@ -519,7 +510,7 @@ jobs:
             echo "BMZ_SPARKLE_DIR=${BMZ_SPARKLE_DIR}" >> "${GITHUB_ENV}"
           fi
           sign_args=(--ad-hoc-sign)
-          if [[ "${BMZ_MACOS_SIGNING_READY}" == "1" ]]; then
+          if [[ "${{ needs.metadata.outputs.should_upload }}" == "true" && "${BMZ_MACOS_SIGNING_READY:-}" == "1" ]]; then
             sign_args=(--sign "${BMZ_MACOS_CODESIGN_IDENTITY}")
           fi
 
@@ -535,9 +526,13 @@ jobs:
 
       - name: Notarize macOS app
         if: needs.metadata.outputs.should_upload == 'true'
+        env:
+          BMZ_MACOS_NOTARY_APPLE_ID: ${{ secrets.BMZ_MACOS_NOTARY_APPLE_ID }}
+          BMZ_MACOS_NOTARY_PASSWORD: ${{ secrets.BMZ_MACOS_NOTARY_PASSWORD }}
+          BMZ_MACOS_NOTARY_TEAM_ID: ${{ secrets.BMZ_MACOS_NOTARY_TEAM_ID }}
         run: |
-          if [[ "${BMZ_MACOS_NOTARIZATION_READY}" != "1" ]]; then
-            echo "Notarization secrets are not configured; skipping notarization."
+          if [[ "${BMZ_MACOS_SIGNING_READY:-}" != "1" || -z "${BMZ_MACOS_NOTARY_APPLE_ID}" || -z "${BMZ_MACOS_NOTARY_PASSWORD}" || -z "${BMZ_MACOS_NOTARY_TEAM_ID}" ]]; then
+            echo "Developer ID signing or notarization is not configured; skipping notarization."
             exit 0
           fi
 
@@ -807,9 +802,9 @@ jobs:
           compression-level: 0
           retention-days: 14
 
-  attach-release-assets:
+  prepare-release-assets:
     if: ${{ !inputs.windows_only }}
-    name: Attach release assets
+    name: Prepare release assets
     runs-on: ubuntu-latest
     needs:
       - metadata
@@ -818,16 +813,14 @@ jobs:
       - build-flatpak
       - build-linux-tar
     permissions:
-      contents: write
-    concurrency:
-      group: bmz-update-feed-publish
-      cancel-in-progress: false
+      contents: read
     steps:
       - name: Checkout release ref
         uses: actions/checkout@v7
         with:
           ref: ${{ needs.metadata.outputs.commit }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Download release files
         uses: actions/download-artifact@v8
@@ -861,8 +854,7 @@ jobs:
           cat dist/release/release.json
           cat dist/release/SHA256SUMS.txt
 
-      - name: Upload verified release files for dry run
-        if: needs.metadata.outputs.should_upload != 'true'
+      - name: Upload verified release files
         uses: actions/upload-artifact@v7
         with:
           name: verified-release-files
@@ -871,8 +863,33 @@ jobs:
           compression-level: 0
           retention-days: 14
 
+  publish-release-assets:
+    if: needs.metadata.outputs.should_upload == 'true'
+    name: Publish release assets
+    runs-on: ubuntu-latest
+    needs:
+      - metadata
+      - prepare-release-assets
+    permissions:
+      contents: write
+    concurrency:
+      group: bmz-update-feed-publish
+      cancel-in-progress: false
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download verified release files
+        uses: actions/download-artifact@v8
+        with:
+          name: verified-release-files
+          path: dist/release
+
       - name: Upload files to GitHub Release
-        if: needs.metadata.outputs.should_upload == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -892,7 +909,6 @@ jobs:
           gh "${args[@]}"
 
       - name: Publish completed update metadata and Sparkle feeds
-        if: needs.metadata.outputs.should_upload == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
