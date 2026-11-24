@@ -132,6 +132,7 @@ const {
   pageSize,
   maxPage,
   pageLocation,
+  correctOutOfRangePage,
 } = useRankingQuery(lnPolicies)
 const rankingScope = computed<RankingScopeFilter>({
   get: () => (user.value && route.query.scope === 'self_and_rivals' ? 'self_and_rivals' : 'global'),
@@ -149,6 +150,7 @@ const {
   immediate: canLoadChart.value,
   query: computed(() => ({ ...rankingQuery.value, scope: rankingScope.value })),
 })
+await correctOutOfRangePage(() => ranking.value?.ranking.pagination)
 
 const selfBestEntry = computed<IrRankingEntry | null>(
   () =>

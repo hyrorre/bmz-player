@@ -67,10 +67,8 @@ const lnPolicies = computed(() =>
     data.value?.ln_filters.has_mixed_ln ?? false,
   ),
 )
-const { lnPolicy, ruleMode, page, pageSize, maxPage, offset, pageLocation } = useRankingQuery(
-  lnPolicies,
-  { queryKey: 'score_page', pageSize: IR_PLAYER_SCORE_PAGE_SIZE },
-)
+const { lnPolicy, ruleMode, page, pageSize, maxPage, offset, pageLocation, correctOutOfRangePage } =
+  useRankingQuery(lnPolicies, { queryKey: 'score_page', pageSize: IR_PLAYER_SCORE_PAGE_SIZE })
 // A direct link can set an LN filter before the profile's available options arrive.
 const scoreQuery = computed(() => ({
   limit: pageSize,
@@ -84,6 +82,7 @@ const { data, pending, error } = await useFetch<PlayerDetail>(
   () => `/api/v1/players/${playerId.value}`,
   { key: () => `player-detail:${playerId.value}`, query: scoreQuery },
 )
+await correctOutOfRangePage(() => data.value?.pagination)
 const errorDescription = computed(() =>
   error.value ? translateApiError(error.value, 'errors.playerLoadFailed') : '',
 )

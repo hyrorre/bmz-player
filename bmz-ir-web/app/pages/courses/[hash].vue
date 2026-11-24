@@ -100,8 +100,17 @@ const { data: detail, error: detailError } = await useFetch<CourseDetail>(
   () => `/api/v1/courses/${courseHash.value}`,
 )
 const lnPolicies = computed(() => lnFilterItems(detail.value?.course.ln_profile))
-const { lnPolicy, ruleMode, ruleQuery, rankingQuery, page, pageSize, maxPage, pageLocation } =
-  useRankingQuery(lnPolicies)
+const {
+  lnPolicy,
+  ruleMode,
+  ruleQuery,
+  rankingQuery,
+  page,
+  pageSize,
+  maxPage,
+  pageLocation,
+  correctOutOfRangePage,
+} = useRankingQuery(lnPolicies)
 const {
   data: ranking,
   pending: rankingPending,
@@ -109,6 +118,7 @@ const {
 } = await useFetch<CourseRanking>(() => `/api/v1/courses/${courseHash.value}/ranking`, {
   query: rankingQuery,
 })
+await correctOutOfRangePage(() => ranking.value?.ranking.pagination)
 
 const selfBestEntry = computed<CourseRankingEntry | null>(
   () =>

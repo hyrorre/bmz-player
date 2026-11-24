@@ -49,8 +49,10 @@ const reportQuery = computed(() => ({
   mode: mode.value,
   include: 'first_pages',
 }))
+const reportKey = (query: typeof reportQuery.value) => `analysis:${JSON.stringify(query)}`
+let reportForSelection: { key: string; report: IrDifficultyDistribution } | undefined
 const { data, status, error } = await useAsyncData(
-  () => `analysis:${JSON.stringify(reportQuery.value)}`,
+  () => reportKey(reportQuery.value),
   async (_nuxtApp, { signal }) => ({
     report: reportQuery.value.player
       ? await requestFetch<IrDifficultyDistribution>('/api/v1/analysis', {
@@ -59,6 +61,16 @@ const { data, status, error } = await useAsyncData(
         })
       : null,
   }),
+  {
+    getCachedData(key, nuxtApp, { cause }) {
+      if (cause === 'initial') {
+        const cached = reportForSelection
+        reportForSelection = undefined
+        if (cached?.key === key) return { report: cached.report }
+      }
+      return nuxtApp.isHydrating ? nuxtApp.payload.data[key] : nuxtApp.static.data[key]
+    },
+  },
 )
 const report = computed(() => data.value?.report)
 const reportCapture = useTemplateRef<HTMLElement>('reportCapture')
@@ -131,12 +143,22 @@ const modalOpen = computed({
 let segmentButton: HTMLButtonElement | null = null
 
 function showCharts(level: string, rank: number, event: MouseEvent) {
+  const current = report.value
+  if (!current?.table) return
+  const player = current.player.id
+  const table = current.table.id
+  const key = reportKey({ ...reportQuery.value, player, table })
+  if (key !== reportKey(reportQuery.value)) {
+    // Adding IDs to the URL does not change the displayed report or its preloaded chart lists.
+    reportForSelection = { key, report: current }
+  }
   segmentButton = event.currentTarget as HTMLButtonElement
   void navigateTo({
     path: route.path,
     query: {
       ...route.query,
-      table: tableId.value,
+      player,
+      table,
       mode: mode.value,
       level,
       rank: String(rank),
@@ -312,6 +334,7 @@ useSeoMeta({ title: () => t('analysis.title') })
                 </span>
                 <div
                   class="distribution-bar"
+                  :style="{ '--segment-count': level.segments.length }"
                   role="group"
                   :aria-label="`${report.table.symbol}${level.level}`"
                 >
@@ -441,7 +464,7 @@ useSeoMeta({ title: () => t('analysis.title') })
 
 .rank-segment {
   flex: var(--rank-count) 1 0%;
-  min-inline-size: 1.25rem;
+  min-inline-size: min(var(--segment-min-width, 1.25rem), calc(100% / var(--segment-count)));
   overflow: hidden;
   cursor: pointer;
   background: var(--ir-rank-fill);
@@ -456,6 +479,24 @@ useSeoMeta({ title: () => t('analysis.title') })
   outline: 2px solid currentColor;
   outline-offset: -2px;
   z-index: 1;
+}
+
+@media (width < 400px) {
+  .distribution-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: 0.25rem;
+  }
+
+  .distribution-row > :first-child {
+    text-align: left;
+  }
+
+  .distribution-bar {
+    --segment-min-width: 1.5rem;
+
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
 }
 
 @media (min-width: 640px) {

@@ -1,3 +1,4 @@
+import { computed, onMounted, ref, watch } from 'vue'
 import type { LocationQuery } from 'vue-router'
 import {
   listSortOptions,
@@ -15,14 +16,33 @@ export function useRoutePagination({
 } = {}) {
   const route = useRoute()
   const maxPage = Math.floor(maxOffset / pageSize) + 1
-  const page = computed(() => Math.min(readPage(route.query[queryKey], pageSize), maxPage))
+  const requestedPage = computed(() => readPage(route.query[queryKey], pageSize))
+  const page = computed(() => Math.min(requestedPage.value, maxPage))
   const offset = computed(() => (page.value - 1) * pageSize)
 
   function pageLocation(nextPage: number) {
     return { path: route.path, query: { ...route.query, [queryKey]: pageParam(nextPage) } }
   }
 
-  return { page, pageSize, maxPage, offset, pageLocation }
+  function correctOutOfRangePage(result: () => { offset: number; total: number } | undefined) {
+    function correction() {
+      const pagination = result()
+      if (pagination?.offset !== offset.value) return
+      const lastPage = Math.min(maxPage, Math.max(1, Math.ceil(pagination.total / pageSize)))
+      if (requestedPage.value > lastPage) return lastPage
+    }
+
+    function replacePage(nextPage: number | undefined) {
+      if (nextPage !== undefined) return navigateTo(pageLocation(nextPage), { replace: true })
+    }
+
+    if (import.meta.server) return replacePage(correction())
+    onMounted(() => {
+      watch(correction, (nextPage) => void replacePage(nextPage), { immediate: true })
+    })
+  }
+
+  return { page, pageSize, maxPage, offset, pageLocation, correctOutOfRangePage }
 }
 
 export function useSearchableListQuery(list: SortableList) {
