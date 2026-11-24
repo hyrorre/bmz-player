@@ -110,3 +110,27 @@ python tools/legacy-compare/loader_vs_oracle.py --oracle .local/openlr2-oracle/o
 - `--sample N`で無作為にN譜面、`--only <ファイル>`でファイルに書いたMD5の譜面だけを比べます。
 - 結果は`results.jsonl`（譜面ごと）と`summary.json`（集計）です。
 - オラクルへ`objects 1`を与えると、OpenLR2が読み込んだ全オブジェクトを、最終的な並び順で`O,番号,チャンネル,時刻,値`として出力します。時刻のずれを調べるときに使います。
+
+## 合成入力での差分テスト
+
+`fuzz.py`は、乱数で作った譜面とプレイをオラクルとBMZのランナーに与え、読み込みとプレイの結果を比べます。
+
+- 譜面には、LR2の読み込みで扱いが変わる要素を混ぜます。BPM・拡張BPM・STOPの変化、小節長、細かい分割、LNチャンネル、`#LNOBJ`、地雷、不可視ノート、同じ位置のオブジェクト、`#RANDOM`、0小節目先頭のオブジェクト、範囲外の文字などです。
+- キーモードは、LR2が曲を登録するときの規則をPythonで別に移植して決め、BMZの判定と比べます。
+- プレイは、正確な押下・早押し・遅押し・見逃し、LNの保持と早離し、地雷の被弾、無関係な押下を混ぜ、配置（正規・MIRROR・RANDOM）とゲージも乱数で選びます。
+- 読み込みは`loader_vs_oracle.py`、プレイは`oracle_vs_bmz.py`と同じ方法で、許容誤差0で比べます。
+
+```powershell
+python tools/legacy-compare/fuzz.py --oracle .local/openlr2-oracle/openlr2_oracle.exe --runner target\debug\examples\legacy_compare.exe --output .local/fuzz-1 --count 500 --seed 1 --jobs 10
+```
+
+結果の`status`は次のとおりです。一致しなかった件の譜面・リプレイ・両方の出力は`cases/`に残ります。
+
+| status | 意味 |
+|---|---|
+| `equal` | 読み込みとプレイが一致 |
+| `equal_no_notes` | 読み込みが一致したノーツの無い譜面。OpenLR2は判定幅を0のまま残すので、プレイは比べない |
+| `oracle_unplayable` | OpenLR2でも時刻が無限大・NaNになる譜面（BPM 0など） |
+| `oracle_undefined` | OpenLR2がレーンの配列の外を読んだプレイ。OpenLR2の結果が実行ごとに変わり、ヒープ破壊で落ちることもある |
+| `skipped_over_one_hour` | ランナーの1時間の上限を超える譜面 |
+| `load_differs` / `play_differs` / `bmz_play_error` | 調べるべき差 |

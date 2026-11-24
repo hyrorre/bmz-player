@@ -195,11 +195,9 @@ fn compare(req: &Request) -> Result<Value> {
                 ensure!(header(op)? == 0, "unsupported P2 option {op}");
             }
         }
-        let fixed = if side == 0 {
-            fixed_key
-        } else {
-            usize::try_from(header(155)?).context("negative P2 fixed key")?
-        };
+        // OpenLR2 compares the P2 table values (11..) with the key number, so a
+        // P2 fixed key never matches and has no effect.
+        let fixed = if side == 0 { fixed_key } else { 0 };
         ensure!(fixed <= keys, "invalid fixed key {fixed}");
         let mut side_table: Vec<_> = match side_arrange {
             0 => (0..=keys).collect(),
@@ -269,7 +267,11 @@ fn compare(req: &Request) -> Result<Value> {
     }
     let expected: Vec<_> =
         replay.iter().filter(|r| r.op == 210 || (sides == 2 && r.op == 211)).collect();
-    ensure!(!expected.is_empty(), "no recorded judgements (op 210/211)");
+    // A synthetic oracle comparison has key edges only and no recorded judgements.
+    ensure!(
+        !expected.is_empty() || req.oracle_output_path.is_some(),
+        "no recorded judgements (op 210/211)"
+    );
     ensure!(expected.iter().all(|r| (0..=5).contains(&r.value)), "invalid recorded judgement");
     let mut expected_counts = [0u32; 6];
     for r in &expected {
@@ -426,6 +428,7 @@ fn compare(req: &Request) -> Result<Value> {
             .filter(|n| n.kind == NoteKind::Mine)
             .map(|n| (n.time.0, n.lane.index())).collect::<Vec<_>>()),
         "chart_notes":chart.total_notes, "reference_notes":reference_notes, "rank_percent":percent,
+        "lr2_undefined":judge.legacy_read_past_lane_buffer(),
         "arrange":arrange, "fixed_key":fixed_key, "seed":seed, "source_to_input_lanes":table, "import_warning_count":imported.warnings.len(),
         "model":"openlr2-sequential-timing-lane-polls-1ms", "full_session_verified":false}),
     )

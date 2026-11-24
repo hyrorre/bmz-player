@@ -3,7 +3,7 @@
 For every SP/DP chart in OpenLR2's song.db (or a random sample), the OpenLR2
 oracle (`end 0`: load only) and the BMZ runner (`dump_path`) load the chart with
 the NORMAL arrangement and the same LR2 random seed. Compared:
-- total notes, judge widths (PGREAT..EMPTY POOR) and the GROOVE / HARD / DEATH /
+- key mode (song.db), total notes, judge widths (PGREAT..EMPTY POOR) and the GROOVE / HARD / DEATH /
   EASY damage tables (exact doubles; they also depend on the int TOTAL)
 - every note, LN and mine per lane: time floored to µs, LN end, mine damage
 """
@@ -47,7 +47,10 @@ def oracle_view(lines: list[str]) -> dict:
         elif f[0] == "N":
             lane, rt, ln, mine = int(f[1]), float(f[3]), float(f[4]), int(f[5])
             end = math.floor(ln * 1000) if ln > rt else -1
-            notes.setdefault(lane, []).append((math.floor(rt * 1000), end, mine if mine > 0 else -1))
+            # ProcNoteOnTiming plays realTiming < realTiming_ln as a long note,
+            # even a mine (one before -1 ms), so its damage is never used.
+            mine = mine if mine > 0 and end == -1 else -1
+            notes.setdefault(lane, []).append((math.floor(rt * 1000), end, mine))
     return {"header": header, "notes": {k: sorted(v) for k, v in notes.items()}}
 
 
@@ -64,16 +67,16 @@ def bmz_view(path: Path) -> dict:
 
 def compare(o: dict, b: dict) -> list[str]:
     diffs = []
-    if o["header"].get("totalnotes") == b["header"].get("totalnotes") == "0" and not o["notes"]:
-        # LR2 sets judge widths and damage only for a chart with notes.
-        return [] if not b["notes"] else ["notes: oracle has none"]
+    no_notes = o["header"].get("totalnotes") == b["header"].get("totalnotes") == "0"
     if o["header"].get("totalnotes") != b["header"].get("totalnotes"):
         diffs.append(f"totalnotes {o['header'].get('totalnotes')} != {b['header'].get('totalnotes')}")
-    for j in range(1, 6):
+    # LR2 sets judge widths and damage only for a chart with notes; a chart of
+    # only mines or BGM still has its objects compared.
+    for j in range(1, 6) if not no_notes else ():
         key = f"judgetime{j}"
         if o["header"].get(key) != b["header"].get(key):
             diffs.append(f"{key} {o['header'].get(key)} != {b['header'].get(key)}")
-    for g in range(4):
+    for g in range(4) if not no_notes else ():
         for j in range(6):
             key = f"damage{g}_{j}"
             ov, bv = o["header"].get(key), b["header"].get(key)
@@ -141,7 +144,12 @@ def main() -> int:
             return {**row, "status": "oracle_error", "reason": str(error)}
         if c.get("bmz_status") != "dumped":
             return {**row, "status": "bmz_error", "reason": c.get("bmz_reason")}
-        diffs = compare(o, bmz_view(Path(c["dump"])))
+        b = bmz_view(Path(c["dump"]))
+        diffs = compare(o, b)
+        # The key mode LR2 stored in song.db, which LEGACY must reproduce.
+        expected = {5: "K5", 7: "K7", 10: "K10", 14: "K14"}[c["keymode"]]
+        if b["header"].get("keymode") != expected:
+            diffs.insert(0, f"keymode {expected} != {b['header'].get('keymode')}")
         return {**row, "status": "equal" if not diffs else "differs", "diffs": diffs[:8]}
 
     rows = []

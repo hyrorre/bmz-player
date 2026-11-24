@@ -48,6 +48,9 @@ pub struct ChartMetadata {
     pub isolated_sound_sources: std::collections::BTreeMap<u32, u32>,
     pub conditional: Option<std::sync::Arc<crate::conditional::ConditionalProgram>>,
     pub conditional_bgm_keys: Vec<crate::conditional::BgmKey>,
+    /// LEGACY: OpenLR2's double `realTiming` (ms) of each lane object, for the
+    /// judge comparisons that depend on its exact value. `time` is floored to µs.
+    pub legacy_note_ms: Option<std::sync::Arc<std::collections::HashMap<NoteId, f64>>>,
     pub conditional_evaluation_times: Vec<TimeUs>,
     pub conditional_revision: usize,
     /// File syntax used to import the chart. Runtime transforms preserve this provenance.
@@ -163,6 +166,7 @@ impl Default for ChartMetadata {
             isolated_sound_sources: Default::default(),
             conditional: None,
             conditional_bgm_keys: Vec::new(),
+            legacy_note_ms: None,
             conditional_evaluation_times: Vec::new(),
             conditional_revision: 0,
             source_format: ChartSourceFormat::Unknown,

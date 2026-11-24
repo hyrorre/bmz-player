@@ -3,7 +3,10 @@
 //! times to the BMZ chart and reads the LR2 header values.
 use std::{collections::BTreeMap, path::Path};
 
-use bmz_core::time::{ChartTick, TimeUs};
+use bmz_core::{
+    lane::KeyMode,
+    time::{ChartTick, TimeUs},
+};
 
 use super::{
     BmsRandomSource, BmsTextEncoding, bms_rs_adapter, error::ImportError,
@@ -51,8 +54,73 @@ pub fn apply_from_bytes(
     let dsc = text
         .lines()
         .any(|l| l.trim_start().get(..7).is_some_and(|h| h.eq_ignore_ascii_case("#FP/DSC")));
-    apply(chart, &intermediate, &text, pms, !pms && !dsc)
+    apply(chart, &intermediate, &text, pms, !pms && !dsc)?;
+    if !pms && !dsc {
+        chart.metadata.key_mode = lr2_scan_key_mode(bytes);
+    }
+    Ok(())
 }
+
+/// The key mode LR2 stores in song.db when it scans the file (`ParseBMSMETA`),
+/// which the play loader then uses. LR2 starts at 5 keys and raises the mode by
+/// the channel numbers of any data line, whatever its objects: channels 18 / 19
+/// make 7 keys and P2 channels make a double mode. Lines inside an `#IF` other
+/// than `#IF 1` are skipped. `.pms` and `#FP/DSC` are 9 keys and not handled here.
+fn lr2_scan_key_mode(bytes: &[u8]) -> KeyMode {
+    let mut mode = 5;
+    let mut skip = false;
+    // fgets pieces; a piece of a long line that does not start with '#' is ignored.
+    for line in bytes.split(|&b| b == b'\n').flat_map(|l| l.chunks(LR2_FGETS_LIMIT)) {
+        if line.starts_with(b"#IF") && !line.starts_with(b"#IF 1") {
+            skip = true;
+            continue;
+        }
+        if line.starts_with(b"#ENDIF") {
+            skip = false;
+            continue;
+        }
+        if line.first() != Some(&b'#')
+            || skip
+            || !line.get(1..6).is_some_and(|d| d.iter().all(u8::is_ascii_digit))
+        {
+            continue;
+        }
+        let mut data = i32::from(line[4] - b'0') * 10 + i32::from(line[5] - b'0');
+        if (51..=69).contains(&data) {
+            data -= 40;
+        }
+        if (31..=49).contains(&data) {
+            data -= 20;
+        }
+        if matches!(data, 18 | 19 | 38 | 39 | 58 | 59) {
+            mode = match mode {
+                5 => 7,
+                10 => 14,
+                other => other,
+            };
+        } else if matches!(data, 28 | 29 | 48 | 49 | 68 | 69) {
+            mode = 14;
+        } else if (21..=29).contains(&data)
+            || (41..=49).contains(&data)
+            || (61..=69).contains(&data)
+        {
+            mode = match mode {
+                5 => 10,
+                7 => 14,
+                other => other,
+            };
+        }
+    }
+    match mode {
+        7 => KeyMode::K7,
+        10 => KeyMode::K10,
+        14 => KeyMode::K14,
+        _ => KeyMode::K5,
+    }
+}
+
+/// `fgets(buffer, 102400, ...)` reads at most 102,399 bytes per call.
+const LR2_FGETS_LIMIT: usize = 102_399;
 
 fn apply(
     chart: &mut PlayableChart,
@@ -231,6 +299,7 @@ pub(super) fn atof(text: &str) -> f64 {
 mod tests {
     use super::*;
     use crate::import::{AssetLookup, import_chart_bytes_with_assets};
+    use crate::model::NoteKind;
     use bmz_core::lane::Lane;
 
     fn load(text: &str) -> PlayableChart {
@@ -245,6 +314,38 @@ mod tests {
         .unwrap();
         apply_from_bytes(&mut imported.chart, path, text.as_bytes(), &source, None).unwrap();
         imported.chart
+    }
+
+    #[test]
+    fn key_mode_follows_the_lr2_scan_of_channel_numbers() {
+        use bmz_core::lane::KeyMode;
+        for (text, mode) in [
+            // An all-zero line still counts, as in LR2's song.db.
+            ("#BPM 120\n#00111:01\n#00118:00\n", KeyMode::K7),
+            // Lines inside an #IF other than #IF 1 are skipped.
+            ("#BPM 120\n#00111:01\n#IF 2\n#00118:01\n#ENDIF\n", KeyMode::K5),
+            ("#BPM 120\n#00111:01\n#00121:01\n", KeyMode::K10),
+            ("#BPM 120\n#00111:01\n#00121:01\n#00159:00\n", KeyMode::K14),
+            ("#BPM 120\n#00111:01\n#00128:00\n", KeyMode::K14),
+        ] {
+            assert_eq!(load(text).metadata.key_mode, mode, "{text}");
+        }
+    }
+
+    #[test]
+    fn an_object_before_minus_one_ms_is_a_long_note_even_a_mine() {
+        // An undefined STOP slot stops for -1/192 measure. 400 of them at
+        // 60 BPM move measure 1 (4000 ms) to -4333.33 ms (checked with the
+        // OpenLR2 oracle, which keeps realTiming_ln == -1 for the mine).
+        let text = format!("#BPM 60\n#00009:{}\n#001D1:05\n#00611:01\n", "01".repeat(400));
+        let chart = load(&text);
+        let notes = &chart.lane_notes[Lane::Key1.index()];
+        let kinds: Vec<_> = notes.iter().map(|n| n.kind).collect();
+        assert_eq!(kinds, [NoteKind::LongStart, NoteKind::LongEnd, NoteKind::Tap]);
+        assert_eq!(notes[0].time.0, -4_333_334);
+        assert_eq!(notes[1].time.0, -1_000);
+        assert_eq!(notes[2].time.0, 15_666_666);
+        assert_eq!(chart.long_notes.len(), 1);
     }
 
     #[test]

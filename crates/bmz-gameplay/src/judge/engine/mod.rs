@@ -79,6 +79,12 @@ pub struct JudgeEngine {
     pub free_zone_autoplay: [bool; LANE_COUNT],
     chart_index: Option<std::sync::Arc<ChartIndex>>,
     legacy_inline_mines: bool,
+    /// OpenLR2's `note_current`: LEGACY judgements other than EMPTY POOR.
+    legacy_note_current: u32,
+    /// Per lane, OpenLR2's free buffer slots and whether its objects are all mines
+    /// (computed on use).
+    legacy_lane_buffers: [Option<(u32, bool)>; LANE_COUNT],
+    legacy_read_past_lane_buffer: bool,
 }
 
 impl JudgeEngine {
@@ -95,6 +101,7 @@ impl JudgeEngine {
             }
         }
         self.hln.rebind(old, new);
+        self.legacy_lane_buffers = [None; LANE_COUNT];
     }
 
     pub fn is_note_started(&self, id: NoteId) -> bool {
@@ -156,6 +163,9 @@ impl JudgeEngine {
             free_zone_autoplay: [false; LANE_COUNT],
             chart_index: None,
             legacy_inline_mines: false,
+            legacy_note_current: 0,
+            legacy_lane_buffers: [None; LANE_COUNT],
+            legacy_read_past_lane_buffer: false,
         }
     }
 
@@ -179,6 +189,7 @@ impl JudgeEngine {
         self.orphan_charge_ends = Default::default();
         self.hln = Default::default();
         self.free_zone_scratched.clear();
+        self.legacy_note_current = 0;
         for lane in Lane::ALL {
             let next = chart.notes_for_lane(lane).partition_point(|note| note.time < start_time);
             self.lanes[lane.index()] = LaneJudgeState {
@@ -228,38 +239,53 @@ impl JudgeEngine {
             self.lanes[input.lane.index()].active_long = None;
         }
         let timed_input = InputEvent { time: judge_time, ..input };
-        let mut input_outcome = match input.kind {
-            InputKind::Press => {
-                self.process_press(chart, timed_input, input.time, play_miss_keysound)
-            }
-            InputKind::Release => {
-                let mut expired = JudgeOutcome::default();
-                let mine = self.process_legacy_mine_head(
-                    chart,
-                    input.lane,
-                    LegacyLaneKey::Release,
-                    judge_time,
-                    input.time,
-                );
-                if self.rule_mode == RuleMode::Legacy && mine.is_none() {
-                    self.settle_missed_notes_in_lane(
+        let empty_slot = if self.rule_mode == RuleMode::Legacy {
+            self.process_legacy_free_slot(
+                chart,
+                input.lane,
+                input.kind == InputKind::Press,
+                judge_time,
+                input.time,
+            )
+        } else {
+            None
+        };
+        let mut input_outcome = if let Some(empty_slot) = empty_slot {
+            empty_slot
+        } else {
+            match input.kind {
+                InputKind::Press => {
+                    self.process_press(chart, timed_input, input.time, play_miss_keysound)
+                }
+                InputKind::Release => {
+                    let mut expired = JudgeOutcome::default();
+                    let mine = self.process_legacy_mine_head(
                         chart,
                         input.lane,
-                        input.time,
+                        LegacyLaneKey::Release,
                         judge_time,
-                        play_miss_keysound,
-                        true,
-                        &mut expired,
+                        input.time,
                     );
-                }
-                if let Some(mine) = mine {
-                    // A mine at the lane head takes this poll (OpenLR2 returns).
-                    mine
-                } else if expired.events.is_empty() {
-                    self.process_release(chart, timed_input, input.time)
-                } else {
-                    expired.consumed_input = true;
-                    expired
+                    if self.rule_mode == RuleMode::Legacy && mine.is_none() {
+                        self.settle_missed_notes_in_lane(
+                            chart,
+                            input.lane,
+                            input.time,
+                            judge_time,
+                            play_miss_keysound,
+                            true,
+                            &mut expired,
+                        );
+                    }
+                    if let Some(mine) = mine {
+                        // A mine at the lane head takes this poll (OpenLR2 returns).
+                        mine
+                    } else if expired.events.is_empty() {
+                        self.process_release(chart, timed_input, input.time)
+                    } else {
+                        expired.consumed_input = true;
+                        expired
+                    }
                 }
             }
         };
@@ -270,6 +296,7 @@ impl JudgeEngine {
         append_outcome(&mut outcome, input_outcome);
         self.filter_free_zone_outcome(chart, &mut outcome);
         self.settle_free_zones(chart, input.time, &mut outcome);
+        self.count_legacy_judgements(&outcome);
         outcome
     }
 
@@ -320,9 +347,17 @@ impl JudgeEngine {
             if self.rule_mode == RuleMode::Legacy && hln::is_hln_head(chart, note.id) {
                 break;
             }
+            // OpenLR2 never settles a passed single note once the cap is reached.
+            if self.rule_mode == RuleMode::Legacy
+                && note.kind == NoteKind::Tap
+                && self.legacy_note_current + legacy_cap::legacy_scored(outcome)
+                    >= chart.total_notes
+            {
+                break;
+            }
             let windows = press_window(self.window_set, self.scratch_lane_mask[lane.index()]);
             let expired = if self.rule_mode == RuleMode::Legacy {
-                legacy_note_expired(note, judge_time, windows)
+                legacy_note_expired(note, legacy_exact_ms(chart, note), judge_time, windows)
             } else {
                 judge_time.0 > note.time.0 + windows.bad_slow_us
             };
@@ -408,6 +443,10 @@ impl JudgeEngine {
     ) -> JudgeOutcome {
         if chart.notes_for_lane(lane).is_empty() {
             return JudgeOutcome::default();
+        }
+        if let Some(empty_slot) = self.process_legacy_free_slot(chart, lane, false, now, now) {
+            self.count_legacy_judgements(&empty_slot);
+            return empty_slot;
         }
         let key = if held { LegacyLaneKey::Hold } else { LegacyLaneKey::Idle };
         if let Some(mine) = self.process_legacy_mine_head(chart, lane, key, now, now) {
@@ -558,6 +597,7 @@ impl JudgeEngine {
 
         self.filter_free_zone_outcome(chart, &mut outcome);
         self.settle_free_zones(chart, now, &mut outcome);
+        self.count_legacy_judgements(&outcome);
         outcome
     }
 
@@ -703,8 +743,13 @@ impl JudgeEngine {
                     .is_some_and(|note| note.kind == NoteKind::Tap)
         });
         while recurse {
-            let next = self.process_legacy_recursive_single(chart, input, event_time);
-            recurse = next.events.last().is_some_and(|event| event.judge == Judge::Bad);
+            let pending = legacy_cap::legacy_scored(&outcome);
+            let next = self.process_legacy_recursive_single(chart, input, event_time, pending);
+            // A BAD on a free slot already continued through the free slots.
+            recurse = next
+                .events
+                .last()
+                .is_some_and(|event| event.judge == Judge::Bad && event.note_id.is_some());
             append_outcome(&mut outcome, next);
         }
         outcome
@@ -717,6 +762,7 @@ impl JudgeEngine {
         chart: &PlayableChart,
         input: InputEvent,
         event_time: TimeUs,
+        pending: u32,
     ) -> JudgeOutcome {
         if let Some(mine) = self.process_legacy_recursive_mine(chart, input, event_time) {
             return mine;
@@ -728,13 +774,19 @@ impl JudgeEngine {
             state.next_note_index,
             &self.judged_notes,
         ) else {
-            return JudgeOutcome::default();
+            return self
+                .recurse_into_legacy_free_slot(chart, input, event_time, pending)
+                .unwrap_or_default();
         };
+        if self.legacy_capped(chart, pending) {
+            return JudgeOutcome::default();
+        }
         let mut single = note.clone();
         single.kind = NoteKind::Tap;
         let windows = press_window(self.window_set, self.scratch_lane_mask[input.lane.index()]);
-        let Some(candidate) = legacy_press_candidate(&single, input.time, windows)
-            .filter(|candidate| candidate.judge != Judge::EmptyPoor)
+        let Some(candidate) =
+            legacy_press_candidate(&single, legacy_exact_ms(chart, note), input.time, windows)
+                .filter(|candidate| candidate.judge != Judge::EmptyPoor)
         else {
             return JudgeOutcome::default();
         };
@@ -872,13 +924,17 @@ impl JudgeEngine {
         let rule_mode = self.rule_mode;
         let windows = press_window(self.window_set, self.scratch_lane_mask[input.lane.index()]);
         let candidate = if rule_mode == RuleMode::Legacy {
+            let capped = self.legacy_capped(chart, 0);
             next_unjudged_press_reference_note(
                 chart,
                 input.lane,
                 self.lanes[input.lane.index()].next_note_index,
                 &self.judged_notes,
             )
-            .and_then(|(_, note)| legacy_press_candidate(note, input.time, windows))
+            .filter(|(_, note)| !(capped && note.kind == NoteKind::Tap))
+            .and_then(|(_, note)| {
+                legacy_press_candidate(note, legacy_exact_ms(chart, note), input.time, windows)
+            })
         } else {
             select_press_candidate(self, chart, input.lane, input.time, windows)
         };
@@ -1173,6 +1229,7 @@ impl JudgeEngine {
 mod helpers;
 mod hln;
 mod kaleid;
+mod legacy_cap;
 mod legacy_mine;
 
 use helpers::*;

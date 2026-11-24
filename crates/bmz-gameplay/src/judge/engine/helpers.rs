@@ -228,20 +228,37 @@ pub(super) fn legacy_ln_margin_us(windows: JudgeWindow) -> i64 {
     pgreat.max(great).max(good)
 }
 
-pub(super) fn legacy_note_expired(note: &NoteEvent, now: TimeUs, windows: JudgeWindow) -> bool {
+/// OpenLR2's double `realTiming` of a LEGACY note, when the chart has it.
+pub(super) fn legacy_exact_ms(chart: &PlayableChart, note: &NoteEvent) -> Option<f64> {
+    chart.metadata.legacy_note_ms.as_ref()?.get(&note.id).copied()
+}
+
+/// OpenLR2: `(double)timing - realTiming > judgetime`. The double subtraction
+/// rounds, so a note a few ulps below a whole millisecond can pass one poll
+/// later than its µs-floored time says; `exact_ms` gives the same result.
+pub(super) fn legacy_note_expired(
+    note: &NoteEvent,
+    exact_ms: Option<f64>,
+    now: TimeUs,
+    windows: JudgeWindow,
+) -> bool {
     let late_limit = match note.kind {
         NoteKind::LongStart => legacy_ln_margin_us(windows),
         _ => windows.bad_slow_us,
     };
-    now.0 / 1_000 * 1_000 - note.time.0 > late_limit
+    match exact_ms {
+        Some(ms) => (now.0 / 1_000) as f64 - ms > late_limit as f64 / 1_000.0,
+        None => now.0 / 1_000 * 1_000 - note.time.0 > late_limit,
+    }
 }
 
 pub(super) fn legacy_press_candidate(
     note: &NoteEvent,
+    exact_ms: Option<f64>,
     input: TimeUs,
     windows: JudgeWindow,
 ) -> Option<PressCandidate> {
-    if legacy_note_expired(note, input, windows) {
+    if legacy_note_expired(note, exact_ms, input, windows) {
         return None;
     }
 

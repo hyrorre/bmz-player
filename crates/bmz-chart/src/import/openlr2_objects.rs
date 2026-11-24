@@ -589,15 +589,13 @@ pub(super) fn rebuild(
         next_id += 1;
         current
     };
+    let invisible: [Vec<NoteEvent>; bmz_core::lane::LANE_COUNT] = std::array::from_fn(|index| {
+        chart.lane_notes[index].iter().filter(|n| n.kind == NoteKind::Invisible).cloned().collect()
+    });
     let mut lane_notes: [Vec<NoteEvent>; bmz_core::lane::LANE_COUNT] =
-        std::array::from_fn(|index| {
-            chart.lane_notes[index]
-                .iter()
-                .filter(|n| n.kind == NoteKind::Invisible)
-                .cloned()
-                .collect()
-        });
+        std::array::from_fn(|_| Vec::new());
     let mut long_notes = Vec::new();
+    let mut exact_ms = HashMap::new();
     for (lane_index, indices) in placed.iter().enumerate() {
         let Some(lane) = lane_of(lane_index as i32 + 10) else {
             continue;
@@ -608,13 +606,19 @@ pub(super) fn rebuild(
             let Some(tick) = o.tick else {
                 continue;
             };
-            let mine = o.mine > 0.0;
+            // ProcNoteOnTiming takes any object with realTiming < realTiming_ln
+            // as a long note. A single object has realTiming_ln == -1, so one
+            // before -1 ms (after a negative STOP) is a long note ending there,
+            // even a mine.
+            let long = o.realtime < o.realtime_ln;
+            let mine = o.mine > 0.0 && !long;
             let tick = ChartTick(tick.saturating_add(shift_ticks));
             let time = floor_us(o.realtime);
             let sound = if mine { None } else { o.wav_key.and_then(|k| sound_of.get(&k).copied()) };
             let start_id = id();
+            exact_ms.insert(start_id, o.realtime);
             // An unpaired LN start has realTiming_ln == -1 and plays as a single note.
-            if !mine && o.realtime < o.realtime_ln {
+            if long {
                 let end_id = id();
                 let end_tick =
                     ChartTick(o.ln_end_tick.unwrap_or(tick.0).saturating_add(shift_ticks));
@@ -669,12 +673,19 @@ pub(super) fn rebuild(
             }
         }
     }
-    for notes in &mut lane_notes {
-        notes.sort_by_key(|n| (n.time, n.tick));
+    // Keep OpenLR2's lane order: the lane cursor judges objects in this order,
+    // which after the truncating real-time sort can be up to a few ms out of
+    // time order. Invisible notes are not judged; they go in by time.
+    for (notes, invisible) in lane_notes.iter_mut().zip(invisible) {
+        for note in invisible {
+            let at = notes.partition_point(|n| (n.time, n.tick) <= (note.time, note.tick));
+            notes.insert(at, note);
+        }
     }
     long_notes.sort_by_key(|p| (p.start_time, p.lane.index()));
     chart.lane_notes = lane_notes;
     chart.long_notes = long_notes;
+    chart.metadata.legacy_note_ms = Some(std::sync::Arc::new(exact_ms));
     chart.metadata.free_zones.clear();
     chart.metadata.long_note_mode = LongNoteMode::Ln;
     chart.total_notes = note_count.max(0) as u32;

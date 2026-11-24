@@ -86,15 +86,22 @@ impl JudgeEngine {
     ) -> Option<JudgeOutcome> {
         let index = self.legacy_mine_head(chart, lane)?;
         let note = &chart.notes_for_lane(lane)[index];
-        // OpenLR2 compares the integer-ms poll time with the double note
-        // time. The note time is floored to µs, so these integer-µs
-        // comparisons give the same result.
+        // OpenLR2 compares the integer-ms poll time with the double note time:
+        // `timing <= realTiming` exactly, `realTiming - timing < GREAT` after
+        // rounding the subtraction. The µs-floored time is used only for a
+        // chart without OpenLR2's times.
         let now_us = judge_time.0.div_euclid(1_000) * 1_000;
         let great_us =
             press_window(self.window_set, self.scratch_lane_mask[lane.index()]).bands(true)[1];
-        let passed = now_us > note.time.0;
+        let (passed, early_hit) = match legacy_exact_ms(chart, note) {
+            Some(ms) => {
+                let t = judge_time.0.div_euclid(1_000) as f64;
+                (t > ms, ms - t < great_us as f64 / 1_000.0)
+            }
+            None => (now_us > note.time.0, note.time.0 < now_us + great_us),
+        };
         let hit = match key {
-            LegacyLaneKey::Press => note.time.0 < now_us + great_us,
+            LegacyLaneKey::Press => early_hit,
             LegacyLaneKey::Hold => passed,
             LegacyLaneKey::Idle | LegacyLaneKey::Release => false,
         };
