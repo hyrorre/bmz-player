@@ -1128,6 +1128,7 @@ async fn another_accounts_key_cannot_submit_old_jobs_and_unsupported_jobs_never_
         ln_policy: LnScorePolicy::ForceLn,
         double_option: crate::select_options::DoubleOptionScoreBucket::Off,
         rule_mode: bmz_gameplay::rule::RuleMode::Lr2Oraja,
+        chart_md5_hex: None,
         bokutachi_game: Some(Game::Bms7k),
     };
     assert!(

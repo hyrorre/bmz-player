@@ -139,7 +139,7 @@ impl JudgeEngine {
         }
     }
 
-    pub(super) fn advance_hln(&mut self, chart: &PlayableChart, now: TimeUs) -> JudgeOutcome {
+    pub(crate) fn advance_hln(&mut self, chart: &PlayableChart, now: TimeUs) -> JudgeOutcome {
         self.hln.ensure(chart);
         let mut outcome = JudgeOutcome::default();
         for body in &mut self.hln.bodies {

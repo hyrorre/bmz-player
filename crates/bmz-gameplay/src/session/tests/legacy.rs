@@ -120,6 +120,7 @@ fn legacy_frame_polls_lower_lane_miss_before_higher_lane_hit() {
     let mut session = legacy_session(chart);
     session.replay_player = Some(ReplayPlayer {
         events: vec![ReplayEvent {
+            applied_after: None,
             lane: Lane::Key2,
             kind: InputKind::Press,
             time: TimeUs(1_201_500),
@@ -174,6 +175,7 @@ fn legacy_human_press_after_the_head_expired_matches_the_replay() {
     replay.replay_player = Some(ReplayPlayer {
         events: vec![
             ReplayEvent {
+                applied_after: None,
                 lane: Lane::Key1,
                 kind: InputKind::Press,
                 time: TimeUs(press),
@@ -181,6 +183,7 @@ fn legacy_human_press_after_the_head_expired_matches_the_replay() {
                 scratch_direction: None,
             },
             ReplayEvent {
+                applied_after: None,
                 lane: Lane::Key1,
                 kind: InputKind::Release,
                 time: TimeUs(release),
@@ -246,6 +249,7 @@ fn legacy_hazard_checks_failure_after_the_lane_poll_in_live_play_and_replay() {
     replay.replay_player = Some(ReplayPlayer {
         events: vec![
             ReplayEvent {
+                applied_after: None,
                 lane: Lane::Key1,
                 kind: InputKind::Press,
                 time: TimeUs(press),
@@ -253,6 +257,7 @@ fn legacy_hazard_checks_failure_after_the_lane_poll_in_live_play_and_replay() {
                 scratch_direction: None,
             },
             ReplayEvent {
+                applied_after: None,
                 lane: Lane::Key1,
                 kind: InputKind::Release,
                 time: TimeUs(release),
@@ -286,6 +291,7 @@ fn legacy_hazard_keeps_the_same_press_bad_chain_in_live_play_and_replay() {
     replay.gauge = GaugeState::new(bmz_core::clear::GaugeType::Hazard, 160.0, 2);
     replay.replay_player = Some(ReplayPlayer {
         events: vec![ReplayEvent {
+            applied_after: None,
             lane: Lane::Key1,
             kind: InputKind::Press,
             time: TimeUs(1_150_000),
@@ -354,6 +360,7 @@ fn replay_event(
     direction: Option<ScratchDirection>,
 ) -> ReplayEvent {
     ReplayEvent {
+        applied_after: None,
         lane,
         kind,
         time: TimeUs(ms * 1_000),

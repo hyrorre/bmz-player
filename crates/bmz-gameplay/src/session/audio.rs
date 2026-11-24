@@ -6,8 +6,34 @@ pub(crate) fn uses_scheduled_auto_keysounds(session: &GameSession) -> bool {
         || session.autoplay.as_ref().is_some_and(AutoplayController::is_full)
 }
 
+/// Lanes whose note sounds are queued at their chart times by the auto keysound
+/// scheduler. Automatic sounds use chart time at every human input offset.
+pub(crate) fn scheduled_keysound_lanes(session: &GameSession) -> Option<[bool; LANE_COUNT]> {
+    let autoplay_only = !uses_scheduled_auto_keysounds(session);
+    let autoplay = session.autoplay.as_ref();
+    if autoplay_only && autoplay.is_none() {
+        return None;
+    }
+    Some(std::array::from_fn(|i| {
+        !session.display_only_lane_mask[i]
+            && (!autoplay_only || autoplay.is_some_and(|auto| auto.is_lane_enabled(Lane::ALL[i])))
+    }))
+}
+
 pub fn schedule_keysounds(session: &mut GameSession, audio: &mut dyn AudioScheduler) {
     let mut pending = std::mem::take(&mut session.pending_keysounds);
+    if !uses_scheduled_auto_keysounds(session)
+        && let Some(lanes) = scheduled_keysound_lanes(session)
+    {
+        // Partial autoplay note sounds were queued at their chart times already.
+        pending.retain(|event| {
+            event.trigger != KeySoundTrigger::NoteJudged
+                || session
+                    .judge
+                    .note_by_id(&session.chart, event.note_id)
+                    .is_none_or(|note| !lanes[note.lane.index()])
+        });
+    }
     if uses_scheduled_auto_keysounds(session) {
         session.pending_keysound_volumes.clear();
         let allow_fallback = session.audio_mix.auto_keysound_fallback;
@@ -21,7 +47,7 @@ pub fn schedule_keysounds(session: &mut GameSession, audio: &mut dyn AudioSchedu
         });
     }
     for event in pending {
-        if session.play_end_reached() {
+        if session.play_end_reached() || session.apply_play_end_request(false) {
             break;
         }
         let note_id = event.note_id;

@@ -120,6 +120,7 @@ pub(super) fn score_state_from_lr2(row: &Lr2ScoreRow, expected_notes: u32) -> Sc
             .min(expected_notes),
         ghost,
         empty_poor_breaks_combo: false,
+        ..Default::default()
     }
 }
 
@@ -157,5 +158,6 @@ pub(super) fn score_state_from_beatoraja(
         .min(expected_notes),
         ghost,
         empty_poor_breaks_combo: false,
+        ..Default::default()
     }
 }

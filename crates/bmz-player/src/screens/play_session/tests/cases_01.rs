@@ -75,7 +75,9 @@ fn profile_auto_scratch_does_not_judge_or_combo_the_scratch() {
     let mut source = chart();
     source.lane_notes = std::array::from_fn(|_| Vec::new());
     source.long_notes.clear();
-    source.lane_notes[Lane::Scratch.index()].push(note(1, Lane::Scratch, 1_000_000));
+    let mut scratch = note(1, Lane::Scratch, 1_000_000);
+    scratch.sound = Some(bmz_core::ids::SoundId(7));
+    source.lane_notes[Lane::Scratch.index()].push(scratch);
     source.lane_notes[Lane::Key1.index()].push(note(2, Lane::Key1, 3_000_000));
     source.total_notes = 2;
     source.end_time = TimeUs(4_000_000);
@@ -83,16 +85,25 @@ fn profile_auto_scratch_does_not_judge_or_combo_the_scratch() {
         assist: AssistOptionConfig { auto_scratch: true, ..Default::default() },
         ..Default::default()
     };
-    let mut session = build_game_session(
-        Arc::new(source),
-        &ProfileConfig::new_default("default", "Default", 1),
-        options,
-    );
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.judge.input_offset_us = -50_000;
+    let mut session = build_game_session(Arc::new(source), &profile, options);
     assert_eq!(session.scored_total_notes, 1);
     let mut audio = bmz_audio::queue::ScheduledSoundQueue::new();
-    // Well past the scratch note, before the Key1 note.
+    session.audio_clock.schedule_ahead = false;
+    for now in [999_999, 1_000_000] {
+        session.audio_clock.pause_at(TimeUs(now));
+        bmz_gameplay::session::advance_session_frame(&mut session, &mut audio);
+        let sounds: Vec<_> = audio.drain_all().map(|sound| sound.sound_id).collect();
+        if now == 1_000_000 {
+            assert_eq!(sounds, [bmz_core::ids::SoundId(7)]);
+        } else {
+            assert!(sounds.is_empty());
+        }
+    }
     session.audio_clock.pause_at(TimeUs(1_500_000));
     bmz_gameplay::session::advance_session_frame(&mut session, &mut audio);
+    assert!(audio.is_empty());
 
     assert_eq!(session.score.ex_score(), 0);
     assert_eq!(session.score.combo, 0);
@@ -251,6 +262,7 @@ fn seven_to_nine_7k_rule_uses_7k_judgement_and_projects_7k_replay() {
     converted.lane_notes[Lane::Key9.index()].push(note(1, Lane::Key9, 1_000_000));
     converted.total_notes = 1;
     let replay = bmz_core::replay::ReplayEvent {
+        applied_after: None,
         lane: Lane::Scratch,
         kind: InputKind::Press,
         // At NORMAL rank, 22 ms is inside 7K scratch PGREAT (22.5 ms) and outside 9K PGREAT (20 ms).

@@ -57,6 +57,74 @@ fn failed_result_summary_uses_record_bp_and_cb() {
 }
 
 #[test]
+fn lane_details_count_missed_cn_end_but_ignore_auto_scratch() {
+    let mut chart = chart();
+    let mut note = NoteEvent {
+        id: NoteId(1),
+        lane: Lane::Key2,
+        kind: NoteKind::LongStart,
+        tick: ChartTick(0),
+        time: TimeUs(0),
+        sound: None,
+        layered_sounds: Vec::new(),
+        damage: None,
+    };
+    chart.lane_notes[Lane::Key2.index()].push(note.clone());
+    note.id = NoteId(2);
+    note.kind = NoteKind::LongEnd;
+    note.time = TimeUs(1_000_000);
+    chart.lane_notes[Lane::Key2.index()].push(note.clone());
+    chart.long_notes.push(bmz_chart::model::LongNotePair {
+        lane: Lane::Key2,
+        style: bmz_chart::model::LongNoteStyle::ChannelPair,
+        mode: Some(LongNoteMode::Cn),
+        start_note_id: NoteId(1),
+        end_note_id: NoteId(2),
+        start_tick: ChartTick(0),
+        end_tick: ChartTick(192),
+        start_time: TimeUs(0),
+        end_time: note.time,
+        sound: None,
+    });
+    chart.lane_notes[Lane::Scratch.index()].push(NoteEvent {
+        id: NoteId(3),
+        lane: Lane::Scratch,
+        kind: NoteKind::DummyTap,
+        ..note
+    });
+    chart.total_notes = 1;
+
+    let mut result = play_result();
+    result.clear_type = ClearType::Failed;
+    result.total_notes = bmz_gameplay::score::scored_note_count(&chart);
+    result.score = ScoreState::default();
+    result.score.apply(&JudgementEvent {
+        note_id: Some(NoteId(1)),
+        lane: Lane::Key2,
+        judge: Judge::PGreat,
+        side: TimingSide::Fast,
+        delta: TimeUs(0),
+        time: TimeUs(0),
+        affects_score: true,
+        advances_score: true,
+    });
+    let details = ResultLaneDetails::new(
+        &chart,
+        &result,
+        &Default::default(),
+        KeyMode::K7,
+        &Lane::ALL.map(|lane| lane == Lane::Scratch),
+    );
+    let key = details.lanes[Lane::Key2.index()];
+    let scratch = details.lanes[Lane::Scratch.index()];
+    assert_eq!((key.notes, key.ex_score, key.bp), (result.total_notes, 2, result.record_bp()));
+    assert_eq!(
+        (scratch.notes, scratch.ex_score, scratch.bp, scratch.auto_scratch),
+        (0, 0, 0, true)
+    );
+}
+
+#[test]
 fn result_summary_keeps_effective_long_note_state() {
     let result = play_result();
     let stored = stored_result();
@@ -573,6 +641,24 @@ fn terminal_gauges_update_a_periodic_point_at_the_same_time() {
     let graph = collector.snapshot();
     assert_eq!(points_of(&graph, GaugeType::Easy), vec![(0, 93.0), (500, 79.5)]);
     assert_eq!(graph.gauge_points.len(), 2 * settled.gauges.len());
+}
+
+#[test]
+fn terminal_gauges_trim_audio_samples_past_the_scoring_cutoff() {
+    let sampled = gauge_with(&[(GaugeType::Hard, 4.0)]);
+    let settled = gauge_with(&[(GaugeType::Hard, 0.0), (GaugeType::Normal, 37.0)]);
+    let mut chart = chart();
+    chart.end_time = TimeUs(2_400_000);
+    let samples = [0, 500_000, 1_000_000, 1_500_000, 2_000_000].map(|t| (t, &sampled));
+    for history in [&samples[..], &samples[..4]] {
+        let mut collector = periodic_collector(history);
+        collector.record_terminal_gauges(&settled, TimeUs(1_980_000));
+        let graph = collector.snapshot_for_result_parts(&chart, &HashMap::new(), Some(&settled));
+        for gauge in &settled.gauges {
+            let points = points_of(&graph, gauge.definition.gauge_type);
+            assert_eq!(&points[4..], &[(1980, gauge.value), (2000, 0.0), (2500, 0.0)]);
+        }
+    }
 }
 
 #[test]

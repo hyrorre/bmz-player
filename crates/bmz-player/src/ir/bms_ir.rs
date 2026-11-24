@@ -313,11 +313,12 @@ impl BmsIrClient {
     pub async fn fetch_ranking(
         &self,
         chart_sha256: &str,
+        chart_md5: Option<&str>,
         request: &IrRankingRequest,
         player_id: &str,
         game_token: &str,
     ) -> Result<IrRankingResult> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "chart_sha256": chart_sha256,
             "scope": request.scope,
             "ln_policy": request.ln_policy,
@@ -326,6 +327,11 @@ impl BmsIrClient {
             "limit": request.limit,
             "offset": request.offset,
         });
+        // The server falls back to this MD5 to find legacy-IR records when it has
+        // no sha256 <-> md5 mapping for the chart. Older servers ignore it.
+        if let Some(chart_md5) = chart_md5 {
+            body["chart_md5"] = serde_json::Value::String(chart_md5.to_string());
+        }
         self.post_authenticated(
             "/api/bmz-player/v1/ranking",
             player_id,
@@ -1160,14 +1166,16 @@ mod tests {
         };
         assert_eq!(
             client
-                .fetch_ranking(chart_hash, &ranking_request, "123", "token")
+                .fetch_ranking(chart_hash, None, &ranking_request, "123", "token")
                 .await
                 .unwrap()
                 .chart
                 .sha256,
             chart_hash
         );
-        assert!(requests.recv().unwrap().starts_with("POST /api/bmz-player/v1/ranking HTTP/1.1"));
+        let ranking_http = requests.recv().unwrap();
+        assert!(ranking_http.starts_with("POST /api/bmz-player/v1/ranking HTTP/1.1"));
+        assert_eq!(request_json(&ranking_http)["chart_sha256"], chart_hash);
 
         let course_request = IrCourseRankingRequest {
             gauge: "Class".to_string(),
@@ -1232,6 +1240,43 @@ mod tests {
             .unwrap();
         assert!(history.scores.is_empty());
         assert!(requests.recv().unwrap().starts_with("POST /api/bmz-player/v1/me/scores HTTP/1.1"));
+    }
+
+    #[tokio::test]
+    async fn ranking_request_includes_chart_md5_only_when_known() {
+        let chart_hash = "ab".repeat(32);
+        let chart_md5 = "0123456789abcdef0123456789abcdef";
+        let ranking: &'static str = Box::leak(
+            format!(
+                r#"{{"chart":{{"sha256":"{chart_hash}"}},"ranking":{{"scope":"global","entries":[]}}}}"#
+            )
+            .into_boxed_str(),
+        );
+        let (base_url, requests) = spawn_mock_server(vec![ok(ranking), ok(ranking)]);
+        let client =
+            BmsIrClient::new_with_timeout(&base_url, std::time::Duration::from_secs(2)).unwrap();
+        let ranking_request = IrRankingRequest {
+            scope: super::super::types::IrRankingScope::Global,
+            ln_policy: "ForceLn".to_string(),
+            double_option: Default::default(),
+            rule_mode: RuleMode::Beatoraja,
+            limit: 20,
+            offset: 0,
+        };
+
+        client
+            .fetch_ranking(&chart_hash, Some(chart_md5), &ranking_request, "123", "token")
+            .await
+            .unwrap();
+        let with_md5 = request_json(&requests.recv().unwrap());
+        assert_eq!(with_md5["chart_md5"], chart_md5);
+        assert_eq!(with_md5["chart_sha256"], chart_hash.as_str());
+        assert_eq!(with_md5["limit"], 20);
+
+        client.fetch_ranking(&chart_hash, None, &ranking_request, "123", "token").await.unwrap();
+        let without_md5 = request_json(&requests.recv().unwrap());
+        assert!(without_md5.get("chart_md5").is_none());
+        assert_eq!(without_md5["chart_sha256"], chart_hash.as_str());
     }
 
     #[tokio::test]

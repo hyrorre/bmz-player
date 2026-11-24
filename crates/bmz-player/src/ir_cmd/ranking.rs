@@ -71,6 +71,8 @@ pub(super) async fn ranking(
         let result = crate::ir::bms_ir::BmsIrClient::new(&provider.base_url)?
             .fetch_ranking(
                 sha256,
+                // The CLI only receives a sha256, so there is no MD5 to forward.
+                None,
                 &IrRankingRequest {
                     scope,
                     ln_policy: ln_policy.to_string(),

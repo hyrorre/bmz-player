@@ -2,6 +2,7 @@ pub(in crate::ui) fn skin_path_combo(
     ui: &mut egui::Ui,
     skin: &mut SkinConfig,
     slot: SkinSlot,
+    app_paths: &AppPaths,
     candidates: &[SkinCandidate],
     show_bundled_origin: bool,
     text: Localizer,
@@ -28,13 +29,7 @@ pub(in crate::ui) fn skin_path_combo(
         })
         .response
         .on_hover_text(selected_text);
-    let combo_changed = selected != current;
-    if combo_changed {
-        save_skin_slot_history(skin, slot);
-        *skin_slot_path_mut(skin, slot) = selected;
-        restore_skin_slot_history(skin, slot);
-    }
-    combo_changed
+    switch_skin_slot(skin, slot, app_paths, selected)
 }
 
 pub(in crate::ui) fn skin_candidate_label(
@@ -235,34 +230,394 @@ pub(in crate::ui) fn skin_slot_history_key(slot: SkinSlot, path: &str) -> String
     format!("{slot_name}::{path}")
 }
 
-pub(in crate::ui) fn save_skin_slot_history(skin: &mut SkinConfig, slot: SkinSlot) {
-    let path = skin_slot_path(skin, slot).trim().to_string();
-    if path.is_empty() {
-        return;
+pub(in crate::ui) fn switch_skin_slot(
+    skin: &mut SkinConfig,
+    slot: SkinSlot,
+    app_paths: &AppPaths,
+    next: String,
+) -> bool {
+    if skin_slot_path(skin, slot) == next {
+        return false;
     }
+    let current = skin_history_path(app_paths, skin, skin_slot_path(skin, slot));
+    save_skin_slot_history(skin, slot, &current);
+    *skin_slot_path_mut(skin, slot) = next;
+    restore_skin_slot_history(skin, slot, app_paths);
+    true
+}
+
+pub(super) fn skin_history_path(app_paths: &AppPaths, skin: &SkinConfig, path: &str) -> String {
+    let path = path.trim();
+    let Some(resolved) = app_paths.resolve_optional_path_ref(path).ok().flatten() else {
+        return path.to_owned();
+    };
+    let grant = if skin.external_access.is_empty() {
+        None
+    } else {
+        app_paths.skin_access_key(&resolved).ok().and_then(|key| skin.external_access.get(&key))
+    };
+    let (entry, fallback) = if let Some(grant) = grant {
+        // Keep the identity pinned to the approved file even when the link is unavailable.
+        let entry = Path::new(&grant.entry);
+        if !entry.is_absolute() {
+            return path.to_owned();
+        }
+        (entry, grant.entry.as_str())
+    } else {
+        (resolved.as_path(), path)
+    };
+    let reference = if path.starts_with(RESOURCE_PATH_PREFIX) {
+        app_paths.resource_path_ref(entry).or_else(|| app_paths.data_path_ref(entry))
+    } else if path.starts_with(DATA_PATH_PREFIX) {
+        app_paths.data_path_ref(entry).or_else(|| app_paths.resource_path_ref(entry))
+    } else {
+        let data = app_paths.data_path_ref(entry);
+        let resource = app_paths.resource_path_ref(entry);
+        match (data, resource) {
+            (Some(data), Some(resource)) => {
+                let data_relative = data.strip_prefix(DATA_PATH_PREFIX).unwrap_or_default();
+                let resource_relative =
+                    resource.strip_prefix(RESOURCE_PATH_PREFIX).unwrap_or_default();
+                // A shared root is listed as bundled. A nested resource root may
+                // also be the only one that lists the skin in its catalog.
+                if data_relative == resource_relative
+                    || (resource_relative.starts_with("skins/")
+                        && !data_relative.starts_with("skins/"))
+                {
+                    Some(resource)
+                } else {
+                    Some(data)
+                }
+            }
+            (data, resource) => data.or(resource),
+        }
+    };
+    reference.unwrap_or_else(|| fallback.to_owned())
+}
+
+fn save_skin_slot_history(skin: &mut SkinConfig, slot: SkinSlot, path: &str) {
     let options = skin_slot_options_mut(skin, slot).clone();
     let files = skin_slot_files_mut(skin, slot).clone();
     let offsets = skin_slot_offsets_mut(skin, slot).clone();
     skin.history.insert(
-        skin_slot_history_key(slot, &path),
+        skin_slot_history_key(slot, path),
         SkinHistoryEntryConfig { options, files, offsets },
     );
 }
 
-pub(in crate::ui) fn restore_skin_slot_history(skin: &mut SkinConfig, slot: SkinSlot) {
-    let path = skin_slot_path(skin, slot).trim().to_string();
-    let history_key = skin_slot_history_key(slot, &path);
-    let Some(entry) =
-        skin.history.get(&history_key).cloned().or_else(|| skin.history.get(&path).cloned())
-    else {
-        skin_slot_options_mut(skin, slot).clear();
-        skin_slot_files_mut(skin, slot).clear();
-        skin_slot_offsets_mut(skin, slot).clear();
-        return;
-    };
-    skin.history.entry(history_key).or_insert_with(|| entry.clone());
+fn restore_skin_slot_history(skin: &mut SkinConfig, slot: SkinSlot, app_paths: &AppPaths) {
+    let path = skin_slot_path(skin, slot).trim();
+    let identity = skin_history_path(app_paths, skin, path);
+    let history_key = skin_slot_history_key(slot, &identity);
+    let prefix = skin_slot_history_key(slot, "");
+    let entry = skin
+        .history
+        .get(&history_key)
+        .or_else(|| skin.history.get(&skin_slot_history_key(slot, path)))
+        .or_else(|| {
+            skin.history.iter().find_map(|(key, entry)| {
+                let stored_path = key.strip_prefix(&prefix)?;
+                (skin_history_path(app_paths, skin, stored_path) == identity).then_some(entry)
+            })
+        })
+        .or_else(|| skin.history.get(path))
+        .or_else(|| {
+            skin.history.iter().find_map(|(key, entry)| {
+                (!key.contains("::") && skin_history_path(app_paths, skin, key) == identity)
+                    .then_some(entry)
+            })
+        })
+        .cloned();
+    if let Some(entry) = &entry {
+        skin.history.entry(history_key).or_insert_with(|| entry.clone());
+    }
+    let entry = entry.unwrap_or_default();
+
     *skin_slot_options_mut(skin, slot) = entry.options;
     *skin_slot_files_mut(skin, slot) = entry.files;
     *skin_slot_offsets_mut(skin, slot) = entry.offsets;
 }
 use super::*;
+use crate::paths::{DATA_PATH_PREFIX, RESOURCE_PATH_PREFIX};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::profile_config::SkinAccessGrant;
+
+    #[test]
+    fn dotted_roots_restore_options_files_and_offsets_from_legacy_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        for data_dir in [temp.path().join("staging/../data"), PathBuf::from("./data")] {
+            let paths = AppPaths::from_dirs(
+                temp.path().join("staging/../resources"),
+                data_dir,
+                temp.path().join("cache"),
+                temp.path().join("logs"),
+            );
+            for (old, selected) in [
+                ("data/skins/B/play.lua", "data:skins/B/play.lua"),
+                ("resource:skins/B/play.lua", "resource:skins/B/play.lua"),
+            ] {
+                let original = SkinHistoryEntryConfig {
+                    options: BTreeMap::from([("Layout".into(), "Saved".into())]),
+                    files: BTreeMap::from([("Notes".into(), "saved.png".into())]),
+                    offsets: vec![SkinOffsetConfig { id: 30, x: 12, ..Default::default() }],
+                };
+                let mut skin = SkinConfig {
+                    play7: old.into(),
+                    play7_options: original.options.clone(),
+                    play7_files: original.files.clone(),
+                    play7_offsets: original.offsets.clone(),
+                    ..Default::default()
+                };
+                assert!(switch_skin_slot(&mut skin, SkinSlot::Play7, &paths, String::new()));
+                assert!(switch_skin_slot(&mut skin, SkinSlot::Play7, &paths, selected.into()));
+                assert_eq!(skin.play7_options, original.options);
+                assert_eq!(skin.play7_files, original.files);
+                assert_eq!(skin.play7_offsets, original.offsets);
+                assert!(
+                    skin.history.contains_key(&skin_slot_history_key(SkinSlot::Play7, selected))
+                );
+            }
+        }
+    }
+
+    fn app_paths(temp: &tempfile::TempDir) -> AppPaths {
+        let root = temp.path().join("app");
+        AppPaths::from_dirs(
+            root.join("resources"),
+            root.join("data"),
+            root.join("cache"),
+            root.join("logs"),
+        )
+    }
+
+    #[test]
+    fn skin_history_keeps_its_origin_when_shared_roots_split() {
+        let temp = tempfile::tempdir().unwrap();
+        let split = app_paths(&temp);
+        let shared = AppPaths::from_dirs(
+            split.resource_dir.clone(),
+            split.resource_dir.clone(),
+            split.cache_dir.clone(),
+            split.logs_dir.clone(),
+        );
+        let slot = SkinSlot::Play7;
+        let bundled = "resource:skins/A/play.luaskin";
+        let user = "data:skins/A/play.luaskin";
+        let mut skin = SkinConfig {
+            play7: "resource:./skins//A/play.luaskin".into(),
+            play7_options: BTreeMap::from([("Layout".into(), "Bundled".into())]),
+            play7_files: BTreeMap::from([("Notes".into(), "bundled.png".into())]),
+            play7_offsets: vec![SkinOffsetConfig { id: 30, x: 12, ..Default::default() }],
+            ..Default::default()
+        };
+
+        assert!(switch_skin_slot(&mut skin, slot, &shared, user.into()));
+        assert!(skin.play7_options.is_empty());
+        assert!(skin.play7_files.is_empty());
+        assert!(skin.play7_offsets.is_empty());
+        skin.play7_options.insert("Layout".into(), "User".into());
+        skin.play7_files.insert("Notes".into(), "user.png".into());
+        skin.play7_offsets.push(SkinOffsetConfig { id: 30, x: -4, ..Default::default() });
+
+        let alias = shared.resource_dir.join("skins/A/play.luaskin");
+        assert!(switch_skin_slot(&mut skin, slot, &shared, alias.to_string_lossy().into_owned()));
+        assert_eq!(skin.play7_options["Layout"], "Bundled");
+        assert!(switch_skin_slot(&mut skin, slot, &shared, String::new()));
+        let mut skin = toml::from_str(&toml::to_string(&skin).unwrap()).unwrap();
+
+        for (path, layout, file, x) in
+            [(bundled, "Bundled", "bundled.png", 12), (user, "User", "user.png", -4)]
+        {
+            assert!(switch_skin_slot(&mut skin, slot, &split, path.into()));
+            assert_eq!(skin.play7_options["Layout"], layout);
+            assert_eq!(skin.play7_files["Notes"], file);
+            assert_eq!(skin.play7_offsets[0].x, x);
+        }
+
+        let nested = AppPaths::from_dirs(
+            split.resource_dir.clone(),
+            split.data_dir.parent().unwrap().to_path_buf(),
+            split.cache_dir,
+            split.logs_dir,
+        );
+        assert_eq!(skin_history_path(&nested, &skin, &alias.to_string_lossy()), bundled);
+    }
+
+    #[test]
+    fn authorized_external_skin_history_uses_the_pinned_entry() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::from_dirs(
+            "resources".into(),
+            std::path::absolute("data").unwrap(),
+            "cache".into(),
+            "logs".into(),
+        );
+        let slot = SkinSlot::Play7;
+        let alias = "packs/../data/skins/Linked/play.luaskin";
+        let user = "data:skins/A/play.luaskin";
+        // The profile pins the external file even though the alias looks local after folding `..`.
+        let external_root = temp.path().join("packs/data/skins/A");
+        let entry = external_root.join("play.luaskin").to_string_lossy().into_owned();
+        let grant = SkinAccessGrant {
+            entry: entry.clone(),
+            roots: vec![external_root.to_string_lossy().into_owned()],
+        };
+        let external_history = SkinHistoryEntryConfig {
+            options: BTreeMap::from([("Layout".into(), "External".into())]),
+            files: BTreeMap::from([("Notes".into(), "external.png".into())]),
+            offsets: vec![SkinOffsetConfig { id: 30, x: 12, ..Default::default() }],
+        };
+        let mut skin = SkinConfig {
+            external_access: BTreeMap::from([(
+                paths.skin_access_key(Path::new(alias)).unwrap(),
+                grant,
+            )]),
+            history: BTreeMap::from([(
+                skin_slot_history_key(slot, alias),
+                external_history.clone(),
+            )]),
+            ..Default::default()
+        };
+
+        assert!(switch_skin_slot(&mut skin, slot, &paths, user.into()));
+        assert!(skin.play7_options.is_empty());
+        assert!(skin.play7_files.is_empty());
+        assert!(skin.play7_offsets.is_empty());
+        skin.play7_options.insert("Layout".into(), "User".into());
+        skin.play7_files.insert("Notes".into(), "user.png".into());
+        skin.play7_offsets.push(SkinOffsetConfig { id: 30, x: -4, ..Default::default() });
+
+        assert!(switch_skin_slot(&mut skin, slot, &paths, alias.into()));
+        assert_eq!(skin.play7_options, external_history.options);
+        assert_eq!(skin.play7_files, external_history.files);
+        assert_eq!(skin.play7_offsets, external_history.offsets);
+        assert_eq!(skin.history[&skin_slot_history_key(slot, &entry)], external_history);
+
+        assert!(switch_skin_slot(&mut skin, slot, &paths, user.into()));
+        assert_eq!(skin.play7_options["Layout"], "User");
+        assert_eq!(skin.play7_files["Notes"], "user.png");
+        assert_eq!(skin.play7_offsets[0].x, -4);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authorized_symlink_with_parent_dir_keeps_separate_skin_history() {
+        use std::fs;
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let paths = app_paths(&temp);
+        let app = paths.data_dir.parent().unwrap();
+        let outside = temp.path().join("outside");
+        let target = outside.join("current");
+        let relative = "data/skins/A/play.luaskin";
+        let external = outside.join(relative);
+        for file in [&app.join(relative), &external] {
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, "return {}").unwrap();
+        }
+        fs::create_dir(&target).unwrap();
+        symlink(target, app.join("packs")).unwrap();
+
+        // Keep the alias relative without changing the test process's working directory.
+        let cwd = std::env::current_dir().unwrap();
+        let to_root: PathBuf = cwd.ancestors().skip(1).map(|_| "..").collect();
+        let alias = to_root.join(app.strip_prefix("/").unwrap()).join("packs/..").join(relative);
+        let alias_ref = alias.to_string_lossy().into_owned();
+        let mut skin = SkinConfig {
+            play7: alias_ref.clone(),
+            play7_options: BTreeMap::from([("Layout".into(), "External".into())]),
+            ..Default::default()
+        };
+        paths.approve_skin_path(&mut skin, &alias).unwrap();
+        assert_eq!(
+            paths.skin_path_context(&skin, &alias).unwrap().entry_file(),
+            external.canonicalize().unwrap()
+        );
+
+        let slot = SkinSlot::Play7;
+        let user = "data:skins/A/play.luaskin";
+        assert!(switch_skin_slot(&mut skin, slot, &paths, user.into()));
+        assert!(skin.play7_options.is_empty());
+        skin.play7_options.insert("Layout".into(), "User".into());
+        assert!(switch_skin_slot(&mut skin, slot, &paths, alias_ref));
+        assert_eq!(skin.play7_options["Layout"], "External");
+        assert!(switch_skin_slot(&mut skin, slot, &paths, user.into()));
+        assert_eq!(skin.play7_options["Layout"], "User");
+    }
+
+    #[test]
+    fn current_data_dir_keeps_bundled_and_user_skin_histories_separate() {
+        let paths = AppPaths::from_dirs("..".into(), ".".into(), "cache".into(), "logs".into());
+        let bundled = "resource:skins/A/play.luaskin";
+        let user = "data:skins/A/play.luaskin";
+        let mut skin = SkinConfig {
+            play7: bundled.into(),
+            play7_options: BTreeMap::from([("Layout".into(), "Bundled".into())]),
+            play7_files: BTreeMap::from([("Notes".into(), "bundled.png".into())]),
+            play7_offsets: vec![SkinOffsetConfig { id: 30, x: 12, ..Default::default() }],
+            ..Default::default()
+        };
+
+        assert!(switch_skin_slot(&mut skin, SkinSlot::Play7, &paths, user.into()));
+        assert!(skin.play7_options.is_empty());
+        assert!(skin.play7_files.is_empty());
+        assert!(skin.play7_offsets.is_empty());
+        skin.play7_options.insert("Layout".into(), "User".into());
+        skin.play7_files.insert("Notes".into(), "user.png".into());
+        skin.play7_offsets.push(SkinOffsetConfig { id: 30, x: -4, ..Default::default() });
+
+        for (path, layout, file, x) in
+            [(bundled, "Bundled", "bundled.png", 12), (user, "User", "user.png", -4)]
+        {
+            assert!(switch_skin_slot(&mut skin, SkinSlot::Play7, &paths, path.into()));
+            assert_eq!(skin.play7_options["Layout"], layout);
+            assert_eq!(skin.play7_files["Notes"], file);
+            assert_eq!(skin.play7_offsets[0].x, x);
+            assert!(skin.history.contains_key(&skin_slot_history_key(SkinSlot::Play7, path)));
+        }
+    }
+
+    #[test]
+    fn parent_dir_skin_path_does_not_share_history_with_a_real_subdirectory() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = app_paths(&temp);
+        // 手書き設定の絶対パス。実際には data/skins/B を指す。
+        let dotted = paths.data_dir.join("skins/A/../B/play.lua").to_string_lossy().into_owned();
+        let mut skin = SkinConfig {
+            play7: dotted,
+            play7_options: BTreeMap::from([("marker".to_owned(), "B".to_owned())]),
+            ..Default::default()
+        };
+
+        // A/B は実在する別スキンなので、B の履歴を引き継いではいけない。
+        assert!(switch_skin_slot(
+            &mut skin,
+            SkinSlot::Play7,
+            &paths,
+            "data:skins/A/B/play.lua".into()
+        ));
+        assert_eq!(skin.play7, "data:skins/A/B/play.lua");
+        assert!(!skin.play7_options.contains_key("marker"));
+
+        // B に戻すと元の履歴が復元される。
+        assert!(switch_skin_slot(
+            &mut skin,
+            SkinSlot::Play7,
+            &paths,
+            "data:skins/B/play.lua".into()
+        ));
+        assert_eq!(skin.play7_options.get("marker").map(String::as_str), Some("B"));
+
+        // 履歴キーも B と A/B で分かれている。
+        assert!(skin.history.contains_key("play7::data:skins/B/play.lua"));
+        assert!(skin.history.contains_key("play7::data:skins/A/B/play.lua"));
+        assert_ne!(
+            skin.history["play7::data:skins/B/play.lua"].options,
+            skin.history["play7::data:skins/A/B/play.lua"].options
+        );
+    }
+}

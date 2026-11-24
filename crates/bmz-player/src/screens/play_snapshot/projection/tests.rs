@@ -53,6 +53,31 @@ fn assert_playfield_eq(actual: &RenderSnapshot, expected: &RenderSnapshot) {
 }
 
 #[test]
+fn hidden_notes_follow_the_projection_clock() {
+    let mut chart = chart();
+    let mut hidden = chart.lane_notes[Lane::Key1.index()][0].clone();
+    hidden.id = NoteId(2);
+    hidden.lane = Lane::Key2;
+    hidden.kind = NoteKind::Invisible;
+    chart.lane_notes[Lane::Key2.index()].push(hidden);
+    let mut session = session(chart);
+    session.show_hidden_notes = true;
+    let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+    let pool = PlayfieldProjection::pool(&session, &cache);
+    let mut snapshot = base(&session, TimeUs(0), &cache);
+    let mut clock = ProjectionClock::default();
+    for time in [TimeUs(0), TimeUs(950_000), TimeUs(1_000_001)] {
+        pool[0].project(&mut snapshot, time, &mut clock);
+        let expected = build_render_snapshot(&session, time, &[], None);
+        assert_eq!(snapshot.visible_notes, expected.visible_notes);
+        assert_eq!(
+            snapshot.visible_notes[Lane::Key2.index()].len(),
+            usize::from(time.0 <= 1_000_000)
+        );
+    }
+}
+
+#[test]
 fn cached_projection_recomputes_all_skin_timers_across_ready_beats_and_event_boundaries() {
     let mut session = session(mixed_chart());
     session.audio_clock.pause_at(TimeUs(-1_000_000));
@@ -274,6 +299,10 @@ fn auto_scratch_visibility_matches_live_projection_and_direct_snapshots() {
             }
             chart.lane_notes[lane.index()].extend(notes);
         }
+        let mut hidden = chart.lane_notes[lane.index()][0].clone();
+        hidden.id.0 += 100;
+        hidden.kind = NoteKind::Invisible;
+        chart.lane_notes[lane.index()].push(hidden);
         chart.lane_notes[lane.index()].sort_by_key(|note| note.time);
         let mut long = chart.long_notes[0].clone();
         long.lane = lane;
@@ -284,6 +313,7 @@ fn auto_scratch_visibility_matches_live_projection_and_direct_snapshots() {
     chart.long_notes.sort_by_key(|long| long.start_time);
     let chart = Arc::new(chart);
     let mut profile = ProfileConfig::new_default("test", "Test", 1);
+    profile.play.show_hidden_notes = true;
     let with_auto_scratch = PlaySessionOptions {
         assist: AssistOptionConfig { auto_scratch: true, ..Default::default() },
         ..Default::default()
@@ -337,6 +367,12 @@ fn auto_scratch_visibility_matches_live_projection_and_direct_snapshots() {
         assert_playfield_eq(&projected, &direct);
         for lane in [Lane::Scratch, Lane::Scratch2] {
             assert_eq!(direct.visible_notes[lane.index()].is_empty(), hidden);
+            assert_eq!(
+                direct.visible_notes[lane.index()]
+                    .iter()
+                    .any(|note| note.kind == NoteVisualKind::Invisible),
+                !hidden
+            );
             assert_eq!(direct.visible_mines[lane.index()].is_empty(), hidden);
             assert_eq!(direct.visible_long_notes.iter().all(|long| long.lane != lane), hidden);
         }

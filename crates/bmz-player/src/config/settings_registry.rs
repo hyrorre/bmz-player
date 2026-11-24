@@ -128,6 +128,7 @@ impl SettingsEntryId {
         Self::ConstantFadeMs,
         Self::HispeedTransitionMs,
         Self::InvertE2KeyGreenNumber,
+        Self::ShowHiddenNotes,
     ];
 
     pub const fn visible_for_hispeed_config(self, preset: HispeedConfigPreset) -> bool {
@@ -277,6 +278,7 @@ impl SettingsEntryId {
             Self::PlayKeysoundOnMiss => "MISS KEYSOUND",
             Self::NoteRetention => "NOTE RETENTION",
             Self::ShowLnTailCap => "LN TAIL CAP",
+            Self::ShowHiddenNotes => "SHOW HIDDEN NOTES",
             Self::GuideSe => "GUIDE SE",
             Self::Hispeed => "CLASSIC HS",
             Self::HispeedMode => "HS CONFIG",
@@ -418,6 +420,7 @@ impl SettingsEntryId {
             Self::PlayKeysoundOnMiss => "settings-entry-description-play-keysound-on-miss",
             Self::NoteRetention => "settings-entry-description-note-retention",
             Self::ShowLnTailCap => "settings-entry-description-show-ln-tail-cap",
+            Self::ShowHiddenNotes => "settings-entry-description-show-hidden-notes",
             Self::GuideSe => "settings-entry-description-guide-se",
             Self::Hispeed => "settings-entry-description-hispeed",
             Self::HispeedMode => "settings-entry-description-hispeed-mode",
@@ -733,14 +736,15 @@ mod tests {
     }
 
     #[test]
-    fn display_entries_end_with_hs_animation_and_e2_key_green_inversion() {
+    fn display_entries_end_with_hs_animation_e2_key_green_inversion_and_hidden_notes() {
         let display = SettingsEntryId::DISPLAY_ENTRIES;
         assert_eq!(
-            &display[display.len() - 3..],
+            &display[display.len() - 4..],
             &[
                 SettingsEntryId::ConstantFadeMs,
                 SettingsEntryId::HispeedTransitionMs,
                 SettingsEntryId::InvertE2KeyGreenNumber,
+                SettingsEntryId::ShowHiddenNotes,
             ]
         );
 

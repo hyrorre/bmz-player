@@ -26,6 +26,7 @@ impl WinitApp {
 
     /// network worker群へSelect実行許可を同期する。
     pub(super) fn sync_select_maintenance_gate(&self) {
+        self.jobs.song_scan.pause.set_paused(!self.select_maintenance_allowed());
         if !self.select_maintenance_allowed() {
             if let Some(progress) = &self.jobs.updates.progress {
                 progress.paused.store(true, Ordering::Relaxed);
@@ -81,6 +82,14 @@ impl WinitApp {
         self.start_startup_course_link_repair_after_first_frame();
         self.start_startup_table_fetch_after_first_frame();
         self.start_startup_rival_sync_after_first_frame();
+        if self.smoke.first_present_logged && std::mem::take(&mut self.boot.deferred_startup_scan) {
+            self.spawn_song_scan_with_scope(
+                Vec::new(),
+                false,
+                "startup rescan".into(),
+                SongScanScope::Startup,
+            );
+        }
         self.start_queued_table_fetch_if_idle();
         self.start_queued_rian_table_fetch_if_idle();
         self.maybe_start_periodic_rian_table_fetch();

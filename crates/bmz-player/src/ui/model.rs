@@ -319,6 +319,8 @@ pub struct EguiRunContext<'a, 'practice> {
     pub skin_meta: &'a SkinConfigMeta,
     pub skin_catalog: &'a SkinCatalog,
     pub course_result: Option<&'a CourseResultSummary>,
+    pub play_result: Option<&'a FinishedPlaySession>,
+    pub result_started_at: std::time::Instant,
     pub course_stage_result: bool,
     pub course_preview: Option<&'a SelectCourseRow>,
     pub course_editor: &'a CourseEditorData,
@@ -478,6 +480,7 @@ pub struct EguiLayer {
     pub(super) font_search_paths: Vec<PathBuf>,
     /// BMZ メニュー（設定・ツールを統合したウィンドウ）の表示状態。F1 でトグルする。
     pub(super) visible: bool,
+    pub(super) result_panel: ResultPanelState,
     pub(super) download_list: super::download_task_list::DownloadListUi,
     /// デバッグ表示内のログ最低表示レベル。
     pub(super) debug_log_filter: DebugLogFilter,

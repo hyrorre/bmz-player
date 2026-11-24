@@ -37,8 +37,8 @@ fn lua_skin_loads_current_folder_lamp_graphs() {
 }
 
 #[test]
-fn lua_skin_preserves_number_ref_digit_and_padding_fields() {
-    let root = TestDir::created("bmz-skin-text-number-padding");
+fn lua_skin_preserves_number_ref_formatting_fields() {
+    let root = TestDir::created("bmz-skin-text-number-formatting");
     let path = root.join("select.luaskin");
     fs::write(
         &path,
@@ -47,7 +47,7 @@ fn lua_skin_preserves_number_ref_digit_and_padding_fields() {
                 type = 0,
                 text = {
                     { id = "seconds", numberRef = 1164, digit = 2, zeropadding = 1 },
-                    { id = "rate", numberRef = 103, digit = 2, padding = 1 }
+                    { id = "target_diff", numberRef = 153, digit = 3, padding = 1, showPlus = true }
                 }
             }
         "#,
@@ -58,7 +58,9 @@ fn lua_skin_preserves_number_ref_digit_and_padding_fields() {
         load_lua_skin(&path, SkinKind::Select, &BTreeMap::new(), &BTreeMap::new()).unwrap();
     let text = &loaded.document.text;
     assert_eq!((text[0].number_ref, text[0].digit, text[0].zeropadding), (Some(1164), 2, 1));
-    assert_eq!((text[1].number_ref, text[1].digit, text[1].padding), (Some(103), 2, 1));
+    assert!(!text[0].show_plus);
+    assert_eq!((text[1].number_ref, text[1].digit, text[1].padding), (Some(153), 3, 1));
+    assert!(text[1].show_plus);
 }
 
 #[test]

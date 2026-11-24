@@ -7,6 +7,7 @@
 bmz-player "chart.bms" --window-mode windowed --window-size 1280x720 --arrange random --gauge hard --gas off
 bmz-player "chart.bms" -a --window-mode borderless --gauge ex-hard --gas select-to-under --gas-bottom easy
 bmz-player "chart.bms" -P --arrange mirror --hispeed 3
+bmz-player "chart.bms" -P --mark-note on --judge-area on --show-ln-tail-cap on --green-number 273
 bmz-player export video "chart.bms" -o out.mp4 --arrange random --gauge hard --gas best-clear --seed 42
 bmz-player "chart.bms" --arrange random --arrange-2p mirror --double-option flip
 bmz-player monitors list
@@ -33,7 +34,7 @@ bmz-player "chart.bms" --gauge hard --print-effective-options
 | 画面設定 | 適用 | 適用 | 維持 |
 | プレイ設定 | 警告して無視 | 指定譜面へ適用 | 破棄してprofile値へ戻す |
 
-`--boot-play-sample`と`--boot-course`も再生対象の明示として扱います。
+`--boot-play-sample`、`--boot-course`、`--boot-replay-file`、`--boot-course-replay`も再生対象の明示として扱います。
 リトライとResultでは維持し、コースでは全ステージで維持します。Decideキャンセルやプレイ開始失敗でSelectへ戻った場合も破棄します。
 Viewerの再生要求はプレイ設定を毎回置き換えます。停止・同じ要求の再開では維持します。
 画面設定はそのプロセスで維持し、後のViewer要求で明示した画面設定だけ変更します。
@@ -52,15 +53,20 @@ Viewer IPCはv3です。更新前の常駐Viewerは終了してから新版を�
 | `--gas` | `off` / `continue` / `hard-to-groove` / `best-clear` / `select-to-under` |
 | `--gas-bottom` | `assist-easy` / `easy` / `normal` |
 | `--hispeed` | `0.01`〜`20.0`です。指定中はClassic・Floating無効の固定倍率 |
+| `--green-number` | `1`〜`6000`の整数。その再生をFloatingで開始し、指定値を目標緑数字にします。`--hispeed`と併用した場合は後に指定した方を使います。 |
 | `--hs-fix` | `off` / `start-bpm` / `min-bpm` / `max-bpm` / `main-bpm` |
 | `--auto-scratch` | `on` / `off`です。onはスクラッチレーンを自動演奏し、スコア・リプレイ保存を無効化 |
 | `--bga` | `on` / `auto` / `off` |
 | `--guide-se` | `on` / `off` |
+| `--show-invisible-notes` | `on` / `off`。その再生だけ不可視ノーツの枠を表示・非表示にします。未指定時はプロファイルの「不可視ノーツ表示」に従います。Viewer・リプレイ・動画出力でも使えます。 |
+| `--mark-note` | `on` / `off`。判定済みノーツにマークを表示します。 |
+| `--judge-area` | `on` / `off`。レーン上に各判定の時間幅を表示します。 |
+| `--show-ln-tail-cap` | `on` / `off`。LN・HLNの終端キャップを切り替えます。CN・HCNや独立した終端を持つQwilightスキンでは、終端を常に描画します。 |
 | `--seed` | 符号なし64bit整数です。P1は下位24bit、P2は次の24bit、BMS分岐seedは指定値 |
 
 P1配置はP2にコピーしません。`-B`のG-BATTLEと`--double-option battle`は別の設定です。
 コースの必須制約は引き続き適用されます。
-リプレイでは表示設定だけ変更可能です。配置・seed・ゲージ・GAS・アシストの明示指定はエラーにします。
+リプレイでも緑数字やノーツ・判定幅の表示を変更できます。表示オプションを省略するとプロファイルの設定を使います。配置・seed・ゲージ・GAS・AUTO SCRATCHの明示指定はエラーにします。
 動画出力には画面設定を指定できません。解像度とFPSは`--resolution`・`--fps`で指定します。
 
 ## レンダリングバックエンド

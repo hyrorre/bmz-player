@@ -34,12 +34,16 @@ pub struct ScanSummary {
     /// being decoded. Their previous registrations stay as they were.
     pub deferred: u32,
     pub removed_files: usize,
+    /// Chart rows whose shared folder document flag changed.
+    pub document_flags_updated: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SongScanScope {
     Paths,
     Library,
+    /// Saved configuration was already loaded and published during bootstrap.
+    Startup,
 }
 
 #[derive(Debug, Clone)]
@@ -145,10 +149,12 @@ mod import;
 mod link_tests;
 #[cfg(test)]
 mod partial_scan_tests;
+mod pause;
 
 pub use discovery::{ChartFileEntry, discover_chart_files};
 pub(crate) use discovery::{enclosing_song_folders, folder_has_document, folder_has_loose_chart};
-pub use import::{scan_song_roots, scan_song_roots_with_progress};
+pub use import::{scan_song_roots, scan_song_roots_with_pause, scan_song_roots_with_progress};
+pub use pause::ScanPause;
 
 pub fn is_chart_file(path: &Path) -> bool {
     path.file_name().is_some_and(discovery::is_chart_file_name)
@@ -622,6 +628,29 @@ mod tests {
         assert_eq!(report.summary.files_seen, 2);
         assert_eq!(report.summary.imported, 1);
         assert_eq!(report.summary.failed, 1);
+    }
+
+    #[test]
+    fn scan_song_roots_counts_only_changed_document_flags() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(&root.path().join("a.bms"), "#TITLE A\n#BPM 120\n#00111:01\n");
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let roots = vec![PathEntry {
+            path: root.path().to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+
+        scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_060, false).unwrap();
+        let unchanged =
+            scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_061, false).unwrap();
+        assert_eq!((unchanged.summary.skipped, unchanged.summary.document_flags_updated), (1, 0));
+        write_file(&root.path().join("readme.txt"), "document");
+        let added = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_062, false).unwrap();
+        assert_eq!((added.summary.skipped, added.summary.document_flags_updated), (1, 1));
     }
 
     #[test]

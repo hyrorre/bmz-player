@@ -65,7 +65,9 @@ Use this when you want to match your timing to what you see.
 
 This shifts when key and button presses are judged, relative to the sound.
 Use it when your input device itself is delayed, such as some controllers.
-If you get many SLOW, adjust it in the plus direction. If you get many FAST, adjust it in the minus direction.
+If you get many SLOW, adjust it in the minus direction. If you get many FAST, adjust it in the plus direction.
+This is the opposite direction from the visual offset.
+With a plus offset, the sound and light when you press and the judgement display also come later by the same amount.
 
 The visual offset alone is usually enough. If you change both by a lot, it becomes hard to tell which one is causing the problem.
 

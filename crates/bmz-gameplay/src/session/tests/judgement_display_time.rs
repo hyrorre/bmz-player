@@ -16,10 +16,11 @@ fn human_judgement_display_time_does_not_change_scoring_or_result_time() {
         assert_eq!(session.result_judgements[&NoteId(1)].time, event.time);
         let display = &session.recent_display_judgements[0];
         assert_eq!(display.judgement, *event);
-        assert_eq!(display.display_time, TimeUs(10_000 - offset));
+        // 表示は打鍵時刻と判定時刻の遅い方から始める。
+        assert_eq!(display.display_time, TimeUs(10_000 - offset.min(0)));
         assert_eq!(display.combo, 1);
 
-        // 表示履歴は正負どちらの offset でも打鍵から800ms保持する。
+        // 表示履歴は正負どちらの offset でも表示開始から800ms保持する。
         let expires = TimeUs(display.display_time.0 + JUDGEMENT_DISPLAY_US);
         update_recent_judgements(&mut session, &events, expires);
         assert_eq!(session.recent_display_judgements.len(), 1);
@@ -29,7 +30,7 @@ fn human_judgement_display_time_does_not_change_scoring_or_result_time() {
 }
 
 #[test]
-fn long_note_release_display_time_uses_uncorrected_human_input() {
+fn long_note_release_display_time_uses_the_later_of_press_and_judgement_time() {
     for mode in [LongNoteMode::Ln, LongNoteMode::Cn, LongNoteMode::Hcn] {
         for offset in [-20_000, 20_000] {
             let mut chart = chart_with_hcn_long_note();
@@ -45,7 +46,7 @@ fn long_note_release_display_time_uses_uncorrected_human_input() {
             assert_eq!(events[0].time, TimeUs(1_000_000));
             let display = session.recent_display_judgements.last().unwrap();
             assert_eq!(display.judgement, events[0]);
-            assert_eq!(display.display_time, TimeUs(1_000_000 - offset));
+            assert_eq!(display.display_time, TimeUs(1_000_000 - offset.min(0)));
         }
     }
 }

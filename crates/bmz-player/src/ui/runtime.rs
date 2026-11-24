@@ -38,6 +38,7 @@ impl EguiLayer {
             font_coverage,
             font_search_paths,
             visible: false,
+            result_panel: ResultPanelState::default(),
             download_list: Default::default(),
             debug_log_filter: DebugLogFilter::default(),
             debug_log_autoscroll: true,
@@ -75,7 +76,9 @@ impl EguiLayer {
     /// BMZ メニューの表示状態を反転する (F1)。
     pub fn toggle(&mut self) {
         self.visible = !self.visible;
-        if !self.visible {
+        if self.visible {
+            self.result_panel.request_raise();
+        } else {
             self.cancel_key_config_listening();
         }
         tracing::info!(visible = self.visible, "egui menu toggled");
@@ -301,6 +304,8 @@ impl EguiLayer {
             skin_meta,
             skin_catalog,
             course_result,
+            play_result,
+            result_started_at,
             course_stage_result,
             course_preview,
             course_editor,
@@ -399,18 +404,6 @@ impl EguiLayer {
             }
             if *visible_flag {
                 let ctx = ui.ctx();
-                let result_ir_visible = result_ir.is_some();
-                // IR ランキングも egui 補助ウィンドウなので、他の egui
-                // ウィンドウと同じ F1 メニュー表示中だけ出す。
-                if let Some(state) = result_ir.as_mut() {
-                    build_result_ir_panel(ctx, state, text);
-                }
-                // Course info panels are developer/debug egui overlays, so keep
-                // them behind the same F1 menu visibility gate as the other
-                // egui windows.
-                if let Some(summary) = course_result {
-                    build_course_result_panel(ctx, summary, result_ir_visible, text);
-                }
                 if let Some(preview) = course_preview {
                     build_course_preview_panel(ctx, preview, text);
                 }
@@ -581,6 +574,18 @@ impl EguiLayer {
                     course_stage_result,
                     build_contents,
                 );
+                let result_details = course_result.map(ResultPanelDetails::Course).or_else(|| {
+                    play_result.map(|play| ResultPanelDetails::Play(play.lane_details.as_deref()))
+                });
+                if let Some(details) = result_details.filter(|_| *visible_flag) {
+                    self.result_panel.show(
+                        ctx,
+                        details,
+                        result_ir.as_deref_mut(),
+                        result_started_at,
+                        text,
+                    );
+                }
                 if settings_editable {
                     build_ir_confirm_modal(ctx, &profile_config.ir, &mut self.ir_manual, text);
                 }

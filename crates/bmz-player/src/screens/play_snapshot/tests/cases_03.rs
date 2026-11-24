@@ -306,8 +306,9 @@ fn build_render_snapshot_routes_invisible_and_mine_correctly() {
         layered_sounds: Vec::new(),
         damage: Some(8.0),
     });
-    let profile = ProfileConfig::new_default("default", "Default", 1);
-    let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    let chart = Arc::new(chart);
+    let session = build_game_session(Arc::clone(&chart), &profile, PlaySessionOptions::default());
 
     let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
 
@@ -319,6 +320,22 @@ fn build_render_snapshot_routes_invisible_and_mine_correctly() {
     assert_eq!(snapshot.visible_mines[Lane::Key3.index()][0].damage, 8.0);
     assert!(snapshot.visible_mines[Lane::Key1.index()].is_empty());
     assert!(snapshot.visible_mines[Lane::Key2.index()].is_empty());
+
+    profile.play.show_hidden_notes = true;
+    let session = build_game_session(chart, &profile, PlaySessionOptions::default());
+    let shown = build_render_snapshot(&session, TimeUs(0), &[], None);
+    let hidden = &shown.visible_notes[Lane::Key2.index()];
+    assert_eq!(hidden.len(), 1);
+    assert_eq!(hidden[0].kind, NoteVisualKind::Invisible);
+    assert_eq!(hidden[0].y, shown.visible_notes[Lane::Key1.index()][0].y);
+    assert_eq!(hidden[0].processed_judge, None);
+    assert_eq!(shown.visible_notes[Lane::Key1.index()], snapshot.visible_notes[Lane::Key1.index()]);
+    assert_eq!(shown.visible_mines, snapshot.visible_mines);
+
+    let at_line = build_render_snapshot(&session, TimeUs(1_000_000), &[], None);
+    assert_eq!(at_line.visible_notes[Lane::Key2.index()].len(), 1);
+    let passed = build_render_snapshot(&session, TimeUs(1_000_001), &[], None);
+    assert!(passed.visible_notes[Lane::Key2.index()].is_empty());
 }
 
 #[test]

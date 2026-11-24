@@ -17,6 +17,9 @@ use bmz_render::snapshot::{
 
 use crate::storage::play_result::StoredPlayResult;
 
+mod lanes;
+pub use lanes::{ResultLaneDetails, ResultLaneSource};
+
 const RESULT_GAUGE_GRAPH_SAMPLE_MS: i32 = 500;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -355,8 +358,10 @@ impl ResultGraphCollector {
         if self.terminal_gauge_ms.is_some() {
             return;
         }
-        let last_ms = self.graph.gauge_points.last().map_or(0, |point| point.time_ms);
-        let time_ms = clamp_us_to_ms(settled_at.0.max(0)).max(last_ms);
+        let time_ms = clamp_us_to_ms(settled_at.0.max(0));
+        // Audio may already have crossed the next sample when delayed scoring settles.
+        let points = &mut self.graph.gauge_points;
+        points.truncate(points.partition_point(|point| point.time_ms <= time_ms));
         for gauge in &gauge_state.gauges {
             let point = ResultGaugeGraphPoint {
                 time_ms,
@@ -366,19 +371,13 @@ impl ResultGraphCollector {
                 gauge_type: gauge.definition.gauge_type as i32,
                 course_section_start: false,
             };
-            match self
-                .graph
-                .gauge_points
-                .iter_mut()
-                .rev()
-                .find(|existing| existing.gauge_type == point.gauge_type)
-            {
+            match points.iter_mut().rev().find(|existing| existing.gauge_type == point.gauge_type) {
                 Some(existing) if existing.time_ms == time_ms => {
                     existing.value = point.value;
                     existing.max = point.max;
                     existing.border = point.border;
                 }
-                _ => self.graph.gauge_points.push(point),
+                _ => points.push(point),
             }
         }
         self.terminal_gauge_ms = Some(time_ms);
@@ -412,11 +411,10 @@ impl ResultGraphCollector {
         let Some(terminal_ms) = self.terminal_gauge_ms else {
             return self.next_gauge_sample_ms;
         };
-        let after_terminal = terminal_ms
+        terminal_ms
             .div_euclid(RESULT_GAUGE_GRAPH_SAMPLE_MS)
             .saturating_add(1)
-            .saturating_mul(RESULT_GAUGE_GRAPH_SAMPLE_MS);
-        self.next_gauge_sample_ms.max(after_terminal)
+            .saturating_mul(RESULT_GAUGE_GRAPH_SAMPLE_MS)
     }
 
     fn record_gauge(&mut self, snapshot: &RenderSnapshot) {

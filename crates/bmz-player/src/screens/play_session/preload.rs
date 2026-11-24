@@ -1387,6 +1387,18 @@ pub fn build_practice_prepared_from_preloaded(
     let mut render_snapshot_cache =
         crate::screens::play_snapshot::PlayRenderSnapshotCache::from_chart(&session.chart);
     render_snapshot_cache.skin_chart = Arc::clone(&preloaded.render_snapshot_cache.skin_chart);
+    if session.show_hidden_notes {
+        session.practice_source_hidden_notes = Some(Arc::new(
+            preloaded
+                .chart
+                .lane_notes
+                .iter()
+                .flatten()
+                .filter(|note| note.kind == NoteKind::Invisible)
+                .map(|note| note.id)
+                .collect(),
+        ));
+    }
     let mut skin_attempt = preloaded.skin_attempt;
     skin_attempt.session_mode_index =
         Some(crate::skin_extension::session_mode_index(SessionMode::Practice));

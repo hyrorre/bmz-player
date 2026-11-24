@@ -212,6 +212,41 @@ fn hcn_gauge_increases_while_passing_and_pressed_until_end() {
 }
 
 #[test]
+fn overlapping_hcn_recovery_and_damage_follow_their_chart_times() {
+    let mut session = session_with_autoplay(chart_with_hcn_long_note());
+    session.gauge.set_initial_value(100.0);
+    session.last_hcn_gauge_at = Some(TimeUs(0));
+    session.lane_hcn_timer[Lane::Key1.index()] =
+        Some(HcnLaneTimer { inclease: true, since: TimeUs(0), passing_count_us: 190_000 });
+    session.lane_hcn_timer[Lane::Key2.index()] =
+        Some(HcnLaneTimer { inclease: false, since: TimeUs(0), passing_count_us: -199_500 });
+    let mut expected = session.gauge.clone();
+    expected.apply_hcn_drain(); // 501us
+    expected.apply_hcn_hold(); // 10001us
+    expected.apply_hcn_drain(); // 200501us
+    apply_hcn_gauge(&mut session, TimeUs(201_000));
+    assert_eq!(session.gauge.carry_values(), expected.carry_values());
+}
+
+#[test]
+fn hcn_head_miss_uses_the_scratch_window_on_mapped_scratch_lanes() {
+    let mut session = session_with_autoplay(chart_with_hcn_long_note());
+    let mut windows = session.judge.window_set;
+    windows.note.bad_slow_us = 120_000;
+    windows.scratch.bad_slow_us = 180_000;
+    session.judge.set_window_set(windows);
+    session.judge.set_scratch_lane_mask(std::array::from_fn(|lane| lane == Lane::Key1.index()));
+    let mut boundaries = Vec::new();
+    session.judge.append_hcn_boundaries(
+        &session.chart,
+        TimeUs(0),
+        TimeUs(300_000),
+        &mut boundaries,
+    );
+    assert_eq!(boundaries, [TimeUs(180_001)]);
+}
+
+#[test]
 fn hcn_passing_waits_until_the_head_is_judged() {
     let mut session = session_with_autoplay(chart_with_hcn_long_note());
 

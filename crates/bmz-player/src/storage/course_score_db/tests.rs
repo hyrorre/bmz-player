@@ -202,6 +202,71 @@ fn insert_course_score_round_trips_score_children_and_trophies() {
 }
 
 #[test]
+fn failed_course_best_cb_includes_unplayed_stages_when_played_history_is_linked() {
+    let mut conn = open_conn();
+    let mut record = sample_score("partial", 2, "Failed", 10);
+    // One PGREAT, one POOR, one empty POOR, 98 unprocessed and 400 unplayed.
+    record.bp = 500;
+    let id = insert_course_score(&mut conn, &record).unwrap();
+    let best = |conn: &Connection| {
+        best_course_score(conn, "partial", LN_POLICY, RuleMode::Beatoraja).unwrap().unwrap()
+    };
+    assert_eq!(best(&conn).cb, 0);
+    insert_failed_stage_history(&conn, id, 10);
+    let best = best(&conn);
+    assert_eq!((best.bp, best.cb), (500, 499));
+    assert_eq!(best.judge_counts.poor, 1);
+}
+
+#[test]
+fn failed_course_best_cb_keeps_stage_cb_for_partial_or_legacy_history() {
+    let mut conn = open_conn();
+    let best = |conn: &Connection, course_hash: &str| {
+        best_course_score(conn, course_hash, LN_POLICY, RuleMode::Beatoraja).unwrap().unwrap()
+    };
+
+    // Stage 2 has no linked history, so its empty POOR count is unknown.
+    let mut partial = sample_score("two-stage", 2, "Failed", 10);
+    partial.bp = 500;
+    partial.charts.push(CourseScoreChartRecord {
+        position: 1,
+        chart_sha256: [2; 32],
+        ex_score: 0,
+        max_combo: 0,
+        clear_type: "Failed".to_string(),
+        gauge_value: 0.0,
+    });
+    let id = insert_course_score(&mut conn, &partial).unwrap();
+    insert_failed_stage_history(&conn, id, 10);
+    assert_eq!(best(&conn, "two-stage").cb, 99);
+
+    // Attempts saved before 2026-07-16 stored BAD + POOR + empty POOR as BP,
+    // while the linked stage CB already counts the 98 unprocessed notes.
+    let mut legacy = sample_score("legacy", 2, "Failed", 20);
+    legacy.bp = 2;
+    let id = insert_course_score(&mut conn, &legacy).unwrap();
+    insert_failed_stage_history(&conn, id, 20);
+    let best = best(&conn, "legacy");
+    assert_eq!((best.bp, best.cb), (2, 99));
+}
+
+/// One PGREAT, one POOR, one empty POOR and 98 unprocessed notes.
+fn insert_failed_stage_history(conn: &Connection, course_score_id: i64, played_at: i64) {
+    conn.execute(
+        "INSERT INTO score_history (
+            chart_sha256, played_at, clear_type, gauge_type, gauge_value,
+            total_notes, ex_score, bp, cb, max_combo,
+            fast_pgreat, slow_pgreat, fast_great, slow_great, fast_good, slow_good,
+            fast_bad, slow_bad, fast_poor, slow_poor, fast_empty_poor, slow_empty_poor,
+            gauge_option, replay_path, course_score_id
+         ) VALUES (?1, ?2, 'NoPlay', 'Class', 0, 100, 2, 100, 99, 1,
+                   1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, '', '', ?3)",
+        params![hash_to_hex(&[1; 32]), played_at, course_score_id],
+    )
+    .unwrap();
+}
+
+#[test]
 fn best_and_latest_are_scoped_by_course_hash() {
     let mut conn = open_conn();
     insert_course_score(&mut conn, &sample_score("course-a", 400, "Hard", 10)).unwrap();

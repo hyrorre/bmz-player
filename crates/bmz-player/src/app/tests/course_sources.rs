@@ -3,7 +3,7 @@ use crate::bootstrap::profile_tests::ProfileTestDir;
 use crate::storage::common::hash_to_hex;
 use bmz_core::course::{CourseDefinition, CourseEntry, CourseKind};
 
-fn course_definition(chart_id: i64, sha256: [u8; 32]) -> CourseDefinition {
+pub(super) fn course_definition(chart_id: i64, sha256: [u8; 32]) -> CourseDefinition {
     CourseDefinition {
         key: "copy-fallback".to_string(),
         title: "Copy fallback".to_string(),

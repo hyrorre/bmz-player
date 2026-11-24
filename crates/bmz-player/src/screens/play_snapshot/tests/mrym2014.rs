@@ -132,6 +132,7 @@ fn mrym2014_fixed_branches() {
                 assert_eq!(
                     saved,
                     bmz_core::replay::ReplayEvent {
+                        applied_after: None,
                         time: later,
                         lane: note.lane,
                         kind: InputKind::Press,

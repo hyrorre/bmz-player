@@ -1,4 +1,8 @@
 //! 採点の自然確定と、確定後に結果が変わらないことの回帰テスト。
+#[path = "result_settlement/hold_timing.rs"]
+mod hold_timing;
+#[path = "result_settlement/negative_offset.rs"]
+mod negative_offset;
 use std::sync::Mutex;
 
 use super::*;
@@ -146,9 +150,10 @@ fn live_hcn_regrab_does_not_penalize_the_following_tap_or_the_consumed_head() {
     use bmz_core::clear::ClearType;
 
     for (rule, with_tap, release, regrab) in [
-        (RuleMode::Beatoraja, true, 1_200_000, 1_700_000),
-        (RuleMode::Lr2Oraja, true, 1_200_000, 1_700_000),
-        (RuleMode::Dx, true, 1_200_000, 1_700_000),
+        // Leave enough hold time to cancel the outstanding drain and exceed +200ms.
+        (RuleMode::Beatoraja, true, 1_200_000, 1_690_000),
+        (RuleMode::Lr2Oraja, true, 1_200_000, 1_690_000),
+        (RuleMode::Dx, true, 1_200_000, 1_690_000),
         (RuleMode::Beatoraja, false, 1_050_000, 1_060_000),
     ] {
         let (mut session, keys) = hcn_regrab_session(rule, with_tap);
@@ -669,8 +674,10 @@ fn dx_negative_input_offset_scores_late_empty_poor_before_settling() {
     advance_at(&mut session, &mut audio, end + 220_000);
     assert_eq!(session.scoring_closed_at, None);
     assert_eq!(session.natural_result_settled_at, None);
-    advance_at(&mut session, &mut audio, end + 220_001);
-    assert_eq!(session.scoring_closed_at, Some(TimeUs(end + 220_001)));
+    advance_at(&mut session, &mut audio, end + 223_000);
+    assert_eq!(session.scoring_closed_at, None);
+    advance_at(&mut session, &mut audio, end + 223_001);
+    assert_eq!(session.scoring_closed_at, Some(TimeUs(end + 223_001)));
     assert_eq!(session.natural_result_settled_at, session.scoring_closed_at);
     assert_eq!(session.state, PlayState::Playing);
     // Later offset changes and the terminal transition must not restart the effect.
@@ -678,7 +685,7 @@ fn dx_negative_input_offset_scores_late_empty_poor_before_settling() {
     let finished_at = session.chart.end_time.0 + SESSION_END_MARGIN_US + 1;
     advance_at(&mut session, &mut audio, finished_at);
     assert_eq!(session.state, PlayState::Finished);
-    assert_eq!(session.natural_result_settled_at, Some(TimeUs(end + 220_001)));
+    assert_eq!(session.natural_result_settled_at, Some(TimeUs(end + 223_001)));
 }
 
 #[test]
@@ -688,6 +695,7 @@ fn full_replay_settles_only_after_the_processed_tick_passes_the_window() {
     let (mut session, _keys) =
         dx_human_session(with_trailing_invisible(tap_chart(TimeUs(end))), -20_000);
     let event = |kind, time| bmz_core::replay::ReplayEvent {
+        applied_after: None,
         lane: Lane::Key1,
         kind,
         time: TimeUs(time),
@@ -810,8 +818,370 @@ fn trailing_invisible_does_not_skip_a_late_mine_or_its_input_window() {
     assert!(session.gauge.current().value < gauge);
     advance_at(&mut session, &mut audio, 1_220_000);
     assert_eq!(session.scoring_closed_at, None);
-    advance_at(&mut session, &mut audio, 1_220_001);
-    assert_eq!(session.scoring_closed_at, Some(TimeUs(1_220_001)));
+    advance_at(&mut session, &mut audio, 1_223_001);
+    assert_eq!(session.scoring_closed_at, Some(TimeUs(1_223_001)));
+}
+
+#[test]
+fn early_finish_replay_preserves_result_before_a_later_mine() {
+    use crate::result::PlayResult;
+    use bmz_core::clear::GaugeType;
+
+    let mine_time = TimeUs(1_000_000);
+    let mut chart = tap_chart(TimeUs(0));
+    chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+        id: NoteId(2),
+        kind: NoteKind::Mine,
+        time: mine_time,
+        damage: Some(200.0),
+        ..chart.lane_notes[Lane::Key1.index()][0].clone()
+    });
+    chart.end_time = mine_time;
+
+    let (mut live, keys) = dx_human_session(chart.clone(), 0);
+    live.gauge = GaugeState::new(GaugeType::Hard, 160.0, chart.total_notes);
+    let mut audio = TestAudio::default();
+    keys.press();
+    advance_at(&mut live, &mut audio, 0);
+    assert!(live.judge.is_exhausted(&live.chart));
+    live.play_end.request(PlayEndRequest::Finish);
+    let ended = advance_at(&mut live, &mut audio, 250_500);
+    assert_eq!(ended.state, PlayState::Finished);
+    assert!(ended.mine_hits.is_empty());
+    let saved = PlayResult::from_states(&chart, &live.score, &live.gauge, live.state, false);
+
+    let (mut replay, _) = dx_human_session(chart.clone(), 0);
+    replay.gauge = GaugeState::new(GaugeType::Hard, 160.0, chart.total_notes);
+    replay.replay_player = Some(ReplayPlayer {
+        kaleid: Some(bmz_chart::kaleid::KaleidPlayEvidence {
+            ended_at: live.result_settled_at().unwrap(),
+            manually_stopped: live.manually_stopped,
+            finished_early: live.finished_early,
+            ..Default::default()
+        }),
+        events: live.replay_recorder.events,
+        ..Default::default()
+    });
+    advance_at(&mut replay, &mut audio, mine_time.0 + 20_000);
+    let played = PlayResult::from_states(&chart, &replay.score, &replay.gauge, replay.state, false);
+    assert_eq!((played.gauge_value, played.clear_type), (saved.gauge_value, saved.clear_type));
+    assert_eq!(replay.state, PlayState::Finished);
+    assert_eq!(replay.scoring_closed_at, live.scoring_closed_at);
+}
+
+fn normal_gauge_hcn_session() -> (GameSession, SharedBackend) {
+    use bmz_core::clear::GaugeType;
+    let (mut play, keys) = hcn_regrab_session(RuleMode::Beatoraja, false);
+    play.gauge = GaugeState::new(GaugeType::Normal, 120.0, play.scored_total_notes);
+    (play, keys)
+}
+
+#[test]
+fn positive_offset_input_waits_for_its_judgement_time() {
+    let (mut live, keys) = dx_human_session(tap_chart(TimeUs(1_000_000)), 50_000);
+    let mut audio = TestAudio::default();
+    keys.press();
+    advance_at(&mut live, &mut audio, 950_000);
+    // The press is judged at 1.000s. Nothing scores, sounds or records before then.
+    assert!(!live.judge.is_exhausted(&live.chart));
+    assert!(audio.scheduled.is_empty());
+    assert!(live.replay_recorder.events.is_empty());
+    assert_eq!(live.lane_keyon_started_at[Lane::Key1.index()], None);
+    let frame = advance_at(&mut live, &mut audio, 999_999);
+    assert!(frame.judgements.is_empty());
+    assert!(audio.scheduled.is_empty());
+
+    let frame = advance_at(&mut live, &mut audio, 1_000_000);
+    assert_eq!(frame.judgements[0].judge, Judge::PGreat);
+    assert_eq!(audio.scheduled.len(), 1);
+    assert_eq!(frame.judgements[0].time, TimeUs(1_000_000));
+    assert_eq!(live.replay_recorder.events[0].time, TimeUs(1_000_000));
+    assert_eq!(live.lane_keyon_started_at[Lane::Key1.index()], Some(TimeUs(1_000_000)));
+    // The judgement display starts with the judgement, not 50ms into its animation.
+    assert_eq!(live.recent_display_judgements[0].display_time, TimeUs(1_000_000));
+}
+
+#[test]
+fn overdue_input_wakes_the_owner_immediately() {
+    use std::time::Duration;
+    let safety = Duration::from_micros(1_800);
+    let (mut session, keys) = dx_human_session(tap_chart(TimeUs(1_000_000)), 50_000);
+    let mut audio = TestAudio::default();
+    keys.press();
+    advance_at(&mut session, &mut audio, 950_000);
+    advance_at(&mut session, &mut audio, 999_900);
+    let mut owner = crate::runtime::GameplayRuntime::new(session);
+    owner.session.audio_clock.running = true;
+    assert_eq!(owner.next_wake_after(safety), Duration::from_micros(100));
+    owner.session.audio_clock.pause_at(TimeUs(1_000_100));
+    assert_eq!(owner.next_wake_after(safety), safety);
+    owner.session.audio_clock.running = true;
+    assert_eq!(owner.next_wake_after(safety), Duration::ZERO);
+    owner.session.state = PlayState::Failed;
+    assert_eq!(owner.next_wake_after(safety), safety);
+    owner.session.state = PlayState::Playing;
+    advance_at(&mut owner.session, &mut audio, 1_000_100);
+    owner.session.audio_clock.running = true;
+    assert_eq!(owner.next_wake_after(safety), safety);
+    assert_eq!(audio.scheduled.len(), 1);
+}
+
+#[test]
+fn viewer_seek_discards_inputs_waiting_for_their_judgement_time() {
+    let (mut live, keys) = dx_human_session(tap_chart(TimeUs(1_000_000)), 50_000);
+    let mut audio = TestAudio::default();
+    keys.press();
+    advance_at(&mut live, &mut audio, 980_000);
+    assert_eq!(live.conditional.pending_inputs.len(), 1);
+    prepare_viewer_seek(&mut live, TimeUs(500_000));
+    assert!(live.conditional.pending_inputs.is_empty());
+    // The press due at 1.030s before the seek is not judged when playback reaches it again.
+    advance_at(&mut live, &mut audio, 1_100_000);
+    assert!(live.replay_recorder.events.is_empty());
+    assert!(!live.judge.is_exhausted(&live.chart));
+}
+
+#[test]
+fn ordinary_hcn_replay_matches_a_positive_offset_release() {
+    use crate::result::PlayResult;
+    // Before inputs waited for their judgement time, the live release left the HCN
+    // 50ms before its replay did, and some of these releases ended 1.5 apart.
+    for (release, step) in (1_300_000..=1_500_000)
+        .step_by(20_000)
+        .map(|t| (t, 1_000))
+        .chain([(1_352_000, 2_000), (1_353_000, 3_100)])
+    {
+        let (mut live, keys) = normal_gauge_hcn_session();
+        live.offsets.input_offset_us = 50_000;
+        let mut audio = TestAudio::default();
+        let mut now = 950_000;
+        while now <= 2_400_000 {
+            if now == 950_000 {
+                keys.press();
+            }
+            if now == release {
+                keys.release();
+            }
+            advance_at(&mut live, &mut audio, now);
+            now += step;
+        }
+        advance_at(&mut live, &mut audio, 12_000_000);
+        assert_eq!(live.state, PlayState::Finished);
+        assert_eq!(live.replay_recorder.events[1].time, TimeUs(release + 50_000));
+        let saved =
+            PlayResult::from_states(&live.chart, &live.score, &live.gauge, live.state, false);
+        let (mut own, _) = normal_gauge_hcn_session();
+        let recording = ReplayPlayer::new(live.replay_recorder.events);
+        own.opponent.independent =
+            Some(independent_replay(normal_gauge_hcn_session().0, recording.clone()));
+        own.replay_player = Some(recording);
+        advance_at(&mut own, &mut audio, 12_000_000);
+        let played = PlayResult::from_states(&own.chart, &own.score, &own.gauge, own.state, false);
+        assert_eq!(
+            (played.gauge_value, played.clear_type, played.record_bp()),
+            (saved.gauge_value, saved.clear_type, saved.record_bp()),
+            "release={release}"
+        );
+        let rival = own.opponent.independent.as_ref().unwrap();
+        assert_eq!(rival.gauge.carry_values(), live.gauge.carry_values(), "release={release}");
+        assert_eq!(own.gauge.carry_values(), live.gauge.carry_values(), "release={release}");
+    }
+}
+
+#[test]
+fn early_finish_replays_hcn_released_with_a_positive_offset() {
+    use crate::result::PlayResult;
+
+    // The release at 1.190s is judged at 1.240s. Exit after that judgement, and
+    // once more after a 200ms HCN gauge boundary.
+    for end in [1_241_000, 1_260_000] {
+        let (mut live, keys) = normal_gauge_hcn_session();
+        live.offsets.input_offset_us = 50_000;
+        let mut audio = TestAudio::default();
+        for now in (950_000..=end).step_by(1_000) {
+            if now == 950_000 {
+                keys.press();
+            }
+            if now == 1_190_000 {
+                keys.release();
+            }
+            if now == end {
+                assert!(live.judge.is_exhausted(&live.chart));
+                live.play_end.request(PlayEndRequest::Finish);
+            }
+            advance_at(&mut live, &mut audio, now);
+        }
+        assert_eq!(live.state, PlayState::Finished);
+        assert!(live.finished_early);
+        let saved =
+            PlayResult::from_states(&live.chart, &live.score, &live.gauge, live.state, false);
+        assert_eq!(live.replay_recorder.events[1].time, TimeUs(1_240_000));
+        let recording = ReplayPlayer {
+            kaleid: Some(bmz_chart::kaleid::KaleidPlayEvidence {
+                ended_at: live.result_settled_at().unwrap(),
+                finished_early: live.finished_early,
+                ..Default::default()
+            }),
+            ..ReplayPlayer::new(live.replay_recorder.events)
+        };
+        let (mut own, _) = normal_gauge_hcn_session();
+        own.replay_player = Some(recording.clone());
+        advance_at(&mut own, &mut audio, 2_100_000);
+        let played = PlayResult::from_states(&own.chart, &own.score, &own.gauge, own.state, false);
+        assert_eq!(
+            (played.gauge_value, played.clear_type, played.record_bp()),
+            (saved.gauge_value, saved.clear_type, saved.record_bp())
+        );
+        assert_eq!(own.scoring_closed_at, Some(TimeUs(end)));
+
+        let (mut battle, _) = normal_gauge_hcn_session();
+        battle.opponent.independent =
+            Some(independent_replay(normal_gauge_hcn_session().0, recording));
+        advance_at(&mut battle, &mut audio, 2_100_000);
+        let rival = battle.opponent.independent.as_ref().unwrap();
+        assert_eq!(rival.gauge.current().value, saved.gauge_value);
+        assert_eq!(rival.score.bp(), saved.score.bp());
+    }
+}
+
+#[test]
+fn early_finish_replay_queues_the_same_bgm_tail_as_live_play() {
+    let mut chart = tap_chart(TimeUs(0));
+    chart.bgm_events = [150_000, 200_000, 200_001]
+        .map(|time| SoundEvent { tick: ChartTick(0), time: TimeUs(time), sound: SoundId(3) })
+        .into();
+    let (mut live, keys) = dx_human_session(chart.clone(), 0);
+    let mut audio = TestAudio::default();
+    keys.press();
+    advance_at(&mut live, &mut audio, 0);
+    live.play_end.request(PlayEndRequest::Finish);
+    advance_at(&mut live, &mut audio, 100_000);
+    assert_eq!(live.bgm_scheduler.next_index, 2);
+
+    for (manually_stopped, rate) in [(false, 25), (false, 100), (false, 300), (true, 100)] {
+        let (mut replay, _) = dx_human_session(chart.clone(), 0);
+        replay.audio_clock.set_playback_rate_percent(rate);
+        replay.replay_player = Some(ReplayPlayer {
+            kaleid: Some(bmz_chart::kaleid::KaleidPlayEvidence {
+                ended_at: live.result_settled_at().unwrap(),
+                finished_early: !manually_stopped,
+                manually_stopped,
+                ..Default::default()
+            }),
+            ..ReplayPlayer::new(live.replay_recorder.events.clone())
+        });
+        advance_at(&mut replay, &mut audio, 99_000);
+        advance_at(&mut replay, &mut audio, 400_000);
+        assert_eq!(replay.scoring_closed_at, live.scoring_closed_at);
+        assert_eq!(replay.bgm_scheduler.next_index, if manually_stopped { 0 } else { 2 });
+    }
+}
+
+#[test]
+fn recorded_replay_end_bounds_scoring_but_not_the_ending_clock() {
+    let end = TimeUs(250_500);
+    for manually_stopped in [false, true] {
+        let (mut replay, _) = dx_human_session(tap_chart(TimeUs(0)), 0);
+        replay.replay_player = Some(ReplayPlayer {
+            kaleid: Some(bmz_chart::kaleid::KaleidPlayEvidence {
+                ended_at: end,
+                manually_stopped,
+                finished_early: !manually_stopped,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let mut audio = TestAudio::default();
+        // The update crossing the recorded stop scores and ends there.
+        let ended = advance_at(&mut replay, &mut audio, 400_000);
+        assert_eq!(ended.times.audio_now, end);
+        let state = if manually_stopped { PlayState::Failed } else { PlayState::Finished };
+        assert_eq!(ended.state, state);
+        assert_eq!(replay.scoring_closed_at, Some(end));
+
+        // The ending keeps following the clock like the recorded play.
+        let ending = advance_at(&mut replay, &mut audio, 600_000);
+        assert_eq!(ending.times.audio_now, TimeUs(600_000));
+        assert_eq!(compute_frame_times(&replay).audio_now, TimeUs(600_000));
+        assert_eq!(replay.state, state);
+        assert_eq!(replay.scoring_closed_at, Some(end));
+    }
+}
+
+#[test]
+fn manual_stop_before_the_first_update_replays_without_scoring() {
+    for end in [TimeUs(-50_000), TimeUs(250_500)] {
+        let (mut live, _) = dx_human_session(tap_chart(TimeUs(0)), 0);
+        let mut audio = TestAudio::default();
+        live.play_end.request(PlayEndRequest::ManualStop);
+        advance_at(&mut live, &mut audio, end.0);
+        assert_eq!(live.replay_stop_scored_through(), Some(TimeUs(-1)));
+        let (mut replay, _) = dx_human_session(tap_chart(TimeUs(0)), 0);
+        replay.replay_player = Some(ReplayPlayer {
+            kaleid: Some(bmz_chart::kaleid::KaleidPlayEvidence {
+                manually_stopped: true,
+                ended_at: end,
+                scored_through: live.replay_stop_scored_through(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        advance_at(&mut replay, &mut audio, 500_000);
+        assert_eq!(replay.state, PlayState::Failed);
+        assert_eq!(replay.scoring_closed_at, Some(end));
+        assert_eq!(replay.score.past_notes, 0);
+        assert_eq!(replay.replay_player.unwrap().scored_until(), None);
+    }
+}
+
+#[test]
+fn manual_stop_replay_scores_input_judged_in_the_last_partial_tick() {
+    // The live update at 250.3ms scored a press judged then. The stop closed
+    // scoring at 250.5ms, between two 1ms replay ticks, with a note left.
+    let end = TimeUs(250_500);
+    let mut chart = tap_chart(TimeUs(260_000));
+    let notes = &mut chart.lane_notes[Lane::Key1.index()];
+    notes.push(NoteEvent { id: NoteId(2), time: TimeUs(1_000_000), ..notes[0].clone() });
+    chart.total_notes += 1;
+    chart.end_time = TimeUs(1_000_000);
+    let (mut replay, _) = dx_human_session(chart, 0);
+    replay.replay_player = Some(ReplayPlayer {
+        kaleid: Some(bmz_chart::kaleid::KaleidPlayEvidence {
+            ended_at: end,
+            manually_stopped: true,
+            ..Default::default()
+        }),
+        ..ReplayPlayer::new(vec![bmz_core::replay::ReplayEvent {
+            applied_after: None,
+            lane: Lane::Key1,
+            kind: InputKind::Press,
+            time: TimeUs(250_300),
+            device_kind: Default::default(),
+            scratch_direction: None,
+        }])
+    });
+    let mut audio = TestAudio::default();
+    advance_at(&mut replay, &mut audio, 400_000);
+    assert_eq!(replay.state, PlayState::Failed);
+    assert!(replay.manually_stopped);
+    assert_eq!(replay.scoring_closed_at, Some(end));
+    assert!(replay.score.ex_score() > 0);
+    assert_eq!(replay.replay_player.as_ref().unwrap().scored_until(), Some(end));
+}
+
+#[test]
+fn finish_request_reaching_an_ended_session_is_discarded() {
+    for ended in [PlayState::Finished, PlayState::Failed] {
+        let (mut session, _) = dx_human_session(tap_chart(TimeUs(0)), 0);
+        session.state = ended;
+        // A stale UI observation sends Finish after the owner already ended.
+        session.play_end.request(PlayEndRequest::Finish);
+        let mut audio = TestAudio::default();
+        advance_at(&mut session, &mut audio, 300_000);
+        assert!(!session.play_end.is_pending());
+        assert_eq!(session.state, ended);
+        assert!(!session.finished_early);
+    }
 }
 
 #[test]
@@ -925,8 +1295,8 @@ fn full_autoplay_does_not_wait_for_the_human_input_offset() {
     advance_at(&mut session, &mut audio, 0);
     advance_at(&mut session, &mut audio, 200_001);
     assert_eq!(session.scoring_closed_at, None);
-    advance_at(&mut session, &mut audio, 250_001);
-    assert_eq!(session.scoring_closed_at, Some(TimeUs(250_001)));
+    advance_at(&mut session, &mut audio, 253_001);
+    assert_eq!(session.scoring_closed_at, Some(TimeUs(253_001)));
 }
 
 #[test]

@@ -1,34 +1,11 @@
 use super::*;
 use crate::screens::result_ir::{IrSubmitState, RankingLoadState, ResultIrState, ResultRankingTab};
 
-/// リザルト画面の IR 送信状況とランキングを表示するオーバーレイ。
-pub(super) fn build_result_ir_panel(
-    ctx: &egui::Context,
+pub(super) fn build_result_ir_content(
+    ui: &mut egui::Ui,
     state: &mut ResultIrState,
     text: Localizer,
 ) {
-    let constrain = ctx.content_rect().shrink(PANEL_VIEWPORT_MARGIN);
-    let panel_width = 360.0;
-    let pos = egui::pos2(constrain.right() - panel_width, constrain.top());
-    let max_height = (constrain.height() - panel_window_chrome(ctx).y).max(32.0);
-
-    egui::Window::new(tr!(text, "result-ir-title"))
-        .id(egui::Id::new("result_ir_overlay"))
-        .resizable(false)
-        .collapsible(true)
-        .movable(true)
-        .constrain_to(constrain)
-        .default_pos(pos)
-        .default_width(panel_width)
-        .max_height(max_height)
-        .show(ctx, |ui| {
-            egui::ScrollArea::vertical().min_scrolled_height(0.0).show(ui, |ui| {
-                build_result_ir_content(ui, state, text);
-            });
-        });
-}
-
-fn build_result_ir_content(ui: &mut egui::Ui, state: &mut ResultIrState, text: Localizer) {
     if let Some(notice) = &state.local_submission_notice {
         ui.small(notice);
         ui.separator();
@@ -219,7 +196,7 @@ mod tests {
     use crate::select_options::DoubleOptionScoreBucket;
 
     #[test]
-    fn long_result_ir_ranking_scrolls_to_last_entry() {
+    fn result_ranking_stays_selected_and_scrolls_to_last_entry() {
         let mut provider = IrProviderConfig::bmz_ir();
         provider.provider_key = provider.provider.clone();
         provider.enabled = true;
@@ -232,6 +209,7 @@ mod tests {
             std::path::PathBuf::new(),
             &config,
             "chart".to_string(),
+            None,
             LnScorePolicy::AutoLn,
             DoubleOptionScoreBucket::Off,
             bmz_gameplay::rule::RuleMode::Beatoraja,
@@ -261,10 +239,26 @@ mod tests {
         let ctx = egui::Context::default();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 300.0));
         let text = Localizer::new(AppLocale::En);
-        let mut frame = |events| {
+        let mut overlay = ResultPanelState::default();
+        let started_at = std::time::Instant::now();
+        let current_result = Some(started_at);
+        let mut frame = |events, result_start: Option<std::time::Instant>| {
+            if result_start.is_none() {
+                overlay.request_raise();
+            }
             ctx.run_ui(
                 egui::RawInput { screen_rect: Some(screen), events, ..Default::default() },
-                |ui| build_result_ir_panel(ui.ctx(), &mut state, text),
+                |ui| {
+                    if let Some(started_at) = result_start {
+                        overlay.show(
+                            ui.ctx(),
+                            ResultPanelDetails::Play(None),
+                            Some(&mut state),
+                            started_at,
+                            text,
+                        );
+                    }
+                },
             )
         };
         let visible_label = |output: &egui::FullOutput, label: &str| {
@@ -281,29 +275,49 @@ mod tests {
             })
         };
 
-        frame(vec![]);
-        let output = frame(vec![]);
+        frame(vec![], current_result);
+        let output = frame(vec![], current_result);
+        assert!(visible_label(&output, "Player 1").is_none());
+        assert!(visible_label(&output, "Lane results are unavailable.").is_some());
+        let tab = visible_label(&output, "IR Rankings").unwrap();
+        let button = |pressed| egui::Event::PointerButton {
+            pos: tab,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![egui::Event::PointerMoved(tab), button(true)], current_result);
+        frame(vec![button(false)], current_result);
+        let output = frame(vec![], None);
+        assert!(visible_label(&output, "Player 1").is_none());
+        let output = frame(vec![], current_result);
         let first = visible_label(&output, "Player 1").expect("first rank should be visible");
         assert!(visible_label(&output, "Player 100").is_none());
         let window =
-            ctx.memory(|memory| memory.area_rect(egui::Id::new("result_ir_overlay"))).unwrap();
+            ctx.memory(|memory| memory.area_rect(egui::Id::new("result_overlay"))).unwrap();
         assert!(screen.contains_rect(window), "IR window outside viewport: {window:?}");
 
-        frame(vec![
-            egui::Event::PointerMoved(first),
-            egui::Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Line,
-                delta: egui::vec2(0.0, -200.0),
-                phase: egui::TouchPhase::Move,
-                modifiers: egui::Modifiers::NONE,
-            },
-        ]);
+        frame(
+            vec![
+                egui::Event::PointerMoved(first),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: egui::vec2(0.0, -200.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            current_result,
+        );
         // ホイールの移動量は egui が複数フレームに分けて適用する。
         for _ in 0..12 {
-            frame(vec![]);
+            frame(vec![], current_result);
         }
-        let output = frame(vec![]);
+        let output = frame(vec![], current_result);
         assert!(visible_label(&output, "Player 1").is_none());
         assert!(visible_label(&output, "Player 100").is_some(), "last rank should be visible");
+        let output = frame(vec![], Some(started_at + std::time::Duration::from_secs(1)));
+        assert!(visible_label(&output, "Player 100").is_some());
+        assert!(visible_label(&output, "Lane results are unavailable.").is_none());
     }
 }

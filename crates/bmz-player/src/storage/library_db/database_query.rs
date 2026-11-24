@@ -219,24 +219,34 @@ impl LibraryDatabase {
         Ok(())
     }
 
-    pub fn update_folder_document_flags(&mut self, folder_flags: &[(PathBuf, bool)]) -> Result<()> {
+    /// Returns how many chart rows changed their document flag.
+    pub fn update_folder_document_flags(
+        &mut self,
+        folder_flags: &[(PathBuf, bool)],
+    ) -> Result<usize> {
         if folder_flags.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
 
+        // Visit neighboring folder index entries together during large rescans.
+        // Stable order preserves the last flag for equivalent normalized paths.
+        let mut ordered: Vec<_> =
+            folder_flags.iter().map(|(folder, flag)| (library_path_key(folder), flag)).collect();
+        ordered.sort_by(|a, b| a.0.cmp(&b.0));
         let tx = self.conn.transaction()?;
+        let mut changed = 0;
         {
             // Unchanged rows are not rewritten, so a rescan adds nothing to the WAL.
             let mut stmt = tx.prepare_cached(
                 "UPDATE charts SET has_document = ?1
                  WHERE folder_path = ?2 AND has_document IS NOT ?1",
             )?;
-            for (folder, has_document) in folder_flags {
-                stmt.execute(params![has_document, to_folder_key(&path_to_string(folder))])?;
+            for (folder, has_document) in ordered {
+                changed += stmt.execute(params![has_document, folder])?;
             }
         }
         tx.commit()?;
-        Ok(())
+        Ok(changed)
     }
 
     /// トランザクションを管理せずに失敗チャートを記録する。戻り値は `chart_file_id`。
@@ -818,32 +828,57 @@ impl LibraryDatabase {
         &self,
         root_id: i64,
     ) -> Result<HashMap<String, ChartFileFingerprint>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT cf.path, cf.file_size, cf.modified_at,
-                CASE WHEN cf.parse_status = 'Failed' THEN cf.failed_import_version
-                    ELSE COALESCE(c.import_version, 0) END
-            FROM chart_files cf
-            LEFT JOIN chart_file_links cfl ON cfl.chart_file_id = cf.id
-            LEFT JOIN charts c ON c.id = cfl.chart_id
-            WHERE cf.root_id = ?1",
-        )?;
-        let rows = stmt.query_map(params![root_id], |row| {
-            let path: String = row.get(0)?;
-            let file_size: i64 = row.get(1)?;
-            Ok((
-                path,
-                ChartFileFingerprint {
-                    file_size: file_size.max(0) as u64,
-                    modified_at: row.get(2)?,
-                    import_version: row.get(3)?,
-                },
-            ))
-        })?;
+        let mut stmt =
+            self.conn.prepare_cached(&format!("{FINGERPRINT_QUERY} WHERE cf.root_id = ?1"))?;
         let mut map = HashMap::new();
-        for row in rows {
-            let (path, fingerprint) = row?;
-            map.insert(path, fingerprint);
+        for row in stmt.query_map([root_id], chart_file_fingerprint)? {
+            let (path, value) = row?;
+            map.insert(path, value);
         }
         Ok(map)
     }
+
+    /// A partial scan can share registered files with its enclosing library.
+    pub(crate) fn extend_scan_fingerprints(
+        &self,
+        map: &mut HashMap<String, ChartFileFingerprint>,
+        missing: &[&str],
+    ) -> Result<()> {
+        if !missing.is_empty() {
+            let mut stmt = self.conn.prepare_cached(&format!(
+                "{FINGERPRINT_QUERY} WHERE cf.path IN (SELECT value FROM json_each(?1))
+                 AND cf.root_id IS NOT NULL"
+            ))?;
+            for chunk in missing.chunks(1024) {
+                for row in
+                    stmt.query_map([serde_json::to_string(chunk)?], chart_file_fingerprint)?
+                {
+                    let (path, value) = row?;
+                    map.insert(path, value);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+const FINGERPRINT_QUERY: &str = "SELECT cf.path, cf.file_size, cf.modified_at,
+    CASE WHEN cf.parse_status = 'Failed' THEN cf.failed_import_version
+        ELSE COALESCE(c.import_version, 0) END
+    FROM chart_files cf
+    LEFT JOIN chart_file_links cfl ON cfl.chart_file_id = cf.id
+    LEFT JOIN charts c ON c.id = cfl.chart_id";
+
+fn chart_file_fingerprint(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(String, ChartFileFingerprint)> {
+    let file_size: i64 = row.get(1)?;
+    Ok((
+        row.get(0)?,
+        ChartFileFingerprint {
+            file_size: file_size.max(0) as u64,
+            modified_at: row.get(2)?,
+            import_version: row.get(3)?,
+        },
+    ))
 }

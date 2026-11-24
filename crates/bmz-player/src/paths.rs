@@ -260,15 +260,11 @@ impl AppPaths {
     }
 
     pub fn resource_path_ref(&self, path: &Path) -> Option<String> {
-        path.strip_prefix(&self.resource_dir)
-            .ok()
-            .map(|relative| format!("{RESOURCE_PATH_PREFIX}{}", path_to_slash(relative)))
+        path_ref(path, &self.resource_dir, RESOURCE_PATH_PREFIX)
     }
 
     pub fn data_path_ref(&self, path: &Path) -> Option<String> {
-        path.strip_prefix(&self.data_dir)
-            .ok()
-            .map(|relative| format!("{DATA_PATH_PREFIX}{}", path_to_slash(relative)))
+        path_ref(path, &self.data_dir, DATA_PATH_PREFIX)
     }
 }
 
@@ -537,6 +533,14 @@ fn strip_first_component(path: &Path, expected: &str) -> Option<PathBuf> {
     }
 }
 
+fn path_ref(path: &Path, root: &Path, prefix: &str) -> Option<String> {
+    // Anchor both paths before folding `..` so `.` remains a directory boundary.
+    let path = normalize_path_lexically(&std::path::absolute(path).ok()?);
+    let root = normalize_path_lexically(&std::path::absolute(root).ok()?);
+    let relative = path.strip_prefix(root).ok()?;
+    Some(format!("{prefix}{}", path_to_slash(relative)))
+}
+
 fn path_to_slash(path: &Path) -> String {
     path.components()
         .filter_map(|component| match component {
@@ -545,6 +549,29 @@ fn path_to_slash(path: &Path) -> String {
         })
         .collect::<Vec<_>>()
         .join("/")
+}
+
+/// ファイルシステムに触れずに `.` / `..` を畳み込む。
+///
+/// `..` がルートを越える場合は畳み込まずにそのまま残す。参照キー化の前に
+/// 適用することで、`A/../B` が `A/B` と同一視されるのを防ぐ。
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let pop = matches!(normalized.components().next_back(), Some(Component::Normal(_)));
+                if pop {
+                    normalized.pop();
+                } else {
+                    normalized.push("..");
+                }
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 #[cfg(test)]
@@ -556,6 +583,61 @@ mod tests {
         assert_eq!(normalize_library_path(r"\\?\C:\Users\player\songs"), "C:/Users/player/songs");
         assert_eq!(normalize_library_path("//?/C:/Users/player/songs"), "C:/Users/player/songs");
         assert_eq!(normalize_library_path(r"\\?\UNC\server\share\songs"), "//server/share/songs");
+    }
+
+    #[test]
+    fn normalize_path_lexically_keeps_the_meaning_of_dot_dot() {
+        let normalize = |path: &str| normalize_path_lexically(Path::new(path));
+        assert_eq!(
+            normalize("/app/data/skins/A/../B/play.lua"),
+            Path::new("/app/data/skins/B/play.lua")
+        );
+        assert_eq!(
+            normalize("/app/data/./skins//B/play.lua"),
+            Path::new("/app/data/skins/B/play.lua")
+        );
+        assert_eq!(normalize("../skins/A/../B"), Path::new("../skins/B"));
+        // A `..` that escapes the root is kept instead of being dropped.
+        assert_eq!(normalize("/../B"), Path::new("/../B"));
+        assert_eq!(normalize("../A"), Path::new("../A"));
+    }
+
+    #[test]
+    fn path_refs_resolve_dot_dot_before_building_the_key() {
+        let paths = AppPaths::from_dirs(
+            PathBuf::from("/app/resources"),
+            PathBuf::from("/app/data"),
+            PathBuf::from("/app/cache"),
+            PathBuf::from("/app/logs"),
+        );
+        assert_eq!(
+            paths.data_path_ref(Path::new("/app/data/skins/A/../B/play.lua")).as_deref(),
+            Some("data:skins/B/play.lua")
+        );
+        assert_eq!(
+            paths.resource_path_ref(Path::new("/app/resources/skins/A/../B/play.lua")).as_deref(),
+            Some("resource:skins/B/play.lua")
+        );
+    }
+
+    #[test]
+    fn path_refs_normalize_both_the_path_and_its_root() {
+        for (resources, data) in
+            [("/app/staging/../resources", "/app/staging/../data"), ("./resources", "./data")]
+        {
+            let paths =
+                AppPaths::from_dirs(resources.into(), data.into(), "cache".into(), "logs".into());
+            let normalized_data = normalize_path_lexically(Path::new(data));
+            let normalized_resources = normalize_path_lexically(Path::new(resources));
+            assert_eq!(
+                paths.data_path_ref(&normalized_data.join("skins/B/play.lua")).as_deref(),
+                Some("data:skins/B/play.lua")
+            );
+            assert_eq!(
+                paths.resource_path_ref(&normalized_resources.join("skins/B/play.lua")).as_deref(),
+                Some("resource:skins/B/play.lua")
+            );
+        }
     }
 
     /// A not-yet-created root inside a directory the returned TempDir owns and removes.

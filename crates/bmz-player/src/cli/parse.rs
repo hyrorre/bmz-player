@@ -159,6 +159,7 @@ where
                 bail!("viewer stop does not accept playback or window overrides");
             }
             let target = options.boot_play_path.is_some()
+                || options.boot_replay_file.is_some()
                 || options.boot_play_sample
                 || options.boot_course_id.is_some()
                 || options.boot_course_replay_id.is_some();
@@ -171,7 +172,9 @@ where
                 || options.boot_course_replay_id.is_some())
                 && play.affects_replay()
             {
-                bail!("replay does not accept arrangement, seed, gauge, GAS or assist overrides");
+                bail!(
+                    "replay does not accept arrangement, seed, gauge, GAS or auto-scratch overrides"
+                );
             }
             options.boot_bms_random_seed = play.seed;
             options.play_overrides = play;
@@ -183,7 +186,9 @@ where
                 bail!("video export does not accept window options");
             }
             if options.replay_slot.is_some() && play.affects_replay() {
-                bail!("replay does not accept arrangement, seed, gauge, GAS or assist overrides");
+                bail!(
+                    "replay does not accept arrangement, seed, gauge, GAS or auto-scratch overrides"
+                );
             }
             options.seed = play.seed.or(options.seed);
             options.play_overrides = play;

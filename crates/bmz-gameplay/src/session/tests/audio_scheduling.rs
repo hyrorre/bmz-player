@@ -2,7 +2,45 @@ use super::*;
 use std::time::{Duration, Instant};
 
 #[test]
-fn manual_stop_interrupts_auto_keysound_scheduling_before_judgement() {
+fn manual_stop_interrupts_auto_keysounds_but_finish_queues_the_last_batch() {
+    struct StopAfterFirstSound {
+        play_end: Arc<PlayEndSignal>,
+        request: PlayEndRequest,
+        scheduled: usize,
+    }
+
+    impl AudioScheduler for StopAfterFirstSound {
+        fn schedule(&mut self, _: ScheduledSound) {
+            self.scheduled += 1;
+            if self.scheduled == 1 {
+                self.play_end.request(self.request);
+            }
+        }
+    }
+
+    let mut chart = chart_with_keysound();
+    let notes = &mut chart.lane_notes[Lane::Key1.index()];
+    notes.push(NoteEvent { id: NoteId(2), ..notes[0].clone() });
+    chart.total_notes = 2;
+    for (request, expected_sounds, expected_state) in [
+        (PlayEndRequest::ManualStop, 1, PlayState::Failed),
+        (PlayEndRequest::Finish, 2, PlayState::Finished),
+    ] {
+        let mut session = session_with_autoplay(chart.clone());
+        let mut audio =
+            StopAfterFirstSound { play_end: session.play_end.clone(), request, scheduled: 0 };
+        let frame = advance_session_frame(&mut session, &mut audio);
+        assert_eq!(audio.scheduled, expected_sounds);
+        assert_eq!(frame.state, expected_state);
+        if expected_state == PlayState::Failed {
+            assert!(frame.judgements.is_empty());
+            assert!(session.manually_stopped);
+        }
+    }
+}
+
+#[test]
+fn rejected_stop_leaves_interrupted_auto_keysounds_for_the_next_update() {
     struct StopAfterFirstSound {
         play_end: Arc<PlayEndSignal>,
         scheduled: usize,
@@ -11,7 +49,9 @@ fn manual_stop_interrupts_auto_keysound_scheduling_before_judgement() {
     impl AudioScheduler for StopAfterFirstSound {
         fn schedule(&mut self, _: ScheduledSound) {
             self.scheduled += 1;
-            self.play_end.request(PlayEndRequest::ManualStop);
+            if self.scheduled == 1 {
+                self.play_end.request(PlayEndRequest::ManualStop);
+            }
         }
     }
 
@@ -20,14 +60,16 @@ fn manual_stop_interrupts_auto_keysound_scheduling_before_judgement() {
     notes.push(NoteEvent { id: NoteId(2), ..notes[0].clone() });
     chart.total_notes = 2;
     let mut session = session_with_autoplay(chart);
+    // Scoring has already closed, so the owner rejects the stop.
+    session.scoring_closed_at = Some(TimeUs(0));
     let mut audio = StopAfterFirstSound { play_end: session.play_end.clone(), scheduled: 0 };
-
     let frame = advance_session_frame(&mut session, &mut audio);
-
     assert_eq!(audio.scheduled, 1);
-    assert_eq!(frame.state, PlayState::Failed);
-    assert!(frame.judgements.is_empty());
-    assert!(session.manually_stopped);
+    assert_eq!(frame.state, PlayState::Playing);
+    assert!(!session.manually_stopped);
+
+    advance_session_frame(&mut session, &mut audio);
+    assert_eq!(audio.scheduled, 2);
 }
 
 #[test]

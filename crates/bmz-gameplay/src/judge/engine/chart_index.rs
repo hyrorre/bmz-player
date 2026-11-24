@@ -72,6 +72,18 @@ impl JudgeEngine {
         self.matching_index(chart).map_or_else(|| contains_mines(chart), |index| index.has_mines)
     }
 
+    pub(crate) fn has_hcn(&self, chart: &PlayableChart) -> bool {
+        self.matching_index(chart).map_or_else(
+            || {
+                chart
+                    .long_notes
+                    .iter()
+                    .any(|p| p.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hcn)
+            },
+            |index| !index.hcn.is_empty(),
+        )
+    }
+
     /// Last event that can affect scoring or gauges. Invisible notes only change keysounds.
     /// Keep the presentation end separately, and retain its fallback for unscored charts.
     pub(crate) fn result_end_time(&self, chart: &PlayableChart) -> TimeUs {
@@ -103,9 +115,84 @@ impl JudgeEngine {
         chart: &'a PlayableChart,
         now: TimeUs,
     ) -> impl Iterator<Item = &'a LongNotePair> + 'a {
+        self.hcn_pairs_between(chart, now, now)
+    }
+
+    /// Keep discrete judgements and mine damage in order with hold recovery, including
+    /// when one owner update spans a whole HCN. Only inspect nearby notes on each lane.
+    pub(crate) fn append_hcn_boundaries(
+        &self,
+        chart: &PlayableChart,
+        previous: TimeUs,
+        now: TimeUs,
+        points: &mut Vec<TimeUs>,
+    ) {
+        if now <= previous {
+            return;
+        }
+        let mut add = |at: TimeUs| {
+            if previous < at && at < now {
+                points.push(at);
+            }
+        };
+        let mut passing = false;
+        for pair in self.hcn_pairs_between(chart, previous, now) {
+            if pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hcn
+                && pair.end_time > previous
+                && pair.start_time <= now
+            {
+                passing = true;
+                add(pair.start_time);
+                add(pair.end_time);
+            }
+        }
+        if !passing {
+            return;
+        }
+        for lane in Lane::ALL {
+            let notes = chart.notes_for_lane(lane);
+            if notes.is_empty() {
+                continue;
+            }
+            let scratch = self.scratch_lane_mask[lane.index()];
+            let late = press_window(self.window_set, scratch).bad_slow_us.saturating_add(1);
+            let first = notes.partition_point(|n| n.time.0.saturating_add(late) <= previous.0);
+            for note in notes[first..].iter().take_while(|n| n.time <= now) {
+                match note.kind {
+                    NoteKind::Tap | NoteKind::LongStart => {
+                        add(TimeUs(note.time.0.saturating_add(late)))
+                    }
+                    NoteKind::LongEnd => {
+                        // LN completion and the late boundary of an unreleased CN/HCN.
+                        add(TimeUs(note.time.0.saturating_add(1)));
+                        add(TimeUs(note.time.0.saturating_add(late)));
+                    }
+                    NoteKind::Mine | NoteKind::Potion | NoteKind::FreeZoneEnd => add(note.time),
+                    _ => {}
+                }
+            }
+            if let Some(release) =
+                self.lanes[lane.index()].active_long.and_then(|l| l.pending_release)
+            {
+                add(TimeUs(
+                    release
+                        .released_at
+                        .0
+                        .saturating_add(long_release_margin_us(self.window_set, scratch)),
+                ));
+            }
+        }
+    }
+
+    fn hcn_pairs_between<'a>(
+        &'a self,
+        chart: &'a PlayableChart,
+        previous: TimeUs,
+        now: TimeUs,
+    ) -> impl Iterator<Item = &'a LongNotePair> + 'a {
         let (indices, range) = match self.matching_index(chart) {
             Some(index) if index.hcn_sorted => {
-                let start = index.hcn_prefix_end.partition_point(|&end| end <= now);
+                let start = index.hcn_prefix_end.partition_point(|&end| end <= previous);
                 let end = index.hcn.partition_point(|&i| chart.long_notes[i].start_time <= now);
                 (Some(index.hcn.as_slice()), start.min(end)..end)
             }

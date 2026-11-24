@@ -9,7 +9,7 @@ use bmz_chart::model::PlayableChart;
 use bmz_core::clear::ClearType;
 use bmz_core::ids::NoteId;
 use bmz_core::input::InputDeviceKind;
-use bmz_core::lane::KeyMode;
+use bmz_core::lane::{KeyMode, LANE_COUNT};
 use bmz_core::replay::ReplayEvent;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::gauge::{GaugeCarryValue, GaugeState};
@@ -27,7 +27,7 @@ use crate::ir::payload::{IrSubmissionContext, build_score_submission};
 use crate::ln_policy::ChartLnProfile;
 use crate::paths::ProfilePaths;
 use crate::screens::play_session::AppliedArrange;
-use crate::screens::result_model::{ResultGraphCollector, ResultSummary};
+use crate::screens::result_model::{ResultGraphCollector, ResultLaneDetails, ResultSummary};
 use crate::storage::network_db::{IrJobKind, NetworkDatabase, NewIrScoreJob};
 use crate::storage::play_result::{
     StorePlayResultMode, StorePlayResultRequest, StoredPlayResult, course_stage_clear_type,
@@ -44,6 +44,7 @@ pub struct FinishedPlaySession {
     pub result: PlayResult,
     pub stored: StoredPlayResult,
     pub summary: ResultSummary,
+    pub lane_details: Option<Arc<ResultLaneDetails>>,
     pub gauge_carry: Vec<GaugeCarryValue>,
     pub course_combo: u32,
     pub course_max_combo: u32,
@@ -254,6 +255,8 @@ pub struct FinishSessionSnapshot {
     chart: Arc<PlayableChart>,
     skin_attempt: bmz_render::snapshot::SkinAttemptState,
     result: PlayResult,
+    result_lane_key_mode: KeyMode,
+    auto_scratch_lanes: [bool; LANE_COUNT],
     primary_key_mode: KeyMode,
     replay_events: Vec<ReplayEvent>,
     judge_algorithm: JudgeAlgorithm,
@@ -324,6 +327,10 @@ impl FinishSessionSnapshot {
         } else {
             Arc::clone(&session.chart)
         };
+        // End the presentation at the recorded audio time, even if scoring lagged behind it.
+        let recorded_stop = session.finished_early || session.manually_stopped;
+        let ended_at = if recorded_stop { session.result_settled_at() } else { None }
+            .unwrap_or_else(|| session.audio_clock.now().max(TimeUs(0)));
         Self {
             completed: !session.manually_stopped
                 && (session.state == PlayState::Finished
@@ -395,6 +402,14 @@ impl FinishSessionSnapshot {
                 }
             },
             result: play_result_from_session(session),
+            // Battle presentation only scores the SP side of a DP-shaped chart.
+            // 7K-to-9K can keep 7K rules on nine physical lanes.
+            result_lane_key_mode: if session.display_only_lane_mask.iter().any(|&masked| masked) {
+                session.primary_key_mode
+            } else {
+                session.chart.metadata.key_mode
+            },
+            auto_scratch_lanes: session.auto_scratch_lanes,
             primary_key_mode: session.primary_key_mode,
             replay_events: session.replay_recorder.events.clone(),
             judge_algorithm: session.judge.algorithm,
@@ -416,8 +431,10 @@ impl FinishSessionSnapshot {
                 preplay_lamp: session.conditional.best_lamp,
                 branches: session.conditional.decisions.clone(),
                 evaluations: session.conditional.evaluations.clone(),
-                ended_at: session.audio_clock.now().max(TimeUs(0)),
+                ended_at,
+                scored_through: session.replay_stop_scored_through(),
                 manually_stopped: session.manually_stopped,
+                finished_early: session.finished_early,
                 options: std::collections::BTreeMap::from([
                     ("judge_windows".into(), serde_json::json!(session.base_judge_windows)),
                     ("rule_mode".into(), serde_json::json!(session.rule_mode.as_str())),
@@ -665,15 +682,12 @@ fn finish_session_snapshot_result(
         && snapshot.assist.score_update_enabled()
         && !conversion_persistence_disabled
     {
-        let mut ir_result = result.clone();
-        ir_result.clear_type = summary_clear_type;
         enqueue_ir_jobs(
             score_db,
             network_db,
             ir_config,
             EnqueueIrJobsRequest {
                 snapshot,
-                result: &ir_result,
                 stored: &stored,
                 played_at,
                 score_key,
@@ -688,6 +702,13 @@ fn finish_session_snapshot_result(
         );
     }
 
+    let lane_details = ResultLaneDetails::new(
+        &snapshot.chart,
+        &result,
+        applied_arrange,
+        snapshot.result_lane_key_mode,
+        &snapshot.auto_scratch_lanes,
+    );
     Ok(FinishedPlaySession {
         conditional_reference_total: snapshot.reference_total,
         kaleid: snapshot.kaleid.provenance.clone(),
@@ -723,6 +744,7 @@ fn finish_session_snapshot_result(
         result,
         stored,
         summary,
+        lane_details: Some(Arc::new(lane_details)),
         gauge_carry: snapshot.gauge_carry.clone(),
         course_combo: snapshot.course_combo,
         course_max_combo: snapshot.course_max_combo,
@@ -760,7 +782,6 @@ fn clear_type_from_name(name: &str) -> Option<ClearType> {
 
 struct EnqueueIrJobsRequest<'a> {
     snapshot: &'a FinishSessionSnapshot,
-    result: &'a PlayResult,
     stored: &'a StoredPlayResult,
     played_at: i64,
     score_key: ScoreKey,
@@ -781,7 +802,6 @@ fn enqueue_ir_jobs(
 ) {
     let EnqueueIrJobsRequest {
         snapshot,
-        result,
         stored,
         played_at,
         score_key,
@@ -796,33 +816,29 @@ fn enqueue_ir_jobs(
     if stored.score_history_id <= 0 || snapshot.rule_mode == RuleMode::Legacy {
         return;
     }
+    let result = &snapshot.result;
     let enabled: Vec<_> = ir_config
         .providers
         .iter()
         .filter(|provider| {
+            let bokutachi = crate::ir::bokutachi::is_config(provider);
+            let complete_song = if bokutachi && finish_mode == FinishResultMode::CourseStage {
+                snapshot.completed
+            } else {
+                !snapshot.manually_stopped
+            };
             provider.enabled
-                && ((crate::ir::bokutachi::is_config(provider)
+                && ((bokutachi
                     && snapshot.primary_key_mode == KeyMode::K9
                     && provider.send_policy
                         == crate::config::profile_config::IrSendPolicyConfig::UpdateScore)
-                    || if crate::ir::bokutachi::is_config(provider)
-                        && finish_mode == FinishResultMode::CourseStage
-                    {
-                        should_send_bokutachi_stage(
-                            provider.send_policy,
-                            &snapshot.result,
-                            result.clear_type,
-                            snapshot.completed,
-                            previous_best,
-                        )
-                    } else {
-                        should_send_ir_score(
-                            provider.send_policy,
-                            result,
-                            snapshot.manually_stopped,
-                            previous_best,
-                        )
-                    })
+                    || should_send_ir_score(
+                        provider.send_policy,
+                        result,
+                        summary.clear_type,
+                        complete_song,
+                        previous_best,
+                    ))
         })
         .collect();
     if enabled.is_empty() {
@@ -929,10 +945,6 @@ fn enqueue_ir_jobs(
                     )?,
                 };
                 let mut dedicated = payload.clone();
-                // The stage lamp is intentionally NO PLAY; BP/CB still come
-                // from the real result, including unprocessed notes on failure.
-                dedicated.result.min_bp = snapshot.result.record_bp();
-                dedicated.result.min_cb = snapshot.result.record_cb();
                 dedicated.play_options.insert("bokutachi".into(), serde_json::to_value(ctx)?);
                 crate::ir::bokutachi::context(&dedicated)?;
                 serde_json::to_string(&dedicated).map_err(Into::into)
@@ -947,8 +959,8 @@ fn enqueue_ir_jobs(
                             score_key,
                             stored.device_type,
                             stored.score_history_id,
-                            &snapshot.result,
-                            result.clear_type,
+                            result,
+                            summary.clear_type,
                         ) {
                             Ok(true) => {}
                             Ok(false) => continue,
@@ -972,7 +984,7 @@ fn enqueue_ir_jobs(
         };
         if crate::ir::rian_ir::is_rian_ir_config(provider)
             && !crate::ir::rian_ir::score_duration_plausible(
-                result.clear_type.as_str(),
+                &payload.result.clear,
                 chart_length_ms,
                 play_duration_ms,
                 snapshot.chart.metadata.has_bms_random
@@ -1017,24 +1029,29 @@ fn enqueue_ir_jobs(
 /// 送信ポリシーによる IR ジョブ作成可否。
 ///
 /// - `Always`: 常に送る
-/// - `CompleteSong`: 途中で手動中断しておらず、最終ゲージが 0 より大きい場合だけ送る。
+/// - `CompleteSong`: `complete_song` が真で、最終ゲージが 0 より大きい場合だけ送る。
+///   呼び出し側は通常、手動中断していないことを渡す。Bokutachiのコース中の単曲では、
+///   全ノーツを処理したこと (`snapshot.completed`) を渡す。
 ///   ASSIST EASY / EASY / NORMAL はゲージ下限が 2% で 0 にならないため、
 ///   ゲージだけでは Esc などによる中断を区別できない
 /// - `UpdateScore`: EX / clear / max combo / BP / CB のいずれかが
-///   ローカルベストから改善した場合 (または初プレイ) だけ送る
+///   ローカルベストから改善した場合 (または初プレイ) だけ送る。
+///   clear は記録するランプ `recorded_lamp` (コース中の単曲では丸めたランプ) で比べ、
+///   BP / CB は途中FAILEDの未処理ノーツを含む `result` の記録値で比べる
 ///
 /// サーバー側でも best 更新判定は別途行われるため、これはクライアント側の
 /// 送信量制御にすぎない。
 fn should_send_ir_score(
     policy: crate::config::profile_config::IrSendPolicyConfig,
     result: &PlayResult,
-    manually_stopped: bool,
+    recorded_lamp: ClearType,
+    complete_song: bool,
     previous_best: Option<&crate::storage::score_db::BestScoreSummary>,
 ) -> bool {
     use crate::config::profile_config::IrSendPolicyConfig;
     match policy {
         IrSendPolicyConfig::Always => true,
-        IrSendPolicyConfig::CompleteSong => !manually_stopped && result.gauge_value > 0.0,
+        IrSendPolicyConfig::CompleteSong => complete_song && result.gauge_value > 0.0,
         IrSendPolicyConfig::UpdateScore => {
             let Some(best) = previous_best else {
                 return true;
@@ -1042,33 +1059,11 @@ fn should_send_ir_score(
             let best_clear_rank =
                 clear_type_from_name(&best.clear_type).map(|clear| clear as i32).unwrap_or(0);
             result.score.ex_score() > best.ex_score
-                || (result.clear_type as i32) > best_clear_rank
+                || (recorded_lamp as i32) > best_clear_rank
                 || result.score.max_combo > best.max_combo
                 || result.record_bp() < best.bp
                 || result.record_cb() < best.cb
         }
-    }
-}
-
-fn should_send_bokutachi_stage(
-    policy: crate::config::profile_config::IrSendPolicyConfig,
-    result: &PlayResult,
-    stage_lamp: ClearType,
-    completed: bool,
-    previous_best: Option<&crate::storage::score_db::BestScoreSummary>,
-) -> bool {
-    use crate::config::profile_config::IrSendPolicyConfig;
-    match policy {
-        IrSendPolicyConfig::Always => true,
-        IrSendPolicyConfig::CompleteSong => completed && result.gauge_value > 0.0,
-        IrSendPolicyConfig::UpdateScore => previous_best.is_none_or(|best| {
-            result.score.ex_score() > best.ex_score
-                || i32::from(stage_lamp as u8)
-                    > clear_type_from_name(&best.clear_type).map_or(0, |v| v as i32)
-                || result.score.max_combo > best.max_combo
-                || result.record_bp() < best.bp
-                || result.record_cb() < best.cb
-        }),
     }
 }
 

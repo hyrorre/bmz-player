@@ -4,14 +4,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use everything_ipc::wm::{EverythingClient, FileInfo, RequestFlags};
-use rayon::prelude::*;
 
 use super::discovery::{
-    ChartDiscovery, ChartFileEntry, DiscoveredArchive, discover_archive_charts,
+    ChartDiscovery, ChartFileEntry, DiscoveredArchive, discover_archive_charts_with,
     enclosing_song_folders, folder_has_loose_chart, is_chart_file_name, is_document_file_name,
     is_excluded_name, record_discovery_issue, usize_to_u32,
 };
-use super::{ScanConfig, ScanDiscoveryBackend, ScanDiscoveryOperation};
+use super::{ScanConfig, ScanDiscoveryBackend, ScanDiscoveryOperation, ScanPause};
 
 const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 const FILETIME_TICKS_PER_SECOND: u64 = 10_000_000;
@@ -35,6 +34,7 @@ pub(super) fn discover_chart_files_everything(
     root: &Path,
     recursive: bool,
     scan: &ScanConfig,
+    pause: &ScanPause,
     mut on_discovered: impl FnMut(u32),
 ) -> Result<ChartDiscovery> {
     if !scan.follow_symlinks {
@@ -158,7 +158,7 @@ pub(super) fn discover_chart_files_everything(
         backend: ScanDiscoveryBackend::Everything,
         fallback_reason: None,
     };
-    add_archive_entries(root, entries, &archive_paths, &mut discovery);
+    add_archive_entries(root, entries, &archive_paths, pause, &mut discovery);
     let entries = &mut discovery.entries;
     for entry in entries.iter_mut() {
         entry.has_document |=
@@ -183,6 +183,7 @@ fn add_archive_entries(
     root: &Path,
     loose_entries: Vec<ChartFileEntry>,
     archive_paths: &[(usize, PathBuf)],
+    pause: &ScanPause,
     discovery: &mut ChartDiscovery,
 ) {
     if archive_paths.is_empty() {
@@ -194,8 +195,14 @@ fn add_archive_entries(
     let mut previous_position = 0;
     // Limit concurrent reads and merge in query order, including errors and loose charts.
     for batch in archive_paths.chunks(ARCHIVE_BATCH_SIZE) {
-        let results: Vec<_> =
-            batch.par_iter().map(|(_, path)| discover_archive_charts(path)).collect();
+        // A pause cancels the reads and repeats them after the scan resumes.
+        let results = pause.par_map(batch, |(_, path)| {
+            let epoch = pause.epoch();
+            match discover_archive_charts_with(path, &pause.archive_control()) {
+                Err(_) if pause.interrupted_since(epoch) => None,
+                result => Some(result),
+            }
+        });
         for ((position, path), result) in batch.iter().zip(results) {
             discovery.entries.extend(loose.by_ref().take(position - previous_position));
             previous_position = *position;
@@ -312,11 +319,11 @@ mod tests {
         };
         let expected: Vec<_> = paths[..paths.len() - 1]
             .iter()
-            .flat_map(|(_, path)| discover_archive_charts(path).unwrap().0)
+            .flat_map(|(_, path)| super::super::discovery::discover_archive_charts(path).unwrap().0)
             .map(|entry| entry.path)
             .collect();
         let mut discovery = ChartDiscovery { complete: true, ..Default::default() };
-        add_archive_entries(root, vec![loose], &paths, &mut discovery);
+        add_archive_entries(root, vec![loose], &paths, &ScanPause::default(), &mut discovery);
         let mut expected = expected;
         expected.insert(1, loose_path);
         assert_eq!(
@@ -343,7 +350,7 @@ mod tests {
 
         let mut discovery = ChartDiscovery { complete: true, ..Default::default() };
         let started = std::time::Instant::now();
-        add_archive_entries(&root, Vec::new(), &paths, &mut discovery);
+        add_archive_entries(&root, Vec::new(), &paths, &ScanPause::default(), &mut discovery);
         eprintln!(
             "archive listing: {:.3} ms, {} charts, {} archives, {} issues",
             started.elapsed().as_secs_f64() * 1000.0,

@@ -39,12 +39,22 @@ pub(super) fn discover_chart_files_with_progress(
     root: &Path,
     recursive: bool,
     scan: &ScanConfig,
+    on_discovered: impl FnMut(u32),
+) -> ChartDiscovery {
+    discover_chart_files_with_pause(root, recursive, scan, &ScanPause::default(), on_discovered)
+}
+
+pub(super) fn discover_chart_files_with_pause(
+    root: &Path,
+    recursive: bool,
+    scan: &ScanConfig,
+    pause: &ScanPause,
     mut on_discovered: impl FnMut(u32),
 ) -> ChartDiscovery {
     // Explicit archive targets bypass directory walkers and Everything queries.
     if crate::chart_source::is_archive_file(root) && !root.is_dir() {
         let mut discovery = ChartDiscovery::default();
-        match discover_archive_charts(root) {
+        match pause.retry_archive(|control| discover_archive_charts_with(root, control)) {
             Ok((entries, generation)) => {
                 on_discovered(usize_to_u32(entries.len()));
                 discovery.entries = entries;
@@ -69,6 +79,7 @@ pub(super) fn discover_chart_files_with_progress(
             root,
             recursive,
             scan,
+            pause,
             &mut on_discovered,
         ) {
             Ok(discovery) => return discovery,
@@ -79,7 +90,7 @@ pub(super) fn discover_chart_files_with_progress(
                     "Everything song discovery failed; falling back to native discovery"
                 );
                 let mut discovery =
-                    discover_chart_files_native(root, recursive, scan, on_discovered);
+                    discover_chart_files_native(root, recursive, scan, pause, on_discovered);
                 discovery.backend = ScanDiscoveryBackend::NativeFallback;
                 discovery.fallback_reason = (!error.is::<super::everything::NoIndexedFiles>())
                     .then(|| format!("{error:#}"));
@@ -94,14 +105,15 @@ pub(super) fn discover_chart_files_with_progress(
             root = %root.display(),
             "Everything song discovery is only available on Windows; falling back to native discovery"
         );
-        let mut discovery = discover_chart_files_native(root, recursive, scan, on_discovered);
+        let mut discovery =
+            discover_chart_files_native(root, recursive, scan, pause, on_discovered);
         discovery.backend = ScanDiscoveryBackend::NativeFallback;
         discovery.fallback_reason =
             Some("Everything song discovery is only available on Windows".to_string());
         return discovery;
     }
 
-    discover_chart_files_native(root, recursive, scan, on_discovered)
+    discover_chart_files_native(root, recursive, scan, pause, on_discovered)
 }
 
 /// Directories read in parallel before their results are merged.
@@ -122,6 +134,7 @@ fn discover_chart_files_native(
     root: &Path,
     recursive: bool,
     scan: &ScanConfig,
+    pause: &ScanPause,
     mut on_discovered: impl FnMut(u32),
 ) -> ChartDiscovery {
     let mut discovery = ChartDiscovery { complete: true, ..Default::default() };
@@ -147,6 +160,7 @@ fn discover_chart_files_native(
     };
     let mut walk = DiscoveryWalk {
         root,
+        pause,
         recursive,
         follow_links: root_canonical.is_some(),
         trees: root_canonical.iter().cloned().collect(),
@@ -189,6 +203,7 @@ fn discover_chart_files_native(
 
 struct DiscoveryWalk<'a> {
     root: &'a Path,
+    pause: &'a ScanPause,
     recursive: bool,
     follow_links: bool,
     root_canonical: Option<PathBuf>,
@@ -238,8 +253,9 @@ impl DiscoveryWalk<'_> {
         while !level.is_empty() {
             let mut next_level = Vec::new();
             for chunk in level.chunks(DISCOVERY_DIRECTORY_CHUNK) {
-                let listings: Vec<DirectoryListing> =
-                    chunk.par_iter().map(|unit| self.list_directory(unit)).collect();
+                // A pause hands unread directories back instead of blocking rayon.
+                let pause = self.pause;
+                let listings = pause.par_map(chunk, |unit| self.list_directory(unit));
                 for (unit, listing) in chunk.iter().zip(listings) {
                     if unit.path == self.root && listing.readable {
                         discovery.root_readable = true;
@@ -282,7 +298,10 @@ impl DiscoveryWalk<'_> {
                 continue;
             }
             let entries = if file.archive {
-                match discover_archive_charts(&file.link) {
+                match self
+                    .pause
+                    .retry_archive(|control| discover_archive_charts_with(&file.link, control))
+                {
                     Ok((entries, generation)) => {
                         discovery
                             .archives
@@ -314,8 +333,8 @@ impl DiscoveryWalk<'_> {
 
     /// Reads one directory. Only chart files and links are stat-ed: on Unix
     /// `DirEntry::metadata` is an extra syscall per entry, while `file_type` comes
-    /// from the directory listing itself.
-    fn list_directory(&self, unit: &DirectoryUnit) -> DirectoryListing {
+    /// from the directory listing itself. `None` means a pause interrupted it.
+    fn list_directory(&self, unit: &DirectoryUnit) -> Option<DirectoryListing> {
         let root = self.root;
         let dir = unit.path.as_path();
         let mut listing = DirectoryListing { complete: true, ..Default::default() };
@@ -333,7 +352,7 @@ impl DiscoveryWalk<'_> {
                     ScanDiscoveryOperation::OpenDirectory,
                     error,
                 );
-                return listing;
+                return Some(listing);
             }
         };
         let mut charts_in_dir = Vec::new();
@@ -418,6 +437,15 @@ impl DiscoveryWalk<'_> {
                 continue;
             }
 
+            // Keysounds usually account for most entries in a song folder.
+            // Only ordinary audio files can bypass link and directory handling.
+            if file_type.is_file()
+                && file_name.as_encoded_bytes().last_chunk::<4>().is_some_and(|suffix| {
+                    suffix.eq_ignore_ascii_case(b".wav") || suffix.eq_ignore_ascii_case(b".ogg")
+                })
+            {
+                continue;
+            }
             if file_type.is_file() && is_document_file_name(&file_name) {
                 has_document = true;
             }
@@ -469,7 +497,13 @@ impl DiscoveryWalk<'_> {
                 if let (Some(parent), Some(name)) = (&unit.canonical, path.file_name()) {
                     listing.regular_files.push(parent.join(name));
                 }
-                match discover_archive_charts(&path) {
+                // Archive listings can read or hash whole files. Stop before each one.
+                if self.pause.is_paused() {
+                    return None;
+                }
+                let epoch = self.pause.epoch();
+                match discover_archive_charts_with(&path, &self.pause.archive_control()) {
+                    Err(_) if self.pause.interrupted_since(epoch) => return None,
                     Ok((entries, generation)) => {
                         listing.archives.push(DiscoveredArchive { path, generation });
                         listing.entries.extend(entries);
@@ -493,7 +527,7 @@ impl DiscoveryWalk<'_> {
         listing.entries.extend(charts_in_dir);
         linked_files_in_dir.iter_mut().for_each(|file| file.has_document = has_document);
         listing.linked_files = linked_files_in_dir;
-        listing
+        Some(listing)
     }
 }
 
@@ -565,12 +599,21 @@ pub(super) fn unresolvable_link_reason(error: &io::Error) -> Option<&'static str
     }
     None
 }
+
+#[cfg(test)]
 pub(super) fn discover_archive_charts(
     path: &Path,
 ) -> Result<(Vec<ChartFileEntry>, crate::song_archive::ArchiveGeneration)> {
+    discover_archive_charts_with(path, &Default::default())
+}
+
+pub(super) fn discover_archive_charts_with(
+    path: &Path,
+    control: &crate::song_archive::ArchiveControl,
+) -> Result<(Vec<ChartFileEntry>, crate::song_archive::ArchiveGeneration)> {
     // A listing, not the full index: the index cache holds only a few archives, so a
     // repeated scan in one process would otherwise open every archive again.
-    let listing = crate::song_archive::chart_listing(path, &Default::default())?;
+    let listing = crate::song_archive::chart_listing(path, control)?;
     let modified_at = listing
         .modified
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())

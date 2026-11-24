@@ -94,6 +94,7 @@ fn replay_session(mode: LongNoteMode, opponent: bool) -> GameSession {
         ]
         .into_iter()
         .map(|(kind, time)| bmz_core::replay::ReplayEvent {
+            applied_after: None,
             lane: Lane::Key1,
             kind,
             time: TimeUs(time),

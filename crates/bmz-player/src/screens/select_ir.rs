@@ -938,6 +938,7 @@ mod tests {
             profile.play.rule_mode,
             Some(sha),
             None,
+            None,
         );
         assert!(select_ir.active_rival_display_name().is_none());
         assert!(select_ir.rival_for(&profile.ir, Some(sha)).is_none());
@@ -1220,6 +1221,7 @@ mod tests {
                 RuleMode::Beatoraja,
                 sha,
                 None,
+                None,
             )
         };
 
@@ -1277,6 +1279,7 @@ mod tests {
                 RuleMode::Beatoraja,
                 sha,
                 None,
+                None,
             ),
             SelectIrResultLookup::Unavailable
         ));
@@ -1298,6 +1301,7 @@ mod tests {
                 DoubleOptionScoreBucket::Off,
                 RuleMode::Beatoraja,
                 sha,
+                None,
                 None,
             )
         };
@@ -1337,6 +1341,7 @@ mod tests {
             RuleMode::Beatoraja,
             Some(sha),
             None,
+            None,
         );
         assert!(select_ir.in_flight.is_none());
         assert!(select_ir.pending.is_some());
@@ -1354,6 +1359,7 @@ mod tests {
             LnScorePolicy::ForceLn,
             DoubleOptionScoreBucket::Off,
             RuleMode::Beatoraja,
+            None,
             None,
             None,
         );
@@ -1383,6 +1389,7 @@ mod tests {
             DoubleOptionScoreBucket::Off,
             RuleMode::Beatoraja,
             Some(sha),
+            None,
             None,
         );
         assert!(!select_ir.cache.contains_key(&sha));
@@ -1421,6 +1428,7 @@ mod tests {
             DoubleOptionScoreBucket::Off,
             RuleMode::Beatoraja,
             Some(sha),
+            None,
             None,
         );
 
@@ -1467,6 +1475,7 @@ mod tests {
             DoubleOptionScoreBucket::Off,
             RuleMode::Beatoraja,
             Some(sha),
+            None,
             None,
         );
 

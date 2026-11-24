@@ -15,6 +15,7 @@ pub(super) struct PendingSongScan {
     pub(super) finished: Receiver<Result<SongScanResult>>,
     pub(super) progress: Arc<AtomicU64>,
     pub(super) library_roots: Option<Vec<PathEntry>>,
+    pub(super) scope: SongScanScope,
     pub(super) download_ids: Vec<u64>,
     pub(super) download_dirs: Vec<PathBuf>,
 }
@@ -74,6 +75,23 @@ pub(super) struct PlayEndingTransition {
     pub(super) result_settled_elapsed_at_finish_ms: Option<i32>,
 }
 
+impl PlayEndingTransition {
+    /// E1 / E2 / Escape during the ending start the exit fade at once. A replay that
+    /// reached its recorded exit waits for this, as it never requested the fade itself.
+    ///
+    /// `None` keeps a FAILED close animation; otherwise whether this call started the fade.
+    pub(super) fn request_fadeout(&mut self, now: Instant) -> Option<bool> {
+        if self.failed {
+            return None;
+        }
+        let started = self.fadeout_started_at.is_none();
+        if started {
+            self.fadeout_started_at = Some(now);
+        }
+        Some(started)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PlayEndingCompletion {
     Result,
@@ -113,6 +131,24 @@ pub(super) fn pre_play_abort_ending(
         } else {
             PlayEndingCompletion::Select
         },
+        completion_remaining_ms: 0,
+        result_settled_elapsed_at_finish_ms: None,
+    }
+}
+
+pub(super) fn result_play_ending(
+    started_at: Instant,
+    failed: bool,
+    finish_requested: bool,
+    completion: PlayEndingCompletion,
+) -> PlayEndingTransition {
+    PlayEndingTransition {
+        started_at,
+        music_end_started_at: (!failed).then_some(started_at),
+        fadeout_started_at: (!failed && finish_requested).then_some(started_at),
+        finished: None,
+        failed,
+        completion,
         completion_remaining_ms: 0,
         result_settled_elapsed_at_finish_ms: None,
     }

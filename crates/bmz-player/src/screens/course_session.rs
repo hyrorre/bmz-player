@@ -479,6 +479,7 @@ mod tests {
                     chart_id: i as i64 + 1,
                     finished: FinishedPlaySession {
                         conditional_reference_total: None,
+                        lane_details: None,
                         kaleid: Default::default(),
                         result,
                         stored: StoredPlayResult {
@@ -746,6 +747,7 @@ mod tests {
                     chart_id: i as i64 + 1,
                     finished: FinishedPlaySession {
                         conditional_reference_total: None,
+                        lane_details: None,
                         kaleid: Default::default(),
                         result,
                         stored,

@@ -200,7 +200,7 @@ pub(crate) fn normalize_battle_replay_for_key_mode(
     if replay.events.is_empty() {
         anyhow::bail!("battle replay has no playable input for the selected key mode");
     }
-    replay.events.sort_by_key(|event| event.time);
+    replay.events.sort_by_key(bmz_core::replay::ReplayEvent::delivery_time);
     Ok(())
 }
 
@@ -959,6 +959,7 @@ mod tests {
         use bmz_core::replay::ReplayEvent;
 
         let event = |lane, time, kind| ReplayEvent {
+            applied_after: None,
             lane,
             kind,
             time: TimeUs(time),

@@ -75,6 +75,7 @@ type EditSession = Box<dyn FnOnce(&mut GameSession) + Send>;
 struct Worker {
     commands: mpsc::SyncSender<EditSession>,
     play_end: Arc<PlayEndSignal>,
+    finish_requested: AtomicBool,
     latest: Arc<Mutex<Option<Publication>>>,
     stop: Arc<AtomicBool>,
     snapshot_requested: Arc<AtomicBool>,
@@ -166,9 +167,16 @@ impl GameplayClient {
         let Some(worker) = &self.worker else {
             return false;
         };
+        if matches!(request, PlayEndRequest::Finish) {
+            worker.finish_requested.store(true, Ordering::Relaxed);
+        }
         worker.play_end.request(request);
         worker.thread.thread().unpark();
         true
+    }
+
+    pub(crate) fn finish_requested(&self) -> bool {
+        self.worker.as_ref().is_some_and(|worker| worker.finish_requested.load(Ordering::Relaxed))
     }
 
     /// Latest render-only setting wins even when the session command queue is full.
@@ -247,6 +255,7 @@ impl GameplayClient {
         self.worker = Some(Worker {
             commands,
             play_end,
+            finish_requested: AtomicBool::new(false),
             latest,
             stop,
             snapshot_requested,
@@ -439,6 +448,11 @@ fn run(
         }
         let previous_chart = runtime.session.chart.clone();
         let mut frame = runtime.advance(&audio);
+        final_notes_processed.store(
+            runtime.session.judge.is_exhausted(&runtime.session.chart)
+                && bmz_gameplay::session::conditional::next_evaluation(&runtime.session).is_none(),
+            Ordering::Release,
+        );
         if !Arc::ptr_eq(&previous_chart, &runtime.session.chart) {
             config.cache = PlayRenderSnapshotCache::from_chart(&runtime.session.chart);
             judge_graph.rebind_chart(
@@ -453,11 +467,6 @@ fn run(
             runtime.session.hispeed,
             Instant::now(),
             Duration::from_millis(u64::from(hispeed_transition_ms.load(Ordering::Relaxed))),
-        );
-        final_notes_processed.store(
-            runtime.session.judge.is_exhausted(&runtime.session.chart)
-                && bmz_gameplay::session::conditional::next_evaluation(&runtime.session).is_none(),
-            Ordering::Release,
         );
         if let Some(effects) = &config.effects {
             if runtime.session.guide_se_enabled {
@@ -536,11 +545,7 @@ fn run(
             || last_publication.elapsed() >= Duration::from_millis(8)
             || previous_state != frame.state;
         if !publish {
-            let remaining =
-                runtime.next_wake_after(SAFETY_WAKE.saturating_sub(iteration_started.elapsed()));
-            if !remaining.is_zero() {
-                thread::park_timeout(remaining);
-            }
+            wait_for_next_update(&runtime, iteration_started);
             continue;
         }
         last_publication = Instant::now();
@@ -548,7 +553,7 @@ fn run(
         // an observed buffer and never wait for the rendering thread to release it.
         let Some(projection) = projection_pool.iter_mut().find(|slot| Arc::strong_count(slot) == 1)
         else {
-            thread::park_timeout(SAFETY_WAKE.saturating_sub(iteration_started.elapsed()));
+            wait_for_next_update(&runtime, iteration_started);
             continue;
         };
         let projection_state = Arc::get_mut(projection).expect("unobserved projection");
@@ -598,11 +603,15 @@ fn run(
         let old =
             if let Ok(mut slot) = latest.try_lock() { slot.replace(publication) } else { None };
         drop(old);
-        let remaining =
-            runtime.next_wake_after(SAFETY_WAKE.saturating_sub(iteration_started.elapsed()));
-        if !remaining.is_zero() {
-            thread::park_timeout(remaining);
-        }
+        wait_for_next_update(&runtime, iteration_started);
+    }
+}
+
+fn wait_for_next_update(runtime: &GameplayRuntime, iteration_started: Instant) {
+    let remaining =
+        runtime.next_wake_after(SAFETY_WAKE.saturating_sub(iteration_started.elapsed()));
+    if !remaining.is_zero() {
+        thread::park_timeout(remaining);
     }
 }
 

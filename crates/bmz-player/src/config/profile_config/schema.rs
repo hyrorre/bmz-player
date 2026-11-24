@@ -283,6 +283,8 @@ pub struct PlayDefaultsConfig {
     #[serde(default)]
     pub show_ln_tail_cap: bool,
     #[serde(default)]
+    pub show_hidden_notes: bool,
+    #[serde(default)]
     pub hide_auto_scratch_notes: bool,
 }
 
@@ -801,6 +803,11 @@ pub struct AssistOptionConfig {
 }
 
 impl AssistOptionConfig {
+    /// Replay playback can use these overlays independently of the recorded chart and judgement.
+    pub(crate) fn replay_display_options(self) -> Self {
+        Self { mark_note: self.mark_note, judge_area: self.judge_area, ..Self::default() }
+    }
+
     pub fn flags(self) -> [bool; 7] {
         [
             self.expand_judge,

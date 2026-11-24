@@ -82,10 +82,15 @@ Launch overrides (never saved):
   --gas off|continue|hard-to-groove|best-clear|select-to-under
   --gas-bottom assist-easy|easy|normal
   --hispeed 0.01..20           Fixed Classic multiplier for this chart
+  --green-number 1..6000       Floating target (last of --hispeed and --green-number wins)
   --hs-fix off|start-bpm|min-bpm|max-bpm|main-bpm
   --auto-scratch on|off        Scratch autoplay; on disables score saving
   --bga on|auto|off
   --guide-se on|off
+  --show-invisible-notes on|off  Show or hide invisible note outlines
+  --mark-note on|off           Mark processed notes
+  --judge-area on|off          Show judgement timing windows on the lanes
+  --show-ln-tail-cap on|off    Show LN/HLN tail caps
   --seed N                     Fixed arrangement and BMS branch seed
   --print-effective-options    Print settings without starting playback
   Without a chart, play overrides are ignored. Returning to Select discards them.

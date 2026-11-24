@@ -93,17 +93,26 @@ fn locator_normalizes_entries_without_confusing_ordinary_bang_names() {
 fn archive_preview_metadata_uses_declared_extension_fallback_before_prefix() {
     let index = crate::song_archive::ArchiveIndex {
         generation: ArchiveGeneration { fingerprint: "test".into() },
-        entries: ["folder/custom.ogg", "folder/preview.wav"]
-            .into_iter()
-            .map(|name| crate::song_archive::ArchiveEntry {
-                name: name.into(),
-                size: 1,
-                is_directory: false,
-            })
-            .collect(),
+        entries: [
+            "folder/custom.ogg",
+            "folder/preview.wav",
+            "folder/Preview-a.OGG",
+            "other/preview.wav",
+        ]
+        .into_iter()
+        .map(|name| crate::song_archive::ArchiveEntry {
+            name: name.into(),
+            size: 1,
+            is_directory: false,
+        })
+        .collect(),
         solid: false,
     };
-    assert_eq!(archive_preview_file(&index, "folder/song.bms", "custom.wav"), "custom.ogg");
+    let previews = ArchivePreviewFiles::new(&index);
+    assert_eq!(previews.resolve("folder/song.bms", "custom.wav"), "custom.ogg");
+    assert_eq!(previews.resolve("folder/song.bms", ""), "Preview-a.OGG");
+    assert_eq!(previews.resolve("other/song.bms", ""), "preview.wav");
+    assert_eq!(previews.resolve("song.bms", "missing.wav"), "missing.wav");
 }
 
 #[test]

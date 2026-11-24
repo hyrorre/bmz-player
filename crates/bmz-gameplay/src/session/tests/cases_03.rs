@@ -149,6 +149,7 @@ fn viewer_seek_prefills_independent_battle_opponent() {
 #[test]
 fn viewer_seek_prefills_pgreats_and_restores_crossing_hcn() {
     let mut session = session_with_autoplay(chart_with_hcn_long_note());
+    session.gauge.set_initial_value(50.0);
 
     prepare_viewer_seek(&mut session, TimeUs(500_000));
 
@@ -158,6 +159,11 @@ fn viewer_seek_prefills_pgreats_and_restores_crossing_hcn() {
     assert_eq!(session.judge.judged_notes.get(&NoteId(1)), Some(&Judge::PGreat));
     assert!(session.judge.lanes[Lane::Key1.index()].active_long.is_some());
     assert_eq!(session.lane_keyon_started_at[Lane::Key1.index()], Some(TimeUs(500_000)));
+    let gauge_at_seek = session.gauge.carry_values();
+    session.audio_clock.pause_at(TimeUs(500_000));
+    advance_session_frame(&mut session, &mut TestAudio::default());
+    assert_eq!(session.gauge.carry_values(), gauge_at_seek);
+    assert_eq!(session.lane_hcn_timer[Lane::Key1.index()].unwrap().passing_count_us, 0);
 
     session.audio_clock =
         AudioClock::with_position(48_000, 0, 1_000_000, Arc::new(AtomicU64::new(0)), true);

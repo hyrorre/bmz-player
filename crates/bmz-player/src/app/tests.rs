@@ -455,3 +455,6 @@ mod select;
 mod skin;
 #[path = "tests/skin_more.rs"]
 mod skin_more;
+#[cfg(windows)]
+#[path = "tests/startup_maintenance.rs"]
+mod startup_maintenance;

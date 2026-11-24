@@ -17,8 +17,6 @@ interface ScoreDetail {
     ex_score: number
     max_combo: number
     min_bp: number
-    bp: number
-    cb: number
     gauge: string
     ln_policy: string
     rule_mode: string
@@ -164,7 +162,7 @@ useSeoMeta({ title: () => t('score.title') })
           </div>
           <div class="rounded-lg border border-neutral-800 p-4">
             <p class="text-xs text-neutral-500">BP</p>
-            <p class="text-2xl font-semibold">{{ data.score.bp }}</p>
+            <p class="text-2xl font-semibold">{{ data.score.min_bp }}</p>
           </div>
         </div>
 

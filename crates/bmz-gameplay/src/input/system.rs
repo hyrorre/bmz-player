@@ -47,9 +47,16 @@ pub struct InputSystem {
 
 impl InputSystem {
     pub fn collect_game_inputs(&mut self, ctx: &InputTimingContext<'_>) -> Vec<InputEvent> {
+        self.collect_game_inputs_with_time(ctx).0
+    }
+
+    pub(crate) fn collect_game_inputs_with_time(
+        &mut self,
+        ctx: &InputTimingContext<'_>,
+    ) -> (Vec<InputEvent>, std::time::Instant) {
         self.backend.update();
         let events = self.backend.drain_events();
-        let collected_ns = super::backend::monotonic_timestamp_ns();
+        let (collected_at, collected_ns) = super::backend::monotonic_observation();
         crate::session::latency::collected(events.iter().filter_map(
             |event| match event.timestamp {
                 DeviceTimestamp::MonotonicNs(ns) => {
@@ -71,7 +78,7 @@ impl InputSystem {
         diagnostics.dropped_events =
             diagnostics.drained_events.saturating_sub(diagnostics.translated_events);
         publish_input_collection_diagnostics(diagnostics);
-        inputs
+        (inputs, collected_at)
     }
 }
 

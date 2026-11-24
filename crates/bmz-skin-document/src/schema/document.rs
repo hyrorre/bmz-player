@@ -1018,6 +1018,9 @@ pub struct SkinTextDef {
     /// default JSON skin to avoid shipping a separate digit atlas.
     #[serde(default, rename = "numberRef")]
     pub number_ref: Option<i32>,
+    /// Display a plus sign for nonnegative `numberRef` values.
+    #[serde(default, rename = "showPlus")]
+    pub show_plus: bool,
     /// Minimum formatted width for `numberRef`, including the sign.
     #[serde(default)]
     pub digit: i32,

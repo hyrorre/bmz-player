@@ -557,6 +557,8 @@ pub struct RenderSnapshot {
     pub hold_ms: [Option<i32>; LANE_COUNT],
     /// LN モードでも終端 (tail) キャップを描画するか。既定 OFF (beatoraja 準拠)。
     pub show_ln_tail_cap: bool,
+    /// 不可視ノーツをプレイフィールドへ投影するか。
+    pub show_hidden_notes: bool,
     /// 各レーンの HCN ACTIVE(回復中) タイマー経過 ms。
     /// beatoraja の TIMER_HCN_ACTIVE (skin timer 250..=257 / 260..=267) に渡る。
     pub hcn_active_ms: [Option<i32>; LANE_COUNT],
@@ -648,6 +650,7 @@ pub enum NoteVisualKind {
     Tap,
     LnStart,
     LnEnd,
+    Invisible,
 }
 
 #[derive(Debug, Clone, PartialEq)]

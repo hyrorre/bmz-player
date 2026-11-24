@@ -3,6 +3,9 @@ use super::*;
 impl WinitApp {
     /// Queue an interactive scene dependency without waiting for disk, Lua or GPU upload.
     pub(super) fn request_scene_skin(&mut self, kind: SkinKind) {
+        if kind == SkinKind::Result {
+            self.skin.skin_pipeline.start_initial_result_decode();
+        }
         self.start_skin_upload_worker();
         if kind == SkinKind::Play {
             self.publish_prepared_play_chart();

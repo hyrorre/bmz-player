@@ -178,6 +178,8 @@ pub(super) fn fill_empty_lr2_continue_assets(
 pub(super) struct SkinPipelineRuntime {
     pub(super) external_access: BTreeMap<String, crate::config::profile_config::SkinAccessGrant>,
     pub(super) screen_size: [u32; 2],
+    /// Initial Result request retained until first present or direct Result entry.
+    pub(super) initial_result_decode: Option<SkinDecodeRequest>,
     screen_requests: Mutex<HashMap<SkinKind, SkinDecodeRequest>>,
     screen_dependencies: Mutex<HashMap<SkinKind, (u64, bmz_skin::SkinLoadDependencies)>>,
     load_errors: Mutex<HashMap<std::path::PathBuf, String>>,
@@ -256,6 +258,7 @@ impl SkinPipelineRuntime {
         Self {
             external_access: BTreeMap::new(),
             screen_size: [0, 0],
+            initial_result_decode: None,
             screen_requests: Mutex::new(HashMap::new()),
             screen_dependencies: Mutex::new(HashMap::new()),
             load_errors: Mutex::new(HashMap::new()),
@@ -278,6 +281,15 @@ impl SkinPipelineRuntime {
             pending: PendingSkinKinds::default(),
             decode_control: Arc::default(),
             lua_file_store: bmz_skin::LuaSkinFileStore::default(),
+        }
+    }
+
+    pub(super) fn start_initial_result_decode(&mut self) {
+        // A direct Result or profile change can supersede the startup request.
+        if let Some(request) = self.initial_result_decode.take()
+            && self.decode_control.current(request.kind, request.generation)
+        {
+            super::spawn_skin_decode(self, request.reuse_installed_fonts(self));
         }
     }
 

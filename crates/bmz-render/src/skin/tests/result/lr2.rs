@@ -345,6 +345,19 @@ fn lr2_numbers_follow_lr2_definitions() {
     assert_eq!(lr2(107, &state), Some(76));
     // Single play compares with the target ghost at the current progress.
     assert_eq!(lr2(108, &state), Some(120 - 80));
+    let battle = SkinDrawState {
+        lr2_opponent: Some(crate::snapshot::OpponentRenderSnapshot {
+            ex_score: 100,
+            ..Default::default()
+        }),
+        ..state.clone()
+    };
+    assert_eq!(lr2(108, &battle), Some(20));
+    assert_eq!(skin_state_number(SKIN_REF_BMZ_LR2_2P_BASE + 8, &battle), Some(-20));
+    for ref_id in [108, 128] {
+        let value = SkinValueDef { ref_id, lr2_number: true, ..Default::default() };
+        assert_eq!(skin_value_number_for_destination(&value, &state), None);
+    }
     // 120 / 200 is rank 5 (B); A starts at 200 * 6 / 9 = 133.
     assert_eq!(lr2(109, &state), Some(120 - 133));
     // Result 1P POOR goes through the flip namespace to the same definition.

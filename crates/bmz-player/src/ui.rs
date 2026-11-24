@@ -50,6 +50,7 @@ use crate::practice_ui::{PracticePanelContext, build_practice_panel};
 use crate::profile_cmd;
 use crate::random_trainer::RandomTrainerState;
 use crate::screens::course_session::CourseResultSummary;
+use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::select_model::SelectCourseRow;
 use crate::select_options::SessionMode;
 use crate::skin_loader::RANDOM_FILE_SELECTION;
@@ -82,6 +83,8 @@ mod auxiliary_course;
 mod auxiliary_debug;
 #[path = "ui/auxiliary_panels/notice.rs"]
 mod auxiliary_notice;
+#[path = "ui/auxiliary_panels/result.rs"]
+mod auxiliary_result;
 #[path = "ui/auxiliary_panels/result_ir.rs"]
 mod auxiliary_result_ir;
 #[path = "ui/auxiliary_panels/update.rs"]
@@ -100,6 +103,7 @@ mod skin_panel;
 use auxiliary_course::*;
 use auxiliary_debug::*;
 use auxiliary_notice::*;
+use auxiliary_result::*;
 use auxiliary_result_ir::*;
 use auxiliary_update::*;
 use auxiliary_window::*;

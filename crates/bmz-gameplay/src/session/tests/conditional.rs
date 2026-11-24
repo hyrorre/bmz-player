@@ -106,12 +106,15 @@ fn stopped_replay_does_not_evaluate_or_score_the_future_suffix() {
             reference_total: 2,
             actual_total: 2,
             preplay_lamp: 5,
-            ended_at: TimeUs(1_000_000),
+            // The stop arrived after the branch boundary, before another scoring update.
+            scored_through: Some(TimeUs(1_000_000)),
+            ended_at: TimeUs(2_100_000),
             manually_stopped: true,
             ..Default::default()
         }),
         branch_decisions: Some(vec![]),
         events: vec![ReplayEvent {
+            applied_after: None,
             lane: Lane::Key1,
             kind: InputKind::Press,
             time: TimeUs(0),
@@ -284,6 +287,7 @@ fn hcn_gauge_before_branch_matches_fine_updates() {
                 GaugeState::new(bmz_core::clear::GaugeType::Normal, 1.0, s.scored_total_notes);
             s.replay_player = Some(ReplayPlayer::new(vec![
                 bmz_core::replay::ReplayEvent {
+                    applied_after: None,
                     lane: Lane::Key1,
                     kind: InputKind::Press,
                     time: TimeUs(0),
@@ -291,6 +295,7 @@ fn hcn_gauge_before_branch_matches_fine_updates() {
                     scratch_direction: None,
                 },
                 bmz_core::replay::ReplayEvent {
+                    applied_after: None,
                     lane: Lane::Key1,
                     kind: InputKind::Release,
                     time: TimeUs(1_000_000),
@@ -366,4 +371,29 @@ fn battle_players_select_independently_before_same_time_inputs() {
         assert_eq!(session.score.ex_score(), 8);
         assert_eq!(opponent.score.bp(), 3);
     }
+}
+
+#[test]
+fn negative_offset_queues_branch_bgm_when_the_audio_reaches_the_branch() {
+    let body =
+        "#00211:01\n#CONDITIONAL 1\n#WHEN AUTO==1\n#00101:02\n#DEFAULT\n#00101:01\n#ENDCONDITIONAL";
+    let mut s = session_with_autoplay(imported(body));
+    s.autoplay = None;
+    s.offsets.input_offset_us = -50_000;
+    s.audio_clock.schedule_ahead = true;
+    let mut audio = ScheduledSoundQueue::new();
+    advance(&mut s, 1_999_000, &mut audio);
+    assert_eq!(audio.drain_all().count(), 0);
+    // Scoring still runs 53ms behind, but the branch and its BGM follow the audio.
+    let runtime = crate::runtime::GameplayRuntime::new(s);
+    assert_eq!(
+        runtime.next_wake_after(std::time::Duration::from_millis(2)),
+        std::time::Duration::from_millis(1)
+    );
+    let mut s = runtime.session;
+    advance(&mut s, 2_000_000, &mut audio);
+    let sounds: Vec<_> = audio.drain_all().collect();
+    assert_eq!(s.conditional.decisions.len(), 1);
+    assert_eq!(sounds.len(), 1);
+    assert_eq!(sounds[0].start_frame, 96_000);
 }

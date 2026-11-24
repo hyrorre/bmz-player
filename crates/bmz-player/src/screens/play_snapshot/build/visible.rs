@@ -100,6 +100,25 @@ fn populate_visible_notes(
         .iter()
         .enumerate()
         {
+            if note.kind == NoteKind::Invisible {
+                if snapshot.show_hidden_notes
+                    && note.time >= lane_render_now
+                    && session.practice_source_hidden_notes.is_none_or(|ids| ids.contains(&note.id))
+                    && let Some(y) = scroll.note_y(note.time, cursor_tick)
+                    && let Some(alpha) = constant_object_alpha(session, lane_render_now, note.time)
+                {
+                    snapshot.visible_notes[output_lane.index()].push(VisibleNote {
+                        lane: output_lane,
+                        time: note.time,
+                        y,
+                        alpha,
+                        kind: NoteVisualKind::Invisible,
+                        processed_judge: None,
+                        pms_miss_fall: None,
+                    });
+                }
+                continue;
+            }
             let Some(alpha) = constant_object_alpha(session, lane_render_now, note.time) else {
                 continue;
             };

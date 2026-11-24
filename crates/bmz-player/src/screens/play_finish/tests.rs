@@ -57,6 +57,7 @@ fn bokutachi_course_stage_device_policy_and_later_failure_are_independent() {
                 s.score.max_combo = 1;
             }
             s.replay_recorder.events.push(ReplayEvent {
+                applied_after: None,
                 lane: Lane::Key1,
                 kind: InputKind::Press,
                 time: TimeUs(0),
@@ -116,14 +117,14 @@ fn bokutachi_course_stage_device_policy_and_later_failure_are_independent() {
 }
 
 #[test]
-fn bokutachi_stage_complete_song_uses_completion_and_update_uses_real_metrics() {
+fn course_stage_complete_song_uses_completion_and_update_uses_real_metrics() {
     use crate::config::profile_config::IrSendPolicyConfig::*;
     let mut result = play_result_from_session(&session());
     result.clear_type = ClearType::Normal;
     result.gauge_value = 80.0;
-    assert!(should_send_bokutachi_stage(CompleteSong, &result, ClearType::NoPlay, true, None));
-    assert!(!should_send_bokutachi_stage(CompleteSong, &result, ClearType::FullCombo, false, None));
-    assert!(should_send_bokutachi_stage(Always, &result, ClearType::NoPlay, false, None));
+    assert!(should_send_ir_score(CompleteSong, &result, ClearType::NoPlay, true, None));
+    assert!(!should_send_ir_score(CompleteSong, &result, ClearType::FullCombo, false, None));
+    assert!(should_send_ir_score(Always, &result, ClearType::NoPlay, false, None));
     let mut best = crate::storage::score_db::BestScoreSummary {
         numeric_score_available: true,
         play_options: None,
@@ -151,13 +152,7 @@ fn bokutachi_stage_complete_song_uses_completion_and_update_uses_real_metrics() 
     best.max_combo = result.score.max_combo;
     best.bp = result.record_bp();
     best.cb = result.record_cb();
-    assert!(!should_send_bokutachi_stage(
-        UpdateScore,
-        &result,
-        ClearType::NoPlay,
-        true,
-        Some(&best)
-    ));
+    assert!(!should_send_ir_score(UpdateScore, &result, ClearType::NoPlay, true, Some(&best)));
     for metric in 0..5 {
         let mut previous = best.clone();
         let mut current = result.clone();
@@ -169,7 +164,7 @@ fn bokutachi_stage_complete_song_uses_completion_and_update_uses_real_metrics() 
             3 => previous.bp += 1,
             _ => previous.cb += 1,
         }
-        assert!(should_send_bokutachi_stage(UpdateScore, &current, lamp, true, Some(&previous)));
+        assert!(should_send_ir_score(UpdateScore, &current, lamp, true, Some(&previous)));
     }
 }
 
@@ -457,22 +452,22 @@ fn latency_stall_test_never_persists_manual_result() {
 
 #[test]
 fn should_send_ir_score_follows_policy() {
-    use crate::config::profile_config::IrSendPolicyConfig;
+    use crate::config::profile_config::IrSendPolicyConfig::*;
     use crate::storage::score_db::BestScoreSummary;
 
     let mut result = play_result_from_session(&session());
     result.gauge_value = 0.0;
     // Failed (ゲージ 0) は CompleteSong では送らない。
-    assert!(should_send_ir_score(IrSendPolicyConfig::Always, &result, false, None));
-    assert!(!should_send_ir_score(IrSendPolicyConfig::CompleteSong, &result, false, None));
+    assert!(should_send_ir_score(Always, &result, result.clear_type, true, None));
+    assert!(!should_send_ir_score(CompleteSong, &result, result.clear_type, true, None));
     result.gauge_value = 12.0;
-    assert!(should_send_ir_score(IrSendPolicyConfig::CompleteSong, &result, false, None));
+    assert!(should_send_ir_score(CompleteSong, &result, result.clear_type, true, None));
     // ゲージが残っていても、Esc などで途中に止めたプレイは CompleteSong では送らない。
-    assert!(!should_send_ir_score(IrSendPolicyConfig::CompleteSong, &result, true, None));
-    assert!(should_send_ir_score(IrSendPolicyConfig::Always, &result, true, None));
+    assert!(!should_send_ir_score(CompleteSong, &result, result.clear_type, false, None));
+    assert!(should_send_ir_score(Always, &result, result.clear_type, false, None));
 
     // UpdateScore: ベストが無ければ送る。
-    assert!(should_send_ir_score(IrSendPolicyConfig::UpdateScore, &result, false, None));
+    assert!(should_send_ir_score(UpdateScore, &result, result.clear_type, true, None));
 
     let best = BestScoreSummary {
         numeric_score_available: true,
@@ -497,11 +492,11 @@ fn should_send_ir_score_follows_policy() {
         replay_path: String::new(),
     };
     // session() の結果は EX 0 / Failed / combo 0 / BP 1 なので全項目で劣る。
-    assert!(!should_send_ir_score(IrSendPolicyConfig::UpdateScore, &result, false, Some(&best)));
+    assert!(!should_send_ir_score(UpdateScore, &result, result.clear_type, true, Some(&best)));
     // EX が改善すれば送る。
     let mut improved = result.clone();
     improved.score.judges.fast_pgreat = 100;
-    assert!(should_send_ir_score(IrSendPolicyConfig::UpdateScore, &improved, false, Some(&best)));
+    assert!(should_send_ir_score(UpdateScore, &improved, improved.clear_type, true, Some(&best)));
 }
 
 fn open_network_db() -> NetworkDatabase {
@@ -944,74 +939,98 @@ fn helper_course_stage_payload_uses_finished_lamp_and_original_bp() {
 }
 
 #[test]
-fn finish_session_result_course_stage_enqueues_ir_with_rounded_clear_type() {
-    let root = make_temp_dir("finish-course-stage-ir");
-    let paths = ProfilePaths {
-        root_dir: root.clone(),
-        profile_toml: root.join("profile.toml"),
-        collection_db: root.join("collection.db"),
-        score_db: root.join("score.db"),
-        network_db: root.join("network.db"),
-        replay_dir: root.join("replay"),
-    };
-    let mut conn = Connection::open_in_memory().unwrap();
-    configure_connection(&conn).unwrap();
-    run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
-    let mut score_db = ScoreDatabase::from_connection(conn);
-    let mut network_db = open_network_db();
-    let replay_config = ReplayConfig {
-        auto_save: false,
-        slot_rules: crate::config::profile_config::default_slot_rules(),
-    };
-    let ir_config = IrConfig {
-        primary_provider: "bms-ir".to_string(),
-        providers: vec![IrProviderConfig {
-            provider: "bms-ir".to_string(),
-            provider_key: "bms-ir".to_string(),
-            base_url: crate::ir::bms_ir::BMS_IR_DEFAULT_BASE_URL.to_string(),
-            enabled: true,
-            account_display_name: "Player".to_string(),
-            account_id: "account-1".to_string(),
-            send_policy: Default::default(),
-            role: Default::default(),
-            last_login_at: None,
-            last_success_at: None,
-        }],
-        ..IrConfig::default()
-    };
-    let mut session = session();
-    Arc::get_mut(&mut session.chart).unwrap().metadata.source_format =
-        bmz_chart::model::ChartSourceFormat::Bms;
+fn failed_song_ir_matches_local_misses_and_only_queues_an_improvement() {
+    use crate::config::profile_config::IrSendPolicyConfig;
+    use crate::ir::types::IrScoreSubmission;
+    use bmz_core::clear::GaugeType;
 
-    let finished = finish_session_result(
-        &mut score_db,
-        &mut network_db,
-        FinishSessionResultRequest {
-            profile_paths: &paths,
-            replay_config: &replay_config,
-            ir_config: &ir_config,
-            session: &session,
-            source_ln_profile: ChartLnProfile::from_chart(&session.chart),
-            chart_length_ms: None,
-            play_duration_ms: None,
-            played_at: 1_700_000_110,
-            applied_arrange: &AppliedArrange::default(),
-            target_ex_score: None,
-            score_key: score_key(&session),
-            practice_mode: false,
-            finish_mode: FinishResultMode::CourseStage,
-        },
-    )
-    .unwrap();
+    for (mode, manually_stopped, empty_poor, lamp) in [
+        (FinishResultMode::CourseStage, false, 0, "NoPlay"),
+        (FinishResultMode::CourseStage, true, 1, "NoPlay"),
+        (FinishResultMode::Normal, false, 0, "Failed"),
+        (FinishResultMode::Normal, true, 1, "Failed"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let paths = profile_paths(root.path());
+        let mut score_db = open_score_db();
+        let mut network_db = open_network_db();
+        let mut ir_config = all_ir_providers();
+        for provider in &mut ir_config.providers {
+            provider.send_policy = IrSendPolicyConfig::UpdateScore;
+        }
+        let mut session = session();
+        let chart = Arc::make_mut(&mut session.chart);
+        chart.metadata.source_format = bmz_chart::model::ChartSourceFormat::Bms;
+        chart.total_notes = 1710;
+        session.scored_total_notes = chart.total_notes;
+        let gauge =
+            if mode == FinishResultMode::CourseStage { GaugeType::Class } else { GaugeType::Hard };
+        session.gauge = GaugeState::new(gauge, 160.0, chart.total_notes);
+        session.gauge.set_initial_value(if manually_stopped { 80.0 } else { 0.0 });
+        session.state = PlayState::Failed;
+        session.manually_stopped = manually_stopped;
+        session.score.past_notes = 6;
+        session.score.judges.fast_pgreat = 1;
+        session.score.judges.slow_poor = 5;
+        session.score.judges.fast_empty_poor = empty_poor;
+        session.score.max_combo = 1;
 
-    assert_eq!(finished.summary.ir_queued_jobs, 1);
-    let jobs = network_db.pending_ir_score_jobs(1_700_000_110, 10).unwrap();
-    assert_eq!(jobs.len(), 1);
-    let payload: serde_json::Value = serde_json::from_str(&jobs[0].payload_json).unwrap();
-    assert_eq!(payload["result"]["clear"], "NoPlay");
-    assert_eq!(payload["play_options"]["course_stage"], true);
-
-    std::fs::remove_dir_all(root).unwrap();
+        let expected = (1709 + empty_poor, 1709);
+        for (played_at, expected_jobs) in [(100, 3), (101, 0)] {
+            let finished = finish_session_result(
+                &mut score_db,
+                &mut network_db,
+                FinishSessionResultRequest {
+                    profile_paths: &paths,
+                    replay_config: &ReplayConfig {
+                        auto_save: false,
+                        slot_rules: crate::config::profile_config::default_slot_rules(),
+                    },
+                    ir_config: &ir_config,
+                    session: &session,
+                    source_ln_profile: ChartLnProfile::from_chart(&session.chart),
+                    chart_length_ms: Some(100_000),
+                    play_duration_ms: Some(1_000),
+                    played_at,
+                    applied_arrange: &AppliedArrange::default(),
+                    target_ex_score: None,
+                    score_key: score_key(&session),
+                    practice_mode: false,
+                    finish_mode: mode,
+                },
+            )
+            .unwrap();
+            assert_eq!((finished.summary.bp, finished.summary.cb), expected);
+            assert_eq!(finished.summary.ir_queued_jobs, expected_jobs);
+        }
+        let history = score_db.recent_history(2, 0).unwrap();
+        assert_eq!(history.len(), 2);
+        for entry in history {
+            assert_eq!(entry.clear_type, lamp);
+            assert_eq!((entry.bp, entry.cb), expected);
+        }
+        let best = score_db.best_scores_for_charts(&[score_key(&session)]).unwrap().pop().unwrap();
+        assert_eq!((best.bp, best.cb), expected);
+        let jobs = network_db.pending_ir_score_jobs(101, 10).unwrap();
+        assert_eq!(jobs.len(), 3);
+        for job in jobs {
+            let payload: IrScoreSubmission = serde_json::from_str(&job.payload_json).unwrap();
+            assert_eq!(payload.result.clear, lamp);
+            assert_eq!(
+                payload.play_options.contains_key("course_stage"),
+                mode == FinishResultMode::CourseStage
+            );
+            assert_eq!(
+                (payload.result.min_bp, payload.result.min_cb),
+                expected,
+                "{}",
+                job.provider
+            );
+            assert_eq!(payload.result.pass_notes, Some(6));
+            assert_eq!(payload.result.judges.slow.poor, 5);
+            assert_eq!(payload.result.judges.fast.empty_poor, empty_poor);
+        }
+    }
 }
 
 #[test]
@@ -1651,6 +1670,396 @@ fn directly_owned_session_saves_its_settled_gauge_end_points() {
 }
 
 #[test]
+fn early_finish_round_trips_saved_gauge_and_lamp_before_later_mine() {
+    use bmz_core::{clear::GaugeType, input::InputEvent};
+    use bmz_gameplay::{gauge::GaugeState, session::PlayEndRequest};
+
+    let mine_time = TimeUs(1_000_000);
+    let finish_time = TimeUs(250_500);
+    let mut live = session();
+    let chart = Arc::make_mut(&mut live.chart);
+    chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+        id: NoteId(2),
+        kind: NoteKind::Mine,
+        time: mine_time,
+        damage: Some(200.0),
+        ..chart.lane_notes[Lane::Key1.index()][0].clone()
+    });
+    chart.end_time = mine_time;
+    live.gauge = GaugeState::new(GaugeType::Hard, 160.0, chart.total_notes);
+    live.state = PlayState::Playing;
+    live.conditional.pending_inputs.push(InputEvent {
+        lane: Lane::Key1,
+        kind: InputKind::Press,
+        time: TimeUs(0),
+        source: InputSource::Human,
+        device_kind: InputDeviceKind::Keyboard,
+        scratch_direction: None,
+    });
+
+    let mut audio = bmz_audio::queue::ScheduledSoundQueue::new();
+    live.audio_clock.pause_at(TimeUs(0));
+    bmz_gameplay::session::advance_session_frame(&mut live, &mut audio);
+    assert!(live.judge.is_exhausted(&live.chart));
+    live.play_end.request(PlayEndRequest::Finish);
+    live.audio_clock.pause_at(finish_time);
+    bmz_gameplay::session::advance_session_frame(&mut live, &mut audio);
+    assert_eq!(live.state, PlayState::Finished);
+
+    let mut replay = session();
+    replay.chart = Arc::clone(&live.chart);
+    replay.gauge = GaugeState::new(GaugeType::Hard, 160.0, replay.chart.total_notes);
+    assert_early_finish_round_trip(
+        &live,
+        replay,
+        TimeUs(mine_time.0 + 20_000),
+        100.0,
+        ClearType::Max,
+    );
+}
+
+#[test]
+fn manual_stop_replays_the_last_scored_press_without_hitting_the_next_mine() {
+    use bmz_core::{clear::GaugeType, input::InputEvent};
+    use bmz_gameplay::{gauge::GaugeState, session::PlayEndRequest};
+
+    let mut live = session();
+    let chart = Arc::make_mut(&mut live.chart);
+    let notes = &mut chart.lane_notes[Lane::Key1.index()];
+    notes[0].time = TimeUs(250_125);
+    notes.push(NoteEvent {
+        id: NoteId(2),
+        kind: NoteKind::Mine,
+        time: TimeUs(250_250),
+        damage: Some(200.0),
+        ..notes[0].clone()
+    });
+    notes.push(NoteEvent { id: NoteId(3), time: TimeUs(1_000_000), ..notes[0].clone() });
+    chart.end_time = TimeUs(1_000_000);
+    chart.total_notes = 2;
+    live.scored_total_notes = chart.total_notes;
+    live.gauge = GaugeState::new(GaugeType::Hard, 160.0, chart.total_notes);
+    let mut replay = session();
+    replay.chart = Arc::clone(&live.chart);
+    replay.scored_total_notes = live.scored_total_notes;
+    replay.gauge = live.gauge.clone();
+    live.state = PlayState::Playing;
+    live.conditional.pending_inputs.push(InputEvent {
+        lane: Lane::Key1,
+        kind: InputKind::Press,
+        time: TimeUs(250_125),
+        source: InputSource::Human,
+        device_kind: InputDeviceKind::Keyboard,
+        scratch_direction: None,
+    });
+    let mut audio = bmz_audio::queue::ScheduledSoundQueue::new();
+    live.audio_clock.pause_at(TimeUs(250_125));
+    bmz_gameplay::session::advance_session_frame(&mut live, &mut audio);
+    live.play_end.request(PlayEndRequest::ManualStop);
+    live.audio_clock.pause_at(TimeUs(250_500));
+    bmz_gameplay::session::advance_session_frame(&mut live, &mut audio);
+
+    let (history, replay, frame) = assert_recorded_stop_round_trip(&live, replay, TimeUs(400_000));
+    assert_eq!(history.ex_score, 2);
+    assert_eq!(history.clear_type, ClearType::Failed.as_str());
+    assert_eq!(history.gauge_value, Some(100.0));
+    assert!(frame.mine_hits.is_empty());
+    assert_eq!(replay.replay_player.unwrap().scored_until(), Some(TimeUs(250_125)));
+}
+
+#[test]
+fn negative_offset_hard_failure_after_a_branch_round_trips() {
+    use crate::config::profile_config::ProfileConfig;
+    use crate::screens::play_session::{PlaySessionOptions, build_game_session};
+    use bmz_core::{clear::GaugeType, input::InputEvent};
+    use bmz_gameplay::gauge::{GaugeProperty, GaugeState};
+
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("branches.bms");
+    std::fs::write(
+        &path,
+        concat!(
+            "#BPM 120\n#HLNOBJ ZZ\n#00011:0000000000000001\n#00211:ZZ\n",
+            "#CONDITIONAL 1\n#WHEN AUTO==0\n#00101:02\n#DEFAULT\n#ENDCONDITIONAL\n",
+            "#CONDITIONAL 3\n#WHEN SCORE==0\n#00411:01\n#DEFAULT\n#ENDCONDITIONAL\n",
+        ),
+    )
+    .unwrap();
+    let chart = Arc::new(bmz_chart::import::import_bms_chart(&path, None, false).unwrap().chart);
+    let setup = || {
+        let mut session = build_game_session(
+            chart.clone(),
+            &ProfileConfig::new_default("test", "Test", 1),
+            PlaySessionOptions::default(),
+        );
+        session.gauge = GaugeState::new_with_property(
+            GaugeType::Hard,
+            160.0,
+            session.scored_total_notes,
+            GaugeProperty::FiveKeys,
+        );
+        session.gauge.set_initial_value(6.0);
+        session
+    };
+    let mut live = setup();
+    live.offsets.input_offset_us = -50_000;
+    let mut audio = bmz_audio::queue::ScheduledSoundQueue::new();
+    for now in [1_800_000, 1_815_000, 2_000_000, 2_040_000] {
+        if now < 2_000_000 {
+            live.conditional.pending_inputs.push(InputEvent {
+                lane: Lane::Key1,
+                kind: if now == 1_800_000 { InputKind::Press } else { InputKind::Release },
+                time: TimeUs(now - 50_000),
+                source: InputSource::Human,
+                device_kind: InputDeviceKind::Keyboard,
+                scratch_direction: None,
+            });
+        }
+        live.audio_clock.pause_at(TimeUs(now));
+        bmz_gameplay::session::advance_session_frame(&mut live, &mut audio);
+        if now == 2_000_000 {
+            assert_eq!(live.state, PlayState::Playing);
+            assert_eq!(live.conditional.evaluations.len(), 1);
+        }
+    }
+    assert_eq!(live.state, PlayState::Failed);
+    assert_eq!(live.scoring_closed_at, Some(TimeUs(1_980_001)));
+    let (_, replay, _) = assert_recorded_stop_round_trip(&live, setup(), TimeUs(2_100_000));
+    assert_eq!(replay.conditional.decisions, live.conditional.decisions);
+    assert_eq!(replay.conditional.decisions.len(), 2);
+    assert_eq!(replay.conditional.evaluations.len(), 1);
+}
+
+#[test]
+fn early_finish_round_trips_saved_hcn_gauge_and_lamp_with_input_offset() {
+    use crate::config::profile_config::ProfileConfig;
+    use crate::screens::play_session::{PlaySessionOptions, build_game_session_with_input_backend};
+    use bmz_gameplay::input::backend::{DeviceInputEvent, DeviceTimestamp, PhysicalControl};
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("hcn.bms");
+    std::fs::write(&path, "#TITLE HCN\n#BPM 120\n#TOTAL 120\n#LNMODE 3\n#00051:0001\n#00151:01\n")
+        .unwrap();
+    let chart = Arc::new(bmz_chart::import::import_bms_chart(&path, None, false).unwrap().chart);
+    let mut profile = ProfileConfig::new_default("test", "Test", 1);
+    profile.play.rule_mode = bmz_gameplay::rule::RuleMode::Beatoraja;
+    let keys = crate::input::shared::SharedInputBackend::default();
+    let session = || {
+        build_game_session_with_input_backend(
+            Arc::clone(&chart),
+            &profile,
+            PlaySessionOptions {
+                gauge_override: Some(bmz_core::clear::GaugeType::Normal),
+                ..Default::default()
+            },
+            Box::new(keys.clone()),
+        )
+    };
+    // Both releases are judged at 1.240s. With negative compensation a later
+    // HCN drain falls between the last scoring update and the physical exit.
+    for (offset, finish) in [(50_000, 1_242_000), (-50_000, 1_510_000)] {
+        let mut live = session();
+        live.offsets.input_offset_us = offset;
+        let mut audio = bmz_audio::queue::ScheduledSoundQueue::new();
+        let press = 1_000_000 - offset;
+        for now in (press..=finish).step_by(1_000) {
+            if now == press || now == 1_240_000 - offset {
+                keys.push_shared_event(DeviceInputEvent {
+                    device: crate::input::winit::W_KEYBOARD_DEVICE_ID,
+                    control: PhysicalControl::KeyboardKey("Z".into()),
+                    kind: if now == press { InputKind::Press } else { InputKind::Release },
+                    timestamp: DeviceTimestamp::Unknown,
+                    bounce_policy: Default::default(),
+                });
+            }
+            if now == finish {
+                assert!(live.judge.is_exhausted(&live.chart));
+                live.play_end.request(bmz_gameplay::session::PlayEndRequest::Finish);
+            }
+            live.audio_clock.pause_at(TimeUs(now));
+            bmz_gameplay::session::advance_session_frame(&mut live, &mut audio);
+        }
+        assert!(live.finished_early);
+        assert_eq!(live.replay_recorder.events[1].time, TimeUs(1_240_000));
+        let (_, replay, frame) =
+            assert_recorded_stop_round_trip(&live, session(), TimeUs(2_100_000));
+        assert!(frame.mine_hits.is_empty());
+        assert_eq!(replay.state, PlayState::Finished);
+        let player = replay.replay_player.unwrap();
+        assert!(player.events.iter().all(|edge| edge.applied_after.is_none()));
+        assert_eq!(player.scored_until(), live.replay_stop_scored_through());
+    }
+}
+
+#[test]
+fn manual_stop_discards_inputs_judged_after_the_stop_with_positive_offset() {
+    use crate::config::profile_config::ProfileConfig;
+    use crate::screens::play_session::{PlaySessionOptions, build_game_session_with_input_backend};
+    use bmz_gameplay::input::backend::{DeviceInputEvent, DeviceTimestamp, PhysicalControl};
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("taps.bms");
+    // Taps at 2.0s and 3.0s. The second keeps notes remaining at the stop.
+    std::fs::write(&path, "#TITLE TAPS\n#BPM 120\n#00111:0101\n").unwrap();
+    let chart = Arc::new(bmz_chart::import::import_bms_chart(&path, None, false).unwrap().chart);
+    let profile = ProfileConfig::new_default("test", "Test", 1);
+    let keys = crate::input::shared::SharedInputBackend::default();
+    let session = || {
+        build_game_session_with_input_backend(
+            Arc::clone(&chart),
+            &profile,
+            PlaySessionOptions::default(),
+            Box::new(keys.clone()),
+        )
+    };
+    let mut live = session();
+    live.offsets.input_offset_us = 50_000;
+    let mut audio = bmz_audio::queue::ScheduledSoundQueue::new();
+    // The press at 1.950s is judged at 2.000s. The release at 1.990s would be
+    // judged at 2.040s, after the stop at 2.010s.
+    for now in (1_950_000..=2_010_000).step_by(1_000) {
+        if now == 1_950_000 || now == 1_990_000 {
+            keys.push_shared_event(DeviceInputEvent {
+                device: crate::input::winit::W_KEYBOARD_DEVICE_ID,
+                control: PhysicalControl::KeyboardKey("Z".into()),
+                kind: if now == 1_950_000 { InputKind::Press } else { InputKind::Release },
+                timestamp: DeviceTimestamp::Unknown,
+                bounce_policy: Default::default(),
+            });
+        }
+        if now == 2_010_000 {
+            assert!(live.score.ex_score() > 0);
+            live.play_end.request(bmz_gameplay::session::PlayEndRequest::ManualStop);
+        }
+        live.audio_clock.pause_at(TimeUs(now));
+        bmz_gameplay::session::advance_session_frame(&mut live, &mut audio);
+    }
+    assert!(live.manually_stopped);
+    // Only the press judged before the stop is recorded.
+    assert_eq!(
+        live.replay_recorder.events.iter().map(|event| event.time).collect::<Vec<_>>(),
+        [TimeUs(2_000_000)]
+    );
+    assert_recorded_stop_round_trip(&live, session(), TimeUs(2_100_000));
+}
+
+fn assert_early_finish_round_trip(
+    live: &GameSession,
+    replay: GameSession,
+    playback_time: TimeUs,
+    gauge: f32,
+    lamp: ClearType,
+) {
+    let (history, replay, frame) = assert_recorded_stop_round_trip(live, replay, playback_time);
+    assert!(frame.mine_hits.is_empty());
+    assert_eq!(replay.state, PlayState::Finished);
+    assert_eq!(history.gauge_value, Some(gauge));
+    assert_eq!(history.clear_type, lamp.as_str());
+}
+
+/// Save `live`, replay its stored file and compare the replayed result with the history.
+fn assert_recorded_stop_round_trip(
+    live: &GameSession,
+    mut replay: GameSession,
+    playback_time: TimeUs,
+) -> (crate::storage::score_db::ScoreHistoryEntry, GameSession, bmz_gameplay::session::SessionFrame)
+{
+    let root = tempfile::tempdir().unwrap();
+    let paths = profile_paths(root.path());
+    let mut score_db = open_score_db();
+    let finished = finish_session_result_once(
+        &mut None,
+        &mut score_db,
+        &mut open_network_db(),
+        FinishSessionResultOnceRequest {
+            profile_paths: &paths,
+            replay_config: &ReplayConfig {
+                auto_save: true,
+                slot_rules: crate::config::profile_config::default_slot_rules(),
+            },
+            ir_config: &IrConfig::default(),
+            session: live,
+            source_ln_profile: ChartLnProfile::from_chart(&live.chart),
+            chart_length_ms: None,
+            play_duration_ms: None,
+            played_at: 1_700_000_114,
+            applied_arrange: &AppliedArrange::default(),
+            target_ex_score: None,
+            target_name: "",
+            target: Default::default(),
+            score_key: score_key(live),
+            practice_mode: false,
+            finish_mode: FinishResultMode::Normal,
+        },
+    )
+    .unwrap();
+    let history = score_db.recent_history(1, 0).unwrap().pop().unwrap();
+    assert_eq!(history.id, finished.stored.score_history_id);
+
+    replay.state = PlayState::Playing;
+    replay.replay_player = Some(
+        crate::storage::replay::load_replay_player(&root.path().join(&history.replay_path))
+            .unwrap(),
+    );
+    replay.conditional = bmz_gameplay::session::conditional::ConditionalRuntime::from_player(
+        replay.replay_player.as_ref(),
+    );
+    replay.audio_clock.pause_at(playback_time);
+    let frame = bmz_gameplay::session::advance_session_frame(
+        &mut replay,
+        &mut bmz_audio::queue::ScheduledSoundQueue::new(),
+    );
+    assert_eq!(replay.state, live.state);
+    assert_eq!(replay.scoring_closed_at, live.scoring_closed_at);
+    let replayed = play_result_from_session(&replay);
+    assert_eq!(
+        (
+            replayed.score.ex_score(),
+            replayed.record_bp(),
+            replayed.score.max_combo,
+            Some(replayed.gauge_value),
+            replayed.clear_type.as_str()
+        ),
+        (
+            history.ex_score,
+            history.bp,
+            history.max_combo,
+            history.gauge_value,
+            history.clear_type.as_str()
+        )
+    );
+    (history, replay, frame)
+}
+
+#[test]
+fn recorded_stop_snapshot_ends_at_the_scoring_cutoff() {
+    for manual_stop in [false, true] {
+        let mut live = session();
+        // The result is captured after the clock passed the cutoff.
+        live.audio_clock.pause_at(TimeUs(95_000));
+        live.scoring_closed_at = Some(TimeUs(80_000));
+        live.finished_early = !manual_stop;
+        live.manually_stopped = manual_stop;
+        live.replay_recorder.events.push(ReplayEvent {
+            applied_after: None,
+            lane: Lane::Key1,
+            kind: InputKind::Press,
+            time: TimeUs(78_000),
+            device_kind: InputDeviceKind::Keyboard,
+            scratch_direction: None,
+        });
+        let snapshot = FinishSessionSnapshot::from_session(
+            &live,
+            ChartLnProfile::default(),
+            &AppliedArrange::default(),
+            live.scoring_closed_at,
+        );
+        assert_eq!(snapshot.kaleid.ended_at, TimeUs(80_000), "manual_stop={manual_stop}");
+        assert_eq!(snapshot.kaleid.finished_early, !manual_stop);
+        assert_eq!(snapshot.kaleid.manually_stopped, manual_stop);
+        assert_eq!(snapshot.replay_events, live.replay_recorder.events);
+    }
+}
+
+#[test]
 fn finish_snapshot_preserves_the_started_session_mode() {
     let mut session = session();
     session.session_mode_index = 1;
@@ -1855,6 +2264,8 @@ fn session() -> GameSession {
         result_wait_end_time: None,
         bga_stretch: 1,
         show_ln_tail_cap: false,
+        show_hidden_notes: false,
+        practice_source_hidden_notes: None,
         hide_auto_scratch_notes: false,
         auto_scratch_lanes: [false; bmz_core::lane::LANE_COUNT],
         lane_hcn_timer: [None; bmz_core::lane::LANE_COUNT],
@@ -1866,6 +2277,7 @@ fn session() -> GameSession {
         pending_mine_hits: Vec::new(),
         state: PlayState::Finished,
         manually_stopped: false,
+        finished_early: false,
         scoring_closed_at: None,
         natural_result_settled_at: None,
         last_hcn_gauge_at: None,

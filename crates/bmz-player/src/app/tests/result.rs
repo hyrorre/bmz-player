@@ -542,6 +542,40 @@ fn viewer_app_exit_uses_the_pre_ready_fade_route() {
 }
 
 #[test]
+fn requested_play_finish_starts_fadeout_with_completion_time_remaining() {
+    let started_at = Instant::now();
+    for (failed, requested, expected_fadeout) in
+        [(false, true, Some(started_at)), (false, false, None), (true, true, None)]
+    {
+        let ending = PlayEndingTransition {
+            completion_remaining_ms: 5000,
+            ..result_play_ending(started_at, failed, requested, PlayEndingCompletion::Result)
+        };
+        assert_eq!(ending.fadeout_started_at, expected_fadeout);
+        assert_eq!(ending.music_end_started_at, (!failed).then_some(started_at));
+        assert_eq!(ending.failed, failed);
+    }
+}
+
+#[test]
+fn replay_ending_at_its_recorded_exit_waits_for_e1_or_e2_to_fade() {
+    let started_at = Instant::now();
+    // The replay ended without a finish request from the UI.
+    let mut ending = result_play_ending(started_at, false, false, PlayEndingCompletion::Result);
+    assert_eq!(ending.fadeout_started_at, None);
+    let pressed_at = started_at + Duration::from_millis(400);
+    assert_eq!(ending.request_fadeout(pressed_at), Some(true));
+    assert_eq!(ending.fadeout_started_at, Some(pressed_at));
+    // A started fade is not restarted.
+    assert_eq!(ending.request_fadeout(pressed_at + Duration::from_millis(100)), Some(false));
+    assert_eq!(ending.fadeout_started_at, Some(pressed_at));
+
+    let mut failed = result_play_ending(started_at, true, false, PlayEndingCompletion::Result);
+    assert_eq!(failed.request_fadeout(pressed_at), None);
+    assert_eq!(failed.fadeout_started_at, None);
+}
+
+#[test]
 fn practice_endings_match_beatoraja_timer_routes() {
     let started_at = Instant::now();
 
@@ -615,7 +649,10 @@ fn result_lua_runtime_values_cover_load_time_result_decisions() {
     assert_eq!(values.get(&121), Some(&1_056));
     assert_eq!(values.get(&151), Some(&1_056));
     assert_eq!(values.get(&152), Some(&((summary.ex_score as i32).saturating_sub(760))));
-    assert_eq!(values.get(&153), Some(&((summary.ex_score as i32).saturating_sub(1_056))));
+    let target_diff = (summary.ex_score as i32).saturating_sub(1_056);
+    for ref_id in [108, 128, 153] {
+        assert_eq!(values.get(&ref_id), Some(&target_diff), "ref={ref_id}");
+    }
     assert_eq!(values.get(&370), Some(&(ClearType::Failed as i32)));
     assert_eq!(values.get(&371), Some(&(ClearType::Normal as i32)));
     assert_eq!(values.get(&374), Some(&-12));
@@ -624,6 +661,12 @@ fn result_lua_runtime_values_cover_load_time_result_decisions() {
     assert_eq!(values.get(&422), Some(&2));
     assert_eq!(values.get(&423), Some(&46));
     assert_eq!(values.get(&424), Some(&104));
+
+    summary.target_ex_score = None;
+    let values = result_lua_runtime_number_values_for_summary(&summary);
+    for ref_id in [108, 128, 153] {
+        assert!(!values.contains_key(&ref_id), "ref={ref_id}");
+    }
 }
 
 #[test]
@@ -1534,6 +1577,85 @@ fn rank_se_is_used_only_after_result_bgms_and_never_downgrades_rank() {
 
 #[cfg(target_os = "windows")]
 #[test]
+#[ignore = "requires a Windows audio output and its own Winit event loop"]
+fn requested_fade_starts_while_the_score_database_is_locked() {
+    use bmz_gameplay::session::{PlayState, advance_session_frame};
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    let event_loop =
+        EventLoop::<AppUserEvent>::with_user_event().with_any_thread(true).build().unwrap();
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    let (mut boot, path, _) = super::boot_chart::registered_charts(&data);
+    boot.app_config.input.gamepad_enabled = false;
+    let id = boot.library_db.chart_id_by_chart_file_path(&path).unwrap().unwrap();
+    let prepared = crate::screens::play_start::prepare_play_session_for_chart_with_winit_input(
+        &boot.library_db,
+        &boot.app_config,
+        &boot.profile_config,
+        id,
+        Default::default(),
+    )
+    .unwrap();
+    let runtime = AudioRuntime::open(&boot.app_config.audio).unwrap();
+    let mut started = open_prepared_winit_play_session(&boot.score_db, &runtime, prepared).unwrap();
+    // Resolve the single tap at a fixed chart time, before natural score settlement.
+    started.running.gameplay.configure_prepared(|session| {
+        let time = session.chart.lane_notes.iter().flatten().next().unwrap().time;
+        session.audio_clock.pause_at(time);
+        session.autoplay = Some(Default::default());
+        advance_session_frame(session, &mut bmz_audio::queue::ScheduledSoundQueue::new());
+        session.autoplay = None;
+        assert_eq!(session.state, PlayState::Playing);
+        assert!(session.judge.is_exhausted(&session.chart));
+        assert_eq!(session.scoring_closed_at, None);
+        session.audio_clock.running = true;
+    });
+    started.running.start_gameplay_runtime(None, 0).unwrap();
+    let (maintenance_tx, _) = tokio::sync::watch::channel(false);
+    let mut app = WinitApp::new(
+        boot,
+        AppOptions { viewer_play: true, ..Default::default() },
+        Instant::now(),
+        None,
+        None,
+        Arc::new(AtomicBool::new(false)),
+        event_loop.create_proxy(),
+        LogBuffer::default(),
+        maintenance_tx,
+        None,
+    )
+    .unwrap();
+    app.viewer_mode = false;
+    app.viewer_waiting = false;
+    app.play.active_play = Some(started);
+    app.play.play_ready_sound_started_at = Some(Instant::now());
+    let lock = rusqlite::Connection::open(&app.boot.profile_paths.score_db).unwrap();
+    lock.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let exit = app.test_input(&PhysicalControl::KeyboardKey("Q".into()), true, false);
+    assert!(app.begin_play_fadeout_after_final_notes_control(&exit));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.play.play_ending.is_none() {
+        app.consume_active_play();
+        assert!(Instant::now() < deadline, "fade waited for the score database");
+        std::thread::yield_now();
+    }
+    assert!(app.play.play_ending.as_ref().unwrap().fadeout_started_at.is_some());
+    assert!(app.play.active_play.as_ref().unwrap().running.pending_finished.is_some());
+    app.finish_play_ending();
+    assert!(app.play.play_ending.is_some());
+    assert!(app.result.finished_play.is_none());
+    lock.execute_batch("ROLLBACK").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.play.play_ending.is_some() {
+        app.finish_play_ending();
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert!(app.result.finished_play.is_some());
+    assert_eq!(app.boot.score_db.recent_history(2, 0).unwrap().len(), 1);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
 #[ignore = "creates an isolated Winit event loop; run alone"]
 fn result_and_select_entries_reuse_skin_decodes_started_ahead() {
     use winit::platform::windows::EventLoopBuilderExtWindows;
@@ -1558,6 +1680,7 @@ fn result_and_select_entries_reuse_skin_decodes_started_ahead() {
     .unwrap();
     app.viewer_mode = false;
     app.viewer_waiting = false;
+    app.skin.default_skin_manifest = Some(bmz_render::skin::default_skin_manifest());
     let finished = debug_boot_finished_play_session();
     let upload = |kind: SkinKind, generation: u64| {
         let now = Instant::now();
@@ -1570,7 +1693,20 @@ fn result_and_select_entries_reuse_skin_decodes_started_ahead() {
             decode_finished_at: now,
             upload_started_at: now,
             upload_finished_at: now,
-            uploaded: Err(anyhow::anyhow!("injected completion")),
+            uploaded: Ok(crate::skin_loader::UploadedSkin {
+                load_dependencies: Default::default(),
+                kind,
+                document: serde_json::from_value(serde_json::json!({
+                    "type": if kind == SkinKind::Result { 7 } else { 5 },
+                }))
+                .unwrap(),
+                lua_runtime: None,
+                fonts: Vec::new(),
+                prepared: Vec::new(),
+                audio_assets: Vec::new(),
+                decode_stats: Default::default(),
+                upload_stats: Default::default(),
+            }),
         }
     };
 
@@ -1614,13 +1750,32 @@ fn result_and_select_entries_reuse_skin_decodes_started_ahead() {
     assert!(app.skin.skin_pipeline.generation(SkinKind::Select) > select);
     assert!(!app.skin.skin_pipeline.is_pending(SkinKind::Select));
 
-    // A Result upload that has not arrived by entry is not waited for.
+    // Entering Result while the upload is in flight keeps the existing request.
     app.result.finished_play = None;
     app.prewarm_result_skin_for_finished_play(&finished);
     let prewarmed = app.skin.skin_pipeline.generation(SkinKind::Result);
     app.result.finished_play = Some(finished.clone());
     app.ensure_result_skin_ready_for_entry(ResultSkinSlot::Normal);
+    assert_eq!(app.skin.skin_pipeline.generation(SkinKind::Result), prewarmed);
+    assert!(app.scene_skin_entry_waiting(SkinKind::Result));
+    let arrived = app.hold_prewarmed_upload(upload(SkinKind::Result, prewarmed)).unwrap();
+    assert!(app.apply_uploaded_skin(arrived));
+    app.poll_scene_skin_entries();
+    assert_eq!(app.skin.skin_pipeline.generation(SkinKind::Result), prewarmed);
+    assert!(app.skin.result_skin_prewarm.is_none());
+    assert!(!app.scene_skin_entry_waiting(SkinKind::Result));
+
+    // An in-flight failure is retried as the entry's load once.
+    app.result.finished_play = None;
+    app.prewarm_result_skin_for_finished_play(&finished);
+    let prewarmed = app.skin.skin_pipeline.generation(SkinKind::Result);
+    app.result.finished_play = Some(finished.clone());
+    app.ensure_result_skin_ready_for_entry(ResultSkinSlot::Normal);
+    let mut failed = upload(SkinKind::Result, prewarmed);
+    failed.uploaded = Err(anyhow::anyhow!("injected failure"));
+    assert!(app.hold_prewarmed_upload(failed).is_none());
     assert!(app.skin.skin_pipeline.generation(SkinKind::Result) > prewarmed);
+    assert!(app.scene_skin_entry_waiting(SkinKind::Result));
 
     // A skin setting change during the ending drops the prewarmed load.
     app.result.finished_play = None;

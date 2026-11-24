@@ -51,6 +51,7 @@ fn course_hcn_constraint_suppresses_empty_poor_for_an_undefined_long_note() {
         ]
         .into_iter()
         .map(|(time, kind)| ReplayEvent {
+            applied_after: None,
             time: TimeUs(time),
             kind,
             lane: Lane::Key1,
@@ -157,6 +158,7 @@ fn dx_9key_replay_judgements_apply_current_pop_damage() {
                 replay_player: Some(ReplayPlayer {
                     events: input_time
                         .map(|time| ReplayEvent {
+                            applied_after: None,
                             lane: Lane::Key1,
                             kind: InputKind::Press,
                             time: TimeUs(time),

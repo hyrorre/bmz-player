@@ -666,6 +666,14 @@ define_settings! {
             },
         format: |profile| format_bool_on_off(profile.play.show_ln_tail_cap),
     }
+    ShowHiddenNotes(bool) {
+        value: [field play.show_hidden_notes],
+        adjust: |profile, _delta| {
+            profile.play.show_hidden_notes = !profile.play.show_hidden_notes;
+            true
+        },
+        format: |profile| format_bool_on_off(profile.play.show_hidden_notes),
+    }
     GuideSe(bool) {
         value: [field play.guide_se],
         adjust: |profile, _delta| {

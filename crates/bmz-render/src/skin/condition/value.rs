@@ -160,6 +160,11 @@ pub(in crate::skin) fn skin_value_number(
         }
         return skin_state_float_expr(&value.value_expr, state).map(integer_property_value);
     }
+    // LR2 Play and Result remap these refs to their own 1P/2P meanings.
+    // Unmapped LR2 refs stay hidden in other scenes.
+    if value.lr2_number && matches!(value.ref_id, 108 | 128) {
+        return None;
+    }
     skin_state_number(value.ref_id, state)
 }
 

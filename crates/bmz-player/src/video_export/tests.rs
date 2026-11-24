@@ -3,6 +3,84 @@ use crate::config::profile_config::ProfileConfig;
 use std::fs;
 
 #[test]
+fn invisible_note_override_reaches_autoplay_and_replay_export_sessions() {
+    let mut fixture = Fixture::new();
+    fixture.save_replay();
+    for slot in [None, Some(1)] {
+        fixture.options.replay_slot = slot;
+        for visible in [true, false] {
+            fixture
+                .options
+                .play_overrides
+                .values
+                .insert("show-invisible-notes".into(), visible.into());
+            let prepared =
+                prepare::prepare(&fixture.options, &fixture.paths, Some("default")).unwrap();
+            assert_eq!(prepared.play.session.show_hidden_notes, visible);
+        }
+    }
+}
+
+#[test]
+fn display_overrides_reach_autoplay_and_replay_without_enabling_replay_assists() {
+    use bmz_gameplay::session::HispeedMode;
+
+    let mut fixture = Fixture::new();
+    fixture.save_replay();
+    let path = fixture.root.join("profiles/default/profile.toml");
+    let mut profile = crate::config::load::load_profile_config(&path).unwrap();
+    profile.play.assist.mark_note = true;
+    profile.play.assist.judge_area = false;
+    profile.play.show_ln_tail_cap = false;
+    profile.play.assist.expand_judge = true;
+    crate::config::save::save_profile_config(&path, &profile).unwrap();
+    for replay in ["", "--replay-slot 1"] {
+        for (flags, mark, area, cap) in [
+            ("", true, false, false),
+            (
+                "--mark-note off --judge-area on --show-ln-tail-cap on --green-number 240",
+                false,
+                true,
+                true,
+            ),
+            (
+                "--mark-note on --judge-area on --show-ln-tail-cap off --green-number 240",
+                true,
+                true,
+                false,
+            ),
+        ] {
+            let args = format!("export video chart.bms -o out.mp4 {replay} {flags}");
+            let crate::cli::Command::Export(parsed) =
+                crate::cli::parse_command(args.split_whitespace()).unwrap()
+            else {
+                panic!()
+            };
+            fixture.options.play_overrides = parsed.play_overrides;
+            fixture.options.replay_slot = parsed.replay_slot;
+            let prepared =
+                prepare::prepare(&fixture.options, &fixture.paths, Some("default")).unwrap();
+            let session = &prepared.play.session;
+            assert_eq!(session.assist.mark_note, mark);
+            assert_eq!(session.assist.judge_area, area);
+            assert_eq!(session.show_ln_tail_cap, cap);
+            assert_eq!(
+                session.assist.configured_mask & crate::assist::EXPAND_JUDGE_MASK != 0,
+                parsed.replay_slot.is_none()
+            );
+            if !flags.is_empty() {
+                assert_eq!(session.hispeed_mode, HispeedMode::Floating);
+                assert_eq!(session.target_green_number, 240);
+            }
+            if parsed.replay_slot.is_some() {
+                assert!(session.assist.score_update_enabled());
+                assert_eq!(session.assist.effective_mask, 0);
+            }
+        }
+    }
+}
+
+#[test]
 fn archive_export_prepare_resolves_media_and_replay_by_internal_chart_hash() {
     let archive = crate::chart_asset::archive_tests::ArchiveFixture::new();
     let mut fixture = Fixture::new();
@@ -170,6 +248,7 @@ impl Fixture {
                 match note.kind {
                     NoteKind::Tap => {
                         events.push(ReplayEvent {
+                            applied_after: None,
                             lane,
                             kind: InputKind::Press,
                             time: note.time,
@@ -177,6 +256,7 @@ impl Fixture {
                             scratch_direction: None,
                         });
                         events.push(ReplayEvent {
+                            applied_after: None,
                             lane,
                             kind: InputKind::Release,
                             time: TimeUs(note.time.0 + 10000),
@@ -185,6 +265,7 @@ impl Fixture {
                         });
                     }
                     NoteKind::LongStart | NoteKind::LongEnd => events.push(ReplayEvent {
+                        applied_after: None,
                         lane,
                         kind: if note.kind == NoteKind::LongStart {
                             InputKind::Press

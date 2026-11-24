@@ -184,6 +184,9 @@ fn settled_runtime_result_records_final_gauges_and_stays_fixed_until_finished() 
     let settled_fingerprint = driver.probe.fingerprint.lock().unwrap().clone();
 
     let finished = finish(&driver.client);
+    let details = finished.lane_details.as_ref().unwrap();
+    let lane = details.lanes[Lane::Key1.index()];
+    assert_eq!((lane.notes, lane.ex_score, lane.bp), (1, 2, 1));
     let graph = &finished.summary.graph;
     assert!(!finished.gauge_carry.is_empty());
     for carry in &finished.gauge_carry {
@@ -240,6 +243,7 @@ fn settled_runtime_result_records_final_gauges_and_stays_fixed_until_finished() 
     let refinished = finish(&driver.client);
     assert_eq!(format!("{:?}", refinished.result), format!("{:?}", finished.result));
     assert_eq!(refinished.summary.graph, finished.summary.graph);
+    assert_eq!(refinished.lane_details, finished.lane_details);
     driver.client.shutdown();
 }
 

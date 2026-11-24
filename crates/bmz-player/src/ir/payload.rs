@@ -178,6 +178,11 @@ pub fn build_score_submission(
     }
     chart_payload.length_ms = context.chart_length_ms;
     let key_mode = chart_payload.mode.clone();
+    let clear = if context.course_stage {
+        crate::storage::play_result::course_stage_clear_type(result.clear_type)
+    } else {
+        result.clear_type
+    };
 
     IrScoreSubmission {
         client: IrClientInfo {
@@ -197,7 +202,7 @@ pub fn build_score_submission(
             rule_mode: context.rule_mode.clone(),
         },
         result: IrResultPayload {
-            clear: result.clear_type.as_str().to_string(),
+            clear: clear.as_str().to_string(),
             played_at: context.played_at,
             duration_ms: context.play_duration_ms,
             judges: IrJudgePayload {
@@ -221,7 +226,7 @@ pub fn build_score_submission(
             ex_score: result.score.ex_score(),
             max_combo: result.score.max_combo,
             notes: result.total_notes,
-            pass_notes: None,
+            pass_notes: Some(result.score.past_notes.min(result.total_notes)),
             min_bp: result.record_bp(),
             min_cb: result.record_cb(),
             ghost,
@@ -523,7 +528,7 @@ mod tests {
         assert_eq!(payload.result.min_cb, 3);
         assert_eq!(payload.result.duration_ms, Some(123_456));
         assert_eq!(payload.chart.length_ms, Some(125_000));
-        assert_eq!(payload.result.pass_notes, None);
+        assert_eq!(payload.result.pass_notes, Some(result.score.past_notes));
         assert_eq!(payload.rule.ln_policy, LnScorePolicy::ForceLn);
         assert_eq!(payload.rule.effective_ln_mode, IrEffectiveLnMode::Ln);
         assert!(payload.chart.ln_profile.has_defined_cn);

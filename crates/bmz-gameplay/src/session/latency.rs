@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 struct Profile {
     last_advance: Option<Instant>,
     window_start: Option<Instant>,
-    collected: Option<Instant>,
     judged: Option<Instant>,
     advance: LatencyHistogram,
     event_age: LatencyHistogram,
@@ -14,6 +13,16 @@ struct Profile {
     judge_enqueue: LatencyHistogram,
 }
 thread_local! { static PROFILE: RefCell<Profile> = RefCell::new(Profile::default()); }
+
+#[cfg(test)]
+pub(super) fn max_collect_judge_us() -> u64 {
+    PROFILE.with_borrow(|p| p.collect_judge.summary().max)
+}
+
+#[cfg(test)]
+pub(super) fn judgement_sample_counts() -> (u64, u64) {
+    PROFILE.with_borrow(|p| (p.collect_judge.summary().count, p.judge_enqueue.summary().count))
+}
 
 pub fn begin_advance() {
     if !tracing::enabled!(tracing::Level::DEBUG) {
@@ -40,22 +49,19 @@ pub fn collected(event_age_us: impl Iterator<Item = u64>) {
         return;
     }
     PROFILE.with_borrow_mut(|p| {
-        p.collected = Some(Instant::now());
         for age in event_age_us {
             p.event_age.record(age);
         }
     });
 }
 
-pub fn judged() {
+pub fn judged(collected: Instant) {
     if !tracing::enabled!(tracing::Level::DEBUG) {
         return;
     }
     PROFILE.with_borrow_mut(|p| {
         let now = Instant::now();
-        if let Some(collected) = p.collected {
-            p.collect_judge.record(now.duration_since(collected).as_micros() as u64);
-        }
+        p.collect_judge.record(now.duration_since(collected).as_micros() as u64);
         p.judged.get_or_insert(now);
     });
 }

@@ -17,3 +17,4 @@ bmz-audio = { path = "../bmz-audio" }
 [dev-dependencies]
 tempfile = "3"
 serde_json.workspace = true
+tracing-subscriber.workspace = true

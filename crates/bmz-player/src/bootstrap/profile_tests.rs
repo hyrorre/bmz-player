@@ -32,7 +32,7 @@ impl ProfileTestDir {
     }
 
     pub(crate) fn boot(&self) -> BootstrappedApp {
-        bootstrap_with_paths_mode(self.paths.clone(), false, None).unwrap()
+        bootstrap_with_paths_mode(self.paths.clone(), StartupScan::Disabled, None).unwrap()
     }
 }
 
@@ -162,7 +162,9 @@ fn explicit_profile_startup_does_not_change_default_until_switch_commits() {
     let data = ProfileTestDir::new();
     drop(data.boot());
     crate::profile_cmd::create_profile(&data.paths, "other", None, false).unwrap();
-    let mut boot = bootstrap_with_paths_mode(data.paths.clone(), false, Some("other")).unwrap();
+    let mut boot =
+        bootstrap_with_paths_mode(data.paths.clone(), StartupScan::Disabled, Some("other"))
+            .unwrap();
     assert_eq!(boot.profile_config.id, "other");
     assert_eq!(load_app_config(&data.paths.config_toml).unwrap().active_profile, "default");
     boot.activate_prepared_profile(PreparedProfile::load(&data.paths, "other").unwrap()).unwrap();

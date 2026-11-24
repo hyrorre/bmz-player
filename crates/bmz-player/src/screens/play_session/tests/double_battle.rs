@@ -123,6 +123,7 @@ fn double_battle_as_replay_leaves_both_scratches_unscored_on_the_replay_clock() 
             source.lane_notes[Lane::Scratch.index()].push(note(2, Lane::Scratch, 1_100_000));
             apply_double_option(&mut source, DoubleOption::BattleAutoScratch);
             let events = [Lane::Key1, Lane::Key8].map(|lane| ReplayEvent {
+                applied_after: None,
                 lane,
                 kind: InputKind::Press,
                 time: TimeUs(1_000_000),

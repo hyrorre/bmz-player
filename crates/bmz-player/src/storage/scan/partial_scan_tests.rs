@@ -149,7 +149,7 @@ fn indexed_prune_checks_the_filesystem_before_removing_charts_below_a_song_folde
         omission_proves_absence: false,
         protected_roots: &[],
     };
-    let mut index = db.chart_paths_not_discovered(&HashSet::new()).unwrap();
+    let mut index = db.chart_paths_not_discovered(&HashSet::new(), Some(root)).unwrap();
     assert_eq!(db.prune_missing_chart_files(&mut index, &request).unwrap(), 0);
     chart(&root.join("song/main.bms"), "Main");
     assert_eq!(db.prune_missing_chart_files(&mut index, &request).unwrap(), 2);
@@ -233,6 +233,32 @@ fn last_scan_at(db: &LibraryDatabase, root: &Path) -> Option<i64> {
             |row| row.get(0),
         )
         .unwrap()
+}
+
+#[test]
+fn partial_and_full_scans_reuse_unchanged_loose_and_archived_files() {
+    let base = temp();
+    let child = base.path().join("child");
+    chart(&child.join("song/a.bms"), "First");
+    write_zip(&child.join("set.zip"), &[("inside.bms", &chart_text("Archive"))]);
+    let mut db = db();
+    let roots = [entry(base.path(), true)];
+    configure_and_scan(&mut db, &roots);
+    let report = partial_scan(&mut db, entry(&child, true), 2);
+    assert_eq!((report.summary.imported, report.summary.skipped), (0, 2));
+
+    chart(&child.join("song/a.bms"), "Changed size");
+    let report = partial_scan(&mut db, entry(&child, true), 3);
+    assert_eq!((report.summary.imported, report.summary.skipped), (1, 1));
+    let report = scan_song_roots(&mut db, &roots, &config(), 4, false).unwrap();
+    assert_eq!((report.summary.imported, report.summary.skipped), (0, 2));
+    // Standalone imports still need adoption by their first scanned root.
+    db.conn().execute("UPDATE chart_files SET root_id = NULL", []).unwrap();
+    let report = scan_song_roots(&mut db, &roots, &config(), 5, false).unwrap();
+    assert_eq!((report.summary.imported, report.summary.skipped), (2, 0));
+    let report = scan_song_roots(&mut db, &roots, &config(), 6, true).unwrap();
+    assert_eq!((report.summary.imported, report.summary.skipped), (2, 0));
+    assert_consistent(&db);
 }
 
 /// Issue #69: F5 on `BMS/INSANE2` while `BMS` is the configured library root.
@@ -661,17 +687,19 @@ fn archive_rewritten_during_partial_scan_keeps_registrations() {
 fn enclosing_root_spellings_do_not_block_pruning() {
     let base = temp();
     let source = base.path().join("source");
-    for name in ["a", "b", "c", "d"] {
+    for name in ["a", "b", "c", "d", "e", "f"] {
         chart(&source.join(format!("{name}.bms")), name);
     }
     let mut db = db();
     scan_song_roots(&mut db, &[entry(&source, true)], &config(), 1, false).unwrap();
     let drive = "C:/bmz-issue69-missing/BMS";
     for (name, path) in [
-        ("a", format!("{drive}/INSANE2/song_B/a.bms")),
-        ("b", format!("{drive}/INSANE2/b.bms")),
+        ("a", r"\\?\C:\bmz-issue69-missing\BMS\INSANE2\song_B\a.bms".into()),
+        ("b", format!("//?/{drive}/INSANE2/b.bms")),
         ("c", format!("{drive}/INSANE2/protected/c.bms")),
         ("d", format!("{drive}/INSANE2-old/d.bms")),
+        ("e", "G:/bmz-issue69-missing/BMS/INSANE2/e.bms".into()),
+        ("f", if cfg!(windows) { drive.to_lowercase() } else { drive.into() } + "/INSANE2/f.bms"),
     ] {
         db.conn()
             .execute(
@@ -694,12 +722,13 @@ fn enclosing_root_spellings_do_not_block_pruning() {
     protected_roots.push(protect(r"C:\bmz-issue69-missing\BMS\INSANE2\protected", true));
     let discovered = HashSet::new();
 
-    let mut index = db.chart_paths_not_discovered(&discovered).unwrap();
+    let scanned_root = Path::new(r"\\?\C:\bmz-issue69-missing\BMS\INSANE2");
+    let mut index = db.chart_paths_not_discovered(&discovered, Some(scanned_root)).unwrap();
     let removed = db
         .prune_missing_chart_files(
             &mut index,
             &PruneRequest {
-                root: Path::new(r"\\?\C:\bmz-issue69-missing\BMS\INSANE2"),
+                root: scanned_root,
                 recursive: true,
                 omission_proves_absence: true,
                 protected_roots: &protected_roots,
@@ -707,13 +736,17 @@ fn enclosing_root_spellings_do_not_block_pruning() {
         )
         .unwrap();
 
-    assert_eq!(removed, 2);
+    assert_eq!(removed, 3);
     let mut stmt = db.conn().prepare("SELECT path FROM chart_files ORDER BY path").unwrap();
     let paths: Vec<String> =
         stmt.query_map([], |row| row.get(0)).unwrap().map(Result::unwrap).collect();
     assert_eq!(
         paths,
-        [format!("{drive}/INSANE2-old/d.bms"), format!("{drive}/INSANE2/protected/c.bms")]
+        [
+            format!("{drive}/INSANE2-old/d.bms"),
+            format!("{drive}/INSANE2/protected/c.bms"),
+            "G:/bmz-issue69-missing/BMS/INSANE2/e.bms".into()
+        ]
     );
 }
 
@@ -742,12 +775,13 @@ fn enclosing_unc_root_does_not_block_pruning() {
         [PathEntry { path: r"\\bmz-issue69\share\BMS".into(), enabled: true, recursive: true }];
     let discovered = HashSet::new();
 
-    let mut index = db.chart_paths_not_discovered(&discovered).unwrap();
+    let scanned_root = Path::new(r"\\?\UNC\bmz-issue69\share\BMS\INSANE2");
+    let mut index = db.chart_paths_not_discovered(&discovered, Some(scanned_root)).unwrap();
     let removed = db
         .prune_missing_chart_files(
             &mut index,
             &PruneRequest {
-                root: Path::new(r"\\?\UNC\bmz-issue69\share\BMS\INSANE2"),
+                root: scanned_root,
                 recursive: true,
                 omission_proves_absence: true,
                 protected_roots: &protected_roots,
@@ -757,4 +791,85 @@ fn enclosing_unc_root_does_not_block_pruning() {
 
     assert_eq!(removed, 1);
     assert_eq!(count(&db, "SELECT COUNT(*) FROM chart_files"), 1);
+}
+
+fn file_db(folder: &Path) -> (PathBuf, LibraryDatabase) {
+    let path = folder.join("library.db");
+    crate::storage::migration::migrate_library_db(&path).unwrap();
+    let db = LibraryDatabase::open(&path).unwrap();
+    (path, db)
+}
+
+#[test]
+fn paused_scan_writes_nothing_until_resumed() {
+    let songs = temp();
+    chart(&songs.path().join("song/a.bms"), "Loose");
+    write_zip(&songs.path().join("pack.zip"), &[("song/b.bms", &chart_text("Archived"))]);
+    let data = temp();
+    let (path, mut db) = file_db(data.path());
+    let roots = [entry(songs.path(), true)];
+    let pause = ScanPause::new();
+    pause.set_paused(true);
+    let worker = {
+        let pause = pause.clone();
+        std::thread::spawn(move || {
+            scan_song_roots_with_pause(&mut db, &roots, &config(), 1, false, &pause, |_| {})
+        })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(!worker.is_finished());
+    let observer = Connection::open(&path).unwrap();
+    let rows = |table: &str| -> i64 {
+        observer.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0)).unwrap()
+    };
+    assert_eq!((rows("roots"), rows("chart_files")), (0, 0));
+
+    pause.set_paused(false);
+    let report = worker.join().unwrap().unwrap();
+    assert_eq!((report.summary.imported, report.summary.failed), (2, 0));
+    assert_eq!(rows("chart_files"), 2);
+}
+
+#[test]
+fn scan_paused_repeatedly_still_imports_and_prunes_everything_once() {
+    let songs = temp();
+    for index in 0..600 {
+        chart(&songs.path().join(format!("song{}/{index}.bms", index % 40)), &format!("C{index}"));
+    }
+    for index in 0..6 {
+        let text = chart_text(&format!("Z{index}"));
+        write_zip(&songs.path().join(format!("packs/{index}.zip")), &[("song/z.bms", &text)]);
+    }
+    let mut db = db();
+    let roots = [entry(songs.path(), true)];
+    let pause = ScanPause::new();
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let toggler = {
+        let (pause, done) = (pause.clone(), std::sync::Arc::clone(&done));
+        std::thread::spawn(move || {
+            let mut paused = false;
+            let mut pauses = 0;
+            while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                paused = !paused;
+                pauses += usize::from(paused);
+                pause.set_paused(paused);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            pause.set_paused(false);
+            pauses
+        })
+    };
+    let report = scan_song_roots_with_pause(&mut db, &roots, &config(), 1, false, &pause, |_| {});
+    done.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(toggler.join().unwrap() > 0);
+    let report = report.unwrap();
+    assert_eq!((report.summary.imported, report.summary.failed), (606, 0));
+    assert!(report.discovery_issues.is_empty());
+    assert_consistent(&db);
+
+    std::fs::remove_file(songs.path().join("song0/0.bms")).unwrap();
+    std::fs::remove_file(songs.path().join("packs/0.zip")).unwrap();
+    let again =
+        scan_song_roots_with_pause(&mut db, &roots, &config(), 2, false, &pause, |_| {}).unwrap();
+    assert_eq!((again.summary.skipped, again.summary.removed_files), (604, 2));
 }

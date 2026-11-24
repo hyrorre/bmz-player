@@ -363,8 +363,18 @@ mod tests {
                 .unwrap();
         let request = |command: &ViewerCommand| platform::request_command(&endpoint, command);
 
+        let mut first = play(r"C:\譜面\_temp.bms", 12, true);
+        if let ViewerCommand::Play { play_overrides, .. } = &mut first {
+            let flags = "chart.bms -P --show-invisible-notes on --mark-note off --judge-area on --show-ln-tail-cap off --green-number 275";
+            let crate::cli::Command::Run(options) =
+                crate::cli::parse_command(flags.split_whitespace()).unwrap()
+            else {
+                panic!()
+            };
+            *play_overrides = options.play_overrides;
+        }
         for command in [
-            play(r"C:\譜面\_temp.bms", 12, true),
+            first,
             ViewerCommand::Stop,
             play(r"C:\譜面\replacement.bms", 3, false),
             ViewerCommand::Quit,
