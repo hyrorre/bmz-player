@@ -553,6 +553,12 @@ mod tests {
         assert_eq!(PackageManifest::read(root).unwrap().version, "0.4.0");
         assert!(!root.join("dll/dll.manifest").exists());
         assert!(pending_update(root).unwrap().is_none());
+        assert!(work.join("startup-version.txt").is_file());
+        assert!(
+            !fs::read_dir(&work).unwrap().any(|entry| {
+                entry.unwrap().file_name().to_string_lossy().starts_with("bmz-sxs-")
+            })
+        );
         assert_user_data(root);
     }
 

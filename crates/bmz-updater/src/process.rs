@@ -14,7 +14,7 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(windows)]
@@ -254,7 +254,8 @@ pub fn start(request: &Request) -> Result<Handoff> {
     }
 }
 
-pub fn run_request(path: &Path) -> Result<()> {
+/// An applied update can return a warning if BMZ could not be restarted.
+pub fn run_request(path: &Path) -> Result<Option<anyhow::Error>> {
     ensure!(path.metadata()?.len() <= 64 * 1024, "invalid updater request");
     let request: Request = serde_json::from_reader(File::open(path)?)?;
     let root = request.root.canonicalize()?;
@@ -279,59 +280,81 @@ pub fn run_request(path: &Path) -> Result<()> {
     }
     let result = transaction::apply(&root, &work);
     drop(instances);
-    let log = match &result {
+    finish_request(&root, &work, &request.restart, result)
+}
+
+fn finish_request(
+    root: &Path,
+    work: &Path,
+    context: &RestartContext,
+    result: Result<()>,
+) -> Result<Option<anyhow::Error>> {
+    // Only launch if the installation is coherent; never run after failed rollback.
+    let restart_error = transaction::pending_update(root)
+        .and_then(|pending| {
+            ensure!(pending.is_none(), "update recovery is required before restarting BMZ");
+            restart(root, context)
+        })
+        .err();
+    let mut log = match &result {
         Ok(()) => "Update completed.\n".to_owned(),
         Err(e) => format!("{e:#}\n"),
     };
-    fs::write(work.join("update.log"), log)?;
-    // Only launch if the installation is coherent; never run after failed rollback.
-    if transaction::pending_update(&root)?.is_none() {
-        restart(&root, &request.restart)?;
+    if let Some(error) = &restart_error {
+        log.push_str(&format!("BMZ did not restart: {error:#}\n"));
     }
-    result
+    if let Err(error) = fs::write(work.join("update.log"), log) {
+        eprintln!("could not write update log: {error}");
+    }
+    result.map(|()| restart_error)
 }
 
-fn startup_probe_dir(work: &Path) -> Result<tempfile::TempDir> {
-    const PREFIX: &str = "bmz-sxs-";
-    const RANDOM_CHARS: usize = 8;
-
-    crate::manifest::reject_link(work)?;
-    let parent = std::path::absolute(work)?;
+fn process_cwd_fits(path: &Path) -> bool {
     #[cfg(windows)]
-    use std::os::windows::ffi::OsStrExt;
-    #[cfg(windows)]
-    const MAX_CURRENT_DIR: usize = 258; // Win32 MAX_PATH minus the trailing separator and NUL.
-    #[cfg(windows)]
-    let parent = if parent.as_os_str().encode_wide().count() + 1 + PREFIX.len() + RANDOM_CHARS
-        > MAX_CURRENT_DIR
     {
-        std::path::absolute(std::env::temp_dir())?
-    } else {
-        parent
-    };
-    #[cfg(windows)]
+        use std::os::windows::ffi::OsStrExt;
+        // Leave room for the trailing separator and NUL. Count verbatim prefixes conservatively.
+        path.as_os_str().encode_wide().count() <= 258
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        true
+    }
+}
+
+struct StartupProbeDir(PathBuf);
+
+impl Drop for StartupProbeDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.0);
+    }
+}
+
+fn startup_probe_dir(work: &Path, temp: &Path) -> Result<StartupProbeDir> {
+    crate::manifest::reject_link(work)?;
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let name = format!("bmz-sxs-{}-{stamp}", std::process::id());
+    let path = std::path::absolute(work)?.join(&name);
+    let path = if process_cwd_fits(&path) { path } else { std::path::absolute(temp)?.join(name) };
     ensure!(
-        parent.as_os_str().encode_wide().count() + 1 + PREFIX.len() + RANDOM_CHARS
-            <= MAX_CURRENT_DIR,
+        process_cwd_fits(&path),
         "SxS loader check needs a shorter temporary directory: {}",
-        parent.display()
+        path.display()
     );
-    tempfile::Builder::new()
-        .prefix(PREFIX)
-        .rand_bytes(RANDOM_CHARS)
-        .tempdir_in(&parent)
-        .with_context(|| {
-            format!("could not create a directory for the SxS loader check in {}", parent.display())
-        })
+    fs::create_dir(&path).with_context(|| {
+        format!("could not create a directory for the SxS loader check: {}", path.display())
+    })?;
+    Ok(StartupProbeDir(path))
 }
 
 pub(crate) fn verify_player_startup(root: &Path, work: &Path, version: &str) -> Result<()> {
-    let cwd = startup_probe_dir(work)?;
+    let cwd = startup_probe_dir(work, &std::env::temp_dir())?;
     let output = checked_path(work, "startup-version.txt")?;
     let stdout = File::options().write(true).create_new(true).open(&output)?;
     let mut command = Command::new(checked_path(root, "bmz-player.exe")?);
     command
-        .current_dir(cwd.path())
+        .current_dir(&cwd.0)
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(stdout)
@@ -371,15 +394,18 @@ pub(crate) fn verify_player_startup(root: &Path, work: &Path, version: &str) -> 
     Ok(())
 }
 
-fn restart(root: &Path, context: &RestartContext) -> Result<()> {
+fn restart(root: &Path, context: &RestartContext) -> Result<Child> {
     ensure!(
         !context.profile.is_empty()
             && context.profile.len() <= 64
             && context.profile.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
         "invalid restart profile"
     );
-    Command::new(root.join("bmz-player.exe"))
-        .current_dir(root)
+    let mut command = Command::new(root.join("bmz-player.exe"));
+    if process_cwd_fits(root) {
+        command.current_dir(root);
+    }
+    command
         .arg("--profile")
         .arg(&context.profile)
         .env("BMZ_DATA_DIR", &context.data_dir)
@@ -387,8 +413,7 @@ fn restart(root: &Path, context: &RestartContext) -> Result<()> {
         .env("BMZ_LOGS_DIR", &context.logs_dir)
         .env("BMZ_RESOURCE_DIR", &context.resource_dir)
         .spawn()
-        .context("updated BMZ could not be restarted")?;
-    Ok(())
+        .context("updated BMZ could not be restarted")
 }
 
 pub fn recover(root: &Path) -> Result<()> {
@@ -440,8 +465,9 @@ mod tests {
         let work = work.canonicalize().unwrap();
         assert!(work.as_os_str().encode_wide().count() > 260);
 
-        let cwd = startup_probe_dir(&work).unwrap();
-        let path = cwd.path().to_path_buf();
+        let cwd = startup_probe_dir(&work, temp.path()).unwrap();
+        let path = cwd.0.clone();
+        assert_eq!(path.parent(), Some(temp.path()));
         let status = Command::new(std::env::current_exe().unwrap())
             .arg("--list")
             .current_dir(&path)
@@ -451,6 +477,76 @@ mod tests {
         assert!(status.success());
         drop(cwd);
         assert!(!path.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_loader_probe_rejects_a_long_temporary_path() {
+        let fixture = tempfile::tempdir().unwrap();
+        let work = fixture.path().join("a".repeat(110)).join("b".repeat(110));
+        let temp = fixture.path().join("c".repeat(110)).join("d".repeat(110));
+        fs::create_dir_all(&work).unwrap();
+        fs::create_dir_all(&temp).unwrap();
+
+        let error = startup_probe_dir(&work, &temp).err().expect("the probe path is too long");
+        assert!(error.to_string().contains("SxS loader check needs a shorter temporary directory"));
+        assert!(fs::read_dir(work).unwrap().next().is_none());
+        assert!(fs::read_dir(temp).unwrap().next().is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_player_can_be_spawned_from_a_deep_installation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("a".repeat(110)).join("b".repeat(110));
+        fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        assert!(!process_cwd_fits(&root));
+        fs::copy(std::env::current_exe().unwrap(), root.join("bmz-player.exe")).unwrap();
+        let context = RestartContext {
+            data_dir: temp.path().join("data"),
+            cache_dir: temp.path().join("cache"),
+            logs_dir: temp.path().join("logs"),
+            resource_dir: root.join("resources"),
+            profile: "default".to_owned(),
+        };
+
+        // The copied test executable exits after rejecting --profile. Only spawn is under test.
+        restart(&root, &context).unwrap().wait().unwrap();
+    }
+
+    #[test]
+    fn a_restart_failure_after_apply_preserves_the_update_and_reports_a_warning() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        crate::manifest::write_test_package(
+            root,
+            "0.4.0",
+            &[("bmz-player.exe", b"old app"), (crate::HELPER, b"old helper")],
+        );
+        let work = transaction::new_work_dir(root).unwrap();
+        crate::manifest::write_test_package(
+            &work.join("stage"),
+            "0.5.0",
+            &[("bmz-player.exe", b"new app"), (crate::HELPER, b"new helper")],
+        );
+        let context = RestartContext {
+            data_dir: root.join("data"),
+            cache_dir: root.join("cache"),
+            logs_dir: root.join("logs"),
+            resource_dir: root.join("resources"),
+            profile: String::new(),
+        };
+
+        let result = transaction::apply(root, &work);
+        let warning = finish_request(root, &work, &context, result).unwrap().unwrap();
+        assert_eq!(warning.to_string(), "invalid restart profile");
+        assert_eq!(PackageManifest::read(root).unwrap().version, "0.5.0");
+        assert!(transaction::pending_update(root).unwrap().is_none());
+        assert_eq!(
+            fs::read_to_string(work.join("update.log")).unwrap(),
+            "Update completed.\nBMZ did not restart: invalid restart profile\n"
+        );
     }
 
     #[test]
