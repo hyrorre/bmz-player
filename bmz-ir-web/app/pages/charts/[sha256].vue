@@ -60,7 +60,6 @@ const listLocation = computed(() =>
 )
 const { user } = useUserSession()
 const { t } = useI18n()
-const { formatDateTime } = useLocaleFormat()
 const { translateApiError } = useApiError()
 const chartParam = computed(() =>
   String(route.params.sha256 ?? '')
@@ -190,10 +189,6 @@ async function copyHash(hash: string) {
     return
   }
   copiedHash.value = { hash }
-}
-
-function formatScoreDate(value: string | null) {
-  return value ? formatDateTime(value) : '-'
 }
 
 const detailErrorDescription = computed(() =>
@@ -401,7 +396,9 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                 <th class="px-2 py-2 text-right">BP</th>
                 <th class="px-2 py-2 text-right">CB</th>
                 <th class="hidden px-3 py-2 xl:table-cell">{{ t('table.input') }}</th>
-                <th class="hidden px-3 py-2 xl:table-cell">{{ t('table.date') }}</th>
+                <th class="hidden w-px px-3 py-2 whitespace-nowrap xl:table-cell">
+                  {{ t('table.date') }}
+                </th>
                 <th scope="col" class="sticky right-0 z-10 w-px bg-elevated px-1">
                   <span class="sr-only">{{ t('score.title') }}</span>
                 </th>
@@ -458,7 +455,7 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                     {{ entry.score.device_type }}
                   </td>
                   <td class="hidden px-3 py-2 text-muted xl:table-cell">
-                    {{ formatScoreDate(entry.score.played_at) }}
+                    <ScoreTableDateTime :value="entry.score.played_at" />
                   </td>
                   <td class="sticky right-0 z-10 bg-default px-1 py-1">
                     <ScoreDetailToggle

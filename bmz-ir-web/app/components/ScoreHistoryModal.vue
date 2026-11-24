@@ -16,16 +16,11 @@ defineProps<{
 const open = defineModel<boolean>('open', { required: true })
 const page = defineModel<number>('page', { required: true })
 const { t } = useI18n()
-const { formatDateTime } = useLocaleFormat()
 const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclosure()
 const wideScoreTable = useWideScoreTable()
 watch([open, page], () => {
   expandedScoreRow.value = null
 })
-
-function formatScoreDate(value: string | null) {
-  return value ? formatDateTime(value) : '-'
-}
 </script>
 
 <template>
@@ -40,7 +35,9 @@ function formatScoreDate(value: string | null) {
         <table class="w-full text-sm">
           <thead class="bg-elevated text-left text-toned">
             <tr>
-              <th class="hidden px-3 py-2 xl:table-cell">{{ t('table.date') }}</th>
+              <th class="hidden w-px px-3 py-2 whitespace-nowrap xl:table-cell">
+                {{ t('table.date') }}
+              </th>
               <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
               <th class="px-3 py-2 text-center">RANK</th>
               <th class="px-3 py-2">{{ t('table.clear') }}</th>
@@ -59,7 +56,7 @@ function formatScoreDate(value: string | null) {
             <template v-for="score in history.scores" :key="scoreKey(score)">
               <tr class="border-t border-default">
                 <td class="hidden px-3 py-2 text-muted xl:table-cell">
-                  {{ formatScoreDate(score.played_at ?? score.server_received_at) }}
+                  <ScoreTableDateTime :value="score.played_at ?? score.server_received_at" />
                 </td>
                 <td class="px-3 py-2 text-right">
                   <RankingExScore :score="score.ex_score" :max="score.max_ex_score" />

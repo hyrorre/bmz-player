@@ -53,7 +53,7 @@ const listLocation = computed(() =>
 )
 const { user } = useUserSession()
 const { t } = useI18n()
-const { formatDateTime, formatNumber } = useLocaleFormat()
+const { formatNumber } = useLocaleFormat()
 const { translateApiError } = useApiError()
 const toast = useToast()
 const rivalUpdating = ref(false)
@@ -234,7 +234,9 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
                 <th class="px-2 py-2 text-right">BP</th>
                 <th class="px-2 py-2 text-right">CB</th>
                 <th class="hidden px-3 py-2 xl:table-cell">{{ t('table.input') }}</th>
-                <th class="hidden px-3 py-2 xl:table-cell">{{ t('table.date') }}</th>
+                <th class="hidden w-px px-3 py-2 whitespace-nowrap xl:table-cell">
+                  {{ t('table.date') }}
+                </th>
                 <th scope="col" class="sticky right-0 z-10 w-px bg-elevated px-1">
                   <span class="sr-only">{{ t('score.title') }}</span>
                 </th>
@@ -287,8 +289,8 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
                   <td class="px-2 py-2 text-right tabular-nums">{{ score.min_bp }}</td>
                   <td class="px-2 py-2 text-right tabular-nums">{{ score.min_cb }}</td>
                   <td class="hidden px-3 py-2 text-muted xl:table-cell">{{ score.device_type }}</td>
-                  <td class="hidden px-3 py-2 whitespace-nowrap text-muted xl:table-cell">
-                    {{ formatDateTime(score.played_at ?? score.server_received_at) }}
+                  <td class="hidden px-3 py-2 text-muted xl:table-cell">
+                    <ScoreTableDateTime :value="score.played_at ?? score.server_received_at" />
                   </td>
                   <td class="sticky right-0 z-10 bg-default px-1 py-1">
                     <ScoreDetailToggle

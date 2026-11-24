@@ -1,5 +1,10 @@
 type DateInput = Date | string | number
 
+const dateAndTimeFormats = new Map<
+  string,
+  { date: Intl.DateTimeFormat; time: Intl.DateTimeFormat }
+>()
+
 export function useLocaleFormat() {
   const { locale } = useI18n()
 
@@ -33,9 +38,23 @@ export function useLocaleFormat() {
     ).format(new Date(value))
   }
 
+  function formatDateAndTime(value: DateInput) {
+    const locale = localeTag.value
+    let formats = dateAndTimeFormats.get(locale)
+    if (!formats) {
+      formats = {
+        date: new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }),
+        time: new Intl.DateTimeFormat(locale, { timeStyle: 'medium' }),
+      }
+      dateAndTimeFormats.set(locale, formats)
+    }
+    const timestamp = new Date(value)
+    return { date: formats.date.format(timestamp), time: formats.time.format(timestamp) }
+  }
+
   function compareText(left: string, right: string) {
     return left.localeCompare(right, localeTag.value, { numeric: true })
   }
 
-  return { localeTag, formatNumber, formatDateTime, formatDate, compareText }
+  return { localeTag, formatNumber, formatDateTime, formatDate, formatDateAndTime, compareText }
 }

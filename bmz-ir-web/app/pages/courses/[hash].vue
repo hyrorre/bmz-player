@@ -93,7 +93,6 @@ const listLocation = computed(() =>
 const { t } = useI18n()
 const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclosure()
 const wideScoreTable = useWideScoreTable()
-const { formatDateTime } = useLocaleFormat()
 const { translateApiError } = useApiError()
 const courseHash = computed(() => String(route.params.hash ?? ''))
 
@@ -144,10 +143,6 @@ function chartMeta(chart: CourseDetail['course']['charts'][number]): string {
   ]
     .filter(Boolean)
     .join(' / ')
-}
-
-function formatScoreDate(value: string | null) {
-  return value ? formatDateTime(value) : '-'
 }
 
 function scoreOption(score: { arrange_options: (IrArrangeOptions | null)[] }) {
@@ -297,7 +292,9 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
                 <th class="px-3 py-2 text-right whitespace-nowrap">MAX COMBO</th>
                 <th class="px-2 py-2 text-right">BP</th>
                 <th class="px-2 py-2 text-right">CB</th>
-                <th class="hidden px-3 py-2 xl:table-cell">{{ t('table.date') }}</th>
+                <th class="hidden w-px px-3 py-2 whitespace-nowrap xl:table-cell">
+                  {{ t('table.date') }}
+                </th>
                 <th scope="col" class="sticky right-0 z-10 w-px bg-elevated px-1">
                   <span class="sr-only">{{ t('score.title') }}</span>
                 </th>
@@ -341,7 +338,7 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
                   <td class="px-2 py-2 text-right tabular-nums">{{ entry.score.bp }}</td>
                   <td class="px-2 py-2 text-right tabular-nums">{{ entry.score.cb ?? '-' }}</td>
                   <td class="hidden px-3 py-2 text-muted xl:table-cell">
-                    {{ formatScoreDate(entry.score.played_at) }}
+                    <ScoreTableDateTime :value="entry.score.played_at" />
                   </td>
                   <td class="sticky right-0 z-10 bg-default px-1 py-1">
                     <ScoreDetailToggle
