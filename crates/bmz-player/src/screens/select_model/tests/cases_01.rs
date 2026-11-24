@@ -26,6 +26,47 @@ fn load_select_items_in_folder_attaches_best_scores_by_hash() {
 }
 
 #[test]
+fn virtual_folder_root_filter_matches_in_memory_selection_and_tie_order() {
+    let (mut library, _) = open_in_memory_dbs();
+    // Alternate roots and reuse a single chart to exercise duplicate sort keys.
+    let duplicate = chart("Same");
+    for path in [
+        "/a%b_/z/song.bms",
+        "/outside/song.bms",
+        "/a%b_/a/song.bms",
+        "/A%b_/song.bms",
+        "/a%b_suffix/song.bms",
+        "/a%b_/pack.zip!/曲/song.bms",
+    ] {
+        library.upsert_chart_import(&record_for_chart(path, &duplicate)).unwrap();
+    }
+    library
+        .conn()
+        .execute(
+            "UPDATE charts SET folder_path = replace(folder_path, '/', char(92))
+         WHERE folder_path = '/a%b_/z'",
+            [],
+        )
+        .unwrap();
+    let all = library.list_all_charts().unwrap();
+    assert_eq!(all.len(), 6);
+    for roots in [vec![], vec!["/".to_string()], vec![r"\a%b_\".to_string(), "/a%b_/a".into()]] {
+        let expected: Vec<_> = all
+            .iter()
+            .filter(|c| chart_is_in_active_song_roots(c, Some(&roots)))
+            .map(|c| c.chart_id)
+            .collect();
+        let actual: Vec<_> = library
+            .list_charts_in_song_roots(&roots)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.chart_id)
+            .collect();
+        assert_eq!(actual, expected, "{roots:?}");
+    }
+}
+
+#[test]
 fn virtual_folder_profile_query_filters_library_charts() {
     let (mut library_db, score_db) = open_in_memory_dbs();
     let mut low = chart("Low");
@@ -217,7 +258,7 @@ fn folder_enrichment_keeps_hash_metadata_for_duplicate_hashes() {
 fn virtual_folder_deduplicates_sha256_before_limit() {
     let (mut library_db, mut score_db) = open_in_memory_dbs();
     let duplicate = chart("Duplicate");
-    let unique = chart("Unique");
+    let unique = chart("A Unique");
     library_db
         .upsert_chart_import(&record_for_chart("/songs/first/duplicate.bms", &duplicate))
         .unwrap();
@@ -244,7 +285,7 @@ version = 1
 id = "limited"
 name = "LIMITED"
 [folders.query]
-filter = "play_count > 0"
+filter = "mode == '7K'"
 order_by = "play_count desc"
 limit = 2
 "#,
@@ -269,7 +310,7 @@ limit = 2
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(titles, ["Duplicate", "Unique"]);
+    assert_eq!(titles, ["Duplicate", "A Unique"]);
     std::fs::remove_dir_all(profile_root).unwrap();
 }
 
@@ -380,6 +421,19 @@ fn load_select_items_uses_profile_ln_policy_for_score_lookup() {
         .unwrap();
     assert_eq!(row.best_score.as_ref().map(|s| s.ln_policy), Some(LnScorePolicy::ForceCn));
     assert_eq!(row.best_score.as_ref().map(|s| s.ex_score), Some(200));
+    let chart = row.chart.as_ref().unwrap();
+    for setting in [LnPolicySetting::AutoLn, LnPolicySetting::AutoCn, LnPolicySetting::AutoHcn] {
+        for rule in [RuleMode::Beatoraja, RuleMode::Dx] {
+            let inputs = library_db.folder_score_inputs(&["/songs"], setting, rule).unwrap();
+            assert_eq!(
+                inputs,
+                [(
+                    score_key_for_chart(chart, setting, rule),
+                    chart.scored_total_notes_for_setting(setting)
+                )]
+            );
+        }
+    }
 }
 
 #[test]

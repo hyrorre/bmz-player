@@ -49,9 +49,8 @@ impl ScoreDatabase {
                  ON u.chart_sha256 = r.chart_sha256 AND u.ln_policy = r.ln_policy
                     AND u.double_option = r.double_option AND u.rule_mode = r.rule_mode"
             );
-            let values = score_key_query_params(chunk);
-            let mut stmt = self.conn.prepare(&sql)?;
-            let rows = stmt.query_map(params_from_iter(values.iter()), |row| {
+            let mut stmt = self.conn.prepare_cached(&sql)?;
+            let rows = stmt.query_map(params_from_iter(score_key_query_params(chunk)), |row| {
                 let key = ScoreKey::with_options(
                     hex_to_hash::<32>(&row.get::<_, String>(0)?)?,
                     ln_policy_from_row(row, 1)?,
@@ -144,9 +143,17 @@ impl ScoreDatabase {
     }
 
     pub fn best_scores_for_charts(&self, keys: &[ScoreKey]) -> Result<Vec<BestScoreSummary>> {
+        let found = self.best_score_map_for_charts(keys)?;
+        Ok(keys.iter().filter_map(|key| found.get(key).cloned()).collect())
+    }
+
+    pub(crate) fn best_score_map_for_charts(
+        &self,
+        keys: &[ScoreKey],
+    ) -> Result<HashMap<ScoreKey, BestScoreSummary>> {
         let mut seen = HashSet::with_capacity(keys.len());
         let unique_keys = keys.iter().copied().filter(|key| seen.insert(*key)).collect::<Vec<_>>();
-        let mut found = HashMap::with_capacity(unique_keys.len());
+        let mut found = HashMap::new();
 
         for chunk in unique_keys.chunks(SCORE_KEY_LOOKUP_BATCH_SIZE) {
             let placeholders =
@@ -201,10 +208,11 @@ impl ScoreDatabase {
                 WHERE (b.chart_sha256, b.ln_policy, b.double_option, b.rule_mode)
                     IN ({placeholders})"
             );
-            let params = score_key_query_params(chunk);
-            let mut stmt = self.conn.prepare(&sql)?;
-            let rows =
-                stmt.query_map(params_from_iter(params.iter()), best_score_summary_from_row)?;
+            let mut stmt = self.conn.prepare_cached(&sql)?;
+            let rows = stmt.query_map(
+                params_from_iter(score_key_query_params(chunk)),
+                best_score_summary_from_row,
+            )?;
             for row in rows {
                 let summary = row?;
                 let key = ScoreKey::with_options(
@@ -217,6 +225,6 @@ impl ScoreDatabase {
             }
         }
 
-        Ok(keys.iter().filter_map(|key| found.get(key).cloned()).collect())
+        Ok(found)
     }
 }

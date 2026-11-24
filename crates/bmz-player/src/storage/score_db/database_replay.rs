@@ -15,9 +15,8 @@ impl ScoreDatabase {
                  WHERE (chart_sha256, ln_policy, double_option, rule_mode)
                     IN ({placeholders})"
             );
-            let params = score_key_query_params(chunk);
-            let mut stmt = self.conn.prepare(&sql)?;
-            let rows = stmt.query_map(params_from_iter(params.iter()), |row| {
+            let mut stmt = self.conn.prepare_cached(&sql)?;
+            let rows = stmt.query_map(params_from_iter(score_key_query_params(chunk)), |row| {
                 let sha256_hex: String = row.get(0)?;
                 let key = ScoreKey::with_options(
                     hex_to_hash::<32>(&sha256_hex)?,

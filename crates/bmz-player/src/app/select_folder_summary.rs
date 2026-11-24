@@ -51,6 +51,7 @@ struct SelectFolderSummaryResult {
 /// 選曲フォルダのlamp集計を非同期で読み込み、表示文脈ごとの世代を管理する。
 pub(super) struct SelectFolderSummaryRuntime {
     cache: HashMap<String, SelectFolderSummaryCacheEntry>,
+    rows_need_cached_summaries: bool,
     request_tx: mpsc::Sender<SelectFolderSummaryWorkerCommand>,
     result_rx: Receiver<SelectFolderSummaryResult>,
     data_generation: u64,
@@ -74,6 +75,7 @@ impl SelectFolderSummaryRuntime {
         drop(result_tx);
         Self {
             cache: HashMap::new(),
+            rows_need_cached_summaries: true,
             request_tx,
             result_rx,
             data_generation: 0,
@@ -97,6 +99,7 @@ impl SelectFolderSummaryRuntime {
         spawn_worker(library_db_path, score_db_path, request_rx, result_tx)?;
         Ok(Self {
             cache: HashMap::new(),
+            rows_need_cached_summaries: true,
             request_tx,
             result_rx,
             data_generation: 0,
@@ -108,7 +111,9 @@ impl SelectFolderSummaryRuntime {
         })
     }
 
-    pub(super) fn sync_view(&mut self, folder_stack: &[String]) {
+    pub(super) fn list_replaced(&mut self, folder_stack: &[String]) {
+        // A refresh of the same folder also installs fresh rows.
+        self.rows_need_cached_summaries = true;
         let next_view_key = view_key(folder_stack);
         if next_view_key == self.view_key {
             return;
@@ -175,6 +180,7 @@ impl SelectFolderSummaryRuntime {
 
         self.ln_policy = ln_policy;
         self.rule_mode = rule_mode;
+        self.rows_need_cached_summaries = true;
         self.view_generation = self.view_generation.wrapping_add(1);
         for item in items {
             if let SelectItem::Folder { summary, .. } = item {
@@ -190,7 +196,10 @@ impl SelectFolderSummaryRuntime {
                 continue;
             }
             let entry = match result.result {
-                Ok(summary) => SelectFolderSummaryCacheEntry::Ready(summary),
+                Ok(summary) => {
+                    self.rows_need_cached_summaries |= summary.is_some();
+                    SelectFolderSummaryCacheEntry::Ready(summary)
+                }
                 Err(error) => {
                     tracing::warn!(
                         key = %result.key,
@@ -205,6 +214,9 @@ impl SelectFolderSummaryRuntime {
             self.cache.insert(result.key, entry);
         }
 
+        if !std::mem::take(&mut self.rows_need_cached_summaries) {
+            return;
+        }
         for item in items {
             let SelectItem::Folder { path, kind, summary, .. } = item else {
                 continue;
@@ -499,7 +511,7 @@ mod tests {
         let SelectFolderSummaryWorkerCommand::Load(request) = requests.try_recv().unwrap() else {
             panic!("expected a request for the NEW folder row");
         };
-        runtime.sync_view(&[path.to_owned()]);
+        runtime.list_replaced(&[path.to_owned()]);
         let summary = SelectFolderSummary { lamp_counts: [3; 11], score_rank_counts: [4; 9] };
         results
             .send(SelectFolderSummaryResult {
@@ -517,6 +529,14 @@ mod tests {
             Ok(SelectFolderSummaryWorkerCommand::SetContext { .. })
         ));
         assert!(requests.try_recv().is_err(), "entering the folder must reuse its row summary");
+
+        // The list loader can replace rows without changing the folder stack.
+        // Cached results also belong on off-screen rows before any cursor move.
+        runtime.list_replaced(&[path.to_owned()]);
+        runtime.refresh(&mut rows, &[], ln, rule, &[], None);
+        assert!(
+            matches!(&rows[0], SelectItem::Folder { summary: Some(value), .. } if value == &summary)
+        );
 
         runtime.refresh(&mut [], &[], ln, RuleMode::Dx, &[], Some(path));
         assert_eq!(runtime.current_folder_summary(path), None);

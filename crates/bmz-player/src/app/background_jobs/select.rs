@@ -132,7 +132,7 @@ impl WinitApp {
         if self.select.score_refresh.take_dirty() {
             self.invalidate_select_folder_summaries();
         }
-        self.select.select_folder_summaries.sync_view(&self.select.folder_stack);
+        self.select.select_folder_summaries.list_replaced(&self.select.folder_stack);
         // beatoraja 準拠の自動送りで mode filter が変わることがあるので、
         // 表示状態と永続化用 profile config を実際に適用したモードへ揃える。
         self.select.select_mode_filter = prepared.mode_filter;

@@ -245,11 +245,8 @@ fn single_archive_subfolder(descendants: &[String], archive_path: &str) -> Optio
     let prefix = format!("{archive_path}/");
     let mut inner: Option<&str> = None;
     let mut has_charts = false;
-    for descendant in descendants {
-        if descendant == archive_path {
-            // 書庫の直下にも譜面がある。
-            return None;
-        }
+    // The caller already excluded archives with charts directly at their root.
+    for descendant in descendants_under(descendants, archive_path) {
         let Some(rest) = descendant.strip_prefix(&prefix) else { continue };
         let (head, tail) = rest.split_once('/').unwrap_or((rest, ""));
         if head.is_empty() {

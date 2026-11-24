@@ -1,4 +1,6 @@
 use super::*;
+use crate::storage::score_db::ScoreKey;
+use bmz_gameplay::rule::RuleMode;
 
 impl LibraryDatabase {
     /// Returns every chart row with the given file SHA-256.
@@ -364,6 +366,30 @@ impl LibraryDatabase {
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Apply the Select root filter once per distinct folder, before decoding and
+    /// sorting chart metadata. Keep rowid order for ties in the original list.
+    pub(crate) fn list_charts_in_song_roots(&self, roots: &[String]) -> Result<Vec<ChartListItem>> {
+        if roots.is_empty() {
+            return Ok(Vec::new());
+        }
+        let roots: Vec<_> =
+            roots.iter().map(|r| r.replace('\\', "/").trim_end_matches('/').to_owned()).collect();
+        let mut stmt = self.conn.prepare(&format!(
+            "WITH roots(path) AS MATERIALIZED (SELECT value FROM json_each(?1)),
+                  folders AS (SELECT DISTINCT folder_path FROM charts)
+             SELECT {CHART_LIST_ITEM_COLUMNS} FROM charts WHERE folder_path IN (
+                 SELECT folder_path FROM folders WHERE EXISTS (
+                     SELECT 1 FROM roots
+                     WHERE rtrim(replace(folder_path, char(92), '/'), '/') = roots.path
+                        OR instr(replace(folder_path, char(92), '/'), roots.path || '/') = 1
+                 )
+             )
+             ORDER BY title COLLATE NOCASE, artist COLLATE NOCASE, play_level COLLATE NOCASE, id"
+        ))?;
+        let rows = stmt.query_map([serde_json::to_string(&roots)?], chart_list_item_from_row)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// Returns the first time each chart was discovered through any linked file.
     pub fn chart_first_seen_at_by_chart_ids(&self, chart_ids: &[i64]) -> Result<HashMap<i64, i64>> {
         if chart_ids.is_empty() {
@@ -452,11 +478,53 @@ impl LibraryDatabase {
     /// expanding to `IN (?,?,...)`, so the SQLite bind-variable limit
     /// (`SQLITE_MAX_VARIABLE_NUMBER`) is never hit even for huge folder sets.
     pub fn list_charts_in_folders(&self, folder_paths: &[&str]) -> Result<Vec<ChartListItem>> {
+        self.map_charts_in_folders(folder_paths, CHART_LIST_ITEM_COLUMNS, chart_list_item_from_row)
+    }
+
+    pub(crate) fn folder_score_inputs(
+        &self,
+        folder_paths: &[&str],
+        setting: LnPolicySetting,
+        rule_mode: RuleMode,
+    ) -> Result<Vec<(ScoreKey, u32)>> {
+        let columns = "sha256, total_notes, has_undefined_ln, has_defined_ln, has_defined_cn,
+                       has_defined_hcn, has_defined_hln, undefined_ln_pairs, defined_ln_pairs,
+                       defined_cn_pairs, defined_hcn_pairs, defined_hln_pairs";
+        self.map_charts_in_folders(folder_paths, columns, |row| {
+            let profile = ChartLnProfile {
+                has_undefined_ln: row.get(2)?,
+                has_defined_ln: row.get(3)?,
+                has_defined_cn: row.get(4)?,
+                has_defined_hcn: row.get(5)?,
+                has_defined_hln: row.get(6)?,
+            };
+            let counts = ChartLnCounts {
+                undefined_ln_pairs: row.get(7)?,
+                defined_ln_pairs: row.get(8)?,
+                defined_cn_pairs: row.get(9)?,
+                defined_hcn_pairs: row.get(10)?,
+                defined_hln_pairs: row.get(11)?,
+            };
+            let sha256 = hex_to_hash(row.get_ref(0)?.as_str()?)?;
+            let policy = crate::ln_policy::score_ln_policy(setting, profile);
+            Ok((
+                ScoreKey::new(sha256, policy).with_rule_mode(rule_mode),
+                counts.scored_total_notes_for_setting(row.get(1)?, setting),
+            ))
+        })
+    }
+
+    fn map_charts_in_folders<T>(
+        &self,
+        folder_paths: &[&str],
+        columns: &str,
+        mut map: impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+    ) -> Result<Vec<T>> {
         if folder_paths.is_empty() {
             return Ok(Vec::new());
         }
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT {CHART_LIST_ITEM_COLUMNS}
+            "SELECT {columns}
             FROM charts
             WHERE folder_path = ?1
             ORDER BY title COLLATE NOCASE, artist COLLATE NOCASE, play_level COLLATE NOCASE"
@@ -464,7 +532,7 @@ impl LibraryDatabase {
         let mut out = Vec::new();
         for path in folder_paths {
             let key = to_folder_key(path);
-            let rows = stmt.query_map(params![key], chart_list_item_from_row)?;
+            let rows = stmt.query_map(params![key], &mut map)?;
             for row in rows {
                 out.push(row?);
             }

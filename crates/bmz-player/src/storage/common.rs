@@ -1,5 +1,3 @@
-use std::fmt::Write;
-
 use anyhow::Result;
 use rusqlite::Connection;
 use rusqlite::types::{FromSqlError, Type};
@@ -49,9 +47,11 @@ pub(crate) fn fill_temp_values<T: rusqlite::ToSql>(
 /// `score.db.*.chart_sha256`）は小文字 hex TEXT で保存する。
 /// この関数は SQLite への bind 直前で `[u8;16]` / `[u8;32]` を変換するためのもの。
 pub fn hash_to_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(out, "{b:02x}");
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
 }

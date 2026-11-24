@@ -49,13 +49,7 @@ fn chart_items_with_optional_table_enrichment(
 ) -> Result<Vec<SelectItem>> {
     let keys: Vec<ScoreKey> =
         all_charts.iter().map(|c| score_key_for_chart(c, ln_policy_setting, rule_mode)).collect();
-    let score_map: HashMap<ScoreKey, BestScoreSummary> = score_db
-        .best_scores_for_charts(&keys)?
-        .into_iter()
-        .map(|s| {
-            (ScoreKey::with_options(s.chart_sha256, s.ln_policy, s.double_option, s.rule_mode), s)
-        })
-        .collect();
+    let score_map = score_db.best_score_map_for_charts(&keys)?;
     let replay_slot_map = replay_slot_map(score_db, &keys)?;
     let last_played = score_db.last_played_times_for_charts(&keys)?;
     let chart_ids: Vec<i64> = all_charts.iter().map(|c| c.chart_id).collect();
@@ -236,11 +230,9 @@ pub(super) fn folder_summary_for_song_folder(
 ) -> Result<SelectFolderSummary> {
     let paths = reachable_chart_folders(library_db, folder_path)?;
     let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
-    folder_summary_for_charts(
+    folder_summary_for_scores(
         score_db,
-        library_db.list_charts_in_folders(&path_refs)?,
-        ln_policy_setting,
-        rule_mode,
+        library_db.folder_score_inputs(&path_refs, ln_policy_setting, rule_mode)?,
     )
 }
 
@@ -265,29 +257,25 @@ pub(super) fn folder_summary_for_charts(
     ln_policy_setting: LnPolicySetting,
     rule_mode: RuleMode,
 ) -> Result<SelectFolderSummary> {
-    let mut seen = HashSet::new();
-    let (keys, total_notes): (Vec<_>, Vec<_>) = charts
-        .iter()
-        .filter_map(|chart| {
-            let key = score_key_for_chart(chart, ln_policy_setting, rule_mode);
-            seen.insert(key).then(|| (key, chart.scored_total_notes_for_setting(ln_policy_setting)))
-        })
-        .unzip();
-    let score_map: HashMap<ScoreKey, BestScoreSummary> = score_db
-        .best_scores_for_charts(&keys)?
-        .into_iter()
-        .map(|score| {
+    folder_summary_for_scores(
+        score_db,
+        charts.into_iter().map(|chart| {
             (
-                ScoreKey::with_double_option(
-                    score.chart_sha256,
-                    score.ln_policy,
-                    score.double_option,
-                )
-                .with_rule_mode(score.rule_mode),
-                score,
+                score_key_for_chart(&chart, ln_policy_setting, rule_mode),
+                chart.scored_total_notes_for_setting(ln_policy_setting),
             )
-        })
-        .collect();
+        }),
+    )
+}
+
+fn folder_summary_for_scores(
+    score_db: &ScoreDatabase,
+    inputs: impl IntoIterator<Item = (ScoreKey, u32)>,
+) -> Result<SelectFolderSummary> {
+    let mut seen = HashSet::new();
+    let (keys, total_notes): (Vec<_>, Vec<_>) =
+        inputs.into_iter().filter(|(key, _)| seen.insert(*key)).unzip();
+    let score_map = score_db.best_score_map_for_charts(&keys)?;
 
     let mut summary = SelectFolderSummary::default();
     for (key, notes) in keys.into_iter().zip(total_notes) {
@@ -332,13 +320,7 @@ pub fn same_folder_difficulties(
     let charts = library_db.list_charts_in_folder(folder_path)?;
     let keys: Vec<ScoreKey> =
         charts.iter().map(|c| score_key_for_chart(c, ln_policy_setting, rule_mode)).collect();
-    let mut bests: HashMap<ScoreKey, BestScoreSummary> = score_db
-        .best_scores_for_charts(&keys)?
-        .into_iter()
-        .map(|s| {
-            (ScoreKey::with_options(s.chart_sha256, s.ln_policy, s.double_option, s.rule_mode), s)
-        })
-        .collect();
+    let mut bests = score_db.best_score_map_for_charts(&keys)?;
     let mut slots = [SelectSameFolderDifficulty::default(); 5];
     for (chart, key) in charts.iter().zip(keys) {
         let slot = match chart.difficulty_name.trim().to_ascii_uppercase().as_str() {

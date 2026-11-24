@@ -78,6 +78,10 @@ fn partial_scans_do_not_reenable_disabled_roots_or_restore_removed_configured_ro
     assert_eq!(sources[&old].chart.chart_id, old);
     assert_eq!(sources[&active].chart.chart_id, active);
     assert_ne!(sources[&disabled].chart.chart_id, disabled);
+    let replacements =
+        f.db.registered_chart_replacements(&charts.iter().collect::<Vec<_>>()).unwrap();
+    assert_eq!(replacements.len(), 1);
+    assert_eq!(replacements[&disabled].chart.chart_id, sources[&disabled].chart.chart_id);
 
     // After promoting the partial target to a setting, removing the setting
     // must not revive the old temporary scope.

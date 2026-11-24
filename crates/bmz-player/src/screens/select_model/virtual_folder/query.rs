@@ -168,9 +168,25 @@ impl VirtualQuery {
     pub(super) fn required_local_days(&self) -> usize {
         self.expression.required_local_days()
     }
+
+    pub(super) fn uses_any(&self, fields: &[Field]) -> bool {
+        self.expression.uses_any(fields)
+    }
 }
 
 impl Expr {
+    fn uses_any(&self, fields: &[Field]) -> bool {
+        match self {
+            Self::And(left, right) | Self::Or(left, right) => {
+                left.uses_any(fields) || right.uses_any(fields)
+            }
+            Self::Not(expr) => expr.uses_any(fields),
+            Self::Compare(field, ..) | Self::InList(field, ..) | Self::InTimeRange(field, ..) => {
+                fields.contains(field)
+            }
+        }
+    }
+
     fn matches(&self, facts: &VirtualChartFacts<'_>, local_days: &[(i64, i64)]) -> bool {
         match self {
             Self::And(left, right) => {

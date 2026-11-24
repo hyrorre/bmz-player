@@ -571,13 +571,7 @@ pub(super) fn load_select_items_in_table_filtered(
         .iter()
         .filter_map(|entry| entry_score_key(entry, ln_policy_setting, rule_mode))
         .collect();
-    let mut score_map: HashMap<ScoreKey, BestScoreSummary> = score_db
-        .best_scores_for_charts(&keys)?
-        .into_iter()
-        .map(|s| {
-            (ScoreKey::with_options(s.chart_sha256, s.ln_policy, s.double_option, s.rule_mode), s)
-        })
-        .collect();
+    let mut score_map = score_db.best_score_map_for_charts(&keys)?;
     let mut replay_slot_map = replay_slot_map(score_db, &keys)?;
     let last_played = score_db.last_played_times_for_charts(&keys)?;
     let chart_ids: Vec<i64> = entries

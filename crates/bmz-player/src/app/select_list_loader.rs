@@ -222,8 +222,8 @@ fn load(request: &SelectListRequest) -> Result<LoadedSelectList> {
         },
     )?;
     if let Some(prepared) = &mut prepared {
-        // Source resolution can touch the filesystem and query archive metadata.
-        // Table-level loading already resolved these before enrichment.
+        // Table levels already resolved copies before enrichment. For other lists
+        // only a replacement needs new metadata and analysis.
         let table_level = matches!(
             prepared.folder_stack.last().and_then(|path| parse_table_path(path)),
             Some(TablePath::Level { .. })
@@ -236,23 +236,17 @@ fn load(request: &SelectListRequest) -> Result<LoadedSelectList> {
                 _ => None,
             })
             .collect();
-        let sources = library_db.registered_chart_sources(&charts).unwrap_or_else(|error| {
+        let sources = library_db.registered_chart_replacements(&charts).unwrap_or_else(|error| {
             tracing::warn!(%error, "failed to resolve select chart sources");
             HashMap::new()
         });
-        let replacement_ids: Vec<_> = sources
-            .iter()
-            .filter_map(|(id, source)| {
-                (*id != source.chart.chart_id).then_some(source.chart.chart_id)
-            })
-            .collect();
+        let replacement_ids: Vec<_> = sources.values().map(|s| s.chart.chart_id).collect();
         let analyses =
             library_db.chart_analysis_summaries_by_chart_ids(&replacement_ids).unwrap_or_default();
         for item in &mut prepared.items {
             if let SelectItem::Chart(row) = item
                 && let Some(chart) = &row.chart
                 && let Some(source) = sources.get(&chart.chart_id)
-                && source.chart.chart_id != chart.chart_id
             {
                 row.has_document = source.chart.has_document;
                 row.chart_analysis = analyses.get(&source.chart.chart_id).cloned();
@@ -262,6 +256,9 @@ fn load(request: &SelectListRequest) -> Result<LoadedSelectList> {
     }
     Ok(LoadedSelectList { prepared, virtual_folders })
 }
+
+#[cfg(test)]
+mod profile;
 
 #[cfg(test)]
 mod tests {

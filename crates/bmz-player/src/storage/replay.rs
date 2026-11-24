@@ -1,6 +1,7 @@
 use std::io::Write;
 use std::path::Path;
 
+use super::common::hash_to_hex;
 use anyhow::{Result, bail};
 use bmz_core::clear::GaugeType;
 use bmz_core::replay::ReplayEvent;
@@ -182,7 +183,7 @@ impl ReplayFile {
             version: REPLAY_FILE_VERSION,
             judge_revision: REPLAY_JUDGE_REVISION,
             judge_window_rates: None,
-            chart_sha256: hex_encode(&chart_sha256),
+            chart_sha256: hash_to_hex(&chart_sha256),
             ln_policy: ln_policy.as_str().to_string(),
             played_at,
             random_seed,
@@ -459,7 +460,7 @@ pub fn load_replay_for_chart_policy_and_double_option(
 }
 
 pub fn replay_file_name(chart_sha256: [u8; 32], played_at: i64, id: uuid::Uuid) -> String {
-    format!("{}-{played_at}-{id}.toml", hex_encode(&chart_sha256))
+    format!("{}-{played_at}-{id}.toml", hash_to_hex(&chart_sha256))
 }
 
 /// One queued replay inside a course attempt: keeps the current chart id, the
@@ -491,7 +492,7 @@ pub fn load_course_replays(
     let mut out = Vec::with_capacity(entries.len());
     for (position, sha, rel_path) in entries {
         let Some(chart_id) = lookup_chart_id(*sha)? else {
-            bail!("chart {} is no longer in the library", hex_encode(sha));
+            bail!("chart {} is no longer in the library", hash_to_hex(sha));
         };
         let abs = replay_root.join(rel_path);
         let replay = load_replay_for_chart(&abs, *sha)?;
@@ -517,7 +518,7 @@ pub fn replay_slot_file_name(
     };
     format!(
         "{}-{}{}{}-slot{slot}.toml",
-        hex_encode(&chart_sha256),
+        hash_to_hex(&chart_sha256),
         ln_policy.as_str(),
         double_suffix,
         rule_suffix
@@ -540,16 +541,6 @@ pub fn imported_course_replay_file_name(
         ln_policy.as_str(),
         rule_suffix,
     )
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
 }
 
 impl ReplayFile {

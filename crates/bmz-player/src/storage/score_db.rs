@@ -215,15 +215,17 @@ impl ScoreKey {
     }
 }
 
-fn score_key_query_params(keys: &[ScoreKey]) -> Vec<String> {
-    let mut params = Vec::with_capacity(keys.len() * 4);
-    for key in keys {
-        params.push(hash_to_hex(&key.chart_sha256));
-        params.push(key.ln_policy.as_str().to_string());
-        params.push(key.double_option.as_str().to_string());
-        params.push(key.rule_mode.as_str().to_string());
-    }
-    params
+fn score_key_query_params(
+    keys: &[ScoreKey],
+) -> impl Iterator<Item = std::borrow::Cow<'static, str>> {
+    keys.iter().flat_map(|key| {
+        [
+            hash_to_hex(&key.chart_sha256).into(),
+            key.ln_policy.as_str().into(),
+            key.double_option.as_str().into(),
+            key.rule_mode.as_str().into(),
+        ]
+    })
 }
 
 /// One clear in the score history, as stored.

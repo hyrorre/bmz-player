@@ -47,6 +47,13 @@ fn file_readable(path: &Path) -> bool {
 /// A file linked to a listed chart: (path, root id, chart import version).
 type OwnChartFile = (PathBuf, Option<i64>, i64);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SourceLookup {
+    VerifyFiles,
+    Registered,
+    RegisteredReplacements,
+}
+
 pub(crate) fn prime_archive_generations(conn: &Connection) -> Result<()> {
     let mut stmt = conn.prepare("SELECT path, stamp, generation FROM song_archive_fingerprints")?;
     let rows = stmt.query_map([], |row| {
@@ -104,7 +111,7 @@ impl LibraryDatabase {
         &self,
         charts: &[&ChartListItem],
     ) -> Result<HashMap<i64, ChartSource>> {
-        self.chart_sources_for_list(charts, true)
+        self.chart_sources_for_list(charts, SourceLookup::VerifyFiles)
     }
 
     /// Use the last successful scan's file registrations, without touching song disks.
@@ -146,17 +153,26 @@ impl LibraryDatabase {
         &self,
         charts: &[&ChartListItem],
     ) -> Result<HashMap<i64, ChartSource>> {
-        self.chart_sources_for_list(charts, false)
+        self.chart_sources_for_list(charts, SourceLookup::Registered)
+    }
+
+    /// The Select list already owns the metadata for each original copy.
+    pub(crate) fn registered_chart_replacements(
+        &self,
+        charts: &[&ChartListItem],
+    ) -> Result<HashMap<i64, ChartSource>> {
+        self.chart_sources_for_list(charts, SourceLookup::RegisteredReplacements)
     }
 
     fn chart_sources_for_list(
         &self,
         charts: &[&ChartListItem],
-        verify_files: bool,
+        lookup: SourceLookup,
     ) -> Result<HashMap<i64, ChartSource>> {
         if charts.is_empty() {
             return Ok(HashMap::new());
         }
+        let verify_files = lookup == SourceLookup::VerifyFiles;
         let roots = scope::SongRootScope::load(&self.conn)?;
         let mut readable = HashMap::new();
         let mut resolved = HashMap::new();
@@ -173,6 +189,7 @@ impl LibraryDatabase {
                             || *readable.entry(path.clone()).or_insert_with(|| file_readable(path)))
                 });
             match own {
+                Some(_) if lookup == SourceLookup::RegisteredReplacements => {}
                 Some((path, root_id, import_version)) => {
                     resolved.insert(
                         chart.chart_id,
@@ -228,7 +245,9 @@ impl LibraryDatabase {
                 if let Some(source) = preferred.chain(fallback).find(|source| {
                     !verify_files
                         || *readable.entry(source.path.clone()).or_insert_with(|| source.readable())
-                }) {
+                }) && (lookup != SourceLookup::RegisteredReplacements
+                    || chart.chart_id != source.chart.chart_id)
+                {
                     resolved.insert(chart.chart_id, source.clone());
                 }
             }
@@ -464,7 +483,7 @@ impl LibraryDatabase {
         source_url: &str,
         level: Option<&str>,
     ) -> Result<Vec<TableEntryListItem>> {
-        self.table_entries_with_sources(source_url, level, true)
+        self.table_entries_with_sources(source_url, level, SourceLookup::VerifyFiles)
     }
 
     pub fn registered_table_entries_at_level(
@@ -472,18 +491,18 @@ impl LibraryDatabase {
         source_url: &str,
         level: Option<&str>,
     ) -> Result<Vec<TableEntryListItem>> {
-        self.table_entries_with_sources(source_url, level, false)
+        self.table_entries_with_sources(source_url, level, SourceLookup::Registered)
     }
 
     fn table_entries_with_sources(
         &self,
         source_url: &str,
         level: Option<&str>,
-        verify_files: bool,
+        lookup: SourceLookup,
     ) -> Result<Vec<TableEntryListItem>> {
         let rows = self.list_table_entries_with_chart_at_level(source_url, level)?;
         let charts: Vec<_> = rows.iter().filter_map(|entry| entry.chart.as_ref()).collect();
-        let sources = self.chart_sources_for_list(&charts, verify_files)?;
+        let sources = self.chart_sources_for_list(&charts, lookup)?;
         rows.into_iter()
             .map(|mut entry| {
                 entry.chart = entry.chart.and_then(|chart| {
