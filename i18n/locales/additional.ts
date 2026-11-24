@@ -135,6 +135,7 @@ const ja = {
       invalidId: '譜面 ID は MD5 (32 hex) または SHA256 (64 hex) である必要があります',
       playClearCount: 'プレイ {plays} / クリア {clears}',
       copy: 'コピー',
+      externalServices: '外部サービス',
     },
     ranking: {
       personalBest: '自己ベスト',
@@ -349,6 +350,7 @@ const en = {
       invalidId: 'The chart ID must be an MD5 (32 hex) or SHA256 (64 hex).',
       playClearCount: '{plays} plays / {clears} clears',
       copy: 'Copy',
+      externalServices: 'External services',
     },
     ranking: {
       personalBest: 'Personal best',
@@ -564,6 +566,7 @@ const ko = {
       invalidId: '차트 ID는 MD5(32 hex) 또는 SHA256(64 hex)이어야 합니다.',
       playClearCount: '플레이 {plays} / 클리어 {clears}',
       copy: '복사',
+      externalServices: '외부 서비스',
     },
     ranking: {
       personalBest: '개인 베스트',
@@ -773,6 +776,7 @@ const zhCN = {
       invalidId: '谱面 ID 必须是 MD5（32 位十六进制）或 SHA256（64 位十六进制）。',
       playClearCount: '游玩 {plays} / 通关 {clears}',
       copy: '复制',
+      externalServices: '外部服务',
     },
     ranking: {
       personalBest: '个人最佳',
@@ -982,6 +986,7 @@ const zhTW = {
       invalidId: '譜面 ID 必須是 MD5（32 位十六進位）或 SHA256（64 位十六進位）。',
       playClearCount: '遊玩 {plays} / 過關 {clears}',
       copy: '複製',
+      externalServices: '外部服務',
     },
     ranking: {
       personalBest: '個人最佳',

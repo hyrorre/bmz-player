@@ -12,7 +12,7 @@ import { readDifficultyFilter } from '~~/bmz-ir-web/shared/utils/difficulty_filt
 interface ChartDetail {
   chart: IrChartLnProfile & {
     sha256: string
-    md5: string
+    md5: string | null
     title: string
     subtitle: string | null
     genre: string | null
@@ -98,6 +98,25 @@ const { data: detail, error: detailError } = await useFetch<ChartDetail>(
   () => `/api/v1/charts/${sha256.value}`,
   { immediate: canLoadChart.value, watch: [sha256] },
 )
+const externalLinks = computed(() => {
+  if (!detail.value) return []
+  const { md5, sha256 } = detail.value.chart
+  const links = [
+    { label: 'rianIR', to: `https://rianir.link/ranking?sha256=${sha256}` },
+    { label: 'Mocha', to: `https://mocha-repository.info/song.php?sha256=${sha256}` },
+    { label: 'MinIR', to: `https://www.gaftalk.com/minir/#/viewer/song/${sha256}/0` },
+    { label: 'Kaleid IR', to: `https://kaleidir.com/charts/${sha256}` },
+    { label: 'Bokutachi IR', to: `https://boku.tachi.ac/search?q=${sha256}&hasPlayedGame=false` },
+  ]
+  if (md5 && /^[0-9a-f]{32}$/i.test(md5)) {
+    links.push(
+      { label: 'BMS-IR', to: `https://bms-ir.org/new/song?songmd5=${md5}` },
+      { label: 'Stellaverse IR', to: `https://ir.stellabms.xyz/redirecthash/${md5}` },
+      { label: 'BMS Score Viewer', to: `https://bms-score-viewer.pages.dev/view?md5=${md5}` },
+    )
+  }
+  return links
+})
 const lnPolicies = computed(() => lnFilterItems(detail.value?.chart))
 const {
   lnPolicy,
@@ -151,9 +170,8 @@ const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclos
 const wideScoreTable = useWideScoreTable()
 
 const copyMd5 = async () => {
-  if (detail.value) {
-    await navigator.clipboard.writeText(detail.value.chart.md5)
-  }
+  const md5 = detail.value?.chart.md5
+  if (md5) await navigator.clipboard.writeText(md5)
 }
 
 const copySha256 = async () => {
@@ -220,7 +238,7 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
             }}
           </p>
           <DifficultyTableBadges :labels="detail.chart.difficulty_labels" class="mt-2" />
-          <p class="mt-3 text-sm break-all text-neutral-400">
+          <p v-if="detail.chart.md5" class="mt-3 text-sm break-all text-neutral-400">
             md5 {{ detail.chart.md5 }}
             <UButton size="xs" variant="subtle" color="neutral" @click="copyMd5">{{
               t('chart.copy')
@@ -232,6 +250,26 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
               t('chart.copy')
             }}</UButton>
           </p>
+          <nav
+            aria-labelledby="chart-external-services"
+            class="mt-4 flex flex-wrap items-center gap-2"
+          >
+            <span id="chart-external-services" class="text-sm font-medium text-muted">
+              {{ t('chart.externalServices') }}
+            </span>
+            <UButton
+              v-for="link in externalLinks"
+              :key="link.label"
+              :to="link.to"
+              :label="link.label"
+              target="_blank"
+              rel="noopener noreferrer"
+              trailing-icon="i-lucide-external-link"
+              color="neutral"
+              variant="subtle"
+              size="sm"
+            />
+          </nav>
         </div>
 
         <div class="mb-4 flex flex-wrap items-center gap-3">
