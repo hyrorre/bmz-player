@@ -269,7 +269,7 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
                     <RankingScoreRank :score="score.ex_score" :max="score.max_ex_score" />
                   </td>
                   <td class="px-3 py-2">
-                    <IrClearBadge :clear="score.clear_type" :rank="score.clear_rank" />
+                    <IrClearBadge :clear="score.clear_type" :rank="score.clear_rank" compact />
                   </td>
                   <td v-if="lnPolicies.length" class="px-3 py-2 text-muted">
                     {{ score.chart?.has_ln ? lnPolicyLabel(score.ln_policy) : '-' }}

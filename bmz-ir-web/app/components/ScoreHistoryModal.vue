@@ -67,7 +67,7 @@ function formatScoreDate(value: string | null) {
                 <td class="px-3 py-2 text-center">
                   <RankingScoreRank :score="score.ex_score" :max="score.max_ex_score" />
                 </td>
-                <td class="px-3 py-2"><IrClearBadge :clear="score.clear" /></td>
+                <td class="px-3 py-2"><IrClearBadge :clear="score.clear" compact /></td>
                 <td v-if="showLn" class="px-3 py-2 text-muted">
                   {{ lnPolicyLabel(score.ln_policy) }}
                 </td>

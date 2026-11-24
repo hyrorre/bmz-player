@@ -325,7 +325,7 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
                     />
                   </td>
                   <td class="px-3 py-2">
-                    <IrClearBadge :clear="entry.score.clear" />
+                    <IrClearBadge :clear="entry.score.clear" compact />
                   </td>
                   <td v-if="lnPolicies.length" class="px-3 py-2 text-muted">
                     {{ lnPolicyLabel(entry.score.ln_policy) }}

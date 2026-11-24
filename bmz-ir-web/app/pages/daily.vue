@@ -293,12 +293,14 @@ useSeoMeta({ title: () => t('daily.title') })
                         <IrClearBadge
                           :clear="row.result.before.clear.type"
                           :rank="row.result.before.clear.rank"
+                          compact
                         />
                         <span class="text-muted">»</span>
                       </template>
                       <IrClearBadge
                         :clear="row.result.after.clear?.type"
                         :rank="row.result.after.clear?.rank"
+                        compact
                       />
                     </div>
                   </td>

@@ -16,7 +16,7 @@ const paletteIndex = computed(() => {
     variant="subtle"
     class="whitespace-nowrap dark:[--ir-rank-badge-accent:80%]"
   >
-    {{ label }}
+    <slot>{{ label }}</slot>
   </UBadge>
 </template>
 
