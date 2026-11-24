@@ -99,8 +99,11 @@ watch(
   { immediate: true },
 )
 const report = computed(() => data.value?.report)
+const tableNotFound = computed(
+  () => extractApiMessage(error.value) === IR_DIFFICULTY_TABLE_NOT_FOUND,
+)
 const analysisErrorDescription = computed(() =>
-  extractApiMessage(error.value) === IR_DIFFICULTY_TABLE_NOT_FOUND
+  tableNotFound.value
     ? t('analysis.tableNotFound')
     : translateApiError(error.value, 'errors.analysisLoadFailed'),
 )
@@ -125,8 +128,8 @@ const tableItems = computed(() =>
 const total = computed(() => report.value?.levels.reduce((sum, level) => sum + level.total, 0) ?? 0)
 const legend = computed(() => labels.value.map((label, rank) => ({ label, rank })).reverse())
 
-async function setView(query: { table?: string; mode?: IrDistributionMode }) {
-  const failure = await navigateTo({
+function viewLocation(query: { table?: string; mode?: IrDistributionMode }) {
+  return {
     path: route.path,
     query: {
       ...route.query,
@@ -137,7 +140,13 @@ async function setView(query: { table?: string; mode?: IrDistributionMode }) {
       rank: undefined,
       chart_page: undefined,
     },
-  })
+  }
+}
+
+const defaultTableLocation = computed(() => viewLocation({ table: undefined }))
+
+async function setView(query: { table?: string; mode?: IrDistributionMode }) {
+  const failure = await navigateTo(viewLocation(query))
   if (failure) return
   if (query.table) preferredTable.value = query.table
   if (query.mode) preferredMode.value = query.mode
@@ -285,7 +294,13 @@ useSeoMeta({ title: () => t('analysis.title') })
         </div>
       </div>
       <p v-else-if="status === 'pending'" class="text-sm text-muted">{{ t('common.loading') }}</p>
-      <UAlert v-else-if="error" color="error" :description="analysisErrorDescription" />
+      <UAlert v-else-if="error" color="error" :description="analysisErrorDescription">
+        <template v-if="tableNotFound" #actions>
+          <UButton :to="defaultTableLocation" color="neutral" size="sm" variant="outline">
+            {{ t('analysis.chooseAnotherTable') }}
+          </UButton>
+        </template>
+      </UAlert>
       <article v-else-if="report" ref="reportCapture">
         <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
           <NuxtLink
