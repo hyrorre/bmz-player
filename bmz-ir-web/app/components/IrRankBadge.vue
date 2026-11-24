@@ -13,8 +13,8 @@ const paletteIndex = computed(() => {
   <UBadge
     :data-rank="paletteIndex"
     color="neutral"
-    :variant="paletteIndex === undefined ? 'subtle' : 'solid'"
-    class="whitespace-nowrap"
+    variant="subtle"
+    class="whitespace-nowrap dark:[--ir-rank-badge-accent:80%]"
   >
     {{ label }}
   </UBadge>
@@ -22,7 +22,12 @@ const paletteIndex = computed(() => {
 
 <style scoped>
 [data-rank] {
-  background-color: var(--ir-rank-fill);
-  color: var(--ir-rank-text);
+  background-color: color-mix(in srgb, var(--ir-rank-fill) 10%, transparent);
+  color: color-mix(
+    in oklab,
+    var(--ir-rank-fill) var(--ir-rank-badge-accent, 45%),
+    var(--ui-text-highlighted)
+  );
+  --tw-ring-color: color-mix(in srgb, var(--ir-rank-fill) 25%, transparent);
 }
 </style>
