@@ -1075,7 +1075,12 @@ impl JudgeEngine {
         if active.mode == LongNoteMode::Hln {
             return JudgeOutcome::default(); // pair ごとの LN 合成を update_hln_input で行う。
         }
+        // LEGACY merges both scratch directions into one key state before
+        // judging (as OpenLR2 does), so its release ends the LN whichever
+        // direction started it.
+        let merged_scratch = self.rule_mode == RuleMode::Legacy && active.mode == LongNoteMode::Ln;
         if matches!(input.lane, Lane::Scratch | Lane::Scratch2)
+            && !merged_scratch
             && input.scratch_direction.is_some()
             && active.scratch_direction.is_some()
             && input.scratch_direction != active.scratch_direction
@@ -1133,14 +1138,13 @@ impl JudgeEngine {
                 let (judge, delta, release_delta, mute_limit) =
                     if self.rule_mode == RuleMode::Legacy && active.mode == LongNoteMode::Ln {
                         let margin = legacy_ln_margin_us(end_window);
-                        let grade = if legacy_offset(input.time, active.end.end_time) < -margin {
-                            Judge::Bad
-                        } else {
-                            active.start_judge
-                        };
-                        // LR2 reports the head offset with the final judgement,
-                        // but stopping the head keysound depends on the tail.
-                        (grade, active.start_delta, end_delta, margin)
+                        let release = TimeUs(legacy_offset(input.time, active.end.end_time));
+                        let grade =
+                            if release.0 < -margin { Judge::Bad } else { active.start_judge };
+                        // LR2 reports the head offset with the final judgement.
+                        // It stops the head keysound only in the early-release
+                        // branch, decided on the same integer milliseconds.
+                        (grade, active.start_delta, release, margin)
                     } else if end_delta.0 >= 0 {
                         (active.start_judge, active.start_delta, active.start_delta, 0)
                     } else {

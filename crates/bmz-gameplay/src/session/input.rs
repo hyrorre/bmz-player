@@ -676,7 +676,7 @@ fn legacy_poll(
 ) {
     let mut human_events = Vec::new();
     for lane in crate::judge::engine::LEGACY_LANE_ORDER {
-        let mut has_edge = false;
+        let mut edges = Vec::new();
         for timed in group.iter().filter(|timed| timed.input.lane == lane) {
             record_human_edge(session, *timed);
             let mut input = timed.input;
@@ -685,25 +685,36 @@ fn legacy_poll(
             }
             update_recent_inputs(session, &[input], now);
             update_lane_key_states(session, &[input]);
-            // OpenLR2 merges both scratch directions into one key state:
-            // releasing one direction while the other is held stays a hold.
-            if input.kind == InputKind::Release && session.lane_key_hold[lane.index()].is_held() {
-                push_skin_runtime_event(session, SkinRuntimeEventKind::Input(input));
-                continue;
+            if input.source == InputSource::Human
+                && let Some(collected_at) = timed.collected_at
+            {
+                super::latency::judged(collected_at);
             }
-            has_edge = true;
+            edges.push(input);
+        }
+        let judged: Vec<_> = if matches!(lane, Lane::Scratch | Lane::Scratch2) {
+            legacy_scratch_edge(&edges, session.lane_key_hold[lane.index()].is_held())
+                .into_iter()
+                .collect()
+        } else {
+            (0..edges.len()).collect()
+        };
+        for (index, input) in edges.iter().enumerate() {
+            if !judged.contains(&index) {
+                push_skin_runtime_event(session, SkinRuntimeEventKind::Input(*input));
+            }
+        }
+        for &index in &judged {
+            let input = edges[index];
             let outcome = evaluate_session_input(session, input);
             if input.source == InputSource::Human {
                 human_events.extend(outcome.events.iter().cloned());
-                if let Some(collected_at) = timed.collected_at {
-                    super::latency::judged(collected_at);
-                }
             }
             // LR2 applies each judgement and mine to the gauge as its lane is
             // polled; the order matters at the gauge limits.
             events.extend(apply_judge_outcome(session, outcome));
         }
-        if !has_edge {
+        if judged.is_empty() {
             let outcome = session.judge.process_legacy_lane_poll(
                 &session.chart,
                 lane,
@@ -718,6 +729,34 @@ fn legacy_poll(
     // fails mid-poll still lets the remaining lanes (and any BAD recursion) be
     // judged and scored; the loop stops before the next poll.
     apply_input_offset_auto_adjust(session, &human_events);
+}
+
+/// The scratch edge OpenLR2 judges in one poll. Its input layer merges the up
+/// and down directions into one key state (`En_input.cpp`): a new press in
+/// either direction wins, then a direction still held, then a release. So a
+/// release while the other direction is held is no release, and a release
+/// and a press in the same poll is the press. `edges` are this poll's edges
+/// in order; `held` is the merged state after them.
+fn legacy_scratch_edge(edges: &[InputEvent], held: bool) -> Option<usize> {
+    let mut last_by_direction: Vec<(Option<ScratchDirection>, usize)> = Vec::new();
+    for (index, input) in edges.iter().enumerate() {
+        match last_by_direction.iter_mut().find(|(d, _)| *d == input.scratch_direction) {
+            Some(entry) => entry.1 = index,
+            None => last_by_direction.push((input.scratch_direction, index)),
+        }
+    }
+    let last = |kind| {
+        last_by_direction
+            .iter()
+            .map(|&(_, index)| index)
+            .filter(|&index| edges[index].kind == kind)
+            .max()
+    };
+    match last(InputKind::Press) {
+        Some(press) => Some(press),
+        None if held => None,
+        None => last(InputKind::Release),
+    }
 }
 
 /// Writes a human edge to the replay with the boundary it was applied after.

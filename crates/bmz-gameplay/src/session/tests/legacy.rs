@@ -461,6 +461,8 @@ fn legacy_mine_hit_counts_as_poor_and_takes_the_gauge_damage() {
     advance_at(&mut session, &mut audio, 1_500_000);
     assert_eq!(judge_counts(&session), [0, 0, 0, 0, 1, 0]);
     assert_eq!(session.score.bp(), 1);
+    // OpenLR2 keeps a mine out of the combo breaks (extendedStats.cb).
+    assert_eq!(session.score.cb(), 0);
     assert!((before - session.gauge.current().value - 10.0).abs() < 1e-4);
 
     advance_at(&mut session, &mut audio, 2_100_000);
@@ -482,4 +484,65 @@ fn legacy_key_held_across_a_mine_is_hit_once() {
     advance_at(&mut session, &mut TestAudio::default(), 1_600_000);
     assert_eq!(judge_counts(&session), [0, 0, 0, 0, 1, 0]);
     assert!((session.gauge.current().value - 90.0).abs() < 1e-4);
+}
+
+/// A press after the poll of its own millisecond is polled again at that
+/// millisecond. The replay records the boundary, so it judges the same way.
+#[test]
+fn legacy_same_millisecond_input_after_a_poll_replays_the_same_judgements() {
+    let chart = two_tap_chart(TimeUs(1_000_000), TimeUs(1_201_100));
+    let (mut human, keys) = legacy_human_session(chart.clone());
+    let mut audio = TestAudio::default();
+    advance_at(&mut human, &mut audio, 1_201_100);
+    keys.press();
+    advance_at(&mut human, &mut audio, 1_201_500);
+    keys.release();
+    advance_at(&mut human, &mut audio, 1_210_000);
+    assert_eq!(judge_counts(&human), [1, 0, 0, 0, 1, 0]);
+    let recorded = human.replay_recorder.events.clone();
+    assert!(recorded[0].applied_after.is_some(), "{recorded:?}");
+
+    let mut replay = legacy_replay_session(chart, recorded);
+    advance_at(&mut replay, &mut TestAudio::default(), 1_210_000);
+    assert_eq!(judge_counts(&replay), judge_counts(&human));
+}
+
+/// Releasing the direction that started a scratch LN while the other is held,
+/// then the other: the merged key is released at the second one, early.
+#[test]
+fn legacy_scratch_release_of_the_other_direction_ends_the_ln_early() {
+    let up = Some(ScratchDirection::Up);
+    let down = Some(ScratchDirection::Down);
+    let mut session = legacy_replay_session(
+        legacy_ln_chart(Lane::Scratch),
+        vec![
+            replay_event(Lane::Scratch, InputKind::Press, 1_000, up),
+            replay_event(Lane::Scratch, InputKind::Press, 1_010, down),
+            replay_event(Lane::Scratch, InputKind::Release, 1_100, up),
+            replay_event(Lane::Scratch, InputKind::Release, 1_500, down),
+        ],
+    );
+    advance_at(&mut session, &mut TestAudio::default(), 2_200_000);
+    assert_eq!(judge_counts(&session), [0, 0, 0, 1, 0, 0]);
+}
+
+/// In one poll a new press of either direction wins over a release, so
+/// switching directions in the same millisecond keeps the LN. The press
+/// re-evaluates the held head as OpenLR2's `ProcLongnote` does; 500 ms after
+/// it, that is an EMPTY POOR, and the LN is scored at its end.
+#[test]
+fn legacy_scratch_release_and_press_in_one_poll_is_a_press() {
+    let up = Some(ScratchDirection::Up);
+    let down = Some(ScratchDirection::Down);
+    let mut session = legacy_replay_session(
+        legacy_ln_chart(Lane::Scratch),
+        vec![
+            replay_event(Lane::Scratch, InputKind::Press, 1_000, up),
+            replay_event(Lane::Scratch, InputKind::Release, 1_500, up),
+            replay_event(Lane::Scratch, InputKind::Press, 1_500, down),
+            replay_event(Lane::Scratch, InputKind::Release, 2_100, down),
+        ],
+    );
+    advance_at(&mut session, &mut TestAudio::default(), 2_200_000);
+    assert_eq!(judge_counts(&session), [1, 0, 0, 0, 0, 1]);
 }

@@ -323,6 +323,36 @@ mod lr2_tests {
         assert_eq!(retraced.applied_arrange.lr2_seed, Some(2179));
         assert_eq!(lr2_table(&retraced.chart), lr2_table(&original.chart));
     }
+    #[test]
+    fn legacy_keeps_the_random_trainer_layout() {
+        let trainer = |rule_mode| PlaySessionOptions {
+            rule_mode,
+            arrange: ArrangeOption::Random,
+            bms_random_seed: Some(2179),
+            random_trainer_seed: Some(4321),
+            ..Default::default()
+        };
+        let legacy = transform("", &trainer(RuleMode::Legacy));
+        let beatoraja = transform("", &trainer(RuleMode::Beatoraja));
+        assert_eq!(lr2_table(&legacy.chart), lr2_table(&beatoraja.chart));
+        // The LR2 lane draw would give this table instead.
+        assert_ne!(lr2_table(&legacy.chart), [1, 5, 2, 6, 3, 7, 4]);
+    }
+
+    #[test]
+    fn legacy_plays_and_stores_every_long_note_as_ln() {
+        let options = PlaySessionOptions {
+            rule_mode: RuleMode::Legacy,
+            ln_policy_setting: crate::ln_policy::LnPolicySetting::AutoCn,
+            ..Default::default()
+        };
+        let result = transform("#LNMODE 2\n#00851:0101\n", &options);
+        assert_eq!(result.score_key.ln_policy, crate::ln_policy::LnScorePolicy::ForceLn);
+        assert!(!result.chart.long_notes.is_empty());
+        assert!(result.chart.long_notes.iter().all(|pair| {
+            pair.mode.unwrap_or(result.chart.metadata.long_note_mode) == LongNoteMode::Ln
+        }));
+    }
 }
 
 /// 音源 preload の入力規模。source は宣言パス単位、region は `SoundId` 単位で数える。
@@ -968,6 +998,12 @@ fn resolve_lr2_arrangement(
     if options.reuse_applied_arrangement {
         return None;
     }
+    // A layout chosen in the Random Trainer wins over LR2's lane draw, as in
+    // the other rule modes. The LR2 seed still decides `#RANDOM`, and the
+    // applied layout is saved with the replay.
+    if options.random_trainer_seed.is_some() && options.arrange_pattern.is_none() {
+        return None;
+    }
     let mut rng = import.lr2_random_state.take()?;
     let key_mode = import.chart.metadata.key_mode;
     let battle_option = options.double_option.normalize_for_key_mode(key_mode).is_battle();
@@ -1083,10 +1119,13 @@ fn transform_chart_for_play(
     if options.assist.auto_scratch && options.replay_player.is_none() {
         applied_double_option = applied_double_option.with_auto_scratch(true);
     }
-    let ln_policy = course_score_ln_policy(
-        options.ln_policy_setting,
-        options.ln_mode_override,
-        source_ln_profile,
+    let ln_policy = crate::storage::score_db::rule_ln_policy(
+        course_score_ln_policy(
+            options.ln_policy_setting,
+            options.ln_mode_override,
+            source_ln_profile,
+        ),
+        options.rule_mode,
     );
     let score_key = ScoreKey::with_options(
         chart.identity.file_sha256,

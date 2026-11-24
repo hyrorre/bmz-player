@@ -234,6 +234,8 @@ fn result_end_time_tracks_scoring_events_and_invalidates_with_the_chart() {
 }
 #[path = "tests/legacy_cap.rs"]
 mod legacy_cap;
+#[path = "tests/legacy_ln.rs"]
+mod legacy_ln;
 #[path = "tests/legacy_mine.rs"]
 mod legacy_mine;
 #[path = "tests/lr2_score.rs"]
