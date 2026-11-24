@@ -10,6 +10,7 @@ interface ScoreDetail {
     clear_type: string
     ex_score: number
     max_combo: number
+    notes: number
     min_bp: number
     gauge: string
     ln_policy: string
@@ -116,7 +117,9 @@ useSeoMeta({ title: () => t('score.title') })
           </div>
           <div class="rounded-lg border border-neutral-800 p-4">
             <p class="text-xs text-neutral-500">MAX COMBO</p>
-            <p class="text-2xl font-semibold">{{ data.score.max_combo }}</p>
+            <p class="text-xl sm:text-2xl">
+              <RankingMaxCombo :combo="data.score.max_combo" :total-notes="data.score.notes" />
+            </p>
           </div>
           <div class="rounded-lg border border-neutral-800 p-4">
             <p class="text-xs text-neutral-500">BP</p>

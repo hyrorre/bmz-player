@@ -102,6 +102,10 @@ export function formatCourseArrange(
   return [...new Set(labels)].join(' · ') || '-'
 }
 
+export function totalNotesFromMaxExScore(max: number | null | undefined) {
+  return max != null && max > 0 && max % 2 === 0 ? max / 2 : null
+}
+
 // Match the ceil-based grade borders and nearest-grade display in BMZ Player.
 export function rankingScoreDisplay(score: number, max: number | null | undefined) {
   if (max == null || max <= 0 || score < 0 || max < score) return null

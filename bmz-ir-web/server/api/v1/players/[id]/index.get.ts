@@ -116,6 +116,7 @@ export default defineEventHandler(async (event) => {
 
   const representative = alias(schema.scores, 'representative')
   const exBest = alias(schema.scores, 'ex_best')
+  const comboBest = alias(schema.scores, 'combo_best')
   const [bests, counts] = await Promise.all([
     db
       .select({
@@ -139,6 +140,8 @@ export default defineEventHandler(async (event) => {
         server_received_at: best.serverReceivedAt,
         playOptions: representative.playOptions,
         scoredNotes: exBest.notes,
+        sourceCombo: comboBest.maxCombo,
+        comboNotes: comboBest.notes,
         hasLn: sql`${hasLn}`.mapWith(Boolean),
         chart: {
           sha256: chart.sha256,
@@ -155,6 +158,10 @@ export default defineEventHandler(async (event) => {
       .leftJoin(chart, chartJoin)
       .leftJoin(representative, eq(representative.id, best.scoreId))
       .leftJoin(exBest, eq(exBest.id, sql`coalesce(${best.bestExScoreId}, ${best.scoreId})`))
+      .leftJoin(
+        comboBest,
+        eq(comboBest.id, sql`coalesce(${best.bestMaxComboScoreId}, ${best.scoreId})`),
+      )
       .where(where)
       .orderBy(desc(best.serverReceivedAt), desc(best.id))
       .limit(limit)
@@ -177,15 +184,18 @@ export default defineEventHandler(async (event) => {
       has_mixed_ln: lnFilters?.has_mixed_ln ?? false,
     },
     pagination: { limit, offset, total, has_more: offset + limit < total },
-    best_scores: bests.map(({ chart, hasLn, playOptions, scoredNotes, ...score }) => ({
-      ...score,
-      ...arrangeOptionsFromPlayOptions(playOptions),
-      max_ex_score: scoredNotes ? scoredNotes * 2 : null,
-      chart: chart && {
-        ...chart,
-        has_ln: Boolean(hasLn),
-        difficulty_labels: difficultyLabels.get(chart.sha256) ?? [],
-      },
-    })),
+    best_scores: bests.map(
+      ({ chart, hasLn, playOptions, scoredNotes, sourceCombo, comboNotes, ...score }) => ({
+        ...score,
+        ...arrangeOptionsFromPlayOptions(playOptions),
+        max_ex_score: scoredNotes ? scoredNotes * 2 : null,
+        max_combo_notes: sourceCombo === score.max_combo ? comboNotes : null,
+        chart: chart && {
+          ...chart,
+          has_ln: Boolean(hasLn),
+          difficulty_labels: difficultyLabels.get(chart.sha256) ?? [],
+        },
+      }),
+    ),
   }
 })

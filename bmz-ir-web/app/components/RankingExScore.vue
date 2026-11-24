@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const props = defineProps<{ score: number; max?: number | null }>()
+const props = defineProps<{ score: number; max?: number | null; rateDigits?: number }>()
 const display = computed(() => rankingScoreDisplay(props.score, props.max))
 </script>
 
@@ -8,10 +8,8 @@ const display = computed(() => rankingScoreDisplay(props.score, props.max))
     <p class="font-semibold">
       {{ score }} <span v-if="display" class="font-normal text-muted">/ {{ display.max }}</span>
     </p>
-    <p v-if="display" class="mt-0.5 flex items-center justify-end gap-1.5 text-xs text-muted">
-      <span>({{ display.rate.toFixed(1) }}%)</span>
-      <IrRankBadge :label="display.grade ?? '-'" size="sm" />
-      <span>({{ display.difference }})</span>
+    <p v-if="display" class="mt-0.5 text-xs text-muted">
+      ({{ display.rate.toFixed(rateDigits ?? 1) }}%)
     </p>
   </div>
 </template>

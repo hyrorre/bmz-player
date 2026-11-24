@@ -129,27 +129,9 @@ function displayDate(value: string): string {
   return formatDate(new Date(`${value}T12:00:00+09:00`))
 }
 
-function scoreRate(result: IrDailyRuleResult): number | null {
-  return scoreRateForSnapshot(result.after)
-}
-
-function scoreRateForSnapshot(snapshot: IrDailyBestSnapshot): number | null {
-  const score = snapshot.ex_score
+function maxExScore(snapshot: IrDailyBestSnapshot): number | null {
   const notes = snapshot.ex_score_notes
-  return score !== null && notes !== null && notes > 0 ? (score / (notes * 2)) * 100 : null
-}
-
-function scoreGrade(rate: number | null): string {
-  if (rate === null) return '-'
-  if (rate >= 100) return 'MAX'
-  if (rate >= 88.888_888) return 'AAA'
-  if (rate >= 77.777_777) return 'AA'
-  if (rate >= 66.666_666) return 'A'
-  if (rate >= 55.555_555) return 'B'
-  if (rate >= 44.444_444) return 'C'
-  if (rate >= 33.333_333) return 'D'
-  if (rate >= 22.222_222) return 'E'
-  return 'F'
+  return notes === null ? null : notes * 2
 }
 
 function signedDelta(value: number): string {
@@ -265,13 +247,14 @@ useSeoMeta({ title: () => t('daily.title') })
           </p>
 
           <div v-if="rows.length" class="overflow-x-auto rounded-xl border border-muted">
-            <table class="w-full min-w-[760px] text-sm">
+            <table class="w-full min-w-[860px] text-sm">
               <thead class="bg-elevated text-left text-muted">
                 <tr>
                   <th class="w-32 px-4 py-3">LV</th>
                   <th class="px-4 py-3">TITLE</th>
                   <th class="w-52 px-4 py-3">CLEAR</th>
-                  <th class="w-56 px-4 py-3">SCORE</th>
+                  <th class="w-52 px-4 py-3 text-right whitespace-nowrap">EX SCORE</th>
+                  <th class="w-40 px-4 py-3 text-center">RANK</th>
                   <th class="w-32 px-4 py-3">MISS</th>
                 </tr>
               </thead>
@@ -319,43 +302,57 @@ useSeoMeta({ title: () => t('daily.title') })
                       />
                     </div>
                   </td>
-                  <td class="px-4 py-3 align-top">
-                    <div class="font-semibold">
+                  <td class="px-4 py-3 text-right align-top">
+                    <div class="flex items-start justify-end gap-2">
                       <template
                         v-if="
                           row.result.updated_fields.ex_score && row.result.before.ex_score !== null
                         "
                       >
-                        <IrRankBadge
-                          :label="scoreGrade(scoreRateForSnapshot(row.result.before))"
-                          size="sm"
+                        <RankingExScore
+                          :score="row.result.before.ex_score"
+                          :max="maxExScore(row.result.before)"
+                          :rate-digits="2"
+                          class="text-muted"
                         />
-                        <span class="text-muted">{{ row.result.before.ex_score }}</span>
-                        <span class="mx-1.5 text-muted">»</span>
+                        <span class="text-muted">»</span>
                       </template>
-                      <IrRankBadge :label="scoreGrade(scoreRate(row.result))" size="sm" />
-                      <span class="ml-1.5">{{ row.result.after.ex_score ?? '-' }}</span>
+                      <RankingExScore
+                        v-if="row.result.after.ex_score !== null"
+                        :score="row.result.after.ex_score"
+                        :max="maxExScore(row.result.after)"
+                        :rate-digits="2"
+                      />
+                      <span v-else class="text-muted">-</span>
                     </div>
-                    <div class="mt-1 text-xs text-muted">
+                    <p
+                      v-if="
+                        row.result.updated_fields.ex_score &&
+                        row.result.before.ex_score !== null &&
+                        row.result.after.ex_score !== null
+                      "
+                      class="mt-1 text-xs font-medium text-error"
+                    >
+                      {{ signedDelta(row.result.after.ex_score - row.result.before.ex_score) }}
+                    </p>
+                  </td>
+                  <td class="px-4 py-3 text-center align-top">
+                    <div class="flex items-start justify-center gap-2">
                       <template
                         v-if="
                           row.result.updated_fields.ex_score && row.result.before.ex_score !== null
                         "
                       >
-                        {{ formatAccuracy(scoreRateForSnapshot(row.result.before)) }}
-                        <span class="mx-1">»</span>
+                        <RankingScoreRank
+                          :score="row.result.before.ex_score"
+                          :max="maxExScore(row.result.before)"
+                        />
+                        <span class="text-muted">»</span>
                       </template>
-                      {{ formatAccuracy(scoreRate(row.result)) }}
-                      <span
-                        v-if="
-                          row.result.updated_fields.ex_score &&
-                          row.result.before.ex_score !== null &&
-                          row.result.after.ex_score !== null
-                        "
-                        class="ml-1 font-medium text-error"
-                      >
-                        {{ signedDelta(row.result.after.ex_score - row.result.before.ex_score) }}
-                      </span>
+                      <RankingScoreRank
+                        :score="row.result.after.ex_score"
+                        :max="maxExScore(row.result.after)"
+                      />
                     </div>
                   </td>
                   <td class="px-4 py-3 align-top">

@@ -227,8 +227,18 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
                 :score="selfBestEntry.score.ex_score"
                 :max="selfBestEntry.score.max_ex_score"
               />
+              <RankingScoreRank
+                :score="selfBestEntry.score.ex_score"
+                :max="selfBestEntry.score.max_ex_score"
+              />
               <IrClearBadge :clear="selfBestEntry.score.clear" />
-              <p class="text-sm">COMBO {{ selfBestEntry.score.max_combo }}</p>
+              <p class="text-sm">
+                MAX COMBO
+                <RankingMaxCombo
+                  :combo="selfBestEntry.score.max_combo"
+                  :total-notes="totalNotesFromMaxExScore(selfBestEntry.score.max_ex_score)"
+                />
+              </p>
               <p class="text-sm">BP {{ selfBestEntry.score.bp }}</p>
             </div>
             <p class="mt-1 text-xs text-neutral-500">
@@ -274,11 +284,12 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
                 <th class="px-3 py-2">#</th>
                 <th class="px-3 py-2">{{ t('table.player') }}</th>
                 <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
+                <th class="px-3 py-2 text-center">RANK</th>
                 <th class="px-3 py-2">{{ t('table.clear') }}</th>
                 <th v-if="lnPolicies.length" class="px-3 py-2">LN</th>
                 <th class="px-3 py-2">RULE</th>
                 <th class="px-3 py-2">OPTION</th>
-                <th class="px-3 py-2 text-right">COMBO</th>
+                <th class="px-3 py-2 text-right whitespace-nowrap">MAX COMBO</th>
                 <th class="px-3 py-2 text-right">BP</th>
                 <th class="px-3 py-2">{{ t('table.date') }}</th>
               </tr>
@@ -298,6 +309,9 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
                 <td class="px-3 py-2 text-right">
                   <RankingExScore :score="entry.score.ex_score" :max="entry.score.max_ex_score" />
                 </td>
+                <td class="px-3 py-2 text-center">
+                  <RankingScoreRank :score="entry.score.ex_score" :max="entry.score.max_ex_score" />
+                </td>
                 <td class="px-3 py-2">
                   <IrClearBadge :clear="entry.score.clear" />
                 </td>
@@ -306,7 +320,12 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
                 </td>
                 <td class="px-3 py-2 text-muted">{{ ruleModeLabel(entry.score.rule_mode) }}</td>
                 <td class="px-3 py-2 text-xs text-muted">{{ scoreOption(entry.score) }}</td>
-                <td class="px-3 py-2 text-right">{{ entry.score.max_combo }}</td>
+                <td class="px-3 py-2 text-right">
+                  <RankingMaxCombo
+                    :combo="entry.score.max_combo"
+                    :total-notes="totalNotesFromMaxExScore(entry.score.max_ex_score)"
+                  />
+                </td>
                 <td class="px-3 py-2 text-right">{{ entry.score.bp }}</td>
                 <td class="px-3 py-2 text-neutral-400">
                   {{ formatScoreDate(entry.score.played_at) }}

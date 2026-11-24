@@ -209,11 +209,13 @@ async function loadRankingEntryDetails(entries: IrRankingEntry[]): Promise<void>
       playerId: player.id,
       scoreId: score.score_id,
       exScoreId: score.source_score_ids?.ex_score ?? score.score_id,
+      comboScoreId: score.source_score_ids?.max_combo ?? score.score_id,
     })),
   )
   const playerId = sql<string>`json_extract(ranking_sources.value, '$.playerId')`
   const representative = alias(schema.scores, 'representative')
   const exBest = alias(schema.scores, 'ex_best')
+  const comboBest = alias(schema.scores, 'combo_best')
   const rows = await db
     .select({
       playerId,
@@ -221,6 +223,8 @@ async function loadRankingEntryDetails(entries: IrRankingEntry[]): Promise<void>
       playOptions: representative.playOptions,
       judges: exBest.judges,
       notes: exBest.notes,
+      combo: comboBest.maxCombo,
+      comboNotes: comboBest.notes,
     })
     .from(sql`json_each(${sources}) as ranking_sources`)
     .leftJoin(schema.profiles, eq(schema.profiles.id, playerId))
@@ -229,6 +233,10 @@ async function loadRankingEntryDetails(entries: IrRankingEntry[]): Promise<void>
       eq(representative.id, sql`json_extract(ranking_sources.value, '$.scoreId')`),
     )
     .leftJoin(exBest, eq(exBest.id, sql`json_extract(ranking_sources.value, '$.exScoreId')`))
+    .leftJoin(
+      comboBest,
+      eq(comboBest.id, sql`json_extract(ranking_sources.value, '$.comboScoreId')`),
+    )
 
   const byPlayer = new Map(rows.map((row) => [row.playerId, row]))
   for (const entry of entries) {
@@ -237,6 +245,7 @@ async function loadRankingEntryDetails(entries: IrRankingEntry[]): Promise<void>
     Object.assign(entry.score, arrangeOptionsFromPlayOptions(details?.playOptions), {
       judges: rankingJudges(details?.judges),
       max_ex_score: details?.notes ? details.notes * 2 : null,
+      max_combo_notes: details?.combo === entry.score.max_combo ? details.comboNotes : null,
     })
   }
 }

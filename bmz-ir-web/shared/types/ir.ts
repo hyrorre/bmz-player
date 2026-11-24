@@ -222,6 +222,8 @@ export interface IrRankingEntry {
     /** Maximum EX score of the attempt that supplied ex_score. */
     max_ex_score?: number | null
     max_combo: number
+    /** Scoring note count of the attempt that supplied max_combo. */
+    max_combo_notes?: number | null
     min_bp: number
     min_cb: number
     gauge: string

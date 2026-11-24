@@ -250,6 +250,7 @@ test('player detail pages filter public bests and include each score source and 
   ex.rule.ln_policy = 'AutoLn'
   ex.rule.rule_mode = 'Dx'
   ex.result.notes = 110
+  ex.result.max_combo = 80
   ex.play_options = { arrange_1p: 'random', arrange_2p: 'mirror' }
   const exBest = await submitScore({ id: 'alice' }, ex, [], 10)
   const clear = structuredClone(ex)
@@ -258,6 +259,7 @@ test('player detail pages filter public bests and include each score source and 
   clear.result.ex_score = 180
   clear.result.judges.fast.pgreat = 90
   clear.result.notes = 105
+  clear.result.max_combo = 90
   clear.play_options = { arrange_1p: 'mirror' }
   const clearBest = await submitScore({ id: 'alice' }, clear, [], 10)
   const noLn = await submitScore({ id: 'alice' }, submission({ sha256: CHART_B }), [], 10)
@@ -291,6 +293,8 @@ test('player detail pages filter public bests and include each score source and 
     best_clear_score_id: clearBest.score_id,
     ex_score: 200,
     max_ex_score: 220,
+    max_combo: 90,
+    max_combo_notes: 105,
     clear_type: 'Hard',
     arrange_1p: 'random',
     arrange_2p: 'mirror',

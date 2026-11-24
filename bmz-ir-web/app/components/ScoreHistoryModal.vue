@@ -27,7 +27,7 @@ function formatScoreDate(value: string | null) {
 </script>
 
 <template>
-  <UModal v-model:open="open" :title="t('ranking.selfHistory')" :ui="{ content: 'sm:max-w-4xl' }">
+  <UModal v-model:open="open" :title="t('ranking.selfHistory')" :ui="{ content: 'sm:max-w-5xl' }">
     <template #body>
       <UAlert v-if="errorDescription" color="error" :description="errorDescription" class="mb-4" />
       <p v-else-if="pending" class="text-sm text-muted">{{ t('common.loading') }}</p>
@@ -40,11 +40,12 @@ function formatScoreDate(value: string | null) {
             <tr>
               <th class="px-3 py-2">{{ t('table.date') }}</th>
               <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
+              <th class="px-3 py-2 text-center">RANK</th>
               <th class="px-3 py-2">{{ t('table.clear') }}</th>
               <th v-if="showLn" class="px-3 py-2">LN</th>
               <th class="px-3 py-2">RULE</th>
               <th class="px-3 py-2">OPTION</th>
-              <th class="px-3 py-2 text-right">COMBO</th>
+              <th class="px-3 py-2 text-right whitespace-nowrap">MAX COMBO</th>
               <th class="px-3 py-2 text-right">BP</th>
               <th
                 v-if="scoreDetailId"
@@ -64,13 +65,21 @@ function formatScoreDate(value: string | null) {
                 <td class="px-3 py-2 text-right">
                   <RankingExScore :score="score.ex_score" :max="score.max_ex_score" />
                 </td>
+                <td class="px-3 py-2 text-center">
+                  <RankingScoreRank :score="score.ex_score" :max="score.max_ex_score" />
+                </td>
                 <td class="px-3 py-2"><IrClearBadge :clear="score.clear" /></td>
                 <td v-if="showLn" class="px-3 py-2 text-muted">
                   {{ lnPolicyLabel(score.ln_policy) }}
                 </td>
                 <td class="px-3 py-2 text-muted">{{ ruleModeLabel(score.rule_mode) }}</td>
                 <td class="px-3 py-2 text-xs text-muted">{{ scoreOption(score) }}</td>
-                <td class="px-3 py-2 text-right">{{ score.max_combo }}</td>
+                <td class="px-3 py-2 text-right">
+                  <RankingMaxCombo
+                    :combo="score.max_combo"
+                    :total-notes="totalNotesFromMaxExScore(score.max_ex_score)"
+                  />
+                </td>
                 <td class="px-3 py-2 text-right">{{ scoreBp(score) }}</td>
                 <td v-if="scoreDetailId" class="sticky right-0 z-10 bg-default px-1 py-1">
                   <ScoreDetailToggle
@@ -84,7 +93,7 @@ function formatScoreDate(value: string | null) {
                 v-if="scoreDetailId && expandedScoreRow === scoreKey(score)"
                 class="border-t border-default bg-elevated"
               >
-                <td :colspan="showLn ? 9 : 8">
+                <td :colspan="showLn ? 10 : 9">
                   <ScoreInlineDetails :id="scoreDetailsId" :score-id="scoreDetailId(score)" />
                 </td>
               </tr>

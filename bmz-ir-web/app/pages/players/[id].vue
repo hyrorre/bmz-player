@@ -26,6 +26,7 @@ interface PlayerDetail {
     clear_type: string
     clear_rank: number
     max_combo: number
+    max_combo_notes: number | null
     min_bp: number
     device_type: string
     ln_policy: string
@@ -222,11 +223,12 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
               <tr>
                 <th class="px-3 py-2">{{ t('table.chart') }}</th>
                 <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
+                <th class="px-3 py-2 text-center">RANK</th>
                 <th class="px-3 py-2">{{ t('table.clear') }}</th>
                 <th v-if="lnPolicies.length" class="px-3 py-2">LN</th>
                 <th class="px-3 py-2">RULE</th>
                 <th class="px-3 py-2">OPTION</th>
-                <th class="px-3 py-2 text-right">COMBO</th>
+                <th class="px-3 py-2 text-right whitespace-nowrap">MAX COMBO</th>
                 <th class="px-3 py-2 text-right">BP</th>
                 <th class="px-3 py-2">{{ t('table.input') }}</th>
                 <th class="px-3 py-2">{{ t('table.date') }}</th>
@@ -260,6 +262,9 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
                   <td class="px-3 py-2 text-right">
                     <RankingExScore :score="score.ex_score" :max="score.max_ex_score" />
                   </td>
+                  <td class="px-3 py-2 text-center">
+                    <RankingScoreRank :score="score.ex_score" :max="score.max_ex_score" />
+                  </td>
                   <td class="px-3 py-2">
                     <IrClearBadge :clear="score.clear_type" :rank="score.clear_rank" />
                   </td>
@@ -270,7 +275,12 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
                   <td class="px-3 py-2 text-xs whitespace-nowrap text-muted">
                     {{ formatRankingArrange(score, score.chart?.mode ?? null) }}
                   </td>
-                  <td class="px-3 py-2 text-right">{{ score.max_combo }}</td>
+                  <td class="px-3 py-2 text-right">
+                    <RankingMaxCombo
+                      :combo="score.max_combo"
+                      :total-notes="score.max_combo_notes"
+                    />
+                  </td>
                   <td class="px-3 py-2 text-right">{{ score.min_bp }}</td>
                   <td class="px-3 py-2 text-muted">{{ score.device_type }}</td>
                   <td class="px-3 py-2 whitespace-nowrap text-muted">
@@ -288,7 +298,7 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
                   v-if="expandedScoreRow === score.id"
                   class="border-t border-default bg-elevated"
                 >
-                  <td :colspan="lnPolicies.length ? 11 : 10">
+                  <td :colspan="lnPolicies.length ? 12 : 11">
                     <ScoreInlineDetails
                       :id="scoreDetailsId"
                       :score-id="score.best_ex_score_id ?? score.score_id"

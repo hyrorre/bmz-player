@@ -255,8 +255,18 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                   :score="selfBestEntry.score.ex_score"
                   :max="selfBestEntry.score.max_ex_score"
                 />
+                <RankingScoreRank
+                  :score="selfBestEntry.score.ex_score"
+                  :max="selfBestEntry.score.max_ex_score"
+                />
                 <IrClearBadge :clear="selfBestEntry.score.clear" />
-                <p class="text-sm">COMBO {{ selfBestEntry.score.max_combo }}</p>
+                <p class="text-sm">
+                  MAX COMBO
+                  <RankingMaxCombo
+                    :combo="selfBestEntry.score.max_combo"
+                    :total-notes="selfBestEntry.score.max_combo_notes"
+                  />
+                </p>
                 <p class="text-sm">BP {{ selfBestEntry.score.min_bp }}</p>
               </div>
               <p class="mt-1 text-xs text-neutral-500">
@@ -315,11 +325,12 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                 <th class="px-3 py-2">#</th>
                 <th class="px-3 py-2">{{ t('table.player') }}</th>
                 <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
+                <th class="px-3 py-2 text-center">RANK</th>
                 <th class="px-3 py-2">{{ t('table.clear') }}</th>
                 <th v-if="lnPolicies.length" class="px-3 py-2">LN</th>
                 <th class="px-3 py-2">RULE</th>
                 <th class="px-3 py-2">OPTION</th>
-                <th class="px-3 py-2 text-right">COMBO</th>
+                <th class="px-3 py-2 text-right whitespace-nowrap">MAX COMBO</th>
                 <th class="px-3 py-2 text-right">BP</th>
                 <th class="px-3 py-2">{{ t('table.input') }}</th>
                 <th class="px-3 py-2">{{ t('table.date') }}</th>
@@ -351,6 +362,12 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                   <td class="px-3 py-2 text-right">
                     <RankingExScore :score="entry.score.ex_score" :max="entry.score.max_ex_score" />
                   </td>
+                  <td class="px-3 py-2 text-center">
+                    <RankingScoreRank
+                      :score="entry.score.ex_score"
+                      :max="entry.score.max_ex_score"
+                    />
+                  </td>
                   <td class="px-3 py-2">
                     <IrClearBadge :clear="entry.score.clear" />
                   </td>
@@ -361,7 +378,12 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                   <td class="px-3 py-2 text-xs text-muted">
                     {{ formatRankingArrange(entry.score, detail.chart.mode) }}
                   </td>
-                  <td class="px-3 py-2 text-right">{{ entry.score.max_combo }}</td>
+                  <td class="px-3 py-2 text-right">
+                    <RankingMaxCombo
+                      :combo="entry.score.max_combo"
+                      :total-notes="entry.score.max_combo_notes"
+                    />
+                  </td>
                   <td class="px-3 py-2 text-right">{{ entry.score.min_bp }}</td>
                   <td class="px-3 py-2 text-neutral-400">{{ entry.score.device_type }}</td>
                   <td class="px-3 py-2 text-neutral-400">
@@ -379,7 +401,7 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                   v-if="expandedScoreRow === entry.score.score_id"
                   class="border-t border-default bg-elevated"
                 >
-                  <td :colspan="lnPolicies.length ? 12 : 11">
+                  <td :colspan="lnPolicies.length ? 13 : 12">
                     <ScoreInlineDetails
                       :id="scoreDetailsId"
                       :score-id="entry.score.source_score_ids?.ex_score ?? entry.score.score_id"
