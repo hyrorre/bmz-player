@@ -17,6 +17,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(windows)]
+mod legacy_cleanup;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RestartContext {
@@ -43,7 +46,16 @@ fn lock_file(root: &Path, name: &str) -> Result<File> {
 
 /// All packaged BMZ processes hold this until shutdown (including Viewer/CLI).
 pub fn instance_guard(root: &Path) -> Result<Vec<File>> {
-    let legacy = PackageManifest::read(root)?.manifest_path() == crate::LEGACY_MANIFEST;
+    let package = PackageManifest::read(root)?;
+    let legacy = package.manifest_path() == crate::LEGACY_MANIFEST;
+    #[cfg(windows)]
+    if !legacy
+        && package.kind == crate::manifest::PackageKind::Portable
+        && package.version == env!("CARGO_PKG_VERSION")
+    {
+        // The old helper can still be exiting. Leave optional cleanup for a later launch.
+        let _ = legacy_cleanup::cleanup(root);
+    }
     let mut guards = Vec::new();
     for name in [crate::INSTANCE_LOCK, crate::LEGACY_INSTANCE_LOCK] {
         let path = checked_path(root, name)?;
@@ -66,8 +78,7 @@ pub fn instance_guard(root: &Path) -> Result<Vec<File>> {
     Ok(guards)
 }
 
-// Hold both generations during migration. Never delete legacy locks: replacing a lock file
-// can split the lock identity while another process still has the original file open.
+// Hold both generations during migration. Replacing an open lock file can split its identity.
 fn update_guards(root: &Path) -> Result<(Vec<File>, Vec<File>)> {
     let legacy = checked_path(root, crate::LEGACY_MANIFEST)?.try_exists()?
         || checked_path(root, crate::LEGACY_INSTANCE_LOCK)?.try_exists()?
