@@ -1565,7 +1565,7 @@ describe('rankings, courses, and aggregates', () => {
         md5: md5s[i]!.toUpperCase(),
         mode: '7K',
         title: [0, 2, 4].includes(i) ? 'Stella fixture' : 'Other chart',
-        updatedAt: new Date(1000 + i),
+        createdAt: new Date(1000 + i),
       })
     }
     await db.insert(schema.difficultyTables).values([
@@ -1575,6 +1575,7 @@ describe('rankings, courses, and aggregates', () => {
         symbol: 'st',
         sourceUrl: 'https://stellabms.xyz/st/table.html',
         activeGeneration: 'current',
+        levelOrder: ['2', '1+'],
       },
       {
         id: 'insane',
@@ -1607,7 +1608,7 @@ describe('rankings, courses, and aggregates', () => {
       legacy_id: stellaStorageId,
       name: 'Stella',
       symbol: 'st',
-      levels: ['1+', '2'],
+      levels: ['2', '1+'],
     })
     expect(first.pagination).toEqual({ limit: 1, offset: 0, total: 2, has_more: true })
     expect(first.difficulty_filter).toEqual({
@@ -1640,6 +1641,17 @@ describe('rankings, courses, and aggregates', () => {
       hashes[2],
       hashes[0],
     ])
+    const sortedUrl = '/api/v1/charts?difficulty_table=stella&sort=table_level'
+    const sorted = await chartsIndexHandler(event({ path: sortedUrl }))
+    expect(sorted.charts.map((chart: { sha256: string }) => chart.sha256)).toEqual([
+      hashes[5],
+      hashes[0],
+      hashes[2],
+    ])
+    const sortedPage = await chartsIndexHandler(
+      event({ path: `${sortedUrl}&order=desc&limit=1&offset=2` }),
+    )
+    expect(sortedPage.charts).toMatchObject([{ sha256: hashes[5] }])
     const tableAndTitle = await chartsIndexHandler(
       event({ path: '/api/v1/charts?difficulty_table=stella&q=Other' }),
     )
@@ -1656,8 +1668,8 @@ describe('rankings, courses, and aggregates', () => {
       ),
     ).toEqual(distribution)
     expect(distribution.levels).toEqual([
-      { level: '1+', total: 2, segments: [{ rank: 0, count: 2 }] },
       { level: '2', total: 1, segments: [{ rank: 0, count: 1 }] },
+      { level: '1+', total: 2, segments: [{ rank: 0, count: 2 }] },
     ])
     const segmentUrl = '/api/v1/analysis/charts?player=alice&level=1%2B&rank=0&table='
     const segment = await analysisChartsHandler(event({ path: `${segmentUrl}stella` }))
@@ -1665,6 +1677,88 @@ describe('rankings, courses, and aggregates', () => {
     expect(await analysisChartsHandler(event({ path: segmentUrl + stellaStorageId }))).toEqual(
       segment,
     )
+  })
+
+  test('chart and course lists sort matching rows in both directions before slicing a page', async () => {
+    const hashes = [CHART_A, CHART_B, 'c'.repeat(64)]
+    await db.insert(schema.charts).values([
+      {
+        sha256: hashes[0]!,
+        mode: '7K',
+        title: 'Zebra',
+        artist: 'Aaron',
+        level: 4,
+        notes: 100,
+        createdAt: new Date(1000),
+      },
+      {
+        sha256: hashes[1]!,
+        mode: '7K',
+        title: 'alfa',
+        artist: 'Zed',
+        level: 9,
+        notes: 50,
+        createdAt: new Date(2000),
+      },
+      { sha256: hashes[2]!, mode: '7K', title: 'beta', notes: 200, createdAt: new Date(3000) },
+    ])
+    for (const [sort, ascending, descending] of [
+      ['created_at', [0, 1, 2], [2, 1, 0]],
+      ['title', [1, 2, 0], [0, 2, 1]],
+      ['artist', [0, 1, 2], [1, 0, 2]],
+      ['level', [0, 1, 2], [1, 0, 2]],
+      ['notes', [1, 0, 2], [2, 0, 1]],
+    ] as const) {
+      for (const [order, positions] of [
+        ['asc', ascending],
+        ['desc', descending],
+      ] as const) {
+        const page = await chartsIndexHandler(
+          event({ path: `/api/v1/charts?sort=${sort}&order=${order}&limit=2&offset=1` }),
+        )
+        expect(page.charts.map((chart: { sha256: string }) => chart.sha256)).toEqual(
+          positions.slice(1).map((i) => hashes[i]),
+        )
+      }
+    }
+    const defaultCharts = await chartsIndexHandler(
+      event({ path: '/api/v1/charts?sort=table_level&order=asc&limit=1' }),
+    )
+    expect(defaultCharts.charts).toMatchObject([{ sha256: hashes[2] }])
+
+    const courses = [
+      { courseHash: 'z', title: 'Zebra', charts: hashes, chartCount: 3, createdAt: new Date(1000) },
+      {
+        courseHash: 'a',
+        title: 'alfa',
+        charts: hashes.slice(0, 1),
+        chartCount: 1,
+        createdAt: new Date(2000),
+      },
+      {
+        courseHash: 'b',
+        title: 'beta',
+        charts: hashes.slice(0, 2),
+        chartCount: 2,
+        createdAt: new Date(3000),
+      },
+    ]
+    await db.insert(schema.irCourses).values(courses)
+    for (const [query, expected] of [
+      ['', ['b', 'a', 'z']],
+      ['sort=created_at&order=asc', ['z', 'a', 'b']],
+      ['sort=title', ['a', 'b', 'z']],
+      ['sort=title&order=desc', ['z', 'b', 'a']],
+      ['sort=chart_count', ['a', 'b', 'z']],
+      ['sort=chart_count&order=desc', ['z', 'b', 'a']],
+    ] as const) {
+      const page = await coursesIndexHandler(
+        event({ path: `/api/v1/courses?${query}&limit=2&offset=1` }),
+      )
+      expect(page.courses.map((course: { course_hash: string }) => course.course_hash)).toEqual(
+        expected.slice(1),
+      )
+    }
   })
 
   test('difficulty distributions show best lamps and score grades and page through the selected segment', async () => {
@@ -1898,7 +1992,7 @@ describe('rankings, courses, and aggregates', () => {
   })
 
   test.each([99, 100])(
-    'player pages with limit=%i keep both statistics within D1 limits',
+    'player pages with limit=%i sort public activity before paging and stay within D1 limits',
     async (limit) => {
       const ids = Array.from({ length: 102 }, (_, i) => `page-${i}`)
       for (const [i, id] of [...ids, 'page-banned'].entries()) {
@@ -1929,18 +2023,16 @@ describe('rankings, courses, and aggregates', () => {
           await submitCourseScore({ id }, coursePayload(charts, computeCourseHash(charts, {})))
         }
         await db
-          .update(schema.bestScores)
+          .update(schema.scores)
           .set({ serverReceivedAt: new Date('2026-01-02') })
-          .where(
-            and(eq(schema.bestScores.playerId, id), eq(schema.bestScores.chartSha256, CHART_A)),
-          )
+          .where(and(eq(schema.scores.playerId, id), eq(schema.scores.chartSha256, CHART_A)))
         await db
-          .update(schema.bestCourseScores)
+          .update(schema.courseScores)
           .set({ serverReceivedAt: new Date(Date.UTC(2026, 0, 3 + i)) })
           .where(
             and(
-              eq(schema.bestCourseScores.playerId, id),
-              eq(schema.bestCourseScores.courseHash, publicCourse),
+              eq(schema.courseScores.playerId, id),
+              eq(schema.courseScores.courseHash, publicCourse),
             ),
           )
       }
@@ -1950,13 +2042,12 @@ describe('rankings, courses, and aggregates', () => {
       const page = await playersIndexHandler(
         event({ path: `/api/v1/players?q=page-&limit=${limit}` }),
       )
-      const scored = ids.slice(98, limit).reverse()
+      const sorted = [ids[99], ids[98], ...ids.slice(0, 98), ...ids.slice(100)]
       expect(page.players.map((player: { id: string }) => player.id)).toEqual([
-        ...scored,
-        ...ids.slice(0, 98),
+        ...sorted.slice(0, limit),
       ])
       expect(page.pagination).toEqual({ limit, offset: 0, total: 102, has_more: true })
-      for (const [i, id] of ids.slice(98, limit).entries()) {
+      for (const [i, id] of ids.slice(98, 100).entries()) {
         expect(page.players.find((player: { id: string }) => player.id === id)).toMatchObject({
           best_score_count: 1,
           best_course_score_count: 1,
@@ -1972,7 +2063,7 @@ describe('rankings, courses, and aggregates', () => {
       const tail = await playersIndexHandler(
         event({ path: `/api/v1/players?q=page-&limit=${limit}&offset=${limit}` }),
       )
-      expect(tail.players.map((player: { id: string }) => player.id)).toEqual(ids.slice(limit))
+      expect(tail.players.map((player: { id: string }) => player.id)).toEqual(sorted.slice(limit))
       expect(tail.pagination).toEqual({ limit, offset: limit, total: 102, has_more: false })
       const empty = await playersIndexHandler(
         event({ path: '/api/v1/players?limit=100&q=no-match' }),
@@ -1983,6 +2074,64 @@ describe('rankings, courses, and aggregates', () => {
       })
     },
   )
+
+  test('player list uses the latest accepted submission and can sort by profile and best counts', async () => {
+    for (const [i, id] of ['bob', 'carol', 'alice'].entries()) {
+      await db
+        .update(schema.users)
+        .set({ createdAt: new Date(1000 + i) })
+        .where(eq(schema.users.id, id))
+      await db
+        .update(schema.profiles)
+        .set({ displayName: `sort fixture ${id}` })
+        .where(eq(schema.profiles.id, id))
+    }
+    for (const [id, sha256, key, points, received] of [
+      ['alice', CHART_A, 'alice-best', 150, '2026-01-01'],
+      ['alice', CHART_A, 'alice-latest', 100, '2026-01-03'],
+      ['bob', CHART_A, 'bob-public', 100, '2026-01-02'],
+      ['alice', CHART_B, 'alice-other', 100, '2026-01-01'],
+    ] as const) {
+      const score = await submitScore({ id }, submission({ sha256, key, exScore: points }), [], 10)
+      expect(score.accepted).toBe(true)
+      await db
+        .update(schema.scores)
+        .set({ serverReceivedAt: new Date(received) })
+        .where(eq(schema.scores.id, score.score_id))
+    }
+    const rejected = await submitScore(
+      { id: 'bob' },
+      submission({ key: 'rejected', exScore: 99 }),
+      [],
+      10,
+    )
+    await db
+      .update(schema.scores)
+      .set({ accepted: false })
+      .where(eq(schema.scores.id, rejected.score_id))
+    await submitCourseScore({ id: 'bob' }, coursePayload([CHART_B], 'bob-course'))
+    await db.update(schema.courseScores).set({ serverReceivedAt: new Date('2026-01-01') })
+    for (const [query, expected] of [
+      ['', ['alice', 'bob', 'carol']],
+      ['order=asc', ['bob', 'alice', 'carol']],
+      ['sort=display_name', ['alice', 'bob', 'carol']],
+      ['sort=display_name&order=desc', ['carol', 'bob', 'alice']],
+      ['sort=created_at', ['alice', 'carol', 'bob']],
+      ['sort=created_at&order=asc', ['bob', 'carol', 'alice']],
+      ['sort=best_score_count', ['alice', 'bob', 'carol']],
+      ['sort=best_score_count&order=asc', ['carol', 'bob', 'alice']],
+      ['sort=best_course_score_count', ['bob', 'alice', 'carol']],
+      ['sort=best_course_score_count&order=asc', ['alice', 'carol', 'bob']],
+    ] as const) {
+      const page = await playersIndexHandler(
+        event({ path: `/api/v1/players?q=sort+fixture&${query}` }),
+      )
+      expect(page.players.map((player: { id: string }) => player.id)).toEqual([...expected])
+      expect(
+        page.players.find((player: { id: string }) => player.id === 'alice').last_score_at,
+      ).toBe('2026-01-03T00:00:00.000Z')
+    }
+  })
 
   test('banned players are excluded before ranking, paging, totals, and clear rate', async () => {
     await submitScore({ id: 'alice' }, submission({ exScore: 300 }), [], 10)

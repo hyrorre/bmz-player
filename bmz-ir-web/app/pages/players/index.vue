@@ -19,8 +19,18 @@ interface PlayerListResult {
   }
 }
 
-const { search, page, pageSize, pageLocation, listQuery, apiQuery, applySearch } =
-  useSearchableListQuery()
+const {
+  search,
+  page,
+  pageSize,
+  pageLocation,
+  listQuery,
+  sort,
+  order,
+  sortItems,
+  apiQuery,
+  applySearch,
+} = useSearchableListQuery('players')
 const localePath = useLocalePath()
 const { t } = useI18n()
 const { formatDateTime } = useLocaleFormat()
@@ -53,7 +63,7 @@ useSeoMeta({ title: () => t('players.title') })
         </p>
       </div>
 
-      <form class="mb-6 flex gap-3" @submit.prevent="applySearch(refresh)">
+      <form class="mb-4 flex gap-3" @submit.prevent="applySearch(refresh)">
         <UInput
           v-model="search"
           class="flex-1"
@@ -63,6 +73,7 @@ useSeoMeta({ title: () => t('players.title') })
         />
         <UButton type="submit" color="primary" variant="subtle">{{ t('common.search') }}</UButton>
       </form>
+      <ListSortControls v-model:sort="sort" v-model:order="order" :items="sortItems" class="mb-6" />
 
       <UAlert v-if="error" color="error" :description="errorDescription" class="mb-6" />
       <p v-else-if="pending" class="text-sm text-neutral-400">{{ t('common.loading') }}</p>

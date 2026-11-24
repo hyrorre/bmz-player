@@ -1,6 +1,7 @@
-import { and, desc, sql, type SQL } from 'drizzle-orm'
+import { and, asc, desc, sql, type SQL } from 'drizzle-orm'
 import { getQuery } from 'h3'
 import { db, schema } from 'hub:db'
+import { readListSort } from '../../../../shared/utils/list_sort'
 import { publicCourseCondition } from '../../../services/moderation/visibility'
 
 export default defineEventHandler(async (event) => {
@@ -8,6 +9,15 @@ export default defineEventHandler(async (event) => {
   const limit = Math.max(1, Math.min(100, Number(query.limit ?? 50) || 50))
   const offset = Math.max(0, Number(query.offset ?? 0) || 0)
   const search = typeof query.q === 'string' ? query.q.trim() : ''
+  const { sort, order } = readListSort('courses', query)
+  const direction = order === 'asc' ? asc : desc
+  const coursesTable = schema.irCourses
+  const sortColumns = {
+    created_at: coursesTable.createdAt,
+    title: sql`nullif(${coursesTable.title}, '') collate nocase`,
+    chart_count: coursesTable.chartCount,
+  }
+  const sortColumn = sortColumns[sort]
 
   const conditions: SQL[] = [publicCourseCondition(schema.irCourses.courseHash)]
   if (search) {
@@ -27,7 +37,7 @@ export default defineEventHandler(async (event) => {
     })
     .from(schema.irCourses)
     .where(and(...conditions))
-    .orderBy(desc(schema.irCourses.updatedAt), schema.irCourses.courseHash)
+    .orderBy(sql`${direction(sortColumn)} nulls last`, schema.irCourses.courseHash)
     .limit(limit)
     .offset(offset)
   const countRequest = db

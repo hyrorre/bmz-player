@@ -304,24 +304,28 @@ function chartSha256Match() {
   return eq(schema.difficultyTableEntries.sha256, sql`lower(${schema.charts.sha256})`)
 }
 
-function activeDifficultyEntries(hash: 'md5' | 'sha256', condition?: SQL) {
+function activeDifficultyEntries(hash: 'md5' | 'sha256', condition?: SQL, value = sql`1`) {
   const entries = schema.difficultyTableEntries
   const index = sql.identifier(`idx_difficulty_table_entries_${hash}`)
   const match = hash === 'md5' ? chartMd5Match() : chartSha256Match()
   // Start with the chart hash to avoid rereading the entire table for each chart.
   return db
-    .select({ found: sql`1` })
+    .select({ value })
     .from(sql`${entries} indexed by ${index}`)
     .innerJoin(schema.difficultyTables, activeDifficultyGeneration())
     .where(and(match, condition))
 }
 
-export function chartDifficultyCondition(filter: DifficultyFilter): SQL {
+function selectedDifficultyEntries(filter: DifficultyFilter) {
   const entries = schema.difficultyTableEntries
-  const selectedDifficulty = and(
+  return and(
     eq(entries.tableId, difficultyTableStorageId(filter.difficulty_table)),
     filter.difficulty_level === undefined ? undefined : eq(entries.level, filter.difficulty_level),
   )
+}
+
+export function chartDifficultyCondition(filter: DifficultyFilter): SQL {
+  const selectedDifficulty = selectedDifficultyEntries(filter)
   // An MD5 match in any active table suppresses every SHA-256 label for the chart.
   return or(
     exists(activeDifficultyEntries('md5', selectedDifficulty)),
@@ -330,6 +334,21 @@ export function chartDifficultyCondition(filter: DifficultyFilter): SQL {
       exists(activeDifficultyEntries('sha256', selectedDifficulty)),
     ),
   )!
+}
+
+export function chartDifficultyLevelOrder(filter: DifficultyFilter): SQL {
+  const { difficultyTables: tables, difficultyTableEntries: entries } = schema
+  const position = sql`coalesce(
+    (select level_order.key from json_each(${tables.levelOrder}) as level_order
+      where level_order.value = ${entries.level}),
+    json_array_length(${tables.levelOrder})
+  )`
+  const selected = selectedDifficultyEntries(filter)
+  // A chart listed at multiple levels sorts by its first level in this table.
+  const md5 = activeDifficultyEntries('md5', selected, sql`min(${position})`)
+  const sha256 = activeDifficultyEntries('sha256', selected, sql`min(${position})`)
+  // chartDifficultyCondition already excludes SHA-256 matches suppressed by MD5 in another table.
+  return sql`coalesce((${md5}), (${sha256}))`
 }
 
 /** One row per registered public chart or unresolved table entry at each level. */

@@ -29,8 +29,18 @@ interface ChartListResult {
   }
 }
 
-const { search, page, pageSize, pageLocation, listQuery, apiQuery, applySearch } =
-  useSearchableListQuery()
+const {
+  search,
+  page,
+  pageSize,
+  pageLocation,
+  listQuery,
+  sort,
+  order,
+  sortItems,
+  apiQuery,
+  applySearch,
+} = useSearchableListQuery('charts')
 const route = useRoute()
 const difficulty = computed(() => readDifficultyFilter(route.query))
 const localePath = useLocalePath()
@@ -96,12 +106,14 @@ const levelItems = computed(() => {
 })
 
 function difficultyLocation(filter?: DifficultyFilter) {
+  const clearTableSort = !filter && route.query.sort === 'table_level'
   return {
     path: route.path,
     query: {
       ...route.query,
       difficulty_table: filter?.difficulty_table,
       difficulty_level: filter?.difficulty_level,
+      ...(clearTableSort ? { sort: undefined, order: undefined } : {}),
       page: undefined,
     },
   }
@@ -194,6 +206,7 @@ useSeoMeta({ title: () => t('charts.title') })
       <p v-if="catalogError" class="mb-4 text-sm text-muted">
         {{ t('charts.difficultyOptionsUnavailable') }}
       </p>
+      <ListSortControls v-model:sort="sort" v-model:order="order" :items="sortItems" class="mb-6" />
 
       <UAlert v-if="error" color="error" :description="errorDescription" class="mb-6" />
       <p v-else-if="pending" class="text-sm text-neutral-400">{{ t('common.loading') }}</p>

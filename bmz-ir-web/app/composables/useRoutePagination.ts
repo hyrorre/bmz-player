@@ -1,4 +1,10 @@
-import type { LocationQuery, LocationQueryRaw } from 'vue-router'
+import type { LocationQuery } from 'vue-router'
+import {
+  listSortOptions,
+  readListSort,
+  type ListSortOrder,
+  type SortableList,
+} from '../../shared/utils/list_sort'
 
 const listPageSize = 50
 
@@ -19,8 +25,9 @@ export function useRoutePagination({
   return { page, pageSize, maxPage, offset, pageLocation }
 }
 
-export function useSearchableListQuery() {
+export function useSearchableListQuery(list: SortableList) {
   const route = useRoute()
+  const { t } = useI18n()
   const pagination = useRoutePagination()
   const appliedSearch = computed(() => searchParam(route.query.q))
   const search = ref(appliedSearch.value ?? '')
@@ -28,10 +35,32 @@ export function useSearchableListQuery() {
     search.value = appliedSearch.value ?? ''
   })
 
-  const listQuery = computed(() => ({
-    q: appliedSearch.value,
-    page: pageParam(pagination.page.value),
-  }))
+  const listQuery = computed(() => listReturnQuery(route.query))
+  const sorting = computed(() => readListSort(list, route.query))
+  const sortItems = computed(() =>
+    listSortOptions(list, route.query).map(([value]) => ({
+      value,
+      label: t(value === 'title' ? `listSort.${list}_title` : `listSort.${value}`),
+    })),
+  )
+  const sort = computed({
+    get: () => sorting.value.sort,
+    set(value: string) {
+      if (value === sorting.value.sort) return
+      const next = readListSort(list, { ...route.query, sort: value, order: undefined })
+      void navigateTo({ path: route.path, query: { ...route.query, ...next, page: undefined } })
+    },
+  })
+  const order = computed({
+    get: () => sorting.value.order,
+    set(value: ListSortOrder) {
+      if (value === sorting.value.order) return
+      void navigateTo({
+        path: route.path,
+        query: { ...route.query, sort: sorting.value.sort, order: value, page: undefined },
+      })
+    },
+  })
 
   async function applySearch(refresh: () => Promise<void>) {
     const q = searchParam(search.value)
@@ -46,8 +75,12 @@ export function useSearchableListQuery() {
     ...pagination,
     search,
     listQuery,
+    sort,
+    order,
+    sortItems,
     apiQuery: computed(() => ({
       q: appliedSearch.value,
+      ...sorting.value,
       offset: pagination.offset.value,
       limit: pagination.pageSize,
     })),
@@ -55,8 +88,13 @@ export function useSearchableListQuery() {
   }
 }
 
-export function listReturnQuery(query: LocationQuery): LocationQueryRaw {
-  return { q: searchParam(query.q), page: pageParam(readPage(query.page)) }
+export function listReturnQuery(query: LocationQuery) {
+  return {
+    q: searchParam(query.q),
+    page: pageParam(readPage(query.page)),
+    sort: searchParam(query.sort),
+    order: query.order === 'asc' || query.order === 'desc' ? query.order : undefined,
+  }
 }
 
 function searchParam(value: unknown) {

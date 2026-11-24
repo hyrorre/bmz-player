@@ -538,6 +538,7 @@ export const courseScores = sqliteTable(
   (table) => [
     uniqueIndex('idx_course_scores_player_idempotency').on(table.playerId, table.idempotencyKey),
     index('idx_course_scores_course').on(table.courseHash, table.serverReceivedAt),
+    index('idx_course_scores_player_received_at').on(table.playerId, table.serverReceivedAt),
   ],
 )
 

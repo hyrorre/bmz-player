@@ -1,5 +1,23 @@
 const ja = {
   messages: {
+    listSort: {
+      label: '並び替え',
+      asc: '昇順',
+      desc: '降順',
+      toggleDirection: '並び順を反転',
+      last_score_at: '最終スコア投稿日時',
+      display_name: '表示名',
+      created_at: '登録日',
+      best_score_count: '譜面ベスト件数',
+      best_course_score_count: 'コースベスト件数',
+      charts_title: '譜面名',
+      artist: 'アーティスト',
+      level: '譜面レベル（☆）',
+      notes: 'ノーツ数',
+      table_level: '難易度表のレベル',
+      courses_title: 'コース名',
+      chart_count: '構成譜面数',
+    },
     profile: {
       title: 'プロフィール編集',
       description: 'ランキングやユーザーページに表示する情報を編集します。',
@@ -216,6 +234,24 @@ const ja = {
 
 const en = {
   messages: {
+    listSort: {
+      label: 'Sort by',
+      asc: 'Ascending',
+      desc: 'Descending',
+      toggleDirection: 'Reverse sort order',
+      last_score_at: 'Last score submission',
+      display_name: 'Display name',
+      created_at: 'Registration date',
+      best_score_count: 'Chart best count',
+      best_course_score_count: 'Course best count',
+      charts_title: 'Chart title',
+      artist: 'Artist',
+      level: 'Chart level (☆)',
+      notes: 'Note count',
+      table_level: 'Difficulty table level',
+      courses_title: 'Course title',
+      chart_count: 'Number of charts',
+    },
     profile: {
       title: 'Edit profile',
       description: 'Edit the information shown in rankings and on your player page.',
@@ -433,6 +469,24 @@ const en = {
 
 const ko = {
   messages: {
+    listSort: {
+      label: '정렬 기준',
+      asc: '오름차순',
+      desc: '내림차순',
+      toggleDirection: '정렬 방향 바꾸기',
+      last_score_at: '마지막 스코어 제출 시각',
+      display_name: '표시 이름',
+      created_at: '등록일',
+      best_score_count: '채보 베스트 기록 수',
+      best_course_score_count: '코스 베스트 기록 수',
+      charts_title: '채보 제목',
+      artist: '아티스트',
+      level: '채보 레벨(☆)',
+      notes: '노트 수',
+      table_level: '난이도표 레벨',
+      courses_title: '코스 제목',
+      chart_count: '채보 수',
+    },
     profile: {
       title: '프로필 편집',
       description: '랭킹과 플레이어 페이지에 표시할 정보를 편집합니다.',
@@ -645,6 +699,24 @@ const ko = {
 
 const zhCN = {
   messages: {
+    listSort: {
+      label: '排序依据',
+      asc: '升序',
+      desc: '降序',
+      toggleDirection: '反转排序方向',
+      last_score_at: '最近成绩提交时间',
+      display_name: '显示名称',
+      created_at: '登记日期',
+      best_score_count: '谱面最佳成绩数',
+      best_course_score_count: '课程最佳成绩数',
+      charts_title: '谱面标题',
+      artist: '艺术家',
+      level: '谱面等级（☆）',
+      notes: '音符数',
+      table_level: '难度表等级',
+      courses_title: '课程名称',
+      chart_count: '包含谱面数',
+    },
     profile: {
       title: '编辑个人资料',
       description: '编辑在排名和玩家页面上显示的信息。',
@@ -856,6 +928,24 @@ const zhCN = {
 
 const zhTW = {
   messages: {
+    listSort: {
+      label: '排序依據',
+      asc: '升冪',
+      desc: '降冪',
+      toggleDirection: '反轉排序方向',
+      last_score_at: '最近成績提交時間',
+      display_name: '顯示名稱',
+      created_at: '登錄日期',
+      best_score_count: '譜面最佳成績數',
+      best_course_score_count: '課程最佳成績數',
+      charts_title: '譜面標題',
+      artist: '演出者',
+      level: '譜面等級（☆）',
+      notes: '音符數',
+      table_level: '難度表等級',
+      courses_title: '課程名稱',
+      chart_count: '包含譜面數',
+    },
     profile: {
       title: '編輯個人資料',
       description: '編輯顯示於排名及玩家頁面的資訊。',
