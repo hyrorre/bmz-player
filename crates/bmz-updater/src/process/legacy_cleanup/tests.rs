@@ -142,8 +142,9 @@ fn cleanup_error_leaves_modern_locks_available_to_other_launches_and_the_helper(
 
     let first = instance_guard(root).unwrap();
     assert!(first.cleanup_error.is_some());
+    // The kept lock was reported by the launch that moved the backups, not on every start.
     let second = instance_guard(root).unwrap();
-    assert!(second.cleanup_error.is_some());
+    assert!(second.cleanup_error.is_none());
     assert!(!root.join(UPDATE_LOCK).exists());
     let (updates, instances) = update_guards(root).unwrap();
     assert!(matches!(instances[0].try_lock(), Err(std::fs::TryLockError::WouldBlock)));
@@ -256,6 +257,12 @@ fn readonly_and_nonempty_locks_are_preserved_while_backups_move() {
         assert!(!root.join(LEGACY_WORK_DIR).exists());
         assert_eq!(fs::read(root.join(MOVED_BACKUP)).unwrap(), b"previous file");
         drop(guard);
+        assert!(instance_guard(root).unwrap().cleanup_error.is_none());
+        // The helper joins the kept lock without recreating the removed legacy update lock.
+        let (updates, instances) = update_guards(root).unwrap();
+        assert_eq!((updates.len(), instances.len()), (1, 2));
+        drop((updates, instances));
+        assert!(!root.join(LEGACY_UPDATE_LOCK).exists());
         if readonly {
             assert!(fs::metadata(&path).unwrap().permissions().readonly());
             fs::set_permissions(&path, permissions).unwrap();
@@ -263,6 +270,76 @@ fn readonly_and_nonempty_locks_are_preserved_while_backups_move() {
             assert_eq!(fs::read(path).unwrap(), b"not an empty lock");
         }
     }
+}
+
+#[test]
+fn every_kept_lock_is_named_in_the_launch_that_moves_backups() {
+    let temp = fixture();
+    let root = temp.path();
+    fs::write(root.join(LEGACY_UPDATE_LOCK), b"not an empty lock").unwrap();
+    let instance = root.join(LEGACY_INSTANCE_LOCK);
+    let permissions = fs::metadata(&instance).unwrap().permissions();
+    let mut read_only = permissions.clone();
+    read_only.set_readonly(true);
+    fs::set_permissions(&instance, read_only).unwrap();
+
+    let first = instance_guard(root).unwrap().cleanup_error.map(|error| format!("{error:#}"));
+    let second = instance_guard(root).unwrap().cleanup_error.is_none();
+    fs::set_permissions(&instance, permissions).unwrap();
+
+    let first = first.unwrap();
+    assert!(first.contains(LEGACY_UPDATE_LOCK) && first.contains("not empty"), "{first}");
+    assert!(first.contains(LEGACY_INSTANCE_LOCK) && first.contains("read-only"), "{first}");
+    assert!(second);
+    assert_eq!(fs::read(root.join(MOVED_BACKUP)).unwrap(), b"previous file");
+}
+
+#[test]
+fn read_only_modern_locks_remain_usable_by_launches_and_the_helper() {
+    let temp = fixture();
+    let root = temp.path();
+    let paths = [INSTANCE_LOCK, UPDATE_LOCK].map(|name| {
+        drop(lock_file(root, name).unwrap());
+        root.join(name)
+    });
+    let original = paths.each_ref().map(|path| fs::metadata(path).unwrap().permissions());
+    for (path, permissions) in paths.iter().zip(&original) {
+        let mut read_only = permissions.clone();
+        read_only.set_readonly(true);
+        fs::set_permissions(path, read_only).unwrap();
+    }
+    let launch = instance_guard(root).map(drop);
+    let helper = update_guards(root).and_then(|(_updates, instances)| {
+        instances[0].try_lock()?;
+        instances[0].unlock()?;
+        Ok(())
+    });
+    for (path, permissions) in paths.iter().zip(original) {
+        assert!(fs::metadata(path).unwrap().permissions().readonly());
+        fs::set_permissions(path, permissions).unwrap();
+    }
+    launch.unwrap();
+    helper.unwrap();
+}
+
+#[test]
+fn creating_a_lock_without_permission_is_reported_without_retrying() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("no-new-files");
+    fs::create_dir(&directory).unwrap();
+    let change_acl = |args: [&str; 2]| {
+        let output =
+            std::process::Command::new("icacls").arg(&directory).args(args).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+    };
+    change_acl(["/deny", "*S-1-1-0:(WD)"]);
+    let result = crate::process::create_lock(&directory.join("instance.lock"));
+    change_acl(["/remove:d", "*S-1-1-0"]);
+
+    let error = result.unwrap_err();
+    assert!(format!("{error:#}").contains("could not create"), "{error:#}");
+    // retry_legacy_open only retries I/O errors that report a busy or deleting lock.
+    assert!(error.downcast_ref::<io::Error>().is_none());
 }
 
 #[test]
@@ -394,7 +471,34 @@ fn legacy_lock_reparse_point_is_preserved_while_backups_move() {
     assert!(!root.join(LEGACY_INSTANCE_LOCK).exists());
     assert!(!root.join(LEGACY_WORK_DIR).exists());
     assert_eq!(fs::read(root.join(MOVED_BACKUP)).unwrap(), b"previous file");
+    drop(guard);
+    let (updates, _) = update_guards(root).unwrap();
+    assert_eq!(updates.len(), 1);
+    drop(updates);
+    assert!(path.is_dir());
     assert_eq!(fs::read(target.path().join("sentinel")).unwrap(), b"outside");
+}
+
+#[test]
+fn a_directory_at_the_legacy_instance_lock_does_not_block_startup_or_updates() {
+    let temp = fixture();
+    let root = temp.path();
+    let path = root.join(LEGACY_INSTANCE_LOCK);
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    fs::write(path.join("user-file"), b"kept").unwrap();
+
+    let guard = instance_guard(root).unwrap();
+    let error = format!("{:#}", guard.cleanup_error.as_ref().unwrap());
+    assert!(error.contains(LEGACY_INSTANCE_LOCK), "{error}");
+    assert_eq!(guard._locks.len(), 1);
+    drop(guard);
+    let (updates, instances) = update_guards(root).unwrap();
+    assert_eq!((updates.len(), instances.len()), (1, 1));
+    drop((updates, instances));
+    assert_eq!(fs::read(path.join("user-file")).unwrap(), b"kept");
+    assert!(!root.join(LEGACY_UPDATE_LOCK).exists());
+    assert_eq!(fs::read(root.join(MOVED_BACKUP)).unwrap(), b"previous file");
 }
 
 #[test]

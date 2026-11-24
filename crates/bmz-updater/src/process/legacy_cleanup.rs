@@ -1,22 +1,23 @@
+use super::regular_file;
 use crate::{
     LEGACY_HELPER, LEGACY_INSTANCE_LOCK, LEGACY_MANIFEST, LEGACY_UPDATE_LOCK, LEGACY_WORK_DIR,
     manifest::checked_path,
     transaction::pending_update,
     windows_path::{gone_or_deleting, verbatim_path},
 };
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, bail};
 use std::{
     fs::{self, File},
     io,
-    os::windows::{fs::MetadataExt, fs::OpenOptionsExt, io::AsRawHandle},
+    os::windows::{fs::OpenOptionsExt, io::AsRawHandle},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 use windows_sys::Win32::{
     Foundation::{ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION, GENERIC_READ},
     Storage::FileSystem::{
-        DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO, FILE_FLAG_OPEN_REPARSE_POINT,
-        FileDispositionInfo, MOVEFILE_WRITE_THROUGH, MoveFileExW, SetFileInformationByHandle,
+        DELETE, FILE_DISPOSITION_INFO, FILE_FLAG_OPEN_REPARSE_POINT, FileDispositionInfo,
+        MOVEFILE_WRITE_THROUGH, MoveFileExW, SetFileInformationByHandle,
     },
 };
 
@@ -53,7 +54,7 @@ pub(super) fn cleanup(root: &Path) -> Result<()> {
         return Ok(());
     }
     let mut paths = Vec::new();
-    let mut warning = None;
+    let mut kept = Vec::new();
     for name in [LEGACY_UPDATE_LOCK, LEGACY_INSTANCE_LOCK] {
         // The names are fixed and symlink_metadata does not follow a legacy lock reparse point.
         let path = root.join(name);
@@ -65,16 +66,17 @@ pub(super) fn cleanup(root: &Path) -> Result<()> {
         };
         let defect = lock_defect(&metadata);
         if let Some(defect) = defect {
-            warning.get_or_insert_with(|| lock_warning(&path, defect));
+            kept.push((path.clone(), defect));
         }
-        if regular_lock(&metadata) {
+        if regular_file(&metadata) {
             paths.push((path, defect.is_none()));
         }
     }
     let work = checked_path(root, LEGACY_WORK_DIR)?;
     let (jobs, empty_work) = completed_jobs(root, &work)?;
     if jobs.is_empty() && !empty_work && paths.iter().all(|(_, removable)| !removable) {
-        return warning.map_or(Ok(()), Err);
+        // Nothing changes in this launch, so kept locks are not reported on every start.
+        return Ok(());
     }
 
     // Hold both old handles only for deletion. The caller's shared modern lock covers job moves.
@@ -93,7 +95,9 @@ pub(super) fn cleanup(root: &Path) -> Result<()> {
             Err(error) => return Err(error).with_context(|| format!("open {}", path.display())),
         };
         if let Some(defect) = lock_defect(&file.metadata()?) {
-            warning.get_or_insert_with(|| lock_warning(&path, defect));
+            if !kept.iter().any(|(known, _)| *known == path) {
+                kept.push((path, defect));
+            }
             retained_locks.push(file);
         } else if removable {
             removable_locks.push((path, file));
@@ -110,7 +114,20 @@ pub(super) fn cleanup(root: &Path) -> Result<()> {
     drop(retained_locks);
 
     finish_jobs(&work, jobs, empty_work)?;
-    warning.map_or(Ok(()), Err)
+    report_kept_locks(&kept)
+}
+
+fn report_kept_locks(kept: &[(PathBuf, &str)]) -> Result<()> {
+    if kept.is_empty() {
+        return Ok(());
+    }
+    let list: Vec<_> =
+        kept.iter().map(|(path, defect)| format!("{} ({defect})", path.display())).collect();
+    bail!(
+        "kept legacy lock files that cannot be removed automatically: {}. BMZ no longer needs \
+         them; check their contents and remove them while BMZ and its updater are closed",
+        list.join(", ")
+    )
 }
 
 fn finish_jobs(work: &Path, jobs: Vec<(PathBuf, PathBuf)>, empty_work: bool) -> Result<()> {
@@ -151,12 +168,8 @@ fn legacy_layout_present(root: &Path) -> Result<bool> {
         || checked_path(root, LEGACY_HELPER)?.try_exists()?)
 }
 
-fn regular_lock(metadata: &fs::Metadata) -> bool {
-    metadata.is_file() && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
-}
-
 fn lock_defect(metadata: &fs::Metadata) -> Option<&'static str> {
-    if !regular_lock(metadata) {
+    if !regular_file(metadata) {
         Some("not a regular file or is a reparse point")
     } else if metadata.len() != 0 {
         Some("not empty")
@@ -165,13 +178,6 @@ fn lock_defect(metadata: &fs::Metadata) -> Option<&'static str> {
     } else {
         None
     }
-}
-
-fn lock_warning(path: &Path, defect: &str) -> anyhow::Error {
-    anyhow!(
-        "legacy lock {} is {defect} and was kept; close BMZ and its updater before inspecting the file",
-        path.display()
-    )
 }
 
 fn mark_locks_for_removal(

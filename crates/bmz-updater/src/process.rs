@@ -38,10 +38,61 @@ pub struct Request {
     pub restart: RestartContext,
 }
 
+// Windows can take an exclusive byte-range lock on a read-only handle, so locks are opened
+// read-only. That keeps a lock file with the read-only attribute usable.
 fn lock_file(root: &Path, name: &str) -> Result<File> {
     let path = checked_path(root, name)?;
+    match File::open(&path) {
+        Ok(file) => return Ok(file),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
     fs::create_dir_all(path.parent().context("missing lock directory")?)?;
-    Ok(File::options().read(true).write(true).create(true).truncate(false).open(path)?)
+    create_lock(&path)
+}
+
+/// Creates a missing lock file, or opens the one that another process created first.
+fn create_lock(path: &Path) -> Result<File> {
+    let create = || match File::options().read(true).write(true).create_new(true).open(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => File::open(path),
+        result => result,
+    };
+    let result = create();
+    #[cfg(windows)]
+    if let Err(error) = &result
+        && missing_permission(path, error)
+    {
+        // A name waiting for deletion can disappear before the native query. Try once more,
+        // then report missing permission without the I/O error that callers retry.
+        return match create() {
+            Err(error) if missing_permission(path, &error) => {
+                bail!("could not create {}: {error}", path.display())
+            }
+            result => Ok(result?),
+        };
+    }
+    Ok(result?)
+}
+
+/// Win32 also reports a name waiting for deletion as access denied. Only that state is transient.
+#[cfg(windows)]
+fn missing_permission(path: &Path, error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32)
+        && !crate::windows_path::delete_pending(path)
+}
+
+/// A directory or reparse point cannot serve as a lock, so no BMZ process coordinates on it.
+fn regular_file(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        metadata.is_file() && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.is_file()
+    }
 }
 
 /// All packaged BMZ processes hold this until shutdown (including Viewer/CLI).
@@ -58,8 +109,7 @@ pub fn instance_guard(root: &Path) -> Result<InstanceGuard> {
     let exists = instance.try_exists()?;
     if !legacy || exists {
         // Packages ship an empty instance lock, permitting read-only launches with data overrides.
-        let file =
-            if exists { File::open(instance)? } else { lock_file(root, crate::INSTANCE_LOCK)? };
+        let file = lock_file(root, crate::INSTANCE_LOCK)?;
         file.try_lock_shared().context("BMZ is being updated")?;
         guards.push(file);
     }
@@ -91,20 +141,22 @@ pub fn instance_guard(root: &Path) -> Result<InstanceGuard> {
 
 fn open_legacy_lock(root: &Path, name: &str, create: bool) -> Result<Option<File>> {
     let open = || -> Result<Option<File>> {
-        let path = checked_path(root, name)?;
-        // Windows can take an exclusive byte-range lock on a read-only handle.
+        crate::manifest::reject_link(root)?;
+        let path = root.join(name);
+        match fs::symlink_metadata(&path) {
+            // Keep such a path in place, but do not fail startup or updates on it.
+            Ok(metadata) if !regular_file(&metadata) => return Ok(None),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
         match File::open(&path) {
             Ok(file) => Ok(Some(file)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                if !create {
-                    return Ok(None);
-                }
-                match File::options().read(true).write(true).create_new(true).open(&path) {
-                    Ok(file) => Ok(Some(file)),
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                        Ok(Some(File::open(checked_path(root, name)?)?))
-                    }
-                    Err(error) => Err(error.into()),
+                if create {
+                    create_lock(&path).map(Some)
+                } else {
+                    Ok(None)
                 }
             }
             Err(error) => Err(error.into()),
@@ -122,12 +174,11 @@ fn update_guards(root: &Path) -> Result<(Vec<File>, Vec<File>)> {
     update.try_lock().context("another updater is running")?;
     let legacy = checked_path(root, crate::LEGACY_MANIFEST)?.try_exists()?
         || transaction::pending_update_in(root, crate::LEGACY_WORK_DIR)?.is_some();
-    // Keep any existing legacy instance handle open before deciding whether to create its peer.
+    // Existing legacy locks are always joined. Every grouped helper also holds the modern update
+    // lock, so legacy locks are created only while a protocol 1 helper may use the installation.
     let old_instance = open_legacy_lock(root, crate::LEGACY_INSTANCE_LOCK, legacy)?;
     let mut updates = vec![update];
-    if let Some(lock) =
-        open_legacy_lock(root, crate::LEGACY_UPDATE_LOCK, legacy || old_instance.is_some())?
-    {
+    if let Some(lock) = open_legacy_lock(root, crate::LEGACY_UPDATE_LOCK, legacy)? {
         lock.try_lock().context("another updater is running")?;
         updates.push(lock);
     }

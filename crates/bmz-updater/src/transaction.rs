@@ -82,12 +82,12 @@ pub fn atomic_json(path: &Path, value: &impl Serialize) -> Result<()> {
 fn durable_rename(source_path: &Path, path: &Path) -> Result<()> {
     #[cfg(windows)]
     {
-        use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::Storage::FileSystem::{
             MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
         };
-        let source: Vec<u16> = source_path.as_os_str().encode_wide().chain(Some(0)).collect();
-        let dest: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        // Extended-length paths keep deep installations within reach of the Win32 API.
+        let source = crate::windows_path::verbatim_path(source_path)?;
+        let dest = crate::windows_path::verbatim_path(path)?;
         if unsafe {
             MoveFileExW(
                 source.as_ptr(),
@@ -390,6 +390,26 @@ mod tests {
     fn assert_user_data(root: &Path) {
         assert_eq!(fs::read(root.join("data/score.db")).unwrap(), b"scores");
         assert_eq!(fs::read(root.join("resources/user.txt")).unwrap(), b"extra");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn applies_an_update_below_a_path_longer_than_max_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("a".repeat(110)).join("b".repeat(110));
+        fs::create_dir_all(&root).unwrap();
+        package(&root, "0.4.0", &[("bmz-player.exe", b"old app"), (crate::HELPER, b"old")]);
+        let work = new_work_dir(&root).unwrap();
+        package(
+            &work.join("stage"),
+            "0.5.0",
+            &[("bmz-player.exe", b"new"), (crate::HELPER, b"new")],
+        );
+        assert!(work.join("backup/0").as_os_str().len() > 260);
+        apply(&root, &work).unwrap();
+        assert_eq!(fs::read(root.join("bmz-player.exe")).unwrap(), b"new");
+        assert_eq!(PackageManifest::read(&root).unwrap().version, "0.5.0");
+        assert!(pending_update(&root).unwrap().is_none());
     }
 
     #[test]

@@ -12,7 +12,7 @@ use windows_sys::{
     },
     Win32::{
         Foundation::{
-            CloseHandle, ERROR_ACCESS_DENIED, ERROR_DELETE_PENDING, OBJ_CASE_INSENSITIVE,
+            CloseHandle, ERROR_ACCESS_DENIED, ERROR_DELETE_PENDING, NTSTATUS, OBJ_CASE_INSENSITIVE,
             STATUS_DELETE_PENDING, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND,
             UNICODE_STRING,
         },
@@ -27,12 +27,23 @@ use windows_sys::{
 pub(crate) fn gone_or_deleting(path: &Path, error: &io::Error) -> bool {
     match error.raw_os_error().map(|code| code as u32) {
         Some(ERROR_DELETE_PENDING) => true,
-        Some(ERROR_ACCESS_DENIED) => check_delete_pending(path).unwrap_or(false),
+        // The name can also disappear between the failed open and the native query.
+        Some(ERROR_ACCESS_DENIED) => native_open_status(path).is_some_and(|status| {
+            matches!(
+                status,
+                STATUS_DELETE_PENDING | STATUS_OBJECT_NAME_NOT_FOUND | STATUS_OBJECT_PATH_NOT_FOUND
+            )
+        }),
         _ => error.kind() == io::ErrorKind::NotFound,
     }
 }
 
-fn check_delete_pending(path: &Path) -> Option<bool> {
+/// Whether `path` names a file or directory that is waiting for deletion.
+pub(crate) fn delete_pending(path: &Path) -> bool {
+    native_open_status(path) == Some(STATUS_DELETE_PENDING)
+}
+
+fn native_open_status(path: &Path) -> Option<NTSTATUS> {
     // Win32 maps delete-pending to access denied. Query the native status without data access.
     let parent = File::options()
         .access_mode(FILE_TRAVERSE)
@@ -63,10 +74,7 @@ fn check_delete_pending(path: &Path) -> Option<bool> {
     if !handle.is_null() {
         unsafe { CloseHandle(handle) };
     }
-    Some(matches!(
-        status,
-        STATUS_DELETE_PENDING | STATUS_OBJECT_NAME_NOT_FOUND | STATUS_OBJECT_PATH_NOT_FOUND
-    ))
+    Some(status)
 }
 
 pub(crate) fn verbatim_path(path: &Path) -> io::Result<Vec<u16>> {
