@@ -61,6 +61,11 @@ macro_rules! skin_document_render_select_songlist_methods {
                 move |item: SkinRenderItem| (SongListPartKey { part, index, order }, item)
             };
             let (rows, center_row_position) = snapshot.bar_rows_and_center();
+            let text_destinations = if self.lr2 {
+                Vec::new()
+            } else {
+                destination_entries(&songlist.text, enabled_options)
+            };
             let (whole_scroll, scroll_direction, scroll_fraction) = snapshot.bar_scroll_slots();
             let mut row_state = state.clone();
             for (row_position, row) in rows.iter().enumerate() {
@@ -358,6 +363,7 @@ macro_rules! skin_document_render_select_songlist_methods {
                 }
                 items.extend(
                     self.select_songlist_text_items(
+                        &text_destinations,
                         row,
                         row_origin,
                         images,

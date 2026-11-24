@@ -248,7 +248,7 @@ pub(super) trait SkinDocumentRenderInternal {
         &self,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
-        images: &SkinImageLookup<'_>,
+        image: Option<&SkinImageDef>,
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Option<Vec<SkinRenderItem>>>;
@@ -455,6 +455,7 @@ pub(super) trait SkinDocumentRenderInternal {
 
     fn select_songlist_text_items(
         &self,
+        destinations: &[&SkinDestinationDef],
         row: &SelectRowSnapshot,
         row_origin: (i32, i32),
         images: &SkinImageLookup<'_>,
@@ -828,6 +829,7 @@ pub(super) trait SkinDocumentRenderInternal {
 }
 
 mod core;
+pub(in crate::skin) use core::static_image_destination_cacheable;
 mod graph;
 mod play;
 mod select;

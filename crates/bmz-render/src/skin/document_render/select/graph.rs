@@ -309,13 +309,12 @@ macro_rules! skin_document_render_select_graph_methods {
             state: &SkinDrawState,
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Vec<SkinRenderItem> {
-            let mut items = Vec::new();
             let Some(destination) =
                 songlist_destination_at(entries, index, enabled_options, state, self.lr2)
             else {
-                return items;
+                return Vec::new();
             };
-            if let Some(mut resolved) = self.resolve_offset_destination_items(
+            self.resolve_offset_destination_items(
                 destination,
                 row_origin,
                 images,
@@ -323,14 +322,13 @@ macro_rules! skin_document_render_select_graph_methods {
                 state,
                 &SkinTextState::default(),
                 sources,
-            ) {
-                items.append(&mut resolved);
-            }
-            items
+            )
+            .unwrap_or_default()
         }
 
         fn select_songlist_text_items(
             &self,
+            destinations: &[&SkinDestinationDef],
             row: &SelectRowSnapshot,
             row_origin: (i32, i32),
             images: &SkinImageLookup<'_>,
@@ -341,7 +339,6 @@ macro_rules! skin_document_render_select_graph_methods {
             let Some(songlist) = &self.songlist else {
                 return Vec::new();
             };
-            let mut items = Vec::new();
             let text_state = SkinTextState {
                 bar_text: row.display_bar_text(),
                 table_level: if row.table_text_secondary.is_empty() {
@@ -354,49 +351,35 @@ macro_rules! skin_document_render_select_graph_methods {
                 table_text_fallback: &row.table_text_fallback,
                 ..SkinTextState::default()
             };
-            if self.lr2 {
-                if let Some(destination) = songlist_destination_at(
+            let destination = if self.lr2 {
+                songlist_destination_at(
                     &songlist.text,
                     usize::from(row.lr2_new_title),
                     enabled_options,
                     state,
                     true,
-                ) && let Some(resolved) = self.resolve_offset_destination_items(
-                    destination,
-                    row_origin,
-                    images,
-                    enabled_options,
-                    state,
-                    &text_state,
-                    sources,
-                ) {
-                    items.extend(resolved);
-                }
-                return items;
-            }
-            let destinations = destination_entries(&songlist.text, enabled_options);
-            let Some(destination) = select_row_slot_with_fallbacks(
-                &destinations,
-                select_row_bar_text_index(row),
-                select_row_bar_text_fallback_indices(row),
-            )
-            .copied() else {
-                return items;
+                )
+            } else {
+                select_row_slot_with_fallbacks(
+                    destinations,
+                    select_row_bar_text_index(row),
+                    select_row_bar_text_fallback_indices(row),
+                )
+                .copied()
             };
-            {
-                if let Some(mut resolved) = self.resolve_offset_destination_items(
-                    destination,
-                    row_origin,
-                    images,
-                    enabled_options,
-                    state,
-                    &text_state,
-                    sources,
-                ) {
-                    items.append(&mut resolved);
-                }
-            }
-            items
+            destination
+                .and_then(|destination| {
+                    self.resolve_offset_destination_items(
+                        destination,
+                        row_origin,
+                        images,
+                        enabled_options,
+                        state,
+                        &text_state,
+                        sources,
+                    )
+                })
+                .unwrap_or_default()
         }
     };
 }

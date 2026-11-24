@@ -78,7 +78,11 @@ pub(super) fn select_row_level_number(row: &SelectRowSnapshot) -> i64 {
     {
         return level;
     }
-    row.play_level.chars().filter(|ch| ch.is_ascii_digit()).collect::<String>().parse().unwrap_or(0)
+    row.play_level
+        .bytes()
+        .filter(u8::is_ascii_digit)
+        .try_fold(0i64, |level, digit| level.checked_mul(10)?.checked_add(i64::from(digit - b'0')))
+        .unwrap_or(0)
 }
 
 pub(super) fn select_row_difficulty_code(row: &SelectRowSnapshot) -> i64 {

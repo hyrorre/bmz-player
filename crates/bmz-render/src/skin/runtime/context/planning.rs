@@ -5,6 +5,9 @@ use super::*;
 /// through to another category with the same ID.
 #[derive(Debug, Default)]
 pub(in crate::skin) struct DestinationObjectIndices {
+    pub(in crate::skin) image: Option<usize>,
+    pub(in crate::skin) value: Option<usize>,
+    pub(in crate::skin) static_image: bool,
     pub(in crate::skin) lr2_charts: Option<usize>,
     pub(in crate::skin) judge: Option<usize>,
     pub(in crate::skin) panel: Option<usize>,
@@ -26,8 +29,19 @@ pub(in crate::skin) struct DestinationObjectIndices {
 }
 
 impl DestinationObjectIndices {
-    pub(in crate::skin) fn new(document: &SkinDocument, destination: &SkinDestinationDef) -> Self {
+    pub(in crate::skin) fn new(
+        document: &SkinDocument,
+        destination: &SkinDestinationDef,
+        objects: &DocumentObjectIndices,
+    ) -> Self {
         Self {
+            image: objects.images.get(&destination.id).copied(),
+            value: objects.values.get(&destination.id).copied(),
+            static_image: crate::skin::document_render::static_image_destination_cacheable(
+                document,
+                destination,
+                &SkinObjectLookup::Indexed { items: &document.image, indices: &objects.images },
+            ),
             lr2_charts: document.lr2_charts.iter().position(|item| item.id == destination.id),
             judge: document.judge.iter().position(|item| item.id == destination.id),
             panel: document.panel.iter().position(|item| item.id == destination.id),

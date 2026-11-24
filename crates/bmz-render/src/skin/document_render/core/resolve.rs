@@ -79,7 +79,8 @@ macro_rules! skin_document_render_core_resolve_methods {
                     .map(|items| wrap_skin_destination_clip(items, clip));
             }
 
-            let value_for_destination = values.get(destination.id.as_str());
+            let value_for_destination = objects
+                .map_or_else(|| values.get(&destination.id), |o| o.value.map(|i| &self.value[i]));
             let elapsed = destination_timer_elapsed_ms(destination, state).or_else(|| {
                 value_for_destination
                     .filter(|value| {
@@ -250,8 +251,12 @@ macro_rules! skin_document_render_core_resolve_methods {
                         vec![item],
                     ));
                 }
+                let image = objects.map_or_else(
+                    || skin_image_for_destination_id(&destination.id, images),
+                    |o| o.image.map(|i| &self.image[i]),
+                );
                 if let Some(items) =
-                    self.resolve_image_destination_items(destination, frame, images, state, sources)
+                    self.resolve_image_destination_items(destination, frame, image, state, sources)
                 {
                     return items.map(|items| {
                         wrap_ambient_destination(destination, frame, self.w, self.h, items)
@@ -389,11 +394,11 @@ macro_rules! skin_document_render_core_resolve_methods {
             &self,
             destination: &SkinDestinationDef,
             mut frame: ResolvedSkinFrame,
-            images: &SkinImageLookup<'_>,
+            image: Option<&SkinImageDef>,
             state: &SkinDrawState,
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Option<Option<Vec<SkinRenderItem>>> {
-            let image = skin_image_for_destination_id(destination.id.as_str(), images)?;
+            let image = image?;
             if image.act.is_some_and(|id| {
                 (LR2_BUTTON_BASE..=LR2_BUTTON_LAST).contains(&id)
                     && skin_state_event_index(id, state) < 0

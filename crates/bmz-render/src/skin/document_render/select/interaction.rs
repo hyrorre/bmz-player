@@ -395,7 +395,7 @@ macro_rules! skin_document_render_select_interaction_methods {
             selected_replay_slot: Option<u8>,
         ) {
             state.select_play_level = select_row_level_number(row);
-            state.play_level = select_row_level_number(row);
+            state.play_level = state.select_play_level;
             state.table_song = !row.table_text_primary.is_empty();
             state.difficulty = select_row_difficulty_code(row);
             state.judge_rank = row.judge_rank;

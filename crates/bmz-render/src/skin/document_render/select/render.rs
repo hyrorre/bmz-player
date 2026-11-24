@@ -315,7 +315,10 @@ macro_rules! skin_document_render_select_render_methods {
                         continue;
                     }
                     let prepared_number = prepare_lua_number_for_destination(
-                        values.get(destination.id.as_str()),
+                        objects.map_or_else(
+                            || values.get(&destination.id),
+                            |o| o.value.map(|i| &self.value[i]),
+                        ),
                         &state,
                     );
                     if matches!(prepared_number, Some(None)) {
@@ -402,7 +405,7 @@ macro_rules! skin_document_render_select_render_methods {
                         ));
                         continue;
                     }
-                    if core::static_image_destination_cacheable(self, destination, &images)
+                    if objects.is_some_and(|o| o.static_image)
                         && let Some(cache) = cache.as_deref_mut()
                     {
                         let cached = cache.cached_static_image_items(destination_index, || {

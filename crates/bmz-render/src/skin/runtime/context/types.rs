@@ -510,7 +510,7 @@ fn cached_document_planning(
         .map(|destination| {
             destination
                 .resolve(document)
-                .map(|destination| DestinationObjectIndices::new(document, destination))
+                .map(|destination| DestinationObjectIndices::new(document, destination, &objects))
                 .unwrap_or_default()
         })
         .collect();

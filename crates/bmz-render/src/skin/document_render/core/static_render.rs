@@ -3,7 +3,7 @@ use crate::skin::{
     destination_has_clip, skin_image_for_destination_id,
 };
 
-pub(in crate::skin::document_render) fn static_image_destination_cacheable(
+pub(in crate::skin) fn static_image_destination_cacheable(
     document: &SkinDocument,
     destination: &SkinDestinationDef,
     images: &SkinImageLookup<'_>,
@@ -283,37 +283,39 @@ macro_rules! skin_document_render_core_static_methods {
                         }
                         continue;
                     }
-                    let cached_items =
-                        if core::static_image_destination_cacheable(self, destination, &images) {
-                            cache.as_deref_mut().map(|cache| {
-                                cache.cached_static_image_items(index, || {
-                                    Arc::from(
-                                        self.resolve_destination_items(
-                                            index,
-                                            destination,
-                                            DestinationResolveContext {
-                                                objects: planning
-                                                    .as_ref()
-                                                    .map(|p| &p.destination_objects[index]),
-                                                images: &images,
-                                                values: &values,
-                                                enabled_options,
-                                                state,
-                                                text_state,
-                                                sources,
-                                                runtime_graphs,
-                                                cache: None,
-                                                number_cache: None,
-                                                prepared_number,
-                                            },
-                                        )
-                                        .unwrap_or_default(),
+                    let cached_items = if planning
+                        .as_ref()
+                        .is_some_and(|p| p.destination_objects[index].static_image)
+                    {
+                        cache.as_deref_mut().map(|cache| {
+                            cache.cached_static_image_items(index, || {
+                                Arc::from(
+                                    self.resolve_destination_items(
+                                        index,
+                                        destination,
+                                        DestinationResolveContext {
+                                            objects: planning
+                                                .as_ref()
+                                                .map(|p| &p.destination_objects[index]),
+                                            images: &images,
+                                            values: &values,
+                                            enabled_options,
+                                            state,
+                                            text_state,
+                                            sources,
+                                            runtime_graphs,
+                                            cache: None,
+                                            number_cache: None,
+                                            prepared_number,
+                                        },
                                     )
-                                })
+                                    .unwrap_or_default(),
+                                )
                             })
-                        } else {
-                            None
-                        };
+                        })
+                    } else {
+                        None
+                    };
                     let owned_items = if cached_items.is_none() {
                         self.resolve_destination_items(
                             index,

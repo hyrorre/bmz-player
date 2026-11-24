@@ -5,9 +5,6 @@ pub(in crate::skin) fn eval_skin_draw_condition(condition: &str, state: &SkinDra
     if condition.is_empty() {
         return true;
     }
-    if let Some(property) = resolve_boolean_property_name(condition) {
-        return test_skin_op(property.id, &[], state) ^ property.negated;
-    }
     if let Some(callback_id) =
         condition.strip_prefix(LUA_DRAW_CALLBACK_PREFIX).and_then(|id| id.parse::<usize>().ok())
     {
@@ -20,6 +17,9 @@ pub(in crate::skin) fn eval_skin_draw_condition(condition: &str, state: &SkinDra
             &runtime.enabled_options,
             &runtime.text_values,
         );
+    }
+    if let Some(property) = resolve_boolean_property_name(condition) {
+        return test_skin_op(property.id, &[], state) ^ property.negated;
     }
 
     condition.split("||").flat_map(|segment| segment.split(" or ")).any(|branch| {
