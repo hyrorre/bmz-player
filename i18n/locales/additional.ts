@@ -164,7 +164,7 @@ const ja = {
       boundarySummary: '成果日の切り替わり: {boundary} ・ {count}譜面',
       empty: 'この日のプレイ記録はありません。',
     },
-    lamps: {
+    analysis: {
       nav: '分析',
       title: '分析',
       description: '難易度表の譜面を集計します。IR未登録の譜面も NO PLAY に含みます。',
@@ -205,7 +205,7 @@ const ja = {
     rankingLoadFailed: 'ランキングの取得に失敗しました。',
     historyLoadFailed: 'スコア履歴の取得に失敗しました。',
     dailyLoadFailed: '成果報告の取得に失敗しました。',
-    lampDistributionLoadFailed: '分析データを読み込めませんでした。',
+    analysisLoadFailed: '分析データを読み込めませんでした。',
     rivalsLoadFailed: 'ライバル一覧の取得に失敗しました。',
     rivalComparisonLoadFailed: 'ライバル比較の取得に失敗しました。',
     rivalUpdateFailed: 'ライバル設定の更新に失敗しました。',
@@ -378,7 +378,7 @@ const en = {
       boundarySummary: 'Daily results boundary: {boundary} · {count} charts',
       empty: 'There are no play records for this day.',
     },
-    lamps: {
+    analysis: {
       nav: 'Analysis',
       title: 'Analysis',
       description:
@@ -420,7 +420,7 @@ const en = {
     rankingLoadFailed: 'Failed to load the ranking.',
     historyLoadFailed: 'Failed to load score history.',
     dailyLoadFailed: 'Failed to load daily results.',
-    lampDistributionLoadFailed: 'Could not load analysis data.',
+    analysisLoadFailed: 'Could not load analysis data.',
     rivalsLoadFailed: 'Failed to load rivals.',
     rivalComparisonLoadFailed: 'Failed to load the rival comparison.',
     rivalUpdateFailed: 'Failed to update the rival setting.',
@@ -589,7 +589,7 @@ const ko = {
       boundarySummary: '성과일 경계: {boundary} · {count}차트',
       empty: '이날의 플레이 기록이 없습니다.',
     },
-    lamps: {
+    analysis: {
       nav: '분석',
       title: '분석',
       description: '난이도표의 채보를 집계합니다. IR에 등록되지 않은 채보도 NO PLAY에 포함됩니다.',
@@ -630,7 +630,7 @@ const ko = {
     rankingLoadFailed: '랭킹을 불러오지 못했습니다.',
     historyLoadFailed: '스코어 기록을 불러오지 못했습니다.',
     dailyLoadFailed: '성과 보고를 불러오지 못했습니다.',
-    lampDistributionLoadFailed: '분석 데이터를 불러오지 못했습니다.',
+    analysisLoadFailed: '분석 데이터를 불러오지 못했습니다.',
     rivalsLoadFailed: '라이벌 목록을 불러오지 못했습니다.',
     rivalComparisonLoadFailed: '라이벌 비교를 불러오지 못했습니다.',
     rivalUpdateFailed: '라이벌 설정을 변경하지 못했습니다.',
@@ -798,7 +798,7 @@ const zhCN = {
       boundarySummary: '每日成果切换：{boundary} · {count} 个谱面',
       empty: '该日没有游玩记录。',
     },
-    lamps: {
+    analysis: {
       nav: '分析',
       title: '分析',
       description: '按难度统计表内谱面，未登记在 IR 的谱面也计入 NO PLAY。',
@@ -839,7 +839,7 @@ const zhCN = {
     rankingLoadFailed: '无法加载排名。',
     historyLoadFailed: '无法加载成绩历史。',
     dailyLoadFailed: '无法加载成果报告。',
-    lampDistributionLoadFailed: '无法加载分析数据。',
+    analysisLoadFailed: '无法加载分析数据。',
     rivalsLoadFailed: '无法加载对手列表。',
     rivalComparisonLoadFailed: '无法加载对手比较。',
     rivalUpdateFailed: '无法更新对手设置。',
@@ -1007,7 +1007,7 @@ const zhTW = {
       boundarySummary: '每日成果切換：{boundary} · {count} 個譜面',
       empty: '該日沒有遊玩記錄。',
     },
-    lamps: {
+    analysis: {
       nav: '分析',
       title: '分析',
       description: '依難度統計表內譜面，未登錄於 IR 的譜面也計入 NO PLAY。',
@@ -1048,7 +1048,7 @@ const zhTW = {
     rankingLoadFailed: '無法載入排名。',
     historyLoadFailed: '無法載入成績歷史。',
     dailyLoadFailed: '無法載入成果報告。',
-    lampDistributionLoadFailed: '無法載入分析資料。',
+    analysisLoadFailed: '無法載入分析資料。',
     rivalsLoadFailed: '無法載入對手清單。',
     rivalComparisonLoadFailed: '無法載入對手比較。',
     rivalUpdateFailed: '無法更新對手設定。',

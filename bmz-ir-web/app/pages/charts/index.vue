@@ -33,7 +33,6 @@ const { search, page, pageSize, pageLocation, listQuery, apiQuery, applySearch }
   useSearchableListQuery()
 const route = useRoute()
 const difficulty = computed(() => readDifficultyFilter(route.query))
-const chartListQuery = computed(() => ({ ...listQuery.value, ...difficulty.value }))
 const localePath = useLocalePath()
 const { t } = useI18n()
 const { translateApiError } = useApiError()
@@ -47,12 +46,22 @@ const [
   useFetch<{ tables: IrDifficultyTableOption[] }>('/api/v1/difficulty-tables'),
 ])
 
-const selectedTable = computed(() =>
-  catalog.value?.tables.find(({ id }) => id === difficulty.value?.difficulty_table),
+const selectedTable = computed(() => {
+  const tableId = difficulty.value?.difficulty_table
+  if (!tableId) return
+  return catalog.value?.tables.find(({ id, legacy_id }) => id === tableId || legacy_id === tableId)
+})
+const selectedTableId = computed(
+  () => selectedTable.value?.id ?? difficulty.value?.difficulty_table,
 )
+const chartListQuery = computed(() => ({
+  ...listQuery.value,
+  ...difficulty.value,
+  difficulty_table: selectedTableId.value,
+}))
 const matchedLabel = computed(() => {
   const label = data.value?.difficulty_filter
-  return label?.table_id === difficulty.value?.difficulty_table ? label : undefined
+  return label?.table_id === selectedTableId.value ? label : undefined
 })
 
 const tableItems = computed(() => {
@@ -99,7 +108,7 @@ function difficultyLocation(filter?: DifficultyFilter) {
 }
 
 const tableChoice = computed({
-  get: () => (difficulty.value ? `table:${difficulty.value.difficulty_table}` : 'all'),
+  get: () => (selectedTableId.value ? `table:${selectedTableId.value}` : 'all'),
   set(value: string) {
     if (value === tableChoice.value) return
     void navigateTo(
@@ -115,10 +124,10 @@ const levelChoice = computed({
       ? 'all'
       : `level:${difficulty.value.difficulty_level}`,
   set(value: string) {
-    if (!difficulty.value || value === levelChoice.value) return
+    if (!selectedTableId.value || value === levelChoice.value) return
     void navigateTo(
       difficultyLocation({
-        difficulty_table: difficulty.value.difficulty_table,
+        difficulty_table: selectedTableId.value,
         difficulty_level: value === 'all' ? undefined : value.slice('level:'.length),
       }),
     )
@@ -154,7 +163,7 @@ useSeoMeta({ title: () => t('charts.title') })
       </form>
 
       <div class="mb-4 flex items-end gap-2 sm:gap-3">
-        <UFormField :label="t('lamps.table')" class="min-w-0 flex-[2] sm:max-w-76">
+        <UFormField :label="t('analysis.table')" class="min-w-0 flex-[2] sm:max-w-76">
           <USelectMenu
             v-model="tableChoice"
             :items="tableItems"

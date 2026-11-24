@@ -426,6 +426,8 @@ export interface IrDifficultyTable {
 }
 
 export interface IrDifficultyTableOption extends IrDifficultyTable {
+  /** Previous public ID accepted by links using difficulty_table. */
+  legacy_id?: string
   levels: string[]
 }
 

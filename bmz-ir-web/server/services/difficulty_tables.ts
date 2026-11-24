@@ -18,6 +18,7 @@ import { alias } from 'drizzle-orm/sqlite-core'
 import { db, schema } from 'hub:db'
 import type { IrDifficultyLabel, IrDifficultyTableOption } from '../../shared/types/ir'
 import type { DifficultyFilter } from '../../shared/utils/difficulty_filter'
+import { DIFFICULTY_TABLE_SOURCES } from '../constants/difficulty_tables'
 import { publicChartCondition } from './moderation/visibility'
 
 const DEFAULT_TIMEOUT_MS = 15_000
@@ -29,6 +30,23 @@ export const DIFFICULTY_LABEL_LOOKUP_CHUNK_SIZE = 40
 const MAX_REDIRECTS = 5
 const FAILURE_LOG_LIMIT = 10
 const FAILURE_ERROR_MAX_LENGTH = 500
+
+// The existing storage IDs keep synced generations and old links addressable.
+const storageIds = new Map(
+  DIFFICULTY_TABLE_SOURCES.map(({ id, sourceUrl }) => [
+    id,
+    difficultyTableId(normalizeHttpUrl(sourceUrl)),
+  ]),
+)
+const publicIds = new Map([...storageIds].map(([id, storageId]) => [storageId, id]))
+
+export function difficultyTablePublicId(storageId: string): string {
+  return publicIds.get(storageId) ?? storageId
+}
+
+export function difficultyTableStorageId(id: string): string {
+  return storageIds.get(id) ?? id
+}
 
 export interface DifficultyTableSource {
   sourceUrl: string
@@ -168,7 +186,7 @@ export async function syncDifficultyTable(
   await persistDifficultyTableGeneration(store, tableId, generation, normalizedSource, table)
 
   return {
-    tableId,
+    tableId: difficultyTablePublicId(tableId),
     sourceUrl: table.sourceUrl,
     generation,
     entryCount: table.entries.length,
@@ -227,7 +245,7 @@ export async function lookupDifficultyLabels(
     rows.push(
       ...chunkRows.map((row) => ({
         ...row,
-        table_id: String(row.table_id),
+        table_id: difficultyTablePublicId(row.table_id),
       })),
     )
   }
@@ -258,10 +276,15 @@ export async function listDifficultyTableOptions(): Promise<IrDifficultyTableOpt
     .innerJoin(entries, activeDifficultyGeneration())
     .groupBy(tables.id)
     .orderBy(asc(tables.priority), asc(tables.name), asc(tables.id))
-  return rows.map(({ levelOrder, levels, ...table }) => ({
-    ...table,
-    levels: levels.sort(compareDifficultyLevels(levelOrder)),
-  }))
+  return rows.map(({ id: storageId, levelOrder, levels, ...table }) => {
+    const id = difficultyTablePublicId(storageId)
+    return {
+      ...table,
+      id,
+      ...(id === storageId ? {} : { legacy_id: storageId }),
+      levels: levels.sort(compareDifficultyLevels(levelOrder)),
+    }
+  })
 }
 
 export function compareDifficultyLevels(levelOrder: string[]) {
@@ -296,7 +319,7 @@ function activeDifficultyEntries(hash: 'md5' | 'sha256', condition?: SQL) {
 export function chartDifficultyCondition(filter: DifficultyFilter): SQL {
   const entries = schema.difficultyTableEntries
   const selectedDifficulty = and(
-    eq(entries.tableId, filter.difficulty_table),
+    eq(entries.tableId, difficultyTableStorageId(filter.difficulty_table)),
     filter.difficulty_level === undefined ? undefined : eq(entries.level, filter.difficulty_level),
   )
   // An MD5 match in any active table suppresses every SHA-256 label for the chart.
@@ -425,8 +448,14 @@ export async function difficultyFilterLabel(
   const [table] = await db
     .select({ table_id: tables.id, table_name: tables.name, symbol: tables.symbol })
     .from(tables)
-    .where(eq(tables.id, filter.difficulty_table))
-  return table ? { ...table, level: filter.difficulty_level } : null
+    .where(eq(tables.id, difficultyTableStorageId(filter.difficulty_table)))
+  return table
+    ? {
+        ...table,
+        table_id: difficultyTablePublicId(table.table_id),
+        level: filter.difficulty_level,
+      }
+    : null
 }
 
 /** Synchronizes every configured table without letting one failure stop the rest. */

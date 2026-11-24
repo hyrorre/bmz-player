@@ -92,8 +92,8 @@ const scoresPostHandler = (await import('../../api/v1/scores.post')).default as 
 const chartsIndexHandler = (await import('../../api/v1/charts/index.get')).default as Handler
 const difficultyTablesHandler = (await import('../../api/v1/difficulty-tables.get'))
   .default as Handler
-const lampsHandler = (await import('../../api/v1/lamps/index.get')).default as Handler
-const lampChartsHandler = (await import('../../api/v1/lamps/charts.get')).default as Handler
+const analysisHandler = (await import('../../api/v1/analysis/index.get')).default as Handler
+const analysisChartsHandler = (await import('../../api/v1/analysis/charts.get')).default as Handler
 const chartDetailHandler = (await import('../../api/v1/charts/[sha256]/index.get'))
   .default as Handler
 const playersIndexHandler = (await import('../../api/v1/players/index.get')).default as Handler
@@ -1556,6 +1556,7 @@ describe('rankings, courses, and aggregates', () => {
   })
 
   test('difficulty filters match displayed labels before paging and respect visibility', async () => {
+    const stellaStorageId = 'table_9abc25b8185039f40a7775156f4092b5'
     const hashes = ['a', 'b', 'c', 'd', 'e', 'f'].map((value) => value.repeat(64))
     const md5s = ['a', 'b', 'c', 'd', 'e', 'f'].map((value) => value.repeat(32))
     for (const [i, sha256] of hashes.entries()) {
@@ -1569,10 +1570,10 @@ describe('rankings, courses, and aggregates', () => {
     }
     await db.insert(schema.difficultyTables).values([
       {
-        id: 'stella',
+        id: stellaStorageId,
         name: 'Stella',
         symbol: 'st',
-        sourceUrl: 'https://example.invalid/st',
+        sourceUrl: 'https://stellabms.xyz/st/table.html',
         activeGeneration: 'current',
       },
       {
@@ -1583,7 +1584,7 @@ describe('rankings, courses, and aggregates', () => {
         activeGeneration: 'current',
       },
     ])
-    const level = { tableId: 'stella', level: '1+', generation: 'current' }
+    const level = { tableId: stellaStorageId, level: '1+', generation: 'current' }
     await db.insert(schema.difficultyTableEntries).values([
       { ...level, md5: md5s[0] },
       { ...level, sha256: hashes[1] },
@@ -1597,6 +1598,17 @@ describe('rankings, courses, and aggregates', () => {
     await setChartStatus(hashes[4]!, 'hidden')
     const url = '/api/v1/charts?difficulty_table=stella&difficulty_level=1%2B&q=Stella&limit=1'
     const first = await chartsIndexHandler(event({ path: url }))
+    expect(
+      await chartsIndexHandler(event({ path: url.replace('stella', stellaStorageId) })),
+    ).toEqual(first)
+    const catalog = await difficultyTablesHandler(event({ path: '/api/v1/difficulty-tables' }))
+    expect(catalog.tables).toContainEqual({
+      id: 'stella',
+      legacy_id: stellaStorageId,
+      name: 'Stella',
+      symbol: 'st',
+      levels: ['1+', '2'],
+    })
     expect(first.pagination).toEqual({ limit: 1, offset: 0, total: 2, has_more: true })
     expect(first.difficulty_filter).toEqual({
       table_id: 'stella',
@@ -1634,13 +1646,25 @@ describe('rankings, courses, and aggregates', () => {
     expect(tableAndTitle.charts.map((chart: { sha256: string }) => chart.sha256)).toEqual([
       hashes[5],
     ])
-    const distribution = await lampsHandler(
-      event({ path: '/api/v1/lamps?player=alice&table=stella' }),
+    const distribution = await analysisHandler(
+      event({ path: '/api/v1/analysis?player=alice&table=stella' }),
     )
+    expect(distribution.table).toEqual({ id: 'stella', name: 'Stella', symbol: 'st' })
+    expect(
+      await analysisHandler(
+        event({ path: `/api/v1/analysis?player=alice&table=${stellaStorageId}` }),
+      ),
+    ).toEqual(distribution)
     expect(distribution.levels).toEqual([
       { level: '1+', total: 2, segments: [{ rank: 0, count: 2 }] },
       { level: '2', total: 1, segments: [{ rank: 0, count: 1 }] },
     ])
+    const segmentUrl = '/api/v1/analysis/charts?player=alice&level=1%2B&rank=0&table='
+    const segment = await analysisChartsHandler(event({ path: `${segmentUrl}stella` }))
+    expect(segment.pagination.total).toBe(2)
+    expect(await analysisChartsHandler(event({ path: segmentUrl + stellaStorageId }))).toEqual(
+      segment,
+    )
   })
 
   test('difficulty distributions show best lamps and score grades and page through the selected segment', async () => {
@@ -1676,28 +1700,30 @@ describe('rankings, courses, and aggregates', () => {
     ])
 
     const token = (await createAuthTokens('alice')).accessToken
-    await expectHttpError(lampsHandler(event({ path: '/api/v1/lamps' })), 401)
-    const lamps = await lampsHandler(event({ path: '/api/v1/lamps', token }))
-    expect(lamps.player.id).toBe('alice')
-    expect(lamps.table.id).toBe('fixture')
-    expect(lamps.levels).toEqual([
+    await expectHttpError(analysisHandler(event({ path: '/api/v1/analysis' })), 401)
+    const clearReport = await analysisHandler(event({ path: '/api/v1/analysis', token }))
+    expect(clearReport.player.id).toBe('alice')
+    expect(clearReport.table.id).toBe('fixture')
+    expect(clearReport.levels).toEqual([
       { level: '10', total: 2, segments: [{ rank: 0, count: 2 }] },
       { level: '2', total: 1, segments: [{ rank: 5, count: 1 }] },
     ])
-    const grades = await lampsHandler(event({ path: '/api/v1/lamps?player=alice&mode=score' }))
+    const grades = await analysisHandler(
+      event({ path: '/api/v1/analysis?player=alice&mode=score' }),
+    )
     expect(grades.levels[1]).toEqual({ level: '2', total: 1, segments: [{ rank: 8, count: 1 }] })
-    const url = '/api/v1/lamps/charts?player=alice&table=fixture'
-    const aaa = await lampChartsHandler(event({ path: `${url}&level=2&rank=8&mode=score` }))
+    const url = '/api/v1/analysis/charts?player=alice&table=fixture'
+    const aaa = await analysisChartsHandler(event({ path: `${url}&level=2&rank=8&mode=score` }))
     expect(aaa.charts).toMatchObject([{ sha256: CHART_A }])
-    const noPlay = await lampChartsHandler(
+    const noPlay = await analysisChartsHandler(
       event({ path: `${url}&level=10&rank=0&limit=1&offset=1` }),
     )
     expect(noPlay.charts).toMatchObject([{ sha256: thirdChart }])
     expect(noPlay.pagination).toEqual({ limit: 1, offset: 1, total: 2, has_more: false })
-    await expectHttpError(lampChartsHandler(event({ path: `${url}&level=2&rank=10` })), 400)
+    await expectHttpError(analysisChartsHandler(event({ path: `${url}&level=2&rank=10` })), 400)
     await setUserStatus('alice', 'banned')
-    await expectHttpError(lampsHandler(event({ path: '/api/v1/lamps?player=alice' })), 404)
-    await expectHttpError(lampChartsHandler(event({ path: `${url}&level=2&rank=5` })), 404)
+    await expectHttpError(analysisHandler(event({ path: '/api/v1/analysis?player=alice' })), 404)
+    await expectHttpError(analysisChartsHandler(event({ path: `${url}&level=2&rank=5` })), 404)
   })
 
   test('unregistered difficulty entries are counted once in both distributions until a matching chart is registered', async () => {
@@ -1729,15 +1755,15 @@ describe('rankings, courses, and aggregates', () => {
       { ...entry, md5: MD5_B, generation: 'old' },
     ])
 
-    const base = '/api/v1/lamps?player=alice&table=fixture'
-    const detail = '/api/v1/lamps/charts?player=alice&table=fixture&rank=0'
+    const base = '/api/v1/analysis?player=alice&table=fixture'
+    const detail = '/api/v1/analysis/charts?player=alice&table=fixture&rank=0'
     for (const mode of ['lamp', 'score']) {
-      const summary = await lampsHandler(event({ path: `${base}&mode=${mode}` }))
+      const summary = await analysisHandler(event({ path: `${base}&mode=${mode}` }))
       expect(summary.levels).toEqual([
         { level: '1', total: 3, segments: [{ rank: 0, count: 3 }] },
         { level: '2', total: 1, segments: [{ rank: 0, count: 1 }] },
       ])
-      const result = await lampChartsHandler(
+      const result = await analysisChartsHandler(
         event({ path: `${detail}&level=1&mode=${mode}&limit=2&offset=1` }),
       )
       expect(result.charts).toEqual([
@@ -1761,7 +1787,7 @@ describe('rankings, courses, and aggregates', () => {
 
     // The already-synced SHA-256 links the MD5-only row as soon as a chart appears in the IR.
     await submitScore({ id: 'bob' }, submission({ sha256: pairedSha256 }), [], 10)
-    const after = await lampChartsHandler(event({ path: `${detail}&level=1` }))
+    const after = await analysisChartsHandler(event({ path: `${detail}&level=1` }))
     expect(after.charts.map((chart: { sha256: string | null }) => chart.sha256)).toEqual([
       CHART_A,
       pairedSha256,
@@ -1794,11 +1820,11 @@ describe('rankings, courses, and aggregates', () => {
       ['score', 9],
     ] as const) {
       const query = `player=alice&table=fixture&mode=${mode}`
-      const summary = await lampsHandler(
-        event({ path: `/api/v1/lamps?${query}&include=first_pages` }),
+      const summary = await analysisHandler(
+        event({ path: `/api/v1/analysis?${query}&include=first_pages` }),
       )
-      const first = await lampChartsHandler(
-        event({ path: `/api/v1/lamps/charts?${query}&level=1&rank=0` }),
+      const first = await analysisChartsHandler(
+        event({ path: `/api/v1/analysis/charts?${query}&level=1&rank=0` }),
       )
       expect(summary.levels[0]).toMatchObject({
         level: '1',
@@ -1823,8 +1849,8 @@ describe('rankings, courses, and aggregates', () => {
     })
     const execute = spyOn(client, 'execute')
     try {
-      await lampsHandler(
-        event({ path: '/api/v1/lamps?player=alice&mode=score&include=first_pages' }),
+      await analysisHandler(
+        event({ path: '/api/v1/analysis?player=alice&mode=score&include=first_pages' }),
       )
       const queries = execute.mock.calls.flatMap(([statement]) =>
         typeof statement === 'object' && statement.sql.includes('as "rank_index"')

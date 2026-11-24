@@ -8,7 +8,12 @@ import type {
   IrDistributionCharts,
   IrDistributionMode,
 } from '../../shared/types/ir'
-import { compareDifficultyLevels, difficultyTableCharts } from './difficulty_tables'
+import {
+  compareDifficultyLevels,
+  difficultyTableCharts,
+  difficultyTablePublicId,
+  difficultyTableStorageId,
+} from './difficulty_tables'
 import { isPublicPlayer, publicPlayerCondition } from './moderation/visibility'
 
 export async function loadDifficultyDistribution(
@@ -35,7 +40,8 @@ export async function loadDifficultyDistribution(
     .from(tables)
     .where(isNotNull(tables.activeGeneration))
     .orderBy(asc(tables.priority), asc(tables.name), asc(tables.id))
-  const table = activeTables.find(({ id }) => id === tableId) ?? activeTables[0]
+  const storageId = tableId === undefined ? undefined : difficultyTableStorageId(tableId)
+  const table = activeTables.find(({ id }) => id === storageId) ?? activeTables[0]
   if (!table) return { player, tables: [], table: null, levels: [] }
 
   const ranks = chartRanks(playerId, mode, table.id)
@@ -64,8 +70,12 @@ export async function loadDifficultyDistribution(
   const compareLevels = compareDifficultyLevels(table.levelOrder)
   return {
     player,
-    tables: activeTables.map(({ levelOrder: _levelOrder, ...item }) => item),
-    table: { id: table.id, name: table.name, symbol: table.symbol },
+    tables: activeTables.map(({ id, name, symbol }) => ({
+      id: difficultyTablePublicId(id),
+      name,
+      symbol,
+    })),
+    table: { id: difficultyTablePublicId(table.id), name: table.name, symbol: table.symbol },
     levels: [...levels.values()].sort((left, right) => compareLevels(left.level, right.level)),
   }
 }
@@ -83,7 +93,7 @@ export async function loadDistributionCharts(
 ): Promise<IrDistributionCharts | null> {
   if (!(await isPublicPlayer(playerId))) return null
   const { mode, table, level, rank, limit, offset } = options
-  const ranks = chartRanks(playerId, mode, table, level)
+  const ranks = chartRanks(playerId, mode, difficultyTableStorageId(table), level)
   const [items, counts] = await Promise.all([
     db
       .select(distributionChartColumns(ranks))

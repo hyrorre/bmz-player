@@ -154,10 +154,10 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
             <UButton
               color="neutral"
               icon="i-lucide-chart-bar-stacked"
-              :to="localePath({ path: '/lamps', query: { player: data.player.id } })"
+              :to="localePath({ path: '/analysis', query: { player: data.player.id } })"
               variant="subtle"
             >
-              {{ t('lamps.nav') }}
+              {{ t('analysis.nav') }}
             </UButton>
             <UButton
               v-if="canManageRival"

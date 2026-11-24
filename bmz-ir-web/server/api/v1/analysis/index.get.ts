@@ -1,13 +1,17 @@
 import { createError, defineEventHandler, getQuery } from 'h3'
-import { loadDifficultyDistribution } from '../../../services/lamp_distribution'
-import { distributionMode, lampPlayerId, lampQueryText } from '../../../utils/lamp_query'
+import { loadDifficultyDistribution } from '../../../services/analysis_distribution'
+import {
+  analysisPlayerId,
+  analysisQueryText,
+  distributionMode,
+} from '../../../utils/analysis_query'
 
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
-  const table = lampQueryText(query.table, 'table')
+  const table = analysisQueryText(query.table, 'table')
   const mode = distributionMode(query.mode)
   const report = await loadDifficultyDistribution(
-    await lampPlayerId(event, query.player),
+    await analysisPlayerId(event, query.player),
     mode,
     table,
     query.include === 'first_pages',

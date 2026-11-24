@@ -4,13 +4,17 @@ import {
   IR_DISTRIBUTION_PAGE_SIZE,
   IR_SCORE_RANK_LABELS,
 } from '../../../../shared/constants/ir'
+import { loadDistributionCharts } from '../../../services/analysis_distribution'
 import { clampInteger } from '../../../services/ir/common'
-import { loadDistributionCharts } from '../../../services/lamp_distribution'
-import { distributionMode, lampPlayerId, lampQueryText } from '../../../utils/lamp_query'
+import {
+  analysisPlayerId,
+  analysisQueryText,
+  distributionMode,
+} from '../../../utils/analysis_query'
 
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
-  const table = lampQueryText(query.table, 'table')
+  const table = analysisQueryText(query.table, 'table')
   const mode = distributionMode(query.mode)
   const { level } = query
   const labels = mode === 'score' ? IR_SCORE_RANK_LABELS : IR_CLEAR_LABELS
@@ -22,7 +26,7 @@ export default defineEventHandler(async (event) => {
       statusMessage: 'table, level, and a valid rank are required',
     })
   }
-  const result = await loadDistributionCharts(await lampPlayerId(event, query.player), {
+  const result = await loadDistributionCharts(await analysisPlayerId(event, query.player), {
     mode,
     table,
     level,

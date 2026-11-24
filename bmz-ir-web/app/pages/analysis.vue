@@ -27,8 +27,8 @@ const playerId = computed(() => queryText(route.query.player) ?? user.value?.id)
 const mode = computed<IrDistributionMode>(() => (route.query.mode === 'score' ? 'score' : 'lamp'))
 const labels = computed(() => (mode.value === 'score' ? IR_SCORE_RANK_LABELS : IR_CLEAR_LABELS))
 const modeItems = computed(() => [
-  { label: t('lamps.clearMode'), value: 'lamp' },
-  { label: t('lamps.scoreMode'), value: 'score' },
+  { label: t('analysis.clearMode'), value: 'lamp' },
+  { label: t('analysis.scoreMode'), value: 'score' },
 ])
 const reportQuery = computed(() => ({
   player: playerId.value,
@@ -37,10 +37,10 @@ const reportQuery = computed(() => ({
   include: 'first_pages',
 }))
 const { data, status, error } = await useAsyncData(
-  () => `lamp-distribution:${JSON.stringify(reportQuery.value)}`,
+  () => `analysis:${JSON.stringify(reportQuery.value)}`,
   async (_nuxtApp, { signal }) => ({
     report: reportQuery.value.player
-      ? await requestFetch<IrDifficultyDistribution>('/api/v1/lamps', {
+      ? await requestFetch<IrDifficultyDistribution>('/api/v1/analysis', {
           query: reportQuery.value,
           signal,
         })
@@ -125,10 +125,10 @@ const {
   status: chartsStatus,
   error: chartsError,
 } = await useAsyncData(
-  () => `lamp-distribution-charts:${JSON.stringify(chartsQuery.value)}`,
+  () => `analysis-charts:${JSON.stringify(chartsQuery.value)}`,
   async (_nuxtApp, { signal }) => ({
     result: chartsQuery.value
-      ? await requestFetch<IrDistributionCharts>('/api/v1/lamps/charts', {
+      ? await requestFetch<IrDistributionCharts>('/api/v1/analysis/charts', {
           query: chartsQuery.value,
           signal,
         })
@@ -158,7 +158,7 @@ const modalTitle = computed(() =>
 )
 const modalCount = computed(() => chartList.value?.pagination.total ?? selection.value?.count ?? 0)
 
-useSeoMeta({ title: () => t('lamps.title') })
+useSeoMeta({ title: () => t('analysis.title') })
 </script>
 
 <template>
@@ -166,13 +166,13 @@ useSeoMeta({ title: () => t('lamps.title') })
     <section class="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
       <header class="mb-6">
         <h1 class="text-3xl font-semibold tracking-tight text-highlighted">
-          {{ t('lamps.title') }}
+          {{ t('analysis.title') }}
         </h1>
-        <p v-if="playerId" class="mt-2 text-sm text-muted">{{ t('lamps.description') }}</p>
+        <p v-if="playerId" class="mt-2 text-sm text-muted">{{ t('analysis.description') }}</p>
       </header>
 
       <div v-if="!playerId" class="space-y-4 rounded-lg border border-default bg-elevated/40 p-5">
-        <p class="text-sm text-muted">{{ t('lamps.choosePlayer') }}</p>
+        <p class="text-sm text-muted">{{ t('analysis.choosePlayer') }}</p>
         <div class="flex flex-wrap gap-2">
           <UButton :to="localePath('/players')" icon="i-lucide-users">{{
             t('rivals.findPlayers')
@@ -186,7 +186,7 @@ useSeoMeta({ title: () => t('lamps.title') })
       <UAlert
         v-else-if="error"
         color="error"
-        :description="translateApiError(error, 'errors.lampDistributionLoadFailed')"
+        :description="translateApiError(error, 'errors.analysisLoadFailed')"
       />
       <template v-else-if="report">
         <NuxtLink
@@ -196,10 +196,10 @@ useSeoMeta({ title: () => t('lamps.title') })
           <UIcon name="i-lucide-user" class="size-4" />
           {{ report.player.display_name || report.player.id }}
         </NuxtLink>
-        <p v-if="!report.table" class="text-sm text-muted">{{ t('lamps.noTables') }}</p>
+        <p v-if="!report.table" class="text-sm text-muted">{{ t('analysis.noTables') }}</p>
         <template v-else>
           <div class="mb-6 flex flex-wrap items-end justify-between gap-4">
-            <UFormField :label="t('lamps.table')">
+            <UFormField :label="t('analysis.table')">
               <USelectMenu
                 :model-value="report.table.id"
                 :items="tableItems"
@@ -212,7 +212,7 @@ useSeoMeta({ title: () => t('lamps.title') })
               :items="modeItems"
               :content="false"
               :model-value="mode"
-              :aria-label="t('lamps.mode')"
+              :aria-label="t('analysis.mode')"
               @update:model-value="
                 (value) => setView({ mode: value === 'score' ? 'score' : undefined })
               "
@@ -223,14 +223,14 @@ useSeoMeta({ title: () => t('lamps.title') })
             v-if="!report.levels.length"
             class="rounded-lg border border-default p-5 text-sm text-muted"
           >
-            {{ t('lamps.noCharts') }}
+            {{ t('analysis.noCharts') }}
           </p>
           <div v-else class="rounded-xl border border-default bg-default">
             <div class="border-b border-default px-4 py-4 sm:px-5">
               <div class="flex flex-wrap items-baseline justify-between gap-2">
                 <h2 class="font-semibold text-highlighted">{{ report.table.name }}</h2>
                 <p class="text-sm text-muted">
-                  {{ t('lamps.chartCount', { count: formatNumber(total) }) }}
+                  {{ t('analysis.chartCount', { count: formatNumber(total) }) }}
                 </p>
               </div>
               <ul class="mt-3 flex flex-wrap gap-x-3 gap-y-2 text-xs text-muted">
@@ -266,7 +266,7 @@ useSeoMeta({ title: () => t('lamps.title') })
                     :style="{ '--rank-count': segment.count }"
                     :title="`${labels[segment.rank]} · ${formatNumber(segment.count)}`"
                     :aria-label="
-                      t('lamps.segment', {
+                      t('analysis.segment', {
                         level: `${report.table.symbol}${level.level}`,
                         rank: labels[segment.rank],
                         count: formatNumber(segment.count),
@@ -290,7 +290,7 @@ useSeoMeta({ title: () => t('lamps.title') })
       <UModal
         v-model:open="modalOpen"
         :title="modalTitle"
-        :description="t('lamps.chartCount', { count: formatNumber(modalCount) })"
+        :description="t('analysis.chartCount', { count: formatNumber(modalCount) })"
         :ui="{ content: 'sm:max-w-2xl', body: 'p-0 sm:p-0' }"
         @after:leave="restoreSegmentFocus"
       >
@@ -305,7 +305,7 @@ useSeoMeta({ title: () => t('lamps.title') })
             :description="translateApiError(chartsError, 'errors.chartsLoadFailed')"
           />
           <p v-else-if="!chartList?.charts.length" class="p-5 text-sm text-muted">
-            {{ t('lamps.noCharts') }}
+            {{ t('analysis.noCharts') }}
           </p>
           <ul v-else class="divide-y divide-default">
             <li v-for="chart in chartList.charts" :key="chart.id">
@@ -336,7 +336,7 @@ useSeoMeta({ title: () => t('lamps.title') })
                   class="size-4 shrink-0 text-muted"
                 />
                 <UBadge v-else color="neutral" variant="subtle" size="sm" class="shrink-0">{{
-                  t('lamps.unregistered')
+                  t('analysis.unregistered')
                 }}</UBadge>
               </component>
             </li>
