@@ -9,11 +9,23 @@ describe('dailyDateRange', () => {
     expect(range.end.toISOString()).toBe('2026-07-13T19:00:00.000Z')
   })
 
+  test('JST の前日・翌日にまたがる境界で現地の0時から始まる', () => {
+    // シドニー（UTC+11）の0時はJSTの前日22時、ロサンゼルス（UTC-8）の0時はJSTの17時。
+    expect(dailyDateRange('2026-11-25', -120).start.toISOString()).toBe('2026-11-24T13:00:00.000Z')
+    expect(dailyDateRange('2026-11-25', 17 * 60).start.toISOString()).toBe(
+      '2026-11-25T08:00:00.000Z',
+    )
+    // UTC-12 の23:59も、成果日と同じ現地の日付になる。
+    expect(dailyDateRange('2026-11-25', 2699).start.toISOString()).toBe('2026-11-26T11:59:00.000Z')
+  })
+
   test('存在しない日付と範囲外の境界を拒否する', () => {
     expect(() => dailyDateRange('2026-02-29', 0)).toThrow('date is invalid')
-    expect(() => dailyDateRange('2026-07-13', 1440)).toThrow(
-      'daily boundary must be between 0 and 1439 minutes',
-    )
+    for (const boundary of [-301, 2700, 1.5]) {
+      expect(() => dailyDateRange('2026-07-13', boundary)).toThrow(
+        'daily boundary must be between -300 and 2699 minutes',
+      )
+    }
   })
 })
 

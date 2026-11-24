@@ -16,7 +16,14 @@ interface DailyRow {
 const route = useRoute()
 const localePath = useLocalePath()
 const { t } = useI18n()
-const { formatNumber: formatLocaleNumber, formatDate, compareText } = useLocaleFormat()
+const {
+  formatNumber: formatLocaleNumber,
+  formatDate,
+  formatTimeWithZone,
+  timeZone,
+  compareText,
+} = useLocaleFormat()
+const dailyBoundaryLabel = useDailyBoundaryLabel()
 const { translateApiError } = useApiError()
 const initialDate = ref(currentDailyDate(0))
 const dateInput = ref(queryString(route.query.date) ?? initialDate.value)
@@ -80,7 +87,17 @@ const rows = computed<DailyRow[]>(() =>
 )
 
 const todayDate = computed(() => currentDailyDate(data.value?.boundary_minutes ?? 0))
-const boundaryLabel = computed(() => formatBoundary(data.value?.boundary_minutes ?? 0))
+const boundaryLabel = computed(() => {
+  const report = data.value
+  if (!report) return ''
+  // The day starts at a fixed instant; show it in the viewer's time zone.
+  const start = dailyBoundaryStart(report.date, report.boundary_minutes)
+  const { dayOffset } = localDailyBoundary(
+    report.boundary_minutes,
+    timeZoneOffsetMinutes(timeZone.value, start),
+  )
+  return dailyBoundaryLabel(formatTimeWithZone(start), dayOffset)
+})
 
 function queryString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
@@ -128,14 +145,14 @@ function formatPlayTime(value: number): string {
   return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
 }
 
-function formatBoundary(value: number): string {
-  const hours = Math.floor(value / 60)
-  const minutes = value % 60
-  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')} JST`
-}
-
+// The date names a result day, not an instant, so it must not move with the viewer's time zone.
 function displayDate(value: string): string {
-  return formatDate(new Date(`${value}T12:00:00+09:00`))
+  return formatDate(`${value}T00:00:00Z`, {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC',
+  })
 }
 
 function maxExScore(snapshot: IrDailyBestSnapshot): number | null {

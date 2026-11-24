@@ -12,6 +12,15 @@ export const IR_PLAYER_SCORE_PAGE_SIZE = 50
 export const IR_DISTRIBUTION_PAGE_SIZE = 50
 export const IR_DIFFICULTY_TABLE_NOT_FOUND = 'Difficulty table not found'
 
+/** 成果日は、日付の JST 00:00 に保存済みの切り替わり分を足した時刻から始まる。 */
+export const JST_UTC_OFFSET_MINUTES = 9 * 60
+/**
+ * UTC-12:00〜UTC+14:00 のどの地域でも、現地の任意の時刻を切り替わりにでき、
+ * 成果日の日付が現地の日付と一致する範囲。
+ */
+export const DAILY_BOUNDARY_MIN_MINUTES = JST_UTC_OFFSET_MINUTES - 14 * 60
+export const DAILY_BOUNDARY_MAX_MINUTES = JST_UTC_OFFSET_MINUTES + 12 * 60 + 24 * 60 - 1
+
 export const IR_CLEAR_LABELS = [
   'NO PLAY',
   'FAILED',

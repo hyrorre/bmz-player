@@ -23,14 +23,27 @@ const state = reactive<ProfileState>({
   dailyBoundaryMinutes: 0,
 })
 
-const dailyBoundaryItems = Array.from({ length: 48 }, (_, index) => {
-  const value = index * 30
-  const hours = Math.floor(value / 60)
-  const minutes = value % 60
-  return {
-    label: `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')} (JST)`,
-    value,
+const timeZone = useViewerTimeZone()
+const dailyBoundaryLabel = useDailyBoundaryLabel()
+// Choices are local times today. In regions with daylight saving time, the saved JST-based
+// boundary moves by an hour in the other season.
+const dailyBoundaryItems = computed(() => {
+  const offset = timeZoneOffsetMinutes(timeZone.value, Date.now())
+  const items = Array.from({ length: 48 }, (_, index) => {
+    const minutes = index * 30
+    return { label: formatClockMinutes(minutes), value: dailyBoundaryForLocalTime(minutes, offset) }
+  })
+  const current = state.dailyBoundaryMinutes
+  if (!items.some(({ value }) => value === current)) {
+    // Keep a value saved in another season or time zone selectable and visible as it is.
+    const local = localDailyBoundary(current, offset)
+    items.push({
+      label: dailyBoundaryLabel(formatClockMinutes(local.minutes), local.dayOffset),
+      value: current,
+    })
+    items.sort((left, right) => left.value - right.value)
   }
+  return items
 })
 
 const loading = ref(false)
@@ -160,6 +173,7 @@ useSeoMeta({ title: () => t('profile.title') })
             :label="t('profile.dailyBoundary')"
             name="dailyBoundaryMinutes"
             :description="t('profile.dailyBoundaryDescription')"
+            :help="t('dailyBoundary.timeZoneHelp', { timeZone })"
           >
             <USelect
               v-model="state.dailyBoundaryMinutes"

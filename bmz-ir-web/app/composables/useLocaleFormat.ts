@@ -1,7 +1,5 @@
 type DateInput = Date | string | number
 
-const timeZone = 'Asia/Tokyo'
-
 const dateAndTimeFormats = new Map<
   string,
   { date: Intl.DateTimeFormat; time: Intl.DateTimeFormat }
@@ -9,6 +7,7 @@ const dateAndTimeFormats = new Map<
 
 export function useLocaleFormat() {
   const { locale } = useI18n()
+  const timeZone = useViewerTimeZone()
 
   const localeTag = computed(() => {
     const tags: Record<string, string> = {
@@ -30,26 +29,38 @@ export function useLocaleFormat() {
     return new Intl.DateTimeFormat(localeTag.value, {
       dateStyle: 'medium',
       timeStyle: 'medium',
-      timeZone,
+      timeZone: timeZone.value,
     }).format(new Date(value))
   }
 
+  /** 閲覧者のタイムゾーンの日付。options の timeZone で別のタイムゾーンを指定できる。 */
   function formatDate(value: DateInput, options?: Intl.DateTimeFormatOptions) {
     return new Intl.DateTimeFormat(localeTag.value, {
-      timeZone,
+      timeZone: timeZone.value,
       ...(options ?? { year: 'numeric', month: 'long', day: 'numeric' }),
+    }).format(new Date(value))
+  }
+
+  /** 閲覧者のタイムゾーンの時刻を、タイムゾーンの略称付きで表示する。 */
+  function formatTimeWithZone(value: DateInput) {
+    return new Intl.DateTimeFormat(localeTag.value, {
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZoneName: 'short',
+      timeZone: timeZone.value,
     }).format(new Date(value))
   }
 
   function formatDateAndTime(value: DateInput) {
     const locale = localeTag.value
-    let formats = dateAndTimeFormats.get(locale)
+    const key = `${locale}\u0000${timeZone.value}`
+    let formats = dateAndTimeFormats.get(key)
     if (!formats) {
       formats = {
-        date: new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeZone }),
-        time: new Intl.DateTimeFormat(locale, { timeStyle: 'medium', timeZone }),
+        date: new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeZone: timeZone.value }),
+        time: new Intl.DateTimeFormat(locale, { timeStyle: 'medium', timeZone: timeZone.value }),
       }
-      dateAndTimeFormats.set(locale, formats)
+      dateAndTimeFormats.set(key, formats)
     }
     const timestamp = new Date(value)
     return { date: formats.date.format(timestamp), time: formats.time.format(timestamp) }
@@ -59,5 +70,14 @@ export function useLocaleFormat() {
     return left.localeCompare(right, localeTag.value, { numeric: true })
   }
 
-  return { localeTag, formatNumber, formatDateTime, formatDate, formatDateAndTime, compareText }
+  return {
+    localeTag,
+    timeZone,
+    formatNumber,
+    formatDateTime,
+    formatDate,
+    formatTimeWithZone,
+    formatDateAndTime,
+    compareText,
+  }
 }

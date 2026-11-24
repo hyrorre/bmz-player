@@ -39,6 +39,12 @@ const ja = {
       dailyBoundaryDescription: 'この時刻より前のプレイは前日の成果として集計します。',
       saved: 'プロフィールを保存しました。',
     },
+    dailyBoundary: {
+      previousDay: '前日 {time}',
+      nextDay: '翌日 {time}',
+      timeZoneHelp:
+        '{timeZone} の時刻で表示しています。夏時間のある地域では、季節によって切り替わりが1時間ずれます。',
+    },
     charts: {
       title: '譜面一覧',
       description: 'スコアが登録されている譜面のランキングを確認できます。',
@@ -281,6 +287,12 @@ const en = {
       dailyBoundary: 'Daily results boundary',
       dailyBoundaryDescription: 'Plays before this time are counted toward the previous day.',
       saved: 'Profile saved.',
+    },
+    dailyBoundary: {
+      previousDay: '{time} (previous day)',
+      nextDay: '{time} (next day)',
+      timeZoneHelp:
+        'Times are shown in {timeZone}. In regions with daylight saving time, the boundary shifts by one hour with the season.',
     },
     charts: {
       title: 'Charts',
@@ -526,6 +538,12 @@ const ko = {
       dailyBoundaryDescription: '이 시각 이전의 플레이는 전날 성과로 집계됩니다.',
       saved: '프로필을 저장했습니다.',
     },
+    dailyBoundary: {
+      previousDay: '전날 {time}',
+      nextDay: '다음 날 {time}',
+      timeZoneHelp:
+        '{timeZone} 기준 시각으로 표시합니다. 서머타임이 있는 지역에서는 계절에 따라 경계가 1시간 달라집니다.',
+    },
     charts: {
       title: '차트 목록',
       description: '스코어가 등록된 차트의 랭킹을 확인할 수 있습니다.',
@@ -765,6 +783,11 @@ const zhCN = {
       dailyBoundaryDescription: '此时间之前的游玩计入前一天的成果。',
       saved: '个人资料已保存。',
     },
+    dailyBoundary: {
+      previousDay: '前一天 {time}',
+      nextDay: '后一天 {time}',
+      timeZoneHelp: '按 {timeZone} 的时间显示。在实行夏令时的地区，切换时间会随季节相差1小时。',
+    },
     charts: {
       title: '谱面列表',
       description: '查看已提交成绩的谱面排名。',
@@ -1002,6 +1025,11 @@ const zhTW = {
       dailyBoundary: '每日成果切換時間',
       dailyBoundaryDescription: '此時間之前的遊玩計入前一天的成果。',
       saved: '個人資料已儲存。',
+    },
+    dailyBoundary: {
+      previousDay: '前一天 {time}',
+      nextDay: '後一天 {time}',
+      timeZoneHelp: '依 {timeZone} 的時間顯示。在實施夏令時間的地區，切換時間會隨季節相差1小時。',
     },
     charts: {
       title: '譜面清單',

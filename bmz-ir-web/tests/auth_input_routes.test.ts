@@ -80,3 +80,32 @@ test('registration and profile updates share display-name boundaries and reject 
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 })
+
+test('profile updates accept daily boundaries for every UTC offset and reject other values', async () => {
+  const app = createApp().use(requestBodyMiddleware).use('/profile', profile)
+  const server = createServer(toNodeListener(app))
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address() as { port: number }
+  try {
+    // -300 is 00:00 at UTC+14. 2699 is 23:59 at UTC-12.
+    for (const [boundary, status] of [
+      [-300, 200],
+      [2699, 200],
+      [-301, 400],
+      [2700, 400],
+      [1.5, 400],
+    ] as const) {
+      const response = await fetch(`http://127.0.0.1:${port}/profile`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ display_name: 'owner', daily_boundary_minutes: boundary }),
+      })
+      expect(response.status).toBe(status)
+      if (status === 200) {
+        expect((await response.json()).player.daily_boundary_minutes).toBe(boundary)
+      }
+    }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})
