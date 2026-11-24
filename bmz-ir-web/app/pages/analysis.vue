@@ -18,12 +18,17 @@ const { t } = useI18n()
 const { formatNumber } = useLocaleFormat()
 const { translateApiError } = useApiError()
 const requestFetch = useRequestFetch()
+const preferredTable = useCookie<string>('ir-analysis-table', {
+  maxAge: 60 * 60 * 24 * 365,
+  sameSite: 'lax',
+})
 
 function queryText(value: unknown) {
   return typeof value === 'string' ? value.trim() || undefined : undefined
 }
 
 const playerId = computed(() => queryText(route.query.player) ?? user.value?.id)
+const tableId = computed(() => queryText(route.query.table) ?? queryText(preferredTable.value))
 const mode = computed<IrDistributionMode>(() => (route.query.mode === 'score' ? 'score' : 'lamp'))
 const labels = computed(() => (mode.value === 'score' ? IR_SCORE_RANK_LABELS : IR_CLEAR_LABELS))
 const modeItems = computed(() => [
@@ -32,7 +37,7 @@ const modeItems = computed(() => [
 ])
 const reportQuery = computed(() => ({
   player: playerId.value,
-  table: queryText(route.query.table),
+  table: tableId.value,
   mode: mode.value,
   include: 'first_pages',
 }))
@@ -60,8 +65,20 @@ const legend = computed(() => labels.value.map((label, rank) => ({ label, rank }
 function setView(query: { table?: string; mode?: 'score' | undefined }) {
   return navigateTo({
     path: route.path,
-    query: { ...route.query, ...query, level: undefined, rank: undefined, chart_page: undefined },
+    query: {
+      ...route.query,
+      table: tableId.value,
+      ...query,
+      level: undefined,
+      rank: undefined,
+      chart_page: undefined,
+    },
   })
+}
+
+async function selectTable(table: string) {
+  const failure = await setView({ table })
+  if (!failure) preferredTable.value = table
 }
 
 const selection = computed(() => {
@@ -92,7 +109,13 @@ function showCharts(level: string, rank: number, event: MouseEvent) {
   segmentButton = event.currentTarget as HTMLButtonElement
   void navigateTo({
     path: route.path,
-    query: { ...route.query, level, rank: String(rank), chart_page: undefined },
+    query: {
+      ...route.query,
+      table: tableId.value,
+      level,
+      rank: String(rank),
+      chart_page: undefined,
+    },
   })
 }
 
@@ -205,7 +228,7 @@ useSeoMeta({ title: () => t('analysis.title') })
                 :items="tableItems"
                 value-key="value"
                 class="w-full sm:w-76"
-                @update:model-value="(table) => setView({ table })"
+                @update:model-value="selectTable"
               />
             </UFormField>
             <UTabs
