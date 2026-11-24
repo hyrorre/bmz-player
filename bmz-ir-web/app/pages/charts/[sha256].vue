@@ -98,6 +98,11 @@ const { data: detail, error: detailError } = await useFetch<ChartDetail>(
   () => `/api/v1/charts/${sha256.value}`,
   { immediate: canLoadChart.value, watch: [sha256] },
 )
+const chartHashes = computed(() => {
+  if (!detail.value) return []
+  const { md5, sha256 } = detail.value.chart
+  return [...(md5 ? [{ label: 'MD5', value: md5 }] : []), { label: 'SHA256', value: sha256 }]
+})
 const externalLinks = computed(() => {
   if (!detail.value) return []
   const { md5, sha256 } = detail.value.chart
@@ -169,15 +174,8 @@ const canShowSelfArea = computed(() => Boolean(selfBestEntry.value || detail.val
 const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclosure()
 const wideScoreTable = useWideScoreTable()
 
-const copyMd5 = async () => {
-  const md5 = detail.value?.chart.md5
-  if (md5) await navigator.clipboard.writeText(md5)
-}
-
-const copySha256 = async () => {
-  if (detail.value) {
-    await navigator.clipboard.writeText(detail.value.chart.sha256)
-  }
+function copyHash(hash: string) {
+  return navigator.clipboard.writeText(hash)
 }
 
 function formatScoreDate(value: string | null) {
@@ -238,18 +236,24 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
             }}
           </p>
           <DifficultyTableBadges :labels="detail.chart.difficulty_labels" class="mt-2" />
-          <p v-if="detail.chart.md5" class="mt-3 text-sm break-all text-neutral-400">
-            md5 {{ detail.chart.md5 }}
-            <UButton size="xs" variant="subtle" color="neutral" @click="copyMd5">{{
-              t('chart.copy')
-            }}</UButton>
-          </p>
-          <p class="mt-1 text-sm break-all text-neutral-400">
-            sha256 {{ detail.chart.sha256 }}
-            <UButton size="xs" variant="subtle" color="neutral" @click="copySha256">{{
-              t('chart.copy')
-            }}</UButton>
-          </p>
+          <div class="mt-3 flex flex-wrap items-center gap-2">
+            <UButton
+              v-for="hash in chartHashes"
+              :key="hash.label"
+              type="button"
+              :title="t('chart.copy')"
+              trailing-icon="i-lucide-copy"
+              :ui="{ trailingIcon: 'text-muted' }"
+              color="neutral"
+              variant="subtle"
+              size="sm"
+              class="max-w-full min-w-0 cursor-pointer rounded-full text-start"
+              @click="copyHash(hash.value)"
+            >
+              <span class="shrink-0 font-semibold">{{ hash.label }}</span>
+              <span class="min-w-0 font-mono text-xs break-all text-toned">{{ hash.value }}</span>
+            </UButton>
+          </div>
           <nav
             aria-labelledby="chart-external-services"
             class="mt-4 flex flex-wrap items-center gap-2"
@@ -265,6 +269,7 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
               target="_blank"
               rel="noopener noreferrer"
               trailing-icon="i-lucide-external-link"
+              :ui="{ trailingIcon: 'text-muted' }"
               color="neutral"
               variant="subtle"
               size="sm"
