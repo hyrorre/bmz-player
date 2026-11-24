@@ -268,6 +268,7 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                   />
                 </p>
                 <p class="text-sm">BP {{ selfBestEntry.score.min_bp }}</p>
+                <p class="text-sm">CB {{ selfBestEntry.score.min_cb }}</p>
               </div>
               <p class="mt-1 text-xs text-neutral-500">
                 {{ selfBestEntry.score.gauge }} ·
@@ -331,7 +332,8 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                 <th class="px-3 py-2">RULE</th>
                 <th class="px-3 py-2">OPTION</th>
                 <th class="px-3 py-2 text-right whitespace-nowrap">MAX COMBO</th>
-                <th class="px-3 py-2 text-right">BP</th>
+                <th class="px-2 py-2 text-right">BP</th>
+                <th class="px-2 py-2 text-right">CB</th>
                 <th class="px-3 py-2">{{ t('table.input') }}</th>
                 <th class="px-3 py-2">{{ t('table.date') }}</th>
                 <th scope="col" class="sticky right-0 z-10 w-px bg-elevated px-1">
@@ -384,7 +386,8 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                       :total-notes="entry.score.max_combo_notes"
                     />
                   </td>
-                  <td class="px-3 py-2 text-right">{{ entry.score.min_bp }}</td>
+                  <td class="px-2 py-2 text-right tabular-nums">{{ entry.score.min_bp }}</td>
+                  <td class="px-2 py-2 text-right tabular-nums">{{ entry.score.min_cb }}</td>
                   <td class="px-3 py-2 text-neutral-400">{{ entry.score.device_type }}</td>
                   <td class="px-3 py-2 text-neutral-400">
                     {{ formatScoreDate(entry.score.played_at) }}
@@ -401,7 +404,7 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                   v-if="expandedScoreRow === entry.score.score_id"
                   class="border-t border-default bg-elevated"
                 >
-                  <td :colspan="lnPolicies.length ? 13 : 12">
+                  <td :colspan="lnPolicies.length ? 14 : 13">
                     <ScoreInlineDetails
                       :id="scoreDetailsId"
                       :score-id="entry.score.source_score_ids?.ex_score ?? entry.score.score_id"
@@ -423,6 +426,7 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
           :limit="historyLimit"
           :score-key="(score) => score.score_id"
           :score-bp="(score) => score.min_bp"
+          :score-cb="(score) => score.min_cb"
           :score-detail-id="(score) => score.score_id"
           :show-ln="Boolean(lnPolicies.length)"
           :score-option="(score) => formatRankingArrange(score, detail?.chart.mode ?? null)"

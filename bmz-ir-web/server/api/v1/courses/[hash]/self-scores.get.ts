@@ -1,6 +1,7 @@
 import { and, desc, eq, sql } from 'drizzle-orm'
 import { getQuery } from 'h3'
 import { db, schema } from 'hub:db'
+import { courseComboBreaks } from '../../../../services/course_ranking'
 import { asRuleMode, normalizeGaugeName, requireHex } from '../../../../services/ir'
 import { requireIrUser } from '../../../../utils/auth'
 
@@ -57,6 +58,7 @@ export default defineEventHandler(async (event) => {
         max_ex_score: schema.courseScores.maxExScore,
         max_combo: schema.courseScores.maxCombo,
         bp: schema.courseScores.bp,
+        judges: schema.courseScores.judges,
         gauge: schema.courseScores.gauge,
         ln_policy: schema.courseScores.lnPolicy,
         rule_mode: schema.courseScores.ruleMode,
@@ -77,8 +79,9 @@ export default defineEventHandler(async (event) => {
   return {
     course: { course_hash: courseHash },
     rule: { gauge, ln_policy: lnPolicy, rule_mode: ruleMode, scoring: 'bms_ex_score_v1' },
-    scores: rows.map((row) => ({
+    scores: rows.map(({ judges, ...row }) => ({
       ...row,
+      cb: courseComboBreaks(row.bp, judges),
       played_at: row.played_at?.toISOString() ?? null,
       server_received_at: row.server_received_at.toISOString(),
     })),

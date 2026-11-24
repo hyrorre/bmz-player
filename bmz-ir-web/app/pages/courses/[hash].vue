@@ -33,6 +33,7 @@ interface CourseRankingEntry {
     max_ex_score: number
     max_combo: number
     bp: number
+    cb: number | null
     device_type: string
     ln_policy: string
     rule_mode: string
@@ -65,6 +66,7 @@ interface CourseSelfScoresResult {
     max_ex_score: number
     max_combo: number
     bp: number
+    cb: number | null
     gauge: string
     ln_policy: string
     rule_mode: string
@@ -240,6 +242,7 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
                 />
               </p>
               <p class="text-sm">BP {{ selfBestEntry.score.bp }}</p>
+              <p class="text-sm">CB {{ selfBestEntry.score.cb ?? '-' }}</p>
             </div>
             <p class="mt-1 text-xs text-neutral-500">
               <template v-if="lnPolicies.length"
@@ -290,7 +293,8 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
                 <th class="px-3 py-2">RULE</th>
                 <th class="px-3 py-2">OPTION</th>
                 <th class="px-3 py-2 text-right whitespace-nowrap">MAX COMBO</th>
-                <th class="px-3 py-2 text-right">BP</th>
+                <th class="px-2 py-2 text-right">BP</th>
+                <th class="px-2 py-2 text-right">CB</th>
                 <th class="px-3 py-2">{{ t('table.date') }}</th>
               </tr>
             </thead>
@@ -326,7 +330,8 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
                     :total-notes="totalNotesFromMaxExScore(entry.score.max_ex_score)"
                   />
                 </td>
-                <td class="px-3 py-2 text-right">{{ entry.score.bp }}</td>
+                <td class="px-2 py-2 text-right tabular-nums">{{ entry.score.bp }}</td>
+                <td class="px-2 py-2 text-right tabular-nums">{{ entry.score.cb ?? '-' }}</td>
                 <td class="px-3 py-2 text-neutral-400">
                   {{ formatScoreDate(entry.score.played_at) }}
                 </td>
@@ -344,6 +349,7 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
           :limit="historyLimit"
           :score-key="(score) => score.course_score_id"
           :score-bp="(score) => score.bp"
+          :score-cb="(score) => score.cb"
           :show-ln="Boolean(lnPolicies.length)"
           :score-option="scoreOption"
         />

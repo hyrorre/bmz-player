@@ -7,6 +7,7 @@ import { clampInteger } from '../../../../services/ir/common'
 import { isPublicCourse, publicPlayerCondition } from '../../../../services/moderation/visibility'
 import { resolveIrUser } from '../../../../utils/auth'
 import {
+  courseComboBreaks,
   fetchCourseRankingRows,
   rankCourseRows,
   type RankedCourseRow,
@@ -71,6 +72,7 @@ export default defineEventHandler(async (event) => {
             id: schema.courseScores.id,
             display_name: schema.profiles.displayName,
             arrange_options: schema.courseScores.arrangeOptions,
+            judges: schema.courseScores.judges,
           })
           .from(schema.courseScores)
           .leftJoin(schema.profiles, eq(schema.profiles.id, schema.courseScores.playerId))
@@ -94,6 +96,7 @@ export default defineEventHandler(async (event) => {
       max_ex_score: row.max_ex_score,
       max_combo: row.max_combo,
       bp: row.bp,
+      cb: courseComboBreaks(row.bp, detailsById.get(row.course_score_id)?.judges),
       device_type: row.device_type,
       ln_policy: row.ln_policy,
       rule_mode: row.rule_mode,

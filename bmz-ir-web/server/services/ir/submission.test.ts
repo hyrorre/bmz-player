@@ -45,7 +45,8 @@ const { getRanking, getRankingWithPreviousRank } = await import('./ranking')
 const { IrIdempotencyCollisionError } = await import('./idempotency')
 const { submitCourseScore, computeCourseHash, validateCourseScoreSubmission } =
   await import('../course_ir')
-const { fetchCourseRankingRows, rankCourseRows } = await import('../course_ranking')
+const { courseComboBreaks, fetchCourseRankingRows, rankCourseRows } =
+  await import('../course_ranking')
 const migrations = new URL('../../../../server/db/migrations/sqlite/', import.meta.url)
 for (const name of (await readdir(migrations)).filter((name) => name.endsWith('.sql')).sort()) {
   await client.executeMultiple(await readFile(new URL(name, migrations), 'utf8'))
@@ -270,6 +271,13 @@ test('course ranking reads recorded arrangements and accepts retries of legacy s
     course_score_id: submitted.course_score_id,
   })
   expect((await db.select().from(schema.courseScores))[0]?.arrangeOptions).toEqual([])
+})
+
+test('course CB retains unplayed notes and excludes only recorded empty POORs', () => {
+  expect(courseComboBreaks(275, { bad: 0, poor: 13, empty_poor: 2 })).toBe(273)
+  expect(courseComboBreaks(2, { empty_poor: 2 })).toBe(0)
+  expect(courseComboBreaks(5, {})).toBeNull()
+  expect(courseComboBreaks(5, { empty_poor: 6 })).toBeNull()
 })
 
 test.each([false, true])(

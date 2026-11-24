@@ -12,6 +12,7 @@ interface ScoreDetail {
     max_combo: number
     notes: number
     min_bp: number
+    min_cb: number
     gauge: string
     ln_policy: string
     rule_mode: string
@@ -121,9 +122,15 @@ useSeoMeta({ title: () => t('score.title') })
               <RankingMaxCombo :combo="data.score.max_combo" :total-notes="data.score.notes" />
             </p>
           </div>
-          <div class="rounded-lg border border-neutral-800 p-4">
-            <p class="text-xs text-neutral-500">BP</p>
-            <p class="text-2xl font-semibold">{{ data.score.min_bp }}</p>
+          <div class="flex flex-wrap gap-x-4 gap-y-1 rounded-lg border border-neutral-800 p-4">
+            <div>
+              <p class="text-xs text-neutral-500">BP</p>
+              <p class="text-xl font-semibold tabular-nums sm:text-2xl">{{ data.score.min_bp }}</p>
+            </div>
+            <div>
+              <p class="text-xs text-neutral-500">CB</p>
+              <p class="text-xl font-semibold tabular-nums sm:text-2xl">{{ data.score.min_cb }}</p>
+            </div>
           </div>
         </div>
 

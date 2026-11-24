@@ -8,6 +8,7 @@ defineProps<{
   limit: number
   scoreKey: (score: T) => string
   scoreBp: (score: T) => number
+  scoreCb: (score: T) => number | null
   scoreDetailId?: (score: T) => string
   showLn: boolean
   scoreOption: (score: T) => string
@@ -46,7 +47,8 @@ function formatScoreDate(value: string | null) {
               <th class="px-3 py-2">RULE</th>
               <th class="px-3 py-2">OPTION</th>
               <th class="px-3 py-2 text-right whitespace-nowrap">MAX COMBO</th>
-              <th class="px-3 py-2 text-right">BP</th>
+              <th class="px-2 py-2 text-right">BP</th>
+              <th class="px-2 py-2 text-right">CB</th>
               <th
                 v-if="scoreDetailId"
                 scope="col"
@@ -80,7 +82,8 @@ function formatScoreDate(value: string | null) {
                     :total-notes="totalNotesFromMaxExScore(score.max_ex_score)"
                   />
                 </td>
-                <td class="px-3 py-2 text-right">{{ scoreBp(score) }}</td>
+                <td class="px-2 py-2 text-right tabular-nums">{{ scoreBp(score) }}</td>
+                <td class="px-2 py-2 text-right tabular-nums">{{ scoreCb(score) ?? '-' }}</td>
                 <td v-if="scoreDetailId" class="sticky right-0 z-10 bg-default px-1 py-1">
                   <ScoreDetailToggle
                     :expanded="expandedScoreRow === scoreKey(score)"
@@ -93,7 +96,7 @@ function formatScoreDate(value: string | null) {
                 v-if="scoreDetailId && expandedScoreRow === scoreKey(score)"
                 class="border-t border-default bg-elevated"
               >
-                <td :colspan="showLn ? 10 : 9">
+                <td :colspan="showLn ? 11 : 10">
                   <ScoreInlineDetails :id="scoreDetailsId" :score-id="scoreDetailId(score)" />
                 </td>
               </tr>

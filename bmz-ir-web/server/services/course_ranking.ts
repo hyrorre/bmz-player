@@ -1,6 +1,17 @@
 import { and, asc, desc, eq, sql, type SQL } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
 
+/** Course BP includes empty POORs and unplayed notes. CB excludes only empty POORs. */
+export function courseComboBreaks(bp: number, judges?: Record<string, unknown>) {
+  const emptyPoor = judges?.empty_poor
+  return typeof emptyPoor === 'number' &&
+    Number.isSafeInteger(emptyPoor) &&
+    emptyPoor >= 0 &&
+    emptyPoor <= bp
+    ? bp - emptyPoor
+    : null
+}
+
 /** player 単位の best 行を順位順に返す。limit 省略時は全行。 */
 export async function fetchCourseRankingRows(conditions: SQL[], limit?: number) {
   const scores = schema.courseScores

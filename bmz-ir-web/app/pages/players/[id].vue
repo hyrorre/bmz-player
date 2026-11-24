@@ -28,6 +28,7 @@ interface PlayerDetail {
     max_combo: number
     max_combo_notes: number | null
     min_bp: number
+    min_cb: number
     device_type: string
     ln_policy: string
     rule_mode: string
@@ -229,7 +230,8 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
                 <th class="px-3 py-2">RULE</th>
                 <th class="px-3 py-2">OPTION</th>
                 <th class="px-3 py-2 text-right whitespace-nowrap">MAX COMBO</th>
-                <th class="px-3 py-2 text-right">BP</th>
+                <th class="px-2 py-2 text-right">BP</th>
+                <th class="px-2 py-2 text-right">CB</th>
                 <th class="px-3 py-2">{{ t('table.input') }}</th>
                 <th class="px-3 py-2">{{ t('table.date') }}</th>
                 <th scope="col" class="sticky right-0 z-10 w-px bg-elevated px-1">
@@ -281,7 +283,8 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
                       :total-notes="score.max_combo_notes"
                     />
                   </td>
-                  <td class="px-3 py-2 text-right">{{ score.min_bp }}</td>
+                  <td class="px-2 py-2 text-right tabular-nums">{{ score.min_bp }}</td>
+                  <td class="px-2 py-2 text-right tabular-nums">{{ score.min_cb }}</td>
                   <td class="px-3 py-2 text-muted">{{ score.device_type }}</td>
                   <td class="px-3 py-2 whitespace-nowrap text-muted">
                     {{ formatDateTime(score.played_at ?? score.server_received_at) }}
@@ -298,7 +301,7 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
                   v-if="expandedScoreRow === score.id"
                   class="border-t border-default bg-elevated"
                 >
-                  <td :colspan="lnPolicies.length ? 12 : 11">
+                  <td :colspan="lnPolicies.length ? 13 : 12">
                     <ScoreInlineDetails
                       :id="scoreDetailsId"
                       :score-id="score.best_ex_score_id ?? score.score_id"
