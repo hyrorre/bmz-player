@@ -71,6 +71,8 @@ export default defineEventHandler(async (event) => {
           .select({
             id: schema.courseScores.id,
             display_name: schema.profiles.displayName,
+            client_name: schema.courseScores.clientName,
+            client_version: schema.courseScores.clientVersion,
             arrange_options: schema.courseScores.arrangeOptions,
             judges: schema.courseScores.judges,
           })
@@ -82,33 +84,38 @@ export default defineEventHandler(async (event) => {
       : []
   const detailsById = new Map(details.map((detail) => [detail.id, detail]))
 
-  const toEntry = ({ rank, row }: RankedCourseRow) => ({
-    rank,
-    player: {
-      id: row.player_id,
-      display_name: detailsById.get(row.course_score_id)?.display_name || 'Player',
-    },
-    score: {
-      course_score_id: row.course_score_id,
-      clear: row.clear_type,
-      course_clear: row.course_clear,
-      ex_score: row.ex_score,
-      max_ex_score: row.max_ex_score,
-      max_combo: row.max_combo,
-      bp: row.bp,
-      cb: courseComboBreaks(row.bp, detailsById.get(row.course_score_id)?.judges),
-      device_type: row.device_type,
-      ln_policy: row.ln_policy,
-      rule_mode: row.rule_mode,
-      arrange_options: detailsById.get(row.course_score_id)?.arrange_options ?? [],
-      played_at: row.played_at,
-      verification: row.verification,
-    },
-    relation: {
-      is_self: row.player_id === user?.id,
-      is_rival: false,
-    },
-  })
+  const toEntry = ({ rank, row }: RankedCourseRow) => {
+    const detail = detailsById.get(row.course_score_id)
+    return {
+      rank,
+      player: {
+        id: row.player_id,
+        display_name: detail?.display_name || 'Player',
+      },
+      score: {
+        course_score_id: row.course_score_id,
+        client_name: detail?.client_name ?? null,
+        client_version: detail?.client_version ?? null,
+        clear: row.clear_type,
+        course_clear: row.course_clear,
+        ex_score: row.ex_score,
+        max_ex_score: row.max_ex_score,
+        max_combo: row.max_combo,
+        bp: row.bp,
+        cb: courseComboBreaks(row.bp, detail?.judges),
+        device_type: row.device_type,
+        ln_policy: row.ln_policy,
+        rule_mode: row.rule_mode,
+        arrange_options: detail?.arrange_options ?? [],
+        played_at: row.played_at,
+        verification: row.verification,
+      },
+      relation: {
+        is_self: row.player_id === user?.id,
+        is_rival: false,
+      },
+    }
+  }
   const entries = ranked.entries.map(toEntry)
   const selfEntry = ranked.self ? toEntry(ranked.self) : undefined
 

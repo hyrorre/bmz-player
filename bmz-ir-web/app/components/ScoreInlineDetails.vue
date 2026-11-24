@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { IrJudges } from '../../shared/types/ir'
-import type { ScoreReplay } from '../types/scoreDetails'
+import type { ScoreClient, ScoreReplay } from '../types/scoreDetails'
 
 const props = defineProps<{
   scoreId: string
@@ -23,7 +23,7 @@ const activeScoreId = computed(() =>
   selectedScore.value === props.otherScoreId ? selectedScore.value : props.scoreId,
 )
 const { data, status, error, refresh } = useFetch<{
-  score: { id: string; judges: Partial<IrJudges> | null }
+  score: ScoreClient & { id: string; judges: Partial<IrJudges> | null }
   replay: ScoreReplay | null
 }>(() => `/api/v1/scores/${encodeURIComponent(activeScoreId.value)}`, { lazy: true })
 const detail = computed(() => (data.value?.score.id === activeScoreId.value ? data.value : null))
@@ -59,6 +59,7 @@ const detail = computed(() => (data.value?.score.id === activeScoreId.value ? da
       :score-id="detail.score.id"
       :judges="detail.score.judges"
       :replay="detail.replay"
+      :client="detail.score"
     />
     <p v-else role="status" class="text-sm text-muted">{{ t('common.loading') }}</p>
   </div>

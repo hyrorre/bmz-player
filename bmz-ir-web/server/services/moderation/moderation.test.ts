@@ -104,6 +104,8 @@ const scoreDetailHandler = (await import('../../api/v1/scores/[id]/index.get')).
 const replayHandler = (await import('../../api/v1/scores/[id]/replay/index.get')).default as Handler
 const courseRankingHandler = (await import('../../api/v1/courses/[hash]/ranking.get'))
   .default as Handler
+const courseSelfScoresHandler = (await import('../../api/v1/courses/[hash]/self-scores.get'))
+  .default as Handler
 const coursesIndexHandler = (await import('../../api/v1/courses/index.get')).default as Handler
 const courseDetailHandler = (await import('../../api/v1/courses/[hash]/index.get'))
   .default as Handler
@@ -1517,6 +1519,40 @@ function coursePayload(charts: string[], key: string, exScore = 100) {
 }
 
 describe('rankings, courses, and aggregates', () => {
+  test('course rankings and self history return the client version of each score', async () => {
+    const charts = [CHART_A, CHART_B]
+    const bestPayload = coursePayload(charts, 'best-attempt', 300)
+    bestPayload.client.version = '0.5.3'
+    const best = await submitCourseScore({ id: 'alice' }, bestPayload)
+    const newerPayload = coursePayload(charts, 'another-attempt', 200)
+    newerPayload.client.version = '0.5.4'
+    const newer = await submitCourseScore({ id: 'alice' }, newerPayload)
+    const hash = bestPayload.course.course_hash
+
+    const ranking = await courseRankingHandler(
+      event({ path: `/api/v1/courses/${hash}/ranking`, params: { hash } }),
+    )
+    expect(ranking.ranking.entries[0].score).toMatchObject({
+      course_score_id: best.course_score_id,
+      client_name: 'BMZ',
+      client_version: '0.5.3',
+    })
+
+    const { accessToken: token } = await createAuthTokens('alice')
+    const history = await courseSelfScoresHandler(
+      event({ path: `/api/v1/courses/${hash}/self-scores`, params: { hash }, token }),
+    )
+    expect(history.scores).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ course_score_id: best.course_score_id, client_version: '0.5.3' }),
+        expect.objectContaining({
+          course_score_id: newer.course_score_id,
+          client_version: '0.5.4',
+        }),
+      ]),
+    )
+  })
+
   test('difficulty table options use the active generation and preserve the level order', async () => {
     await db.insert(schema.difficultyTables).values([
       {

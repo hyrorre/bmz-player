@@ -114,6 +114,7 @@ const ja = {
     },
     score: {
       title: 'スコア詳細',
+      clientVersion: '送信時のバージョン',
       bestEx: 'EXスコアベスト',
       bestClear: 'クリアベスト',
       retry: '再試行',
@@ -359,6 +360,7 @@ const en = {
     },
     score: {
       title: 'Score details',
+      clientVersion: 'Client version at submission',
       bestEx: 'Best EX score',
       bestClear: 'Best clear',
       retry: 'Retry',
@@ -605,6 +607,7 @@ const ko = {
     },
     score: {
       title: '스코어 상세',
+      clientVersion: '전송 시 버전',
       bestEx: '최고 EX 스코어',
       bestClear: '최고 클리어',
       retry: '다시 시도',
@@ -846,6 +849,7 @@ const zhCN = {
     },
     score: {
       title: '成绩详情',
+      clientVersion: '提交时的版本',
       bestEx: '最高 EX 分数',
       bestClear: '最佳通关',
       retry: '重试',
@@ -1086,6 +1090,7 @@ const zhTW = {
     },
     score: {
       title: '成績詳情',
+      clientVersion: '提交時的版本',
       bestEx: '最高 EX 分數',
       bestClear: '最佳通關',
       retry: '重試',

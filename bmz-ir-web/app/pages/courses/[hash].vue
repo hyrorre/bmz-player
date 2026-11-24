@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { IrArrangeOptions, IrChartLnProfile, IrRanking } from '../../../shared/types/ir'
+import type { ScoreClient } from '../../types/scoreDetails'
 
 interface CourseDetail {
   course: {
@@ -25,7 +26,7 @@ interface CourseDetail {
 interface CourseRankingEntry {
   rank: number
   player: { id: string; display_name: string }
-  score: {
+  score: ScoreClient & {
     course_score_id: string
     clear: string
     course_clear: boolean
@@ -58,7 +59,7 @@ interface CourseRanking {
 }
 
 interface CourseSelfScoresResult {
-  scores: {
+  scores: (ScoreClient & {
     course_score_id: string
     clear: string
     course_clear: boolean
@@ -75,7 +76,7 @@ interface CourseSelfScoresResult {
     played_at: string | null
     server_received_at: string
     verification: string
-  }[]
+  })[]
   pagination: {
     limit: number
     offset: number
@@ -367,6 +368,7 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
                       :id="scoreDetailsId"
                       :device="entry.score.device_type"
                       :date="entry.score.played_at"
+                      :client="entry.score"
                       class="sticky left-0 w-fit max-w-[calc(100vw-3rem)] px-3 py-3"
                     />
                   </td>

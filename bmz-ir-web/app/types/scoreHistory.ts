@@ -1,5 +1,7 @@
+import type { ScoreClient } from './scoreDetails'
+
 /** Fields shared by chart and course history rows. IDs and BP stay page-specific. */
-export interface HistoryScore {
+export interface HistoryScore extends Partial<ScoreClient> {
   played_at: string | null
   server_received_at: string
   ex_score: number

@@ -52,6 +52,8 @@ export default defineEventHandler(async (event) => {
     db
       .select({
         course_score_id: schema.courseScores.id,
+        client_name: schema.courseScores.clientName,
+        client_version: schema.courseScores.clientVersion,
         clear: schema.courseScores.clearType,
         course_clear: schema.courseScores.courseClear,
         ex_score: schema.courseScores.exScore,

@@ -5,6 +5,7 @@ import type {
   IrRuleMode,
   LnScorePolicy,
 } from '../../shared/types/ir'
+import type { ScoreClient } from '../types/scoreDetails'
 
 const lnLabels: Record<LnScorePolicy, string> = {
   ForceLn: 'LN',
@@ -104,6 +105,14 @@ export function formatCourseArrange(
 
 export function totalNotesFromMaxExScore(max: number | null | undefined) {
   return max != null && max > 0 && max % 2 === 0 ? max / 2 : null
+}
+
+export function formatScoreClientVersion(client?: Partial<ScoreClient> | null) {
+  const version = client?.client_version?.trim()
+  if (!version) return ''
+  const name = client?.client_name?.trim()
+  const displayName = name && /^(bmz|bmz[ -]player)$/i.test(name) ? 'bmz-player' : name
+  return [displayName, version].filter(Boolean).join(' ')
 }
 
 // Match the ceil-based grade borders and nearest-grade display in BMZ Player.

@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import type { IrJudges } from '../../shared/types/ir'
-import type { ScoreReplay } from '../types/scoreDetails'
+import type { ScoreClient, ScoreReplay } from '../types/scoreDetails'
+import { formatScoreClientVersion } from '../utils/rankingDisplay'
 
 const props = defineProps<{
   scoreId: string
   judges?: Partial<IrJudges> | null
   replay?: ScoreReplay | null
+  client?: ScoreClient | null
 }>()
 const { t } = useI18n()
 const { formatNumber } = useLocaleFormat()
@@ -44,6 +46,7 @@ const judgeRows = computed(() =>
 const replayAvailable = computed(() =>
   ['uploaded', 'verified'].includes(props.replay?.status ?? ''),
 )
+const clientVersion = computed(() => formatScoreClientVersion(props.client))
 
 async function downloadReplay() {
   if (downloading.value) return
@@ -116,6 +119,7 @@ async function downloadReplay() {
         <UAlert v-if="replayError" role="alert" color="error" :description="replayError" />
       </template>
       <p v-else class="text-sm text-muted">{{ t('score.noReplay') }}</p>
+      <p v-if="clientVersion" class="text-xs wrap-anywhere text-muted">{{ clientVersion }}</p>
     </section>
   </div>
 </template>

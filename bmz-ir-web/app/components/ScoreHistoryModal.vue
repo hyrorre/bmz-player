@@ -106,6 +106,7 @@ watch([open, page], () => {
                     :id="scoreDetailsId"
                     :device="score.device_type"
                     :date="score.played_at ?? score.server_received_at"
+                    :client="score"
                     class="sticky left-0 w-fit max-w-[calc(100vw-5rem)] px-3 py-3"
                   />
                 </td>

@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import {
   formatCourseArrange,
   formatRankingArrange,
+  formatScoreClientVersion,
   lnFilterItems,
   rankingScoreDisplay,
 } from '../app/utils/rankingDisplay'
@@ -41,6 +42,19 @@ test('formats the nearest grade border separately from the achieved grade', () =
   expect(rankingScoreDisplay(6069, 6828)).toMatchObject({ grade: 'AA', difference: 'AAA-1' })
   expect(rankingScoreDisplay(6828, 6828)).toMatchObject({ grade: 'MAX', difference: 'MAX+0' })
   expect(rankingScoreDisplay(99, null)).toBeNull()
+})
+
+test('shows BMZ score versions with the bmz-player name', () => {
+  expect(formatScoreClientVersion({ client_name: 'BMZ', client_version: '0.5.4' })).toBe(
+    'bmz-player 0.5.4',
+  )
+  expect(formatScoreClientVersion({ client_name: 'bmz', client_version: '0.5.3' })).toBe(
+    'bmz-player 0.5.3',
+  )
+  expect(formatScoreClientVersion({ client_name: 'Other Player', client_version: '1.0' })).toBe(
+    'Other Player 1.0',
+  )
+  expect(formatScoreClientVersion({ client_name: 'BMZ', client_version: null })).toBe('')
 })
 
 test('displays two sides for DP and keeps known course options in chart order', () => {
