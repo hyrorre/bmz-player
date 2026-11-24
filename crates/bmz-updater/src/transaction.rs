@@ -35,13 +35,27 @@ pub fn active_path(root: &Path) -> PathBuf {
 pub fn pending_update(root: &Path) -> Result<Option<PathBuf>> {
     let mut pending = None;
     for directory in [crate::WORK_DIR, crate::LEGACY_WORK_DIR] {
-        let path = checked_path(root, &format!("{directory}/active.json"))?;
-        if path.try_exists()? {
+        if let Some(path) = pending_update_in(root, directory)? {
             ensure!(pending.is_none(), "multiple unfinished updates; recovery is ambiguous");
             pending = Some(path);
         }
     }
     Ok(pending)
+}
+
+pub(crate) fn pending_update_in(root: &Path, directory: &str) -> Result<Option<PathBuf>> {
+    let result = checked_path(root, &format!("{directory}/active.json"))
+        .and_then(|path| Ok(path.try_exists()?.then_some(path)));
+    #[cfg(windows)]
+    if directory == crate::LEGACY_WORK_DIR
+        && result.as_ref().err().and_then(|error| error.downcast_ref()).is_some_and(|error| {
+            crate::windows_path::gone_or_deleting(&root.join(directory), error)
+        })
+    {
+        // Cleanup only removes the old directory when it is empty.
+        return Ok(None);
+    }
+    result
 }
 
 pub fn new_work_dir(root: &Path) -> Result<PathBuf> {

@@ -4,13 +4,21 @@ use crate::{
     manifest::{PackageKind, PackageManifest},
     process::{instance_guard, lock_file, update_guards},
 };
+use std::os::windows::ffi::OsStrExt;
+use windows_sys::Win32::{
+    Foundation::ERROR_ACCESS_DENIED, Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS,
+};
 
 const OLD_BACKUP: &str = ".bmz-update/job-finished/backup/0";
 const MOVED_BACKUP: &str = "updater/legacy-backups/job-finished/backup/0";
 
 fn fixture() -> tempfile::TempDir {
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
+    write_fixture(temp.path());
+    temp
+}
+
+fn write_fixture(root: &Path) {
     crate::manifest::write_test_package(
         root,
         env!("CARGO_PKG_VERSION"),
@@ -22,7 +30,6 @@ fn fixture() -> tempfile::TempDir {
     fs::write(root.join(OLD_BACKUP), b"previous file").unwrap();
     fs::write(root.join(".bmz-update/job-finished/result.json"), b"{}").unwrap();
     fs::write(root.join(".bmz-update/job-finished/update.log"), b"finished").unwrap();
-    temp
 }
 
 fn assert_legacy_kept(root: &Path) {
@@ -144,7 +151,8 @@ fn cleanup_error_leaves_modern_locks_available_to_other_launches_and_the_helper(
         update.unlock().unwrap();
     }
     assert_eq!(fs::read(legacy_update).unwrap(), b"unexpected lock contents");
-    assert_legacy_kept(root);
+    assert!(!root.join(LEGACY_INSTANCE_LOCK).exists());
+    assert_eq!(fs::read(root.join(MOVED_BACKUP)).unwrap(), b"previous file");
 }
 
 #[test]
@@ -222,7 +230,7 @@ fn old_layout_markers_and_other_package_types_skip_cleanup() {
 }
 
 #[test]
-fn readonly_and_nonempty_locks_are_preserved_and_reported() {
+fn readonly_and_nonempty_locks_are_preserved_while_backups_move() {
     for readonly in [false, true] {
         let temp = fixture();
         let root = temp.path();
@@ -235,11 +243,18 @@ fn readonly_and_nonempty_locks_are_preserved_and_reported() {
         } else {
             fs::write(&path, b"not an empty lock").unwrap();
         }
+        let open_lock = File::open(&path).unwrap();
+        assert!(instance_guard(root).unwrap().cleanup_error.is_none());
+        assert_legacy_kept(root);
+        drop(open_lock);
+
         let guard = instance_guard(root).unwrap();
         assert!(
             format!("{:#}", guard.cleanup_error.as_ref().unwrap()).contains(LEGACY_INSTANCE_LOCK)
         );
-        assert_legacy_kept(root);
+        assert!(!root.join(LEGACY_UPDATE_LOCK).exists());
+        assert!(!root.join(LEGACY_WORK_DIR).exists());
+        assert_eq!(fs::read(root.join(MOVED_BACKUP)).unwrap(), b"previous file");
         drop(guard);
         if readonly {
             assert!(fs::metadata(&path).unwrap().permissions().readonly());
@@ -251,19 +266,111 @@ fn readonly_and_nonempty_locks_are_preserved_and_reported() {
 }
 
 #[test]
+fn the_helper_can_exclusively_lock_both_read_only_legacy_files() {
+    let temp = fixture();
+    let root = temp.path();
+    let paths = [root.join(LEGACY_INSTANCE_LOCK), root.join(LEGACY_UPDATE_LOCK)];
+    let original = paths.each_ref().map(|path| fs::metadata(path).unwrap().permissions());
+    for (path, permissions) in paths.iter().zip(&original) {
+        let mut read_only = permissions.clone();
+        read_only.set_readonly(true);
+        fs::set_permissions(path, read_only).unwrap();
+    }
+    let result = update_guards(root).and_then(|(updates, instances)| {
+        assert_eq!(updates.len(), 2);
+        assert_eq!(instances.len(), 2);
+        instances[1].try_lock()?;
+        instances[1].unlock()?;
+        Ok(())
+    });
+    for (path, permissions) in paths.iter().zip(original) {
+        assert!(fs::metadata(path).unwrap().permissions().readonly());
+        fs::set_permissions(path, permissions).unwrap();
+    }
+    result.unwrap();
+}
+
+#[test]
+fn cleanup_reports_a_delete_permission_denial() {
+    let temp = fixture();
+    let root = temp.path();
+    let path = root.join(LEGACY_UPDATE_LOCK);
+    let change_acl = |args: [&str; 2]| {
+        let output = std::process::Command::new("icacls").arg(&path).args(args).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+    };
+    change_acl(["/deny", "*S-1-1-0:(D)"]);
+    let guard = instance_guard(root);
+    let attempts = std::cell::Cell::new(0);
+    let result = retry_legacy_open(&path, || {
+        attempts.set(attempts.get() + 1);
+        Ok(Some(File::options().access_mode(GENERIC_READ | DELETE).open(&path)?))
+    });
+    change_acl(["/remove:d", "*S-1-1-0"]);
+
+    let error = guard.unwrap().cleanup_error.unwrap();
+    assert!(format!("{error:#}").contains(LEGACY_UPDATE_LOCK));
+    assert_eq!(error.downcast_ref::<io::Error>().unwrap().kind(), io::ErrorKind::PermissionDenied);
+    assert!(result.is_err());
+    assert_eq!(attempts.get(), 1);
+    assert_legacy_kept(root);
+}
+
+#[test]
 fn a_backup_directory_created_after_the_scan_is_not_replaced() {
     let temp = fixture();
     let root = temp.path();
-    let (jobs, _) = completed_jobs(root, &root.join(LEGACY_WORK_DIR)).unwrap();
-    let [(source, backup)] = jobs.as_slice() else { panic!("expected one completed job") };
+    let work = root.join(LEGACY_WORK_DIR);
+    let (jobs, empty_work) = completed_jobs(root, &work).unwrap();
+    let [(_, backup)] = jobs.as_slice() else { panic!("expected one completed job") };
     fs::create_dir_all(backup).unwrap();
-    assert!(move_job(source, backup).is_err());
-    assert!(backup.is_dir());
+    fs::write(backup.join("sentinel"), b"existing directory").unwrap();
+    finish_jobs(&work, jobs, empty_work).unwrap();
+    assert_eq!(
+        fs::read(root.join("updater/legacy-backups/job-finished/sentinel")).unwrap(),
+        b"existing directory"
+    );
     assert_eq!(fs::read(root.join(OLD_BACKUP)).unwrap(), b"previous file");
 }
 
 #[test]
-fn legacy_lock_reparse_point_is_preserved_and_reported() {
+fn a_concurrent_cleaner_can_move_a_job_and_leave_the_old_directory_delete_pending() {
+    let temp = fixture();
+    let root = temp.path();
+    let work = root.join(LEGACY_WORK_DIR);
+    let (jobs, empty_work) = completed_jobs(root, &work).unwrap();
+    let [(source, backup)] = jobs.as_slice() else { panic!("expected one completed job") };
+    fs::create_dir_all(backup.parent().unwrap()).unwrap();
+    fs::rename(source, backup).unwrap();
+    let directory = File::options()
+        .access_mode(DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(&work)
+        .unwrap();
+    set_delete_disposition(&directory, true).unwrap();
+    assert_eq!(fs::remove_dir(&work).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    finish_jobs(&work, jobs, empty_work).unwrap();
+    assert!(instance_guard(root).unwrap().cleanup_error.is_none());
+    assert!(update_guards(root).is_ok());
+    drop(directory);
+    assert!(!work.exists());
+    assert_eq!(fs::read(root.join(MOVED_BACKUP)).unwrap(), b"previous file");
+}
+
+#[test]
+fn completed_jobs_move_when_the_destination_exceeds_win32_max_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("a".repeat(110)).join("b".repeat(110));
+    assert!(root.join(MOVED_BACKUP).as_os_str().encode_wide().count() > 260);
+    fs::create_dir_all(&root).unwrap();
+    write_fixture(&root.canonicalize().unwrap());
+    assert!(instance_guard(&root).unwrap().cleanup_error.is_none());
+    assert!(!root.join(LEGACY_WORK_DIR).exists());
+    assert_eq!(fs::read(root.join(MOVED_BACKUP)).unwrap(), b"previous file");
+}
+
+#[test]
+fn legacy_lock_reparse_point_is_preserved_while_backups_move() {
     let temp = fixture();
     let root = temp.path();
     let path = root.join(LEGACY_UPDATE_LOCK);
@@ -284,9 +391,9 @@ fn legacy_lock_reparse_point_is_preserved_and_reported() {
     let error = format!("{:#}", guard.cleanup_error.as_ref().unwrap());
     assert!(error.contains("reparse point") || error.contains("symlink"), "{error}");
     assert!(path.is_dir());
-    assert!(root.join(LEGACY_INSTANCE_LOCK).is_file());
-    assert!(root.join(OLD_BACKUP).is_file());
-    assert!(!root.join(MOVED_BACKUP).exists());
+    assert!(!root.join(LEGACY_INSTANCE_LOCK).exists());
+    assert!(!root.join(LEGACY_WORK_DIR).exists());
+    assert_eq!(fs::read(root.join(MOVED_BACKUP)).unwrap(), b"previous file");
     assert_eq!(fs::read(target.path().join("sentinel")).unwrap(), b"outside");
 }
 

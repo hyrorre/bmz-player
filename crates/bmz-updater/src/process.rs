@@ -77,12 +77,8 @@ pub fn instance_guard(root: &Path) -> Result<InstanceGuard> {
     #[cfg(not(windows))]
     let cleanup_error = None;
 
-    let old_instance = open_legacy_lock(root, crate::LEGACY_INSTANCE_LOCK, false, false)?;
+    let old_instance = open_legacy_lock(root, crate::LEGACY_INSTANCE_LOCK, legacy)?;
     if let Some(file) = old_instance {
-        file.try_lock_shared().context("BMZ is being updated")?;
-        guards.push(file);
-    } else if legacy {
-        let file = lock_file(root, crate::LEGACY_INSTANCE_LOCK)?;
         file.try_lock_shared().context("BMZ is being updated")?;
         guards.push(file);
     }
@@ -93,17 +89,29 @@ pub fn instance_guard(root: &Path) -> Result<InstanceGuard> {
     Ok(InstanceGuard { _locks: guards, cleanup_error })
 }
 
-fn open_legacy_lock(root: &Path, name: &str, write: bool, create: bool) -> Result<Option<File>> {
+fn open_legacy_lock(root: &Path, name: &str, create: bool) -> Result<Option<File>> {
     let open = || -> Result<Option<File>> {
         let path = checked_path(root, name)?;
-        match File::options().read(true).write(write).create(create).truncate(false).open(path) {
+        // Windows can take an exclusive byte-range lock on a read-only handle.
+        match File::open(&path) {
             Ok(file) => Ok(Some(file)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound && !create => Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if !create {
+                    return Ok(None);
+                }
+                match File::options().read(true).write(true).create_new(true).open(&path) {
+                    Ok(file) => Ok(Some(file)),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        Ok(Some(File::open(checked_path(root, name)?)?))
+                    }
+                    Err(error) => Err(error.into()),
+                }
+            }
             Err(error) => Err(error.into()),
         }
     };
     #[cfg(windows)]
-    let result = legacy_cleanup::retry_legacy_open(open);
+    let result = legacy_cleanup::retry_legacy_open(&root.join(name), open);
     #[cfg(not(windows))]
     let result = open();
     result.with_context(|| format!("could not open {name}"))
@@ -113,12 +121,12 @@ fn update_guards(root: &Path) -> Result<(Vec<File>, Vec<File>)> {
     let update = lock_file(root, crate::UPDATE_LOCK)?;
     update.try_lock().context("another updater is running")?;
     let legacy = checked_path(root, crate::LEGACY_MANIFEST)?.try_exists()?
-        || checked_path(root, &format!("{}/active.json", crate::LEGACY_WORK_DIR))?.try_exists()?;
+        || transaction::pending_update_in(root, crate::LEGACY_WORK_DIR)?.is_some();
     // Keep any existing legacy instance handle open before deciding whether to create its peer.
-    let old_instance = open_legacy_lock(root, crate::LEGACY_INSTANCE_LOCK, true, legacy)?;
+    let old_instance = open_legacy_lock(root, crate::LEGACY_INSTANCE_LOCK, legacy)?;
     let mut updates = vec![update];
     if let Some(lock) =
-        open_legacy_lock(root, crate::LEGACY_UPDATE_LOCK, true, legacy || old_instance.is_some())?
+        open_legacy_lock(root, crate::LEGACY_UPDATE_LOCK, legacy || old_instance.is_some())?
     {
         lock.try_lock().context("another updater is running")?;
         updates.push(lock);

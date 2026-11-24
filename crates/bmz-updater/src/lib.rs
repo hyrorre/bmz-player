@@ -5,6 +5,8 @@ pub mod manifest;
 pub mod process;
 pub mod release;
 pub mod transaction;
+#[cfg(windows)]
+mod windows_path;
 
 pub const PROTOCOL: u32 = 4;
 pub const MANIFEST: &str = "updater/bmz-package.json";
