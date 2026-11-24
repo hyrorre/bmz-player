@@ -6,7 +6,7 @@ name: Release Apps
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag, or Git ref for a Windows-only test
+        description: Release tag, or Git ref for a build without publishing
         required: true
         type: string
       upload_to_release:
@@ -86,7 +86,7 @@ jobs:
             echo "failed to read workspace version from Cargo.toml" >&2
             exit 1
           fi
-          if [[ "${WINDOWS_ONLY}" == "true" ]]; then
+          if [[ "${WINDOWS_ONLY}" == "true" || ( "${EVENT_NAME}" == "workflow_dispatch" && "${INPUT_UPLOAD}" != "true" ) ]]; then
             tag="v${cargo_version}"
             version="${cargo_version}"
           fi
@@ -127,7 +127,8 @@ jobs:
       BMZ_WINDOWS_TARGET: x86_64-win7-windows-msvc
       VCPKG_DEFAULT_TRIPLET: x64-windows-release
       VCPKGRS_TRIPLET: x64-windows-release
-      VCPKG_ROOT: C:\vcpkg
+      VCPKG_ROOT: C:\bmz-vcpkg
+      BMZ_VCPKG_COMMIT: 2f8bf7a5bad48aaef99d80b221fca712f016ab8f
       VCPKGRS_DYNAMIC: 1
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
     steps:
@@ -154,9 +155,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: release-windows-win7-${{ env.RUSTUP_TOOLCHAIN }}-${{ hashFiles('Cargo.lock', 'triplets/x64-windows-release.cmake') }}
+          key: release-windows-win7-${{ env.RUSTUP_TOOLCHAIN }}-${{ env.BMZ_VCPKG_COMMIT }}-${{ hashFiles('Cargo.lock', 'triplets/x64-windows-release.cmake') }}
           restore-keys: |
-            release-windows-win7-${{ env.RUSTUP_TOOLCHAIN }}-
+            release-windows-win7-${{ env.RUSTUP_TOOLCHAIN }}-${{ env.BMZ_VCPKG_COMMIT }}-
 
       - name: Install cargo-about
         shell: pwsh
@@ -184,15 +185,20 @@ jobs:
           .\scripts\test-windows-compat-build.ps1
           choco upgrade innosetup --version=6.7.1 --allow-downgrade --no-progress --yes
 
-          if (-not (Test-Path -LiteralPath (Join-Path $env:VCPKG_ROOT "vcpkg.exe"))) {
-            git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
-            & (Join-Path $env:VCPKG_ROOT "bootstrap-vcpkg.bat") -disableMetrics
-          }
+          git init --quiet $env:VCPKG_ROOT
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg repository initialization failed" }
+          git -C $env:VCPKG_ROOT fetch --depth 1 https://github.com/microsoft/vcpkg.git $env:BMZ_VCPKG_COMMIT
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg fetch failed" }
+          git -C $env:VCPKG_ROOT checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg checkout failed" }
+          & (Join-Path $env:VCPKG_ROOT "bootstrap-vcpkg.bat") -disableMetrics
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed" }
 
           $overlayTriplets = Join-Path $env:GITHUB_WORKSPACE "triplets"
           & (Join-Path $env:VCPKG_ROOT "vcpkg.exe") install `
             "--overlay-triplets=$overlayTriplets" `
             "ffmpeg:$env:VCPKG_DEFAULT_TRIPLET"
+          if ($LASTEXITCODE -ne 0) { throw "FFmpeg installation failed" }
 
       - name: Record Windows dependency provenance
         shell: pwsh
@@ -201,9 +207,14 @@ jobs:
 
           $provenance = "dist\release\bmz-player-v$env:BMZ_VERSION-windows-x64-provenance.txt"
           "BMZ Player $env:BMZ_VERSION Windows x64 dependency provenance" | Out-File -LiteralPath $provenance -Encoding utf8
+          "vcpkg commit: $env:BMZ_VCPKG_COMMIT" | Out-File -LiteralPath $provenance -Encoding utf8 -Append
           "" | Out-File -LiteralPath $provenance -Encoding utf8 -Append
           "vcpkg packages:" | Out-File -LiteralPath $provenance -Encoding utf8 -Append
-          & (Join-Path $env:VCPKG_ROOT "vcpkg.exe") list ffmpeg | Out-File -LiteralPath $provenance -Encoding utf8 -Append
+          $packages = & (Join-Path $env:VCPKG_ROOT "vcpkg.exe") list ffmpeg
+          if ($LASTEXITCODE -ne 0 -or -not ($packages -match "^ffmpeg:${env:VCPKG_DEFAULT_TRIPLET}\s+9\.1(?:\.0)?\s")) {
+            throw "Expected FFmpeg 9.1 for $env:VCPKG_DEFAULT_TRIPLET"
+          }
+          $packages | Out-File -LiteralPath $provenance -Encoding utf8 -Append
 
           $ffmpegBin = Join-Path $env:VCPKG_ROOT "installed\$env:VCPKG_DEFAULT_TRIPLET\bin"
           $ffmpegExe = Get-ChildItem -LiteralPath $ffmpegBin -Filter ffmpeg.exe -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -429,6 +440,7 @@ jobs:
           cargo clean -p ffmpeg-sys-next --target "${{ matrix.target }}"
 
       - name: Import macOS signing certificate
+        if: needs.metadata.outputs.should_upload == 'true'
         run: |
           {
             echo "BMZ_MACOS_SIGNING_READY=0"
@@ -522,6 +534,7 @@ jobs:
           "dist/macos/BMZ Player.app/Contents/MacOS/bmz-player" --help
 
       - name: Notarize macOS app
+        if: needs.metadata.outputs.should_upload == 'true'
         run: |
           if [[ "${BMZ_MACOS_NOTARIZATION_READY}" != "1" ]]; then
             echo "Notarization secrets are not configured; skipping notarization."
