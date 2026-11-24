@@ -236,6 +236,8 @@ fn result_end_time_tracks_scoring_events_and_invalidates_with_the_chart() {
 mod legacy_cap;
 #[path = "tests/legacy_mine.rs"]
 mod legacy_mine;
+#[path = "tests/lr2_score.rs"]
+mod lr2_score;
 #[path = "tests/mine.rs"]
 mod mine;
 #[path = "tests/miss_keysound.rs"]

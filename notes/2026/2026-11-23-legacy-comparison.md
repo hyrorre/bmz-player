@@ -301,3 +301,43 @@ OpenLR2のオブジェクト配列を出力するデバッグ指示（`objects 1
 | オラクルのエラー（上記の3譜面） | 4 |
 
 修正前は114譜面で違っていた（ほとんどが`#PLAYER`の無い4鍵・6鍵相当の譜面）。残る11件は、BMZが5鍵、`song.db`が7鍵とする譜面である。10件はノーツのチャンネルを1つも含まず、1件はスクラッチ（16）だけを含む。OpenLR2の`ParseBMSMETA`（`LR2_songmanage.cpp`）は5から始めて18/19などで7に上げるため、OpenLR2の規則ではこれらは5鍵になり、BMZと一致する。この`song.db`はOpenLR2以前の登録値を引き継いでいる可能性があり、原因は確かめていない。プレイ時のキーモードは`song.db`の値なので、スクラッチだけの1譜面ではLR2とBMZでレーン配置が変わり得る。ノーツの無い10件は判定が発生しない。
+
+## CustomIRの送信値の比較（2026-11-24）
+
+StellaverseはOpenLR2のCustomIRモジュールとして、リザルトで`IRScoreV1`を受け取る（`LR2_customir.cpp`の`IRScoreInternal`）。その項目のうち、プレイから決まる値をオラクルとBMZで比べた。
+
+| 項目 | OpenLR2での出どころ |
+|---|---|
+| 早/遅のPGREAT〜POOR、コンボ切れ、FAST / SLOW、処理済みノーツ数（全体と20レーン） | `ProcSinglenote` / `ProcLongnote`の分岐ごとの`EXTENDEDPLAYERSTATS` |
+| レーンのノーツ数 | `bmsobj_note[lane].count`（地雷を含む） |
+| 最大コンボ、スコア、EX、レート | `ApplyJudgeNote` |
+| ゲージ6種 | `ApplyJudgeNote` / `ApplyJudgeMine`。未処理のノーツが残るとプレイ終了時にすべて0 |
+| クリア種別 | `CheckClear` |
+| グラフ（ゲージ6種・コンボ・EX、各1000点） | 各ポーリング後の`LogGraphPlayData`と、終了時の`LogGraphPlayerDataToEnd` |
+| ゴースト | `ApplyJudgeNote`が積む判定列を`PLAYSCORE::EncodeGhostData`で符号化 |
+
+レートのグラフ（`rategraph`）は自己ベストのもので、プレイからは決まらないため比べていない。設定・曲情報・入力機器などの項目もプレイの結果ではないので対象外とした。
+
+BMZ側は`bmz_gameplay::lr2_score::Lr2ScoreRecorder`で同じ値を組み立てる。LR2の数え方はBMZのスコアと違う点が多い。
+
+- PGREATはFAST / SLOWに数えない。見逃しのPOORは遅いPOORでコンボ切れ、空POORは早いPOORでノーツ数に入らない。
+- LNは始点を押した時点でGREAT〜BADのFAST / SLOWを数え、終点で始点の早遅のまま判定を数える。
+- BADのあと、`ProcSinglenote`は次のオブジェクトを単ノートとして判定する。次がLNでも始点・終点の区別はなく、即時にFASTまで数える。リプレイ照合の2プレイで見つかり、修正した。
+- `song_runtime`は読み込み時の`endtime`で、BGMの最後か、ノーツ（地雷を含む）の2秒後。単ノートの`realTiming_ln`は-1なので、最初のノーツでは1999msに上がるだけになる。BMZは読み込み時に`legacy_song_runtime_ms`として求める。
+- `song_runtime`が無限大の譜面では、MSVCの`(int)inf`が`INT_MIN`になるためグラフが1点も記録されず、全点が初期値になる。fuzzの1件で見つかり、修正した。
+- P-ATTACK / G-ATTACKのゲージはBMZのゲージにないため、記録側でLR2の増減量表（`legacy_judge_damage`）から計算する。
+
+### 結果
+
+許容誤差0で、判定・地雷・ポーリングごとの状態に加えて上の全項目を比べた。
+
+| 入力 | プレイ | 送信値まで一致 | 差あり |
+|---|---:|---:|---:|
+| 保存リプレイ（`.local/oracle-vs-bmz-submission/`） | 234 | 233 | 0 |
+| fuzz seed 1〜4（`.local/fuzz-sub-1`〜`4`） | 6,500譜面 | 6,095 | 0 |
+
+- リプレイの残る1件はP-ATTACKで、対象外。
+- fuzzの残りは、ノーツなし4、OpenLR2で再生不能365、1時間超22、未定義動作14。未定義動作のうち12件ではグラフやレーンの集計にも差が出たが、14件ともOpenLR2がレーンの配列の外を読んだプレイ（2件はオラクルの出力自体がNULで壊れた）である。
+- fuzzで閉店したプレイ3,019件（未定義動作を含む）も、未定義動作を除いて、ゲージが0になる処理とクリア種別まで一致した。
+
+BMZ本体はまだStellaverseへ送信しない。送信を実装するときは、LEGACYのプレイで`Lr2ScoreRecorder`に全判定イベントと地雷を渡し、各ポーリング後に`log_graph`、終了時に`finish`を呼べば、ここで比べた値がそのまま得られる。

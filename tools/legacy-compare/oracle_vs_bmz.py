@@ -34,7 +34,7 @@ def keymodes(openlr2: Path) -> dict[str, int]:
 
 
 def parse(lines: list[str]) -> dict:
-    out = {"J": [], "M": [], "S": [], "E": None}
+    out = {"J": [], "M": [], "S": [], "E": None, "R": {}}
     for line in lines:
         f = line.strip().split(",")
         if f[0] == "J":
@@ -45,7 +45,25 @@ def parse(lines: list[str]) -> dict:
             out["S"].append((int(f[1]), [float(x) for x in f[2:6]], [int(x) for x in f[8:]]))
         elif f[0] == "E":
             out["E"] = (int(f[1]), f[2])
+        elif f[0] == "R" and f[1] == "ghost":
+            out["R"]["ghost"] = line.strip()[len("R,ghost,"):]
+        elif f[0] in ("R", "G"):
+            # The CustomIR submission fields. Doubles compare by value
+            # (C prints %.17g, Rust the shortest round trip).
+            out["R"][f"{f[0]}.{f[1]}"] = [float(x) for x in f[2:]]
     return out
+
+
+def compare_submission(oracle: dict, bmz: dict):
+    """First differing CustomIR field, or None. Missing on both sides is equal."""
+    for key in sorted(set(oracle["R"]) | set(bmz["R"])):
+        o, b = oracle["R"].get(key), bmz["R"].get(key)
+        if o != b:
+            if isinstance(o, list) and isinstance(b, list) and len(o) == len(b):
+                i = next(i for i, (x, y) in enumerate(zip(o, b)) if x != y)
+                return {"field": key, "index": i, "oracle": o[i], "bmz": b[i]}
+            return {"field": key, "oracle": o, "bmz": b}
+    return None
 
 
 def first_diff(a: list, b: list):
@@ -65,6 +83,7 @@ def compare(oracle: dict, bmz: dict, tolerance: float) -> dict:
         "closing": None,
         "state": None,
         "gauge_max_abs_diff": [0.0] * 4,
+        "submission": compare_submission(oracle, bmz),
     }
     if oracle["E"] and bmz["E"] and (oracle["E"][1] == "closed" or bmz["E"][1] == "closed") and oracle["E"] != bmz["E"]:
         result["closing"] = {"oracle": oracle["E"], "bmz": bmz["E"]}
@@ -79,7 +98,7 @@ def compare(oracle: dict, bmz: dict, tolerance: float) -> dict:
             result["gauge_max_abs_diff"][i] = max(result["gauge_max_abs_diff"][i], abs(ohp[i] - bhp[i]))
         if result["state"] is None and (orest != brest or any(abs(o - b) > tolerance for o, b in zip(ohp, bhp))):
             result["state"] = {"ms": ms, "oracle": [ohp, orest], "bmz": [bhp, brest]}
-    result["equal"] = all(result[k] is None for k in ("judgements", "mines", "closing", "state"))
+    result["equal"] = all(result[k] is None for k in ("judgements", "mines", "closing", "state", "submission"))
     return result
 
 
@@ -139,6 +158,7 @@ def main() -> int:
         "mines_equal": sum(r.get("mines", 0) is None for r in rows),
         "state_equal": sum(r.get("state", 0) is None for r in rows),
         "closing_equal": sum(r.get("closing", 0) is None for r in rows),
+        "submission_equal": sum(r.get("submission", 0) is None for r in rows),
         "closed_plays": sum(bool(r.get("oracle_end")) and r["oracle_end"][1] == "closed" for r in rows),
         "max_gauge_abs_diff": [max((r.get("gauge_max_abs_diff") or [0] * 4)[i] for r in rows) for i in range(4)],
         "tolerance": args.tolerance,

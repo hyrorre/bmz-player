@@ -155,6 +155,7 @@ pub(super) fn normalize_metadata(input: &IntermediateMetadata) -> ChartMetadata 
         conditional: input.conditional.clone(),
         conditional_bgm_keys: Vec::new(),
         legacy_note_ms: None,
+        legacy_song_runtime_ms: None,
         conditional_evaluation_times: Vec::new(),
         conditional_revision: 0,
         source_format: crate::model::ChartSourceFormat::Unknown,

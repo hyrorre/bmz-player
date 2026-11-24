@@ -2,7 +2,8 @@
 //!
 //! Score and gauges are updated as GameSession does on the LEGACY polling
 //! clock: each poll applies its judgements in order, then its mine hits, and
-//! a closing gauge stops play before the next poll.
+//! a closing gauge stops play before the next poll. After the `E` line, the
+//! play part of the CustomIR submission comes from `Lr2ScoreRecorder`.
 use std::{
     fs::File,
     io::{BufWriter, Write},
@@ -15,6 +16,7 @@ use bmz_core::{clear::GaugeType, lane::Lane};
 use bmz_gameplay::{
     gauge::{GaugeProperty, GaugeState, gauge_total_for_play},
     judge::model::JudgementEvent,
+    lr2_score::{Lr2Judgements, Lr2ScoreRecorder},
     rule::RuleMode,
     score::ScoreState,
 };
@@ -46,6 +48,8 @@ pub struct OracleOut {
     score: ScoreState,
     mines: u32,
     dirty: bool,
+    submission: Lr2ScoreRecorder,
+    columns: [[u32; 2]; 20],
 }
 
 impl OracleOut {
@@ -65,6 +69,8 @@ impl OracleOut {
             score: ScoreState::for_rule_mode(chart.metadata.key_mode, RuleMode::Legacy),
             mines: 0,
             dirty: false,
+            submission: Lr2ScoreRecorder::new(chart, openlr2_gauge as usize, total),
+            columns: [[0; 2]; 20],
         };
         writeln!(this.out, "H,totalnotes,{}", chart.total_notes)?;
         writeln!(this.out, "H,gauge_total,{total:.17}")?;
@@ -110,6 +116,7 @@ impl OracleOut {
     }
 
     /// Applies one lane's outcome of the current poll, in lane order.
+    /// `events` holds all of the outcome's events, including long-note heads.
     pub fn lane(
         &mut self,
         ms: i64,
@@ -117,6 +124,10 @@ impl OracleOut {
         mines: &[(Lane, f64)],
         judge_value: impl Fn(&JudgementEvent) -> usize,
     ) -> Result<()> {
+        for event in events {
+            self.submission.apply_event(event);
+        }
+        let events: Vec<_> = events.iter().filter(|e| e.affects_score).collect();
         if !events.is_empty() || !mines.is_empty() {
             self.dirty = true;
         }
@@ -128,6 +139,7 @@ impl OracleOut {
         for &(lane, damage) in mines {
             writeln!(self.out, "M,{ms},{},{}", openlr2_lane(lane), damage)?;
             self.gauge.apply_mine(damage);
+            self.submission.apply_mine(damage);
             self.score.record_legacy_mine_hit();
             self.mines += 1;
         }
@@ -136,6 +148,19 @@ impl OracleOut {
 
     /// Ends a poll. Returns true when the selected gauge closes play.
     pub fn end_poll(&mut self, ms: i64) -> Result<bool> {
+        if std::env::var_os("BMZ_LR2_COLUMNS").is_some() {
+            // Debug: the oracle's `columns 1` lines.
+            for lane in 0..20 {
+                let v = self.submission.column(lane).values();
+                let key = [v[..10].iter().sum::<u32>(), v[11] + v[12]];
+                if key != self.columns[lane] {
+                    self.columns[lane] = key;
+                    let text: Vec<_> = v[..14].iter().map(u32::to_string).collect();
+                    writeln!(self.out, "X,{ms},{lane},{}", text.join(","))?;
+                }
+            }
+        }
+        self.submission.log_graph(ms);
         if !std::mem::take(&mut self.dirty) {
             return Ok(false);
         }
@@ -145,6 +170,39 @@ impl OracleOut {
 
     pub fn finish(mut self, ms: i64, reason: &str) -> Result<()> {
         writeln!(self.out, "E,{ms},{reason}")?;
+        let score = self.submission.finish();
+        let stats = |out: &mut BufWriter<File>, name: &str, s: &Lr2Judgements| {
+            let values: Vec<_> = s.values().iter().map(u32::to_string).collect();
+            writeln!(out, "R,{name},{}", values.join(","))
+        };
+        stats(&mut self.out, "total", &score.judgements_total)?;
+        for (lane, column) in score.judgements_column.iter().enumerate() {
+            stats(&mut self.out, &format!("col{lane}"), column)?;
+        }
+        writeln!(
+            self.out,
+            "R,score,{},{},{},{},{:?},{},{}",
+            score.max_combo,
+            score.gauge_type,
+            score.moneyscore,
+            score.exscore,
+            score.rate,
+            score.clear_type,
+            score.notes_total
+        )?;
+        let hp: Vec<_> = score.hp.iter().map(|v| format!("{v:?}")).collect();
+        writeln!(self.out, "R,hp,{}", hp.join(","))?;
+        writeln!(self.out, "R,runtime,{:?}", score.song_runtime)?;
+        let samples = |out: &mut BufWriter<File>, name: &str, values: &[i32]| {
+            let values: Vec<_> = values.iter().map(i32::to_string).collect();
+            writeln!(out, "G,{name},{}", values.join(","))
+        };
+        for (gauge, values) in score.graphs.hp.iter().enumerate() {
+            samples(&mut self.out, &format!("hp{gauge}"), values)?;
+        }
+        samples(&mut self.out, "combo", &score.graphs.combo)?;
+        samples(&mut self.out, "exscore", &score.graphs.exscore)?;
+        writeln!(self.out, "R,ghost,{}", score.ghost)?;
         self.out.flush()?;
         Ok(())
     }

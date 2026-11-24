@@ -17,6 +17,7 @@
 //   randsc <p1> [p2]        scratch randomisation (replay op 106/156)
 //   dpflip <0|1>            DP side flip (replay op 206)
 //   end <ms>                last poll (default: last object + 3000 ms)
+//   columns <0|1>           debug: print X lines when a column's IR counts change
 //   e <ms> <lane> <1|0>     key edge (press/release) on OpenLR2 lane 0..19
 // Edges must be sorted by time. Several edges of one lane in one poll are
 // passed as separate calls in order, as BMZ does.
@@ -28,10 +29,14 @@
 //   M,<ms>,<lane>,<damage>               in ApplyJudgeMine order
 //   S,<ms>,<hp0..hp5>,<ex>,<combo>,<maxcombo>,<jc0..jc5>,<note_current>
 //   E,<ms>,<closed|end>
+//   R,<field>,<values...>                after E: the play part of the
+//   G,<graph>,<1000 samples>             CustomIR IRScoreV1
+//   X,<ms>,<lane>,<15 IR counts>         with `columns 1`
 #include "../LR2/Engine.h"
 #include "../LR2/Scene04_Play.h"
 #include "../LR2/LR2_bmsload.h"
 #include "../LR2/LR2_replay.h"
+#include "../LR2/LR2_statplay.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -55,6 +60,58 @@ void print_state(game& g, int ms) {
     std::printf(",%d\n", p.note_current);
 }
 
+void print_stats(const char* name, const EXTENDEDPLAYERSTATS& s, unsigned total) {
+    std::printf("R,%s,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n", name, s.epg, s.lpg, s.egr, s.lgr, s.egd,
+                s.lgd, s.ebd, s.lbd, s.epr, s.lpr, s.cb, s.fast, s.slow, s.noteCount, total);
+}
+
+void print_stats_line(int ms, int lane, const EXTENDEDPLAYERSTATS& s) {
+    std::printf("X,%d,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n", ms, lane, s.epg, s.lpg, s.egr, s.lgr, s.egd,
+                s.lgd, s.ebd, s.lbd, s.epr, s.lpr, s.cb, s.fast, s.slow, s.noteCount);
+}
+
+void print_samples(const char* name, const int* values) {
+    std::printf("G,%s", name);
+    for (int i = 0; i < 1000; ++i) std::printf(",%d", values[i]);
+    std::printf("\n");
+}
+
+// The end of Scene04_Play and the result scene for a single song: gauges
+// drop to 0 when notes are left, the graphs are filled to the end and the
+// clear is decided. Then the fields IRScoreInternal copies from the play.
+void print_submission(game& g) {
+    auto& p = g.gameplay.player[PLAYER_1];
+    if (p.totalnotes > p.note_current)
+        for (int gauge = 0; gauge < 6; ++gauge) p.HP[gauge] = 0;
+    LogGraphPlayerDataToEnd(&g.gameplay.statgraph[PLAYER_1], &p);
+    CheckClear(&p, p.gaugeType, 0);
+    print_stats("total", p.extendedStats, p.totalnotes);
+    for (int lane = 0; lane < 20; ++lane) {
+        char name[16];
+        std::snprintf(name, sizeof name, "col%d", lane);
+        print_stats(name, p.extendedColumnStats[lane], g.gameplay.bmsobj_note[lane].count);
+    }
+    std::printf("R,score,%d,%d,%d,%d,%.17g,%d,%d\n", p.max_combo, p.gaugeType, p.score, p.exscore, p.rate,
+                p.clearType, p.totalnotes);
+    std::printf("R,hp");
+    for (int gauge = 0; gauge < 6; ++gauge) std::printf(",%.17g", p.HP[gauge]);
+    std::printf("\nR,runtime,%.17g\n", g.gameplay.song_runtime);
+    const auto& graph = g.gameplay.statgraph[PLAYER_1];
+    for (int gauge = 0; gauge < 6; ++gauge) {
+        char name[8];
+        std::snprintf(name, sizeof name, "hp%d", gauge);
+        print_samples(name, graph.hp[gauge].data());
+    }
+    print_samples("combo", graph.combo);
+    print_samples("exscore", graph.exscore);
+    if (g.gameplay.p1Score.judge_queue_len > 0) {
+        const CSTR ghost = g.gameplay.p1Score.EncodeGhostData();
+        std::printf("R,ghost,%s\n", ghost.body ? ghost.body : "");
+    } else {
+        std::printf("R,ghost,\n");
+    }
+}
+
 int fail(const char* message) {
     std::fprintf(stderr, "openlr2_oracle: %s\n", message);
     return 2;
@@ -64,7 +121,7 @@ int fail(const char* message) {
 int main() {
     std::string chart;
     int keymode = 0, random1 = 0, random2 = 0, seed = 0, gauge = 0, end_ms = -1;
-    int randfix1 = 0, randfix2 = 0, randsc1 = 0, randsc2 = 0, dpflip = 0, dump_objects = 0;
+    int randfix1 = 0, randfix2 = 0, randsc1 = 0, randsc2 = 0, dpflip = 0, dump_objects = 0, columns = 0;
     std::vector<Edge> edges;
     for (std::string line; std::getline(std::cin, line);) {
         std::istringstream in(line);
@@ -89,6 +146,8 @@ int main() {
             in >> dpflip;
         } else if (key == "gauge") {
             in >> gauge;
+        } else if (key == "columns") {
+            in >> columns;
         } else if (key == "objects") {
             in >> dump_objects;
         } else if (key == "end") {
@@ -214,7 +273,23 @@ int main() {
             print_state(*g, ms);
             ++emitted;
         }
+        if (columns) {
+            static unsigned last[20][2];
+            for (int lane = 0; lane < 20; ++lane) {
+                const auto& c = g->gameplay.player[PLAYER_1].extendedColumnStats[lane];
+                const unsigned sum[2] = {c.epg + c.lpg + c.egr + c.lgr + c.egd + c.lgd + c.ebd + c.lbd + c.epr + c.lpr,
+                                         c.fast + c.slow};
+                if (sum[0] == last[lane][0] && sum[1] == last[lane][1]) continue;
+                last[lane][0] = sum[0];
+                last[lane][1] = sum[1];
+                print_stats_line(ms, lane, c);
+            }
+        }
+        // Scene04_Play logs the graphs after the lane polls of each loop.
+        LogGraphPlayData(&g->gameplay.statgraph[PLAYER_1], &g->gameplay.player[PLAYER_1], ms,
+                         static_cast<int>(g->gameplay.song_runtime));
     }
     std::printf("E,%d,%s\n", ms, reason);
+    print_submission(*g);
     return 0;
 }

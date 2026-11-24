@@ -446,9 +446,8 @@ fn record_lane(
 ) -> Result<()> {
     mine_hits.extend(outcome.mine_hits.iter().map(|h| (ms, lane.index(), h.damage)));
     if let Some(oracle) = oracle {
-        let scored: Vec<_> = outcome.events.iter().filter(|e| e.affects_score).cloned().collect();
         let mines: Vec<_> = outcome.mine_hits.iter().map(|h| (lane, h.damage)).collect();
-        oracle.lane(ms, &scored, &mines, |e| value(e.judge))?;
+        oracle.lane(ms, &outcome.events, &mines, |e| value(e.judge))?;
     }
     events.extend(outcome.events.iter().cloned());
     Ok(())

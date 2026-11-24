@@ -530,6 +530,27 @@ fn lane_of(op: i32) -> Option<Lane> {
     }
 }
 
+/// `endtime` from `ParseBmsFile`'s note placement loop, which becomes
+/// `song_runtime`: the last BGM object, or 2 s after the last note object
+/// (mines included), in the real-time order. A single object has
+/// `realTiming_ln == -1`, so while `endtime` is below 1999 ms it is raised to
+/// 1999 instead of to the object's time + 2000.
+fn song_runtime(objects: &[LrObject]) -> f64 {
+    let mut endtime = 0.0f64;
+    for o in objects {
+        if (10..=29).contains(&o.op) {
+            if o.realtime_ln + 2000.0 > endtime {
+                endtime = o.realtime_ln + 2000.0;
+            } else if o.realtime + 2000.0 > endtime {
+                endtime = o.realtime + 2000.0;
+            }
+        } else if o.op == 1 && o.realtime > endtime {
+            endtime = o.realtime;
+        }
+    }
+    endtime
+}
+
 /// Step 5: rebuilds `lane_notes` / `long_notes` / `total_notes` from the
 /// loaded objects. `shift_ticks` is the origin measure BMZ inserts for the
 /// origin shift. Invisible notes are kept as imported.
@@ -686,6 +707,7 @@ pub(super) fn rebuild(
     chart.lane_notes = lane_notes;
     chart.long_notes = long_notes;
     chart.metadata.legacy_note_ms = Some(std::sync::Arc::new(exact_ms));
+    chart.metadata.legacy_song_runtime_ms = Some(song_runtime(objects));
     chart.metadata.free_zones.clear();
     chart.metadata.long_note_mode = LongNoteMode::Ln;
     chart.total_notes = note_count.max(0) as u32;

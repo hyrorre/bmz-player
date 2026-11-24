@@ -99,6 +99,21 @@ python tools/legacy-compare/oracle_vs_bmz.py --results .local/legacy-compare --o
 - `oracle_vs_bmz.py`は、compare.pyで比較したプレイごとに、同じ入力をオラクルとBMZのランナー（`oracle_output_path`付き）へ与え、出力を1行ずつ比べます。対象は、判定のポーリング時刻・レーン・判定値、地雷の時刻・レーン・ダメージ、各ポーリング後のGROOVE / HARD / DEATH / EASYのHP・EX・コンボ・最大コンボ・判定数・処理済みノーツ数、閉店です。HPは`--tolerance`（既定1e-3、0で完全一致）以内を一致とします。
 - BMZ側はGameSessionのLEGACY 1msポーリングと同じく、レーン順に判定と地雷をスコア・ゲージへ反映し、ポーリング後に閉店を確認します。
 
+### CustomIRの送信値
+
+OpenLR2はリザルトでCustomIRモジュール（Stellaverseなど）へ`IRScoreV1`を渡します（`LR2_customir.cpp`）。オラクルは`E`行のあとに、そのうちプレイから決まる値を出力します。
+
+- `R,total` / `R,col0`〜`R,col19`：早/遅のPGREAT〜POOR、コンボ切れ、FAST / SLOW、処理済みノーツ数、ノーツ数（全体とレーンごと）
+- `R,score`：最大コンボ、ゲージ種別、スコア（20万点満点）、EX、レート、クリア種別、ノーツ数
+- `R,hp`：ゲージ6種の最終値。未処理のノーツが残ると、OpenLR2はすべて0にします
+- `R,runtime`：`song_runtime`（グラフの時間軸）
+- `G,hp0`〜`G,hp5` / `G,combo` / `G,exscore`：1000点のグラフ
+- `R,ghost`：LR2形式のゴースト
+
+BMZ側は`bmz_gameplay::lr2_score::Lr2ScoreRecorder`が、判定イベント（LN始点の、スコアに影響しないイベントを含む）と地雷から同じ値を組み立てます。`oracle_vs_bmz.py`と`fuzz.py`はこれらを許容誤差0で比べ、結果の`submission`に最初の差を書きます。
+
+差を調べるときは、オラクルに`columns 1`を与え、ランナーを環境変数`BMZ_LR2_COLUMNS=1`付きで動かすと、両方がレーンの集計の変わったポーリングごとに`X,ms,レーン,…`を出力します。
+
 ## 譜面の読み込みの全数比較
 
 `loader_vs_oracle.py`は、OpenLR2の`song.db`にある譜面を1つずつオラクルとBMZのランナー（`dump_path`付き）で読み込み、ノーツ数・判定幅・ゲージの増減量と、全ノート・LN終点・地雷の時刻（µs単位に切り捨て）を比べます。

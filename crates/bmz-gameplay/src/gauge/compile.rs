@@ -54,6 +54,22 @@ pub fn legacy_gauge_rule(
     total: f64,
     total_notes: u32,
 ) -> Option<LegacyGaugeRule> {
+    let table = legacy_judge_damage(total, total_notes)?;
+    let (index, guts, floor_two) = match gauge_type {
+        GaugeType::Normal => (0, false, true),
+        GaugeType::Hard => (1, true, false),
+        GaugeType::Hazard => (2, true, false),
+        GaugeType::Easy => (3, false, true),
+        _ => return None,
+    };
+    Some(LegacyGaugeRule { damage: table[index], guts, floor_two })
+}
+
+/// OpenLR2's whole `judge_damage[gauge][judge]` table for a single song.
+/// Gauges: GROOVE, HARD, DEATH, EASY, P-ATTACK, G-ATTACK. Judges: EMPTY POOR,
+/// POOR, BAD, GOOD, GREAT, PGREAT. `None` without notes, where LR2 leaves the
+/// table at 0.
+pub fn legacy_judge_damage(total: f64, total_notes: u32) -> Option<[[f64; 6]; 6]> {
     if total_notes == 0 {
         return None;
     }
@@ -87,19 +103,14 @@ pub fn legacy_gauge_rule(
     }
     let totalbase = 100.0 / f64::from(recover);
     let dmg = (notebase * 10.0).max(totalbase) / 10.0;
-    // [EMPTY POOR, POOR, BAD, GOOD, GREAT, PGREAT]
-    let (damage, guts, floor_two) = match gauge_type {
-        GaugeType::Normal => ([-2.0, -6.0, -4.0, per_good, per_note, per_note], false, true),
-        GaugeType::Hard => ([dmg * -2.0, dmg * -10.0, dmg * -6.0, 0.05, 0.1, 0.1], true, false),
-        GaugeType::Hazard => ([0.0, -100.0, -100.0, 0.0, 0.0, 0.0], true, false),
-        GaugeType::Easy => (
-            [-1.6, -4.800000000000001, -3.2, per_good * 1.2, per_note * 1.2, per_note * 1.2],
-            false,
-            true,
-        ),
-        _ => return None,
-    };
-    Some(LegacyGaugeRule { damage, guts, floor_two })
+    Some([
+        [-2.0, -6.0, -4.0, per_good, per_note, per_note],
+        [dmg * -2.0, dmg * -10.0, dmg * -6.0, 0.05, 0.1, 0.1],
+        [0.0, -100.0, -100.0, 0.0, 0.0, 0.0],
+        [-1.6, -4.800000000000001, -3.2, per_good * 1.2, per_note * 1.2, per_note * 1.2],
+        [-100.0, -100.0, -100.0, -100.0, -1.0, 0.1],
+        [dmg * -2.0, dmg * -10.0, -6.0, 0.1, -1.0, dmg * -10.0],
+    ])
 }
 
 pub(super) fn apply_modifier(

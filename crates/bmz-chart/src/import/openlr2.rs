@@ -349,6 +349,19 @@ mod tests {
     }
 
     #[test]
+    fn song_runtime_follows_the_lr2_endtime_loop() {
+        // Checked with the OpenLR2 oracle. A single note's realTiming_ln is -1,
+        // so the first note raises endtime to 1999 ms, not to its time + 2 s.
+        for (text, runtime) in [
+            ("#BPM 60\n#00111:01\n", 1_999.0),
+            ("#BPM 60\n#00111:0101\n#00201:01\n", 8_000.0),
+            ("#BPM 60\n#00111:0101\n#00201:0001\n", 10_000.0),
+        ] {
+            assert_eq!(load(text).metadata.legacy_song_runtime_ms, Some(runtime), "{text}");
+        }
+    }
+
+    #[test]
     fn sequential_double_rounding_survives_integer_millisecond_conversion() {
         let chart = load(
             "#BPM 180\n#00001:00010101010101000000000000000000\n#00011:00000000000001000000000000000000\n",
