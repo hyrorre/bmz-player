@@ -45,29 +45,44 @@ fn lock_file(root: &Path, name: &str) -> Result<File> {
 }
 
 /// All packaged BMZ processes hold this until shutdown (including Viewer/CLI).
-pub fn instance_guard(root: &Path) -> Result<Vec<File>> {
+pub struct InstanceGuard {
+    _locks: Vec<File>,
+    pub cleanup_error: Option<anyhow::Error>,
+}
+
+pub fn instance_guard(root: &Path) -> Result<InstanceGuard> {
     let package = PackageManifest::read(root)?;
     let legacy = package.manifest_path() == crate::LEGACY_MANIFEST;
+    let mut guards = Vec::new();
+    let instance = checked_path(root, crate::INSTANCE_LOCK)?;
+    let exists = instance.try_exists()?;
+    if !legacy || exists {
+        // Packages ship an empty instance lock, permitting read-only launches with data overrides.
+        let file =
+            if exists { File::open(instance)? } else { lock_file(root, crate::INSTANCE_LOCK)? };
+        file.try_lock_shared().context("BMZ is being updated")?;
+        guards.push(file);
+    }
+
     #[cfg(windows)]
-    if !legacy
+    let cleanup_error = if !legacy
         && package.kind == crate::manifest::PackageKind::Portable
         && package.version == env!("CARGO_PKG_VERSION")
     {
-        // The old helper can still be exiting. Leave optional cleanup for a later launch.
-        let _ = legacy_cleanup::cleanup(root);
-    }
-    let mut guards = Vec::new();
-    for name in [crate::INSTANCE_LOCK, crate::LEGACY_INSTANCE_LOCK] {
-        let path = checked_path(root, name)?;
-        let exists = path.try_exists()?;
-        if (legacy && name == crate::INSTANCE_LOCK
-            || !legacy && name == crate::LEGACY_INSTANCE_LOCK)
-            && !exists
-        {
-            continue;
-        }
-        // Packages ship an empty instance lock, permitting read-only launches with data overrides.
-        let file = if exists { File::open(path)? } else { lock_file(root, name)? };
+        // The shared modern lock protects against apply/recovery without blocking other launches.
+        legacy_cleanup::cleanup(root).err()
+    } else {
+        None
+    };
+    #[cfg(not(windows))]
+    let cleanup_error = None;
+
+    let old_instance = open_legacy_lock(root, crate::LEGACY_INSTANCE_LOCK, false, false)?;
+    if let Some(file) = old_instance {
+        file.try_lock_shared().context("BMZ is being updated")?;
+        guards.push(file);
+    } else if legacy {
+        let file = lock_file(root, crate::LEGACY_INSTANCE_LOCK)?;
         file.try_lock_shared().context("BMZ is being updated")?;
         guards.push(file);
     }
@@ -75,25 +90,41 @@ pub fn instance_guard(root: &Path) -> Result<Vec<File>> {
         transaction::pending_update(root)?.is_none(),
         "interrupted update: run bmz-updater --recover INSTALL_DIR before starting BMZ"
     );
-    Ok(guards)
+    Ok(InstanceGuard { _locks: guards, cleanup_error })
 }
 
-// Hold both generations during migration. Replacing an open lock file can split its identity.
+fn open_legacy_lock(root: &Path, name: &str, write: bool, create: bool) -> Result<Option<File>> {
+    let open = || -> Result<Option<File>> {
+        let path = checked_path(root, name)?;
+        match File::options().read(true).write(write).create(create).truncate(false).open(path) {
+            Ok(file) => Ok(Some(file)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && !create => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    };
+    #[cfg(windows)]
+    let result = legacy_cleanup::retry_legacy_open(open);
+    #[cfg(not(windows))]
+    let result = open();
+    result.with_context(|| format!("could not open {name}"))
+}
+
 fn update_guards(root: &Path) -> Result<(Vec<File>, Vec<File>)> {
+    let update = lock_file(root, crate::UPDATE_LOCK)?;
+    update.try_lock().context("another updater is running")?;
     let legacy = checked_path(root, crate::LEGACY_MANIFEST)?.try_exists()?
-        || checked_path(root, crate::LEGACY_INSTANCE_LOCK)?.try_exists()?
         || checked_path(root, &format!("{}/active.json", crate::LEGACY_WORK_DIR))?.try_exists()?;
-    let mut updates = vec![lock_file(root, crate::UPDATE_LOCK)?];
-    if legacy || checked_path(root, crate::LEGACY_UPDATE_LOCK)?.try_exists()? {
-        updates.push(lock_file(root, crate::LEGACY_UPDATE_LOCK)?);
-    }
-    for lock in &updates {
+    // Keep any existing legacy instance handle open before deciding whether to create its peer.
+    let old_instance = open_legacy_lock(root, crate::LEGACY_INSTANCE_LOCK, true, legacy)?;
+    let mut updates = vec![update];
+    if let Some(lock) =
+        open_legacy_lock(root, crate::LEGACY_UPDATE_LOCK, true, legacy || old_instance.is_some())?
+    {
         lock.try_lock().context("another updater is running")?;
+        updates.push(lock);
     }
     let mut instances = vec![lock_file(root, crate::INSTANCE_LOCK)?];
-    if legacy {
-        instances.push(lock_file(root, crate::LEGACY_INSTANCE_LOCK)?);
-    }
+    instances.extend(old_instance);
     Ok((updates, instances))
 }
 

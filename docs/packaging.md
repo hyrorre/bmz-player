@@ -130,8 +130,8 @@ macOS / Linuxの配布パス解決は変更しません。
 
 通常は`-UpdaterLayout grouped`（既定値）で、updater本体・メタデータ・ロック・
 更新作業を`updater/`へまとめます。`data`の上書き先が別ドライブでも、更新作業領域は
-exeと同じボリュームに置きます。`updater/update.lock`、`active.json`、`job-*`は実行時の
-状態であり、配布物には含めません。`-Smoke`はパッケージの一時コピーで起動し、
+exeと同じボリュームに置きます。`updater/update.lock`、`updater/active.json`、`updater/job-*/`、
+`updater/legacy-backups/`は実行時の状態であり、配布物には含めません。`-Smoke`はパッケージの一時コピーで起動し、
 検証用データをstagingへ生成しません。
 
 旧updaterから自動更新可能な橋渡し版を作る場合のみ`-UpdaterLayout legacy`を指定します。
