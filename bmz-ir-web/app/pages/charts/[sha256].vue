@@ -148,6 +148,7 @@ const {
 
 const canShowSelfArea = computed(() => Boolean(selfBestEntry.value || detail.value?.stats.self))
 const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclosure()
+const wideScoreTable = useWideScoreTable()
 
 const copyMd5 = async () => {
   if (detail.value) {
@@ -300,7 +301,12 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
             "
             :other-score-id="selfBestEntry.score.source_score_ids?.clear"
             class="mt-3 border-t border-default"
-          />
+          >
+            <ScoreRowMetadata
+              :device="selfBestEntry.score.device_type"
+              :date="selfBestEntry.score.played_at"
+            />
+          </ScoreInlineDetails>
         </div>
 
         <RankingPagination
@@ -334,8 +340,8 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                 <th class="px-3 py-2 text-right whitespace-nowrap">MAX COMBO</th>
                 <th class="px-2 py-2 text-right">BP</th>
                 <th class="px-2 py-2 text-right">CB</th>
-                <th class="px-3 py-2">{{ t('table.input') }}</th>
-                <th class="px-3 py-2">{{ t('table.date') }}</th>
+                <th class="hidden px-3 py-2 xl:table-cell">{{ t('table.input') }}</th>
+                <th class="hidden px-3 py-2 xl:table-cell">{{ t('table.date') }}</th>
                 <th scope="col" class="sticky right-0 z-10 w-px bg-elevated px-1">
                   <span class="sr-only">{{ t('score.title') }}</span>
                 </th>
@@ -388,8 +394,10 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                   </td>
                   <td class="px-2 py-2 text-right tabular-nums">{{ entry.score.min_bp }}</td>
                   <td class="px-2 py-2 text-right tabular-nums">{{ entry.score.min_cb }}</td>
-                  <td class="px-3 py-2 text-neutral-400">{{ entry.score.device_type }}</td>
-                  <td class="px-3 py-2 text-neutral-400">
+                  <td class="hidden px-3 py-2 text-muted xl:table-cell">
+                    {{ entry.score.device_type }}
+                  </td>
+                  <td class="hidden px-3 py-2 text-muted xl:table-cell">
                     {{ formatScoreDate(entry.score.played_at) }}
                   </td>
                   <td class="sticky right-0 z-10 bg-default px-1 py-1">
@@ -404,12 +412,18 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                   v-if="expandedScoreRow === entry.score.score_id"
                   class="border-t border-default bg-elevated"
                 >
-                  <td :colspan="lnPolicies.length ? 14 : 13">
+                  <td :colspan="11 + (lnPolicies.length ? 1 : 0) + (wideScoreTable ? 2 : 0)">
                     <ScoreInlineDetails
                       :id="scoreDetailsId"
                       :score-id="entry.score.source_score_ids?.ex_score ?? entry.score.score_id"
                       :other-score-id="entry.score.source_score_ids?.clear"
-                    />
+                    >
+                      <ScoreRowMetadata
+                        :device="entry.score.device_type"
+                        :date="entry.score.played_at"
+                        class="xl:hidden"
+                      />
+                    </ScoreInlineDetails>
                   </td>
                 </tr>
               </template>

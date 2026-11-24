@@ -18,6 +18,7 @@ export default defineI18nLocale(() =>
         save: '保存',
       },
       nav: {
+        account: '账号',
         charts: '谱面',
         courses: '课程',
         players: '玩家',
@@ -84,6 +85,7 @@ export default defineI18nLocale(() =>
         unsupported: '暂不支持通过邮件重置密码。请登录后在账户设置中修改。',
       },
       manual: {
+        chapters: '选择章节',
         title: '使用手册',
         description: '介绍 BMZ Player 的入门方法、操作方式以及常见问题的解决办法。',
         englishOnly: '此语言的使用手册尚未提供，因此显示英语版。',

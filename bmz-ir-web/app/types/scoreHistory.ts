@@ -7,6 +7,7 @@ export interface HistoryScore {
   clear: string
   max_combo: number
   gauge: string
+  device_type: string
   ln_policy: string
   rule_mode: string
 }

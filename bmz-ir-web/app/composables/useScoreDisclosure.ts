@@ -8,3 +8,8 @@ export function useScoreDisclosure() {
 
   return { expandedScoreRow, scoreDetailsId, toggleScoreDetails }
 }
+
+/** Expanded rows must span the columns shown at Tailwind's xl breakpoint. */
+export function useWideScoreTable() {
+  return useViewportMatch('(min-width: 80rem)')
+}

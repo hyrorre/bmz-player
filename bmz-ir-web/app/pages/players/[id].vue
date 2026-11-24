@@ -58,6 +58,7 @@ const { translateApiError } = useApiError()
 const toast = useToast()
 const rivalUpdating = ref(false)
 const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclosure()
+const wideScoreTable = useWideScoreTable()
 
 const selectableLnPolicies = availableLnFilterItems(true, true)
 const lnPolicies = computed(() =>
@@ -232,8 +233,8 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
                 <th class="px-3 py-2 text-right whitespace-nowrap">MAX COMBO</th>
                 <th class="px-2 py-2 text-right">BP</th>
                 <th class="px-2 py-2 text-right">CB</th>
-                <th class="px-3 py-2">{{ t('table.input') }}</th>
-                <th class="px-3 py-2">{{ t('table.date') }}</th>
+                <th class="hidden px-3 py-2 xl:table-cell">{{ t('table.input') }}</th>
+                <th class="hidden px-3 py-2 xl:table-cell">{{ t('table.date') }}</th>
                 <th scope="col" class="sticky right-0 z-10 w-px bg-elevated px-1">
                   <span class="sr-only">{{ t('score.title') }}</span>
                 </th>
@@ -242,7 +243,7 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
             <tbody>
               <template v-for="score in data.best_scores" :key="score.id">
                 <tr class="border-t border-default">
-                  <td class="min-w-48 px-3 py-2">
+                  <td class="min-w-32 px-3 py-2 wrap-anywhere sm:min-w-48">
                     <NuxtLink
                       :to="localePath(`/charts/${score.chart_sha256}`)"
                       class="font-medium hover:underline"
@@ -285,8 +286,8 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
                   </td>
                   <td class="px-2 py-2 text-right tabular-nums">{{ score.min_bp }}</td>
                   <td class="px-2 py-2 text-right tabular-nums">{{ score.min_cb }}</td>
-                  <td class="px-3 py-2 text-muted">{{ score.device_type }}</td>
-                  <td class="px-3 py-2 whitespace-nowrap text-muted">
+                  <td class="hidden px-3 py-2 text-muted xl:table-cell">{{ score.device_type }}</td>
+                  <td class="hidden px-3 py-2 whitespace-nowrap text-muted xl:table-cell">
                     {{ formatDateTime(score.played_at ?? score.server_received_at) }}
                   </td>
                   <td class="sticky right-0 z-10 bg-default px-1 py-1">
@@ -301,12 +302,18 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
                   v-if="expandedScoreRow === score.id"
                   class="border-t border-default bg-elevated"
                 >
-                  <td :colspan="lnPolicies.length ? 13 : 12">
+                  <td :colspan="10 + (lnPolicies.length ? 1 : 0) + (wideScoreTable ? 2 : 0)">
                     <ScoreInlineDetails
                       :id="scoreDetailsId"
                       :score-id="score.best_ex_score_id ?? score.score_id"
                       :other-score-id="score.best_clear_score_id"
-                    />
+                    >
+                      <ScoreRowMetadata
+                        :device="score.device_type"
+                        :date="score.played_at ?? score.server_received_at"
+                        class="xl:hidden"
+                      />
+                    </ScoreInlineDetails>
                   </td>
                 </tr>
               </template>

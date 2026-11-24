@@ -18,6 +18,7 @@ export default defineI18nLocale(() =>
         save: '儲存',
       },
       nav: {
+        account: '帳戶',
         charts: '譜面',
         courses: '課程',
         players: '玩家',
@@ -84,6 +85,7 @@ export default defineI18nLocale(() =>
         unsupported: '暫未支援透過電郵重設密碼。請登入後在帳戶設定中更改。',
       },
       manual: {
+        chapters: '選擇章節',
         title: '使用手冊',
         description: '介紹 BMZ Player 的入門方法、操作方式以及常見問題的處理方法。',
         englishOnly: '此語言的使用手冊尚未提供，因此顯示英文版。',

@@ -18,6 +18,7 @@ const page = defineModel<number>('page', { required: true })
 const { t } = useI18n()
 const { formatDateTime } = useLocaleFormat()
 const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclosure()
+const wideScoreTable = useWideScoreTable()
 watch([open, page], () => {
   expandedScoreRow.value = null
 })
@@ -39,7 +40,7 @@ function formatScoreDate(value: string | null) {
         <table class="w-full text-sm">
           <thead class="bg-elevated text-left text-toned">
             <tr>
-              <th class="px-3 py-2">{{ t('table.date') }}</th>
+              <th class="hidden px-3 py-2 xl:table-cell">{{ t('table.date') }}</th>
               <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
               <th class="px-3 py-2 text-center">RANK</th>
               <th class="px-3 py-2">{{ t('table.clear') }}</th>
@@ -49,11 +50,7 @@ function formatScoreDate(value: string | null) {
               <th class="px-3 py-2 text-right whitespace-nowrap">MAX COMBO</th>
               <th class="px-2 py-2 text-right">BP</th>
               <th class="px-2 py-2 text-right">CB</th>
-              <th
-                v-if="scoreDetailId"
-                scope="col"
-                class="sticky right-0 z-10 w-px bg-elevated px-1"
-              >
+              <th scope="col" class="sticky right-0 z-10 w-px bg-elevated px-1">
                 <span class="sr-only">{{ t('score.title') }}</span>
               </th>
             </tr>
@@ -61,7 +58,7 @@ function formatScoreDate(value: string | null) {
           <tbody>
             <template v-for="score in history.scores" :key="scoreKey(score)">
               <tr class="border-t border-default">
-                <td class="px-3 py-2 text-muted">
+                <td class="hidden px-3 py-2 text-muted xl:table-cell">
                   {{ formatScoreDate(score.played_at ?? score.server_received_at) }}
                 </td>
                 <td class="px-3 py-2 text-right">
@@ -84,7 +81,7 @@ function formatScoreDate(value: string | null) {
                 </td>
                 <td class="px-2 py-2 text-right tabular-nums">{{ scoreBp(score) }}</td>
                 <td class="px-2 py-2 text-right tabular-nums">{{ scoreCb(score) ?? '-' }}</td>
-                <td v-if="scoreDetailId" class="sticky right-0 z-10 bg-default px-1 py-1">
+                <td class="sticky right-0 z-10 bg-default px-1 py-1">
                   <ScoreDetailToggle
                     :expanded="expandedScoreRow === scoreKey(score)"
                     :controls="scoreDetailsId"
@@ -93,11 +90,27 @@ function formatScoreDate(value: string | null) {
                 </td>
               </tr>
               <tr
-                v-if="scoreDetailId && expandedScoreRow === scoreKey(score)"
+                v-if="expandedScoreRow === scoreKey(score)"
                 class="border-t border-default bg-elevated"
               >
-                <td :colspan="showLn ? 11 : 10">
-                  <ScoreInlineDetails :id="scoreDetailsId" :score-id="scoreDetailId(score)" />
+                <td :colspan="9 + (showLn ? 1 : 0) + (wideScoreTable ? 1 : 0)">
+                  <ScoreInlineDetails
+                    v-if="scoreDetailId"
+                    :id="scoreDetailsId"
+                    :score-id="scoreDetailId(score)"
+                  >
+                    <ScoreRowMetadata
+                      :device="score.device_type"
+                      :date="score.played_at ?? score.server_received_at"
+                    />
+                  </ScoreInlineDetails>
+                  <ScoreRowMetadata
+                    v-else
+                    :id="scoreDetailsId"
+                    :device="score.device_type"
+                    :date="score.played_at ?? score.server_received_at"
+                    class="sticky left-0 w-fit max-w-[calc(100vw-5rem)] px-3 py-3"
+                  />
                 </td>
               </tr>
             </template>

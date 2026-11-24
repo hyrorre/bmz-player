@@ -17,7 +17,7 @@ async function switchLocale(value: LocaleCode) {
 <template>
   <USelect
     :aria-label="t('common.language')"
-    class="w-40"
+    class="w-28 sm:w-40"
     :items="localeItems"
     :model-value="locale"
     size="sm"

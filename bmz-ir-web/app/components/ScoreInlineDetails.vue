@@ -31,6 +31,7 @@ const detail = computed(() => (data.value?.score.id === activeScoreId.value ? da
 
 <template>
   <div class="sticky left-0 w-full max-w-[calc(100vw-3rem)] space-y-3 px-3 py-4 sm:px-4">
+    <slot />
     <UTabs
       v-if="scoreChoices.length"
       v-model="selectedScore"

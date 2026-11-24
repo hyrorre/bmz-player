@@ -91,6 +91,8 @@ const listLocation = computed(() =>
   localePath({ path: '/courses', query: listReturnQuery(route.query) }),
 )
 const { t } = useI18n()
+const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclosure()
+const wideScoreTable = useWideScoreTable()
 const { formatDateTime } = useLocaleFormat()
 const { translateApiError } = useApiError()
 const courseHash = computed(() => String(route.params.hash ?? ''))
@@ -295,47 +297,74 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
                 <th class="px-3 py-2 text-right whitespace-nowrap">MAX COMBO</th>
                 <th class="px-2 py-2 text-right">BP</th>
                 <th class="px-2 py-2 text-right">CB</th>
-                <th class="px-3 py-2">{{ t('table.date') }}</th>
+                <th class="hidden px-3 py-2 xl:table-cell">{{ t('table.date') }}</th>
+                <th scope="col" class="sticky right-0 z-10 w-px bg-elevated px-1">
+                  <span class="sr-only">{{ t('score.title') }}</span>
+                </th>
               </tr>
             </thead>
             <tbody>
-              <tr
-                v-for="entry in ranking.ranking.entries"
-                :key="entry.score.course_score_id"
-                class="border-t border-default"
-              >
-                <td class="px-3 py-2 text-toned">{{ entry.rank }}</td>
-                <td class="px-3 py-2">
-                  <NuxtLink :to="localePath(`/players/${entry.player.id}`)" class="hover:underline">
-                    {{ entry.player.display_name }}
-                  </NuxtLink>
-                </td>
-                <td class="px-3 py-2 text-right">
-                  <RankingExScore :score="entry.score.ex_score" :max="entry.score.max_ex_score" />
-                </td>
-                <td class="px-3 py-2 text-center">
-                  <RankingScoreRank :score="entry.score.ex_score" :max="entry.score.max_ex_score" />
-                </td>
-                <td class="px-3 py-2">
-                  <IrClearBadge :clear="entry.score.clear" />
-                </td>
-                <td v-if="lnPolicies.length" class="px-3 py-2 text-muted">
-                  {{ lnPolicyLabel(entry.score.ln_policy) }}
-                </td>
-                <td class="px-3 py-2 text-muted">{{ ruleModeLabel(entry.score.rule_mode) }}</td>
-                <td class="px-3 py-2 text-xs text-muted">{{ scoreOption(entry.score) }}</td>
-                <td class="px-3 py-2 text-right">
-                  <RankingMaxCombo
-                    :combo="entry.score.max_combo"
-                    :total-notes="totalNotesFromMaxExScore(entry.score.max_ex_score)"
-                  />
-                </td>
-                <td class="px-2 py-2 text-right tabular-nums">{{ entry.score.bp }}</td>
-                <td class="px-2 py-2 text-right tabular-nums">{{ entry.score.cb ?? '-' }}</td>
-                <td class="px-3 py-2 text-neutral-400">
-                  {{ formatScoreDate(entry.score.played_at) }}
-                </td>
-              </tr>
+              <template v-for="entry in ranking.ranking.entries" :key="entry.score.course_score_id">
+                <tr class="border-t border-default">
+                  <td class="px-3 py-2 text-toned">{{ entry.rank }}</td>
+                  <td class="px-3 py-2">
+                    <NuxtLink
+                      :to="localePath(`/players/${entry.player.id}`)"
+                      class="hover:underline"
+                    >
+                      {{ entry.player.display_name }}
+                    </NuxtLink>
+                  </td>
+                  <td class="px-3 py-2 text-right">
+                    <RankingExScore :score="entry.score.ex_score" :max="entry.score.max_ex_score" />
+                  </td>
+                  <td class="px-3 py-2 text-center">
+                    <RankingScoreRank
+                      :score="entry.score.ex_score"
+                      :max="entry.score.max_ex_score"
+                    />
+                  </td>
+                  <td class="px-3 py-2">
+                    <IrClearBadge :clear="entry.score.clear" />
+                  </td>
+                  <td v-if="lnPolicies.length" class="px-3 py-2 text-muted">
+                    {{ lnPolicyLabel(entry.score.ln_policy) }}
+                  </td>
+                  <td class="px-3 py-2 text-muted">{{ ruleModeLabel(entry.score.rule_mode) }}</td>
+                  <td class="px-3 py-2 text-xs text-muted">{{ scoreOption(entry.score) }}</td>
+                  <td class="px-3 py-2 text-right">
+                    <RankingMaxCombo
+                      :combo="entry.score.max_combo"
+                      :total-notes="totalNotesFromMaxExScore(entry.score.max_ex_score)"
+                    />
+                  </td>
+                  <td class="px-2 py-2 text-right tabular-nums">{{ entry.score.bp }}</td>
+                  <td class="px-2 py-2 text-right tabular-nums">{{ entry.score.cb ?? '-' }}</td>
+                  <td class="hidden px-3 py-2 text-muted xl:table-cell">
+                    {{ formatScoreDate(entry.score.played_at) }}
+                  </td>
+                  <td class="sticky right-0 z-10 bg-default px-1 py-1">
+                    <ScoreDetailToggle
+                      :expanded="expandedScoreRow === entry.score.course_score_id"
+                      :controls="scoreDetailsId"
+                      @toggle="toggleScoreDetails(entry.score.course_score_id)"
+                    />
+                  </td>
+                </tr>
+                <tr
+                  v-if="expandedScoreRow === entry.score.course_score_id"
+                  class="border-t border-default bg-elevated"
+                >
+                  <td :colspan="11 + (lnPolicies.length ? 1 : 0) + (wideScoreTable ? 1 : 0)">
+                    <ScoreRowMetadata
+                      :id="scoreDetailsId"
+                      :device="entry.score.device_type"
+                      :date="entry.score.played_at"
+                      class="sticky left-0 w-fit max-w-[calc(100vw-3rem)] px-3 py-3"
+                    />
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
         </div>
