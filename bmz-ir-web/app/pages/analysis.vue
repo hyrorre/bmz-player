@@ -18,10 +18,12 @@ const { t } = useI18n()
 const { formatNumber } = useLocaleFormat()
 const { translateApiError } = useApiError()
 const requestFetch = useRequestFetch()
-const preferredTable = useCookie<string>('ir-analysis-table', {
+const preferenceCookieOptions = {
   maxAge: 60 * 60 * 24 * 365,
   sameSite: 'lax',
-})
+} as const
+const preferredTable = useCookie<string>('ir-analysis-table', preferenceCookieOptions)
+const preferredMode = useCookie<IrDistributionMode>('ir-analysis-mode', preferenceCookieOptions)
 
 function queryText(value: unknown) {
   return typeof value === 'string' ? value.trim() || undefined : undefined
@@ -29,7 +31,13 @@ function queryText(value: unknown) {
 
 const playerId = computed(() => queryText(route.query.player) ?? user.value?.id)
 const tableId = computed(() => queryText(route.query.table) ?? queryText(preferredTable.value))
-const mode = computed<IrDistributionMode>(() => (route.query.mode === 'score' ? 'score' : 'lamp'))
+const mode = computed<IrDistributionMode>(() => {
+  const { mode, level, rank } = route.query
+  if (mode === 'lamp' || mode === 'score') return mode
+  // Older chart list links omit the clear lamp mode.
+  if (typeof level === 'string' && typeof rank === 'string') return 'lamp'
+  return preferredMode.value === 'score' ? 'score' : 'lamp'
+})
 const labels = computed(() => (mode.value === 'score' ? IR_SCORE_RANK_LABELS : IR_CLEAR_LABELS))
 const modeItems = computed(() => [
   { label: t('analysis.clearMode'), value: 'lamp' },
@@ -62,23 +70,22 @@ const tableItems = computed(() =>
 const total = computed(() => report.value?.levels.reduce((sum, level) => sum + level.total, 0) ?? 0)
 const legend = computed(() => labels.value.map((label, rank) => ({ label, rank })).reverse())
 
-function setView(query: { table?: string; mode?: 'score' | undefined }) {
-  return navigateTo({
+async function setView(query: { table?: string; mode?: IrDistributionMode }) {
+  const failure = await navigateTo({
     path: route.path,
     query: {
       ...route.query,
       table: tableId.value,
+      mode: mode.value,
       ...query,
       level: undefined,
       rank: undefined,
       chart_page: undefined,
     },
   })
-}
-
-async function selectTable(table: string) {
-  const failure = await setView({ table })
-  if (!failure) preferredTable.value = table
+  if (failure) return
+  if (query.table) preferredTable.value = query.table
+  if (query.mode) preferredMode.value = query.mode
 }
 
 const selection = computed(() => {
@@ -97,7 +104,13 @@ const modalOpen = computed({
     void navigateTo(
       {
         path: route.path,
-        query: { ...route.query, level: undefined, rank: undefined, chart_page: undefined },
+        query: {
+          ...route.query,
+          mode: mode.value,
+          level: undefined,
+          rank: undefined,
+          chart_page: undefined,
+        },
       },
       { replace: true },
     )
@@ -112,6 +125,7 @@ function showCharts(level: string, rank: number, event: MouseEvent) {
     query: {
       ...route.query,
       table: tableId.value,
+      mode: mode.value,
       level,
       rank: String(rank),
       chart_page: undefined,
@@ -228,7 +242,7 @@ useSeoMeta({ title: () => t('analysis.title') })
                 :items="tableItems"
                 value-key="value"
                 class="w-full sm:w-76"
-                @update:model-value="selectTable"
+                @update:model-value="(table) => setView({ table })"
               />
             </UFormField>
             <UTabs
@@ -237,7 +251,7 @@ useSeoMeta({ title: () => t('analysis.title') })
               :model-value="mode"
               :aria-label="t('analysis.mode')"
               @update:model-value="
-                (value) => setView({ mode: value === 'score' ? 'score' : undefined })
+                (value) => setView({ mode: value === 'score' ? 'score' : 'lamp' })
               "
             />
           </div>
