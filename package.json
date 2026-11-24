@@ -38,6 +38,7 @@
     "@nuxt/ui": "^4.12.0",
     "@nuxthub/core": "^0.10.10",
     "@nuxtjs/i18n": "^10.6.0",
+    "@zumer/snapdom": "3.8.3",
     "drizzle-orm": "^0.45.4",
     "marked": "^18.1.1",
     "nuxt": "^4.6.2",

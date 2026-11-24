@@ -34,6 +34,15 @@ const apiQuery = computed(() => {
 const { data, status, error } = await useFetch<IrDailyReport>('/api/v1/daily', {
   query: apiQuery,
 })
+const reportCapture = useTemplateRef<HTMLElement>('reportCapture')
+const sharePath = computed(() => {
+  const report = data.value
+  if (!report) return
+  return localePath({
+    path: '/daily',
+    query: { player: report.player.id, date: report.date, mode: report.mode },
+  })
+})
 
 watch(
   () => data.value?.date,
@@ -162,7 +171,7 @@ useSeoMeta({ title: () => t('daily.title') })
         {{ t('common.loading') }}
       </div>
 
-      <template v-else-if="data">
+      <article v-else-if="data" ref="reportCapture">
         <section
           class="rounded-t-2xl border border-muted bg-elevated px-5 py-8 text-center shadow-lg sm:px-8"
         >
@@ -207,7 +216,7 @@ useSeoMeta({ title: () => t('daily.title') })
         </section>
 
         <section class="rounded-b-2xl border-x border-b border-muted bg-default p-4 sm:p-6">
-          <div class="mb-6 flex flex-wrap items-center justify-center gap-2">
+          <div data-report-controls class="mb-4 flex flex-wrap items-center justify-center gap-2">
             <UButton
               color="neutral"
               icon="i-lucide-chevron-left"
@@ -236,6 +245,14 @@ useSeoMeta({ title: () => t('daily.title') })
               {{ t('daily.nextDay') }}
             </UButton>
           </div>
+          <ReportShareActions
+            v-if="sharePath"
+            :capture-target="reportCapture"
+            :share-path="sharePath"
+            :share-text="`${data.player.display_name || data.player.id} · ${t('daily.reportForDate', { date: displayDate(data.date) })}`"
+            :filename="`bmz-ir-daily-${data.date}`"
+            class="mb-6 justify-center"
+          />
 
           <p class="mb-4 text-center text-xs text-muted">
             {{
@@ -246,7 +263,11 @@ useSeoMeta({ title: () => t('daily.title') })
             }}
           </p>
 
-          <div v-if="rows.length" class="overflow-x-auto rounded-xl border border-muted">
+          <div
+            v-if="rows.length"
+            data-report-scroll
+            class="overflow-x-auto rounded-xl border border-muted"
+          >
             <table class="w-full min-w-[860px] text-sm">
               <thead class="bg-elevated text-left text-muted">
                 <tr>
@@ -386,7 +407,7 @@ useSeoMeta({ title: () => t('daily.title') })
             <p class="font-medium">{{ t('daily.empty') }}</p>
           </div>
         </section>
-      </template>
+      </article>
     </section>
   </main>
 </template>

@@ -1,5 +1,13 @@
 const ja = {
   messages: {
+    reportShare: {
+      saveImage: '画像を保存',
+      copyUrl: '共有URLをコピー',
+      postOnX: 'Xで投稿',
+      copied: '共有URLをコピーしました',
+      copyFailed: '共有URLをコピーできませんでした',
+      imageFailed: '画像を保存できませんでした',
+    },
     listSort: {
       label: '並び替え',
       asc: '昇順',
@@ -234,6 +242,14 @@ const ja = {
 
 const en = {
   messages: {
+    reportShare: {
+      saveImage: 'Save image',
+      copyUrl: 'Copy share URL',
+      postOnX: 'Post on X',
+      copied: 'Share URL copied',
+      copyFailed: 'Could not copy the share URL',
+      imageFailed: 'Could not save the image',
+    },
     listSort: {
       label: 'Sort by',
       asc: 'Ascending',
@@ -469,6 +485,14 @@ const en = {
 
 const ko = {
   messages: {
+    reportShare: {
+      saveImage: '이미지 저장',
+      copyUrl: '공유 URL 복사',
+      postOnX: 'X에 게시',
+      copied: '공유 URL을 복사했습니다',
+      copyFailed: '공유 URL을 복사하지 못했습니다',
+      imageFailed: '이미지를 저장하지 못했습니다',
+    },
     listSort: {
       label: '정렬 기준',
       asc: '오름차순',
@@ -699,6 +723,14 @@ const ko = {
 
 const zhCN = {
   messages: {
+    reportShare: {
+      saveImage: '保存图片',
+      copyUrl: '复制分享链接',
+      postOnX: '发布到 X',
+      copied: '已复制分享链接',
+      copyFailed: '无法复制分享链接',
+      imageFailed: '无法保存图片',
+    },
     listSort: {
       label: '排序依据',
       asc: '升序',
@@ -928,6 +960,14 @@ const zhCN = {
 
 const zhTW = {
   messages: {
+    reportShare: {
+      saveImage: '儲存圖片',
+      copyUrl: '複製分享連結',
+      postOnX: '在 X 上發布',
+      copied: '已複製分享連結',
+      copyFailed: '無法複製分享連結',
+      imageFailed: '無法儲存圖片',
+    },
     listSort: {
       label: '排序依據',
       asc: '升冪',

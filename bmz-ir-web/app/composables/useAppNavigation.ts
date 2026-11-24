@@ -18,7 +18,6 @@ export function useAppNavigation() {
     const manualPath = localePath('/manual')
     return [
       { label: t('nav.charts'), icon: 'i-lucide-list-music', to: localePath('/charts') },
-      { label: t('analysis.nav'), icon: 'i-lucide-chart-bar-stacked', to: localePath('/analysis') },
       { label: t('nav.courses'), icon: 'i-lucide-medal', to: localePath('/courses') },
       { label: t('nav.players'), icon: 'i-lucide-users', to: localePath('/players') },
       {
@@ -43,6 +42,11 @@ export function useAppNavigation() {
             icon: 'i-lucide-circle-user-round',
           },
           { label: t('nav.daily'), to: localePath('/daily'), icon: 'i-lucide-calendar-days' },
+          {
+            label: t('analysis.nav'),
+            to: localePath('/analysis'),
+            icon: 'i-lucide-chart-bar-stacked',
+          },
           { label: t('nav.rivals'), to: localePath('/rivals'), icon: 'i-lucide-users-round' },
           { label: t('nav.profile'), to: localePath('/profile'), icon: 'i-lucide-user-pen' },
           { label: t('nav.settings'), to: localePath('/settings'), icon: 'i-lucide-settings' },

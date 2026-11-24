@@ -9,6 +9,7 @@
         "@nuxt/ui": "^4.12.0",
         "@nuxthub/core": "^0.10.10",
         "@nuxtjs/i18n": "^10.6.0",
+        "@zumer/snapdom": "3.8.3",
         "drizzle-orm": "^0.45.4",
         "marked": "^18.1.1",
         "nuxt": "^4.6.2",
@@ -915,6 +916,8 @@
     "@vueuse/metadata": ["@vueuse/metadata@14.4.0", "", {}, "sha512-swx/255R6JyHZFJhx845iz5CRWDZdCfvkZOpACWc5+c5WHcG24mv8gUT1WIdFQaHt6dq79rvILd9QnCWiyVm9g=="],
 
     "@vueuse/shared": ["@vueuse/shared@14.4.0", "", { "peerDependencies": { "vue": "^3.5.0" } }, "sha512-JRgY90Sz8DDtPMsaDflvPMp9xYk69JZAmbuDvAquUVXKr2gEjqtzGNTTthLfckH0BzBqvnu31gb4a8TGLRe79g=="],
+
+    "@zumer/snapdom": ["@zumer/snapdom@3.8.3", "", {}, "sha512-WW/T0i3S2pYqjzLOsBrOO/lTaHGS/EEu1DQyC+XCWpR+N7sBxlOmWLwy35GAuH29UA37GC1nv7kOgvrKLe8bJg=="],
 
     "abbrev": ["abbrev@3.0.1", "", {}, "sha512-AO2ac6pjRB3SJmGJo+v5/aK6Omggp6fsLrs6wN9bd35ulu4cCwaAU9+7ZhXjeqHVkaHThLuzH0nZr0YpCDhygg=="],
 

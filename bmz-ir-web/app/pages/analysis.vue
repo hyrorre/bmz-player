@@ -61,6 +61,18 @@ const { data, status, error } = await useAsyncData(
   }),
 )
 const report = computed(() => data.value?.report)
+const reportCapture = useTemplateRef<HTMLElement>('reportCapture')
+const sharePath = computed(() => {
+  const current = report.value
+  if (!current?.table) return
+  return localePath({
+    path: '/analysis',
+    query: { player: current.player.id, table: current.table.id, mode: mode.value },
+  })
+})
+const modeLabel = computed(() =>
+  mode.value === 'score' ? t('analysis.scoreMode') : t('analysis.clearMode'),
+)
 const tableItems = computed(() =>
   (report.value?.tables ?? []).map(({ id, name, symbol }) => ({
     label: symbol ? `${name} (${symbol})` : name,
@@ -225,17 +237,26 @@ useSeoMeta({ title: () => t('analysis.title') })
         color="error"
         :description="translateApiError(error, 'errors.analysisLoadFailed')"
       />
-      <template v-else-if="report">
-        <NuxtLink
-          :to="localePath(`/players/${report.player.id}`)"
-          class="mb-4 inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
-        >
-          <UIcon name="i-lucide-user" class="size-4" />
-          {{ report.player.display_name || report.player.id }}
-        </NuxtLink>
+      <article v-else-if="report" ref="reportCapture">
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <NuxtLink
+            :to="localePath(`/players/${report.player.id}`)"
+            class="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
+          >
+            <UIcon name="i-lucide-user" class="size-4" />
+            {{ report.player.display_name || report.player.id }}
+          </NuxtLink>
+          <ReportShareActions
+            v-if="report.table && sharePath"
+            :capture-target="reportCapture"
+            :share-path="sharePath"
+            :share-text="`${report.player.display_name || report.player.id} · ${report.table.name} · ${modeLabel}`"
+            :filename="`bmz-ir-analysis-${report.table.id}-${mode}`"
+          />
+        </div>
         <p v-if="!report.table" class="text-sm text-muted">{{ t('analysis.noTables') }}</p>
         <template v-else>
-          <div class="mb-6 flex flex-wrap items-end justify-between gap-4">
+          <div data-report-controls class="mb-6 flex flex-wrap items-end justify-between gap-4">
             <UFormField :label="t('analysis.table')">
               <USelectMenu
                 :model-value="report.table.id"
@@ -322,7 +343,7 @@ useSeoMeta({ title: () => t('analysis.title') })
             </ul>
           </div>
         </template>
-      </template>
+      </article>
 
       <UModal
         v-model:open="modalOpen"
