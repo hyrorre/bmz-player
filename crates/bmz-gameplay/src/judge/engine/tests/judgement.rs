@@ -701,7 +701,7 @@ fn dx_9key_ln_early_bad_release_can_be_cancelled_during_margin() {
     let press = engine.process_input(&chart, press_at(TimeUs(1_000_000)));
     assert_eq!(press.events[0].judge, Judge::PGreat);
 
-    let release = engine.process_input(&chart, release_at(TimeUs(1_750_000)));
+    let release = engine.process_input(&chart, release_at(TimeUs(1_700_000)));
     assert!(release.events.is_empty());
     assert!(
         engine.lanes[Lane::Key1.index()]
@@ -709,9 +709,9 @@ fn dx_9key_ln_early_bad_release_can_be_cancelled_during_margin() {
             .is_some_and(|active| active.pending_release.is_some())
     );
 
-    let before_margin = engine.process_misses(&chart, TimeUs(1_866_666));
+    let before_margin = engine.process_misses(&chart, TimeUs(1_864_999));
     assert!(before_margin.events.is_empty());
-    let repress = engine.process_input(&chart, press_at(TimeUs(1_866_667)));
+    let repress = engine.process_input(&chart, press_at(TimeUs(1_865_000)));
     assert!(repress.events.is_empty());
     assert!(repress.consumed_input);
 
@@ -733,10 +733,10 @@ fn dx_9key_cn_early_bad_release_finalizes_after_margin() {
     );
 
     engine.process_input(&chart, press_at(TimeUs(1_000_000)));
-    let release = engine.process_input(&chart, release_at(TimeUs(1_750_000)));
+    let release = engine.process_input(&chart, release_at(TimeUs(1_700_000)));
     assert!(release.events.is_empty());
 
-    let finalized = engine.process_misses(&chart, TimeUs(1_866_667));
+    let finalized = engine.process_misses(&chart, TimeUs(1_865_000));
     assert_eq!(finalized.events.len(), 1);
     assert_eq!(finalized.events[0].note_id, Some(NoteId(2)));
     assert_eq!(finalized.events[0].judge, Judge::Bad);
@@ -753,45 +753,45 @@ fn dx_pop_engine() -> JudgeEngine {
 }
 
 #[test]
-fn dx_pop_cn_release_boundaries_widen_only_the_early_side() {
-    // 参照側 JudgeProperty.POP の LN 終端は PG/GR/GD が {-116667, 233333}、BD が
-    // {-183333, 366667} ({LATE, EARLY})。BMZ の差分は「離し時刻 - 終端」なので EARLY が負。
-    // BD 以下の早離しは longnoteMargin (116667) の間だけ保留され、その後に確定する。
-    for (offset_us, expected, pending) in [
-        (-233_333, Judge::PGreat, false),
-        (-233_334, Judge::Bad, true),
+fn dx_pop_charge_release_boundaries_widen_only_the_early_side() {
+    let cases = [
+        (-281_667, Judge::PGreat, false),
+        (-281_668, Judge::Bad, true),
         (-366_667, Judge::Bad, true),
         (-366_668, Judge::Poor, true),
         (116_667, Judge::PGreat, false),
         (116_668, Judge::Bad, false),
         (183_333, Judge::Bad, false),
         (183_334, Judge::Poor, false),
-    ] {
-        let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
-        chart.long_notes[0].mode = Some(LongNoteMode::Cn);
-        let mut engine = dx_pop_engine();
-        engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+    ];
+    for mode in [LongNoteMode::Cn, LongNoteMode::Hcn] {
+        for (offset_us, expected, pending) in cases {
+            let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+            chart.long_notes[0].mode = Some(mode);
+            let mut engine = dx_pop_engine();
+            engine.process_input(&chart, press_at(TimeUs(1_000_000)));
 
-        let released_at = 2_000_000 + offset_us;
-        let release = engine.process_input(&chart, release_at(TimeUs(released_at)));
-        let events = if pending {
-            assert!(release.events.is_empty(), "{offset_us}");
-            let before = engine.process_misses(&chart, TimeUs(released_at + 116_666));
-            assert!(before.events.is_empty(), "{offset_us}");
-            engine.process_misses(&chart, TimeUs(released_at + 116_667)).events
-        } else {
-            release.events
-        };
+            let released_at = 2_000_000 + offset_us;
+            let release = engine.process_input(&chart, release_at(TimeUs(released_at)));
+            let events = if pending {
+                assert!(release.events.is_empty(), "{mode:?} {offset_us}");
+                let before = engine.process_misses(&chart, TimeUs(released_at + 164_999));
+                assert!(before.events.is_empty(), "{mode:?} {offset_us}");
+                engine.process_misses(&chart, TimeUs(released_at + 165_000)).events
+            } else {
+                release.events
+            };
 
-        assert_eq!(events.len(), 1, "{offset_us}");
-        assert_eq!(events[0].note_id, Some(NoteId(2)), "{offset_us}");
-        assert_eq!(events[0].judge, expected, "{offset_us}");
+            assert_eq!(events.len(), 1, "{mode:?} {offset_us}");
+            assert_eq!(events[0].note_id, Some(NoteId(2)), "{mode:?} {offset_us}");
+            assert_eq!(events[0].judge, expected, "{mode:?} {offset_us}");
+        }
     }
 }
 
 #[test]
 fn dx_pop_ln_early_release_boundary_uses_widened_window() {
-    for (offset_us, pending) in [(-233_333, false), (-233_334, true)] {
+    for (offset_us, pending) in [(-281_667, false), (-281_668, true)] {
         let chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
         let mut engine = dx_pop_engine();
         engine.process_input(&chart, press_at(TimeUs(1_000_000)));

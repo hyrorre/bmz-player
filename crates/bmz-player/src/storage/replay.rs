@@ -5,6 +5,7 @@ use anyhow::{Result, bail};
 use bmz_core::clear::GaugeType;
 use bmz_core::replay::ReplayEvent;
 use bmz_gameplay::judge::model::JudgeAlgorithm;
+use bmz_gameplay::judge::window::DxPopJudgeRevision;
 use bmz_gameplay::replay::ReplayPlayer;
 use bmz_gameplay::rule::RuleMode;
 use serde::{Deserialize, Serialize};
@@ -20,7 +21,8 @@ pub const REPLAY_FILE_VERSION: u32 = 8;
 /// boundaries, delays passive scoring for negative human input offsets on all charts,
 /// records the scoring boundary for inputs that arrive after it, and records the
 /// scoring position at each branch evaluation.
-pub const REPLAY_JUDGE_REVISION: u32 = 4;
+/// Revision 5 extends DX POP early-release windows and the re-press margin.
+pub const REPLAY_JUDGE_REVISION: u32 = 5;
 pub const SEED_SCHEME_BEATORAJA_24BIT_V1: &str = "beatoraja_24bit_v1";
 pub const SEED_SCHEME_LEGACY_SHARED_V3: &str = "legacy_shared_v3";
 pub const S_RANDOM_SCHEME_LEGACY_40MS_V1: &str = SRandomScheme::LEGACY_40MS_V1;
@@ -106,7 +108,11 @@ impl ReplayFile {
             kaleid: self.kaleid.clone(),
             events: self.events.clone(),
             judge_algorithm: self.judge_algorithm,
-            legacy_dx_pop_judge: self.judge_revision == 0,
+            dx_pop_judge_revision: match self.judge_revision {
+                0 => DxPopJudgeRevision::Legacy,
+                1..=4 => DxPopJudgeRevision::V1ToV4,
+                _ => DxPopJudgeRevision::Current,
+            },
             input_excludes_start_margin: self.input_excludes_start_margin,
             branch_decisions: self.branch_decisions.clone(),
             next_index: 0,
@@ -591,12 +597,8 @@ mod tests {
         let text = toml::to_string(&replay).unwrap();
         let current = parse_replay(&text).unwrap();
         assert_eq!(current.judge_revision, REPLAY_JUDGE_REVISION);
-        assert!(!current.player().legacy_dx_pop_judge);
+        assert_eq!(current.player().dx_pop_judge_revision, DxPopJudgeRevision::Current);
         assert_eq!(current.player().judge_window_rates.unwrap().keys, [100, 100, 0]);
-        let legacy = text.replace(&format!("judge_revision = {REPLAY_JUDGE_REVISION}\n"), "");
-        let legacy = parse_replay(&legacy).unwrap();
-        assert_eq!(legacy.judge_revision, 0);
-        assert!(legacy.player().legacy_dx_pop_judge);
     }
 
     use bmz_core::clear::GaugeType;
@@ -786,16 +788,19 @@ events = []
     }
 
     #[test]
-    fn replays_without_judge_revision_use_the_earlier_dx_pop_windows() {
+    fn replay_judge_revision_selects_the_dx_pop_windows() {
         let replay = ReplayFile::new([7; 32], 1, None, ArrangeOption::Normal, None, None, vec![]);
-        assert_eq!(replay.judge_revision, REPLAY_JUDGE_REVISION);
-        assert!(!replay.player().legacy_dx_pop_judge);
         let text = toml::to_string(&replay).unwrap();
-        let reloaded = parse_replay(&text).unwrap();
-        assert!(!reloaded.player().legacy_dx_pop_judge);
-        let legacy = text.replace(&format!("judge_revision = {REPLAY_JUDGE_REVISION}\n"), "");
-        assert_ne!(legacy, text);
-        assert!(parse_replay(&legacy).unwrap().player().legacy_dx_pop_judge);
+        let revision_line = format!("judge_revision = {REPLAY_JUDGE_REVISION}\n");
+        let legacy = parse_replay(&text.replace(&revision_line, "")).unwrap();
+        assert_eq!(legacy.judge_revision, 0);
+        assert_eq!(legacy.player().dx_pop_judge_revision, DxPopJudgeRevision::Legacy);
+        for revision in 1..=4 {
+            let old = text.replace(&revision_line, &format!("judge_revision = {revision}\n"));
+            let old = parse_replay(&old).unwrap();
+            assert_eq!(old.judge_revision, revision);
+            assert_eq!(old.player().dx_pop_judge_revision, DxPopJudgeRevision::V1ToV4);
+        }
     }
 
     #[test]

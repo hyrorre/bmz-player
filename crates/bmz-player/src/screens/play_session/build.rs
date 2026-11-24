@@ -433,7 +433,7 @@ pub fn build_game_session_with_input_backend(
     let base_judge_windows = replay_judge_windows_for_keymode_and_rule_mode(
         primary_key_mode,
         rule_mode,
-        replay_player.as_ref().is_some_and(|player| player.legacy_dx_pop_judge),
+        replay_player.as_ref().map(|player| player.dx_pop_judge_revision).unwrap_or_default(),
     );
     let window_rates =
         replay_player.as_ref().and_then(|player| player.judge_window_rates).unwrap_or_else(|| {
@@ -515,7 +515,11 @@ pub fn build_game_session_with_input_backend(
             let base_judge_windows = replay_judge_windows_for_keymode_and_rule_mode(
                 key_mode,
                 rule_mode,
-                opponent.replay_player.as_ref().is_some_and(|player| player.legacy_dx_pop_judge),
+                opponent
+                    .replay_player
+                    .as_ref()
+                    .map(|player| player.dx_pop_judge_revision)
+                    .unwrap_or_default(),
             );
             let base_judge_windows = opponent
                 .replay_player

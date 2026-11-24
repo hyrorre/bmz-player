@@ -196,26 +196,30 @@ EXPAND JUDGEの任意倍率と再押下猶予倍率は設定に保持され、DX
 - EMPTY POOR FAST: `529167us`（候補走査の上限は排他的）
 - EMPTY POOR SLOW: `183333us`
 
-9KのLN / CN / HCN end（早離し側だけ広い）:
+PMS 5K / 9KのLN / CN / HCN / HLN終端（早離し側だけ広い）:
 
-- PGREAT / GREAT / GOOD: FAST（早離し）`233333us`、SLOW `116667us`
+- PGREAT / GREAT / GOOD: FAST（早離し）`281667us`、SLOW `116667us`
 - BAD: FAST `366667us`、SLOW `183333us`
 - EMPTY POOR: なし
 
-FAST側のPGREAT / GREAT / GOOD幅は、参照側の注記どおり判定幅116667us＋離し猶予116667usです。
+FAST側のPGREAT / GREAT / GOOD幅は、判定幅116667usと離し猶予165000usの合計です。
+[LR2orajaED-rian #50](https://github.com/rian-eimu/lr2oraja-endlessdream/pull/50)
 
 9KではBADがノーツを消費せず、後続入力でGOOD以上へ再判定できます。
 MultiBadで付いたBADも同じく非消費とします。EMPTY POORはコンボを切り、
 `MissCondition.ONE`として1ノーツにつき1回まで扱います。
 
-9KのLN / CN / HCNをBAD / POOR相当の早さで離した場合は、116667usの
+PMSのLN / CN / HCN / HLNをBAD / POOR相当の早さで離した場合は、165000usの
 release margin中だけ終端判定を保留します。その間に押し直せば早離しを取り消し、
 押し直さなければ保留した判定を確定します。long scratchのmarginは0です。
 
-v0.5.2以前に記録した9K DX MODEのリプレイは、記録時の判定で再現するため旧POP窓で再生します
-（通常ノートGOOD `±87500us`・BAD `±100000us`・EMPTY POOR FAST / SLOW `500000us` / `112500us`、
-LN end PGREAT / GREAT / GOOD / BAD `±120000` / `150000` / `217000` / `283000us`、release margin `200000us`）。
-リプレイファイルの`judge_revision`がないものを旧判定として扱い、新しく記録するリプレイには`judge_revision = 1`を書きます。
+DX POPのリプレイは記録時の判定窓と離し猶予を使います。
+
+- `judge_revision`がない、または0の場合は旧POP窓です。通常ノートのGOODは`±87500us`、BADは`±100000us`、
+  EMPTY POORはFAST `500000us`、SLOW `112500us`です。LN終端のPGREAT / GREAT / GOOD / BADは
+  `±120000` / `150000` / `217000` / `283000us`、離し猶予は`200000us`です。
+- リビジョン1〜4では早離しでGOOD以上になる幅が`233333us`、離し猶予が`116667us`です。
+- リビジョン5の新規記録には現在の幅と離し猶予を使います。
 
 `#RANK`, `#DEFEXRANK`, `#EXRANKxx` / chA0は固定IIDX / POP窓へ反映しません。
 BMZの実装でもDX modeの`judge_percent_at_time`は常に100%を返し、

@@ -354,13 +354,13 @@ fn dx_9key_uses_fixed_pop_windows_and_release_margin() {
     assert_eq!(windows.long_note_end.good_us, 116_667);
     assert_eq!(windows.long_note_end.bad_slow_us, 183_333);
     let fast = windows.long_note_end_fast.expect("POP LN end has an EARLY-side window");
-    assert_eq!(fast.pgreat_us, 233_333);
-    assert_eq!(fast.great_us, 233_333);
-    assert_eq!(fast.good_us, 233_333);
+    assert_eq!(fast.pgreat_us, 281_667);
+    assert_eq!(fast.great_us, 281_667);
+    assert_eq!(fast.good_us, 281_667);
     assert_eq!(fast.bad_fast_us, 366_667);
     assert_eq!(windows.long_note_end.bad_fast_us, fast.bad_fast_us);
     assert_eq!(windows.long_scratch_end_fast, windows.long_note_end_fast);
-    assert_eq!(windows.long_note_release_margin_us, 116_667);
+    assert_eq!(windows.long_note_release_margin_us, 165_000);
 
     // 参照側 JudgePropertyPopLongNoteEndTest と同じく #RANK によらず固定。
     for percent in [25, 50, 75, 125] {

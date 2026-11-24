@@ -139,7 +139,7 @@ profile policyを適用した後のeffective LN modeを指します。
   同じ入力を直後の通常ノートへ流しません。
 - CN / HCNを離さず終点を通過した場合の見逃し確定時刻は、long-note endの
   BAD終端ではなく通常ノートのlate BAD終端を使います。
-- 9Kのbeatoraja PMSとDX POPのrelease marginはそれぞれ200msと116,667μsです。BAD / POOR相当の
+- 9Kのbeatoraja PMSとDX POPのrelease marginはそれぞれ200msと165msです。BAD / POOR相当の
   早離しは直ちに確定せず、この猶予内に押し直すと取り消します。猶予を過ぎると保留判定を確定します。
   それ以外の通常レーンとlong scratchのmarginは0です。
 - HCNの`passing`参照自体は現在時刻が始点を通過すると設定されるが、始点stateが未判定の
