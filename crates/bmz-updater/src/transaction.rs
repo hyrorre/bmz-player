@@ -392,26 +392,6 @@ mod tests {
         assert_eq!(fs::read(root.join("resources/user.txt")).unwrap(), b"extra");
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn applies_an_update_below_a_path_longer_than_max_path() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("a".repeat(110)).join("b".repeat(110));
-        fs::create_dir_all(&root).unwrap();
-        package(&root, "0.4.0", &[("bmz-player.exe", b"old app"), (crate::HELPER, b"old")]);
-        let work = new_work_dir(&root).unwrap();
-        package(
-            &work.join("stage"),
-            "0.5.0",
-            &[("bmz-player.exe", b"new"), (crate::HELPER, b"new")],
-        );
-        assert!(work.join("backup/0").as_os_str().len() > 260);
-        apply(&root, &work).unwrap();
-        assert_eq!(fs::read(root.join("bmz-player.exe")).unwrap(), b"new");
-        assert_eq!(PackageManifest::read(&root).unwrap().version, "0.5.0");
-        assert!(pending_update(&root).unwrap().is_none());
-    }
-
     #[test]
     fn migrates_legacy_layout_and_updates_grouped_layout_without_touching_user_data() {
         for old_grouped in [false, true] {

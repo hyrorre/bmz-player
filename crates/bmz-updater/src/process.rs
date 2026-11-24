@@ -144,8 +144,10 @@ fn open_legacy_lock(root: &Path, name: &str, create: bool) -> Result<Option<File
         crate::manifest::reject_link(root)?;
         let path = root.join(name);
         match fs::symlink_metadata(&path) {
-            // Keep such a path in place, but do not fail startup or updates on it.
-            Ok(metadata) if !regular_file(&metadata) => return Ok(None),
+            Ok(metadata) if !regular_file(&metadata) => {
+                ensure!(!create, "required legacy lock is not a regular file");
+                return Ok(None);
+            }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
@@ -368,8 +370,7 @@ pub fn recover(root: &Path) -> Result<()> {
 pub fn available_space(root: &Path) -> Result<u64> {
     #[cfg(windows)]
     {
-        use std::os::windows::ffi::OsStrExt;
-        let root: Vec<u16> = root.as_os_str().encode_wide().chain(Some(0)).collect();
+        let root = crate::windows_path::verbatim_path(root)?;
         let mut available = 0;
         if unsafe {
             windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
@@ -431,5 +432,24 @@ mod tests {
         }
         assert!(instance_guard(temp.path()).is_err());
         assert!(update_guards(temp.path()).is_err());
+    }
+
+    #[test]
+    fn a_legacy_install_requires_its_instance_lock_for_startup_and_recovery() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        crate::manifest::write_test_package(
+            root,
+            "0.4.0",
+            &[("bmz-player.exe", b"app"), (crate::LEGACY_HELPER, b"helper")],
+        );
+        let legacy_lock = root.join(crate::LEGACY_INSTANCE_LOCK);
+        fs::create_dir(&legacy_lock).unwrap();
+        assert!(!root.join(crate::INSTANCE_LOCK).exists());
+
+        assert!(instance_guard(root).is_err());
+        assert!(recover(root).is_err());
+        assert!(!root.join(crate::INSTANCE_LOCK).exists());
+        assert!(legacy_lock.is_dir());
     }
 }
