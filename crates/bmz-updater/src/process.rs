@@ -291,14 +291,47 @@ pub fn run_request(path: &Path) -> Result<()> {
     result
 }
 
+fn startup_probe_dir(work: &Path) -> Result<tempfile::TempDir> {
+    const PREFIX: &str = "bmz-sxs-";
+    const RANDOM_CHARS: usize = 8;
+
+    crate::manifest::reject_link(work)?;
+    let parent = std::path::absolute(work)?;
+    #[cfg(windows)]
+    use std::os::windows::ffi::OsStrExt;
+    #[cfg(windows)]
+    const MAX_CURRENT_DIR: usize = 258; // Win32 MAX_PATH minus the trailing separator and NUL.
+    #[cfg(windows)]
+    let parent = if parent.as_os_str().encode_wide().count() + 1 + PREFIX.len() + RANDOM_CHARS
+        > MAX_CURRENT_DIR
+    {
+        std::path::absolute(std::env::temp_dir())?
+    } else {
+        parent
+    };
+    #[cfg(windows)]
+    ensure!(
+        parent.as_os_str().encode_wide().count() + 1 + PREFIX.len() + RANDOM_CHARS
+            <= MAX_CURRENT_DIR,
+        "SxS loader check needs a shorter temporary directory: {}",
+        parent.display()
+    );
+    tempfile::Builder::new()
+        .prefix(PREFIX)
+        .rand_bytes(RANDOM_CHARS)
+        .tempdir_in(&parent)
+        .with_context(|| {
+            format!("could not create a directory for the SxS loader check in {}", parent.display())
+        })
+}
+
 pub(crate) fn verify_player_startup(root: &Path, work: &Path, version: &str) -> Result<()> {
-    let cwd = checked_path(work, "startup-probe")?;
-    fs::create_dir(&cwd)?;
+    let cwd = startup_probe_dir(work)?;
     let output = checked_path(work, "startup-version.txt")?;
     let stdout = File::options().write(true).create_new(true).open(&output)?;
     let mut command = Command::new(checked_path(root, "bmz-player.exe")?);
     command
-        .current_dir(cwd)
+        .current_dir(cwd.path())
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(stdout)
@@ -395,6 +428,31 @@ pub fn available_space(root: &Path) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn a_long_work_path_can_start_the_loader_probe() {
+        use std::os::windows::ffi::OsStrExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let work = temp.path().join("a".repeat(110)).join("b".repeat(110));
+        fs::create_dir_all(&work).unwrap();
+        let work = work.canonicalize().unwrap();
+        assert!(work.as_os_str().encode_wide().count() > 260);
+
+        let cwd = startup_probe_dir(&work).unwrap();
+        let path = cwd.path().to_path_buf();
+        let status = Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .current_dir(&path)
+            .stdout(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        drop(cwd);
+        assert!(!path.exists());
+    }
+
     #[test]
     fn all_running_instances_block_exclusive_update_lock() {
         let temp = tempfile::tempdir().unwrap();
