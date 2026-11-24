@@ -164,6 +164,10 @@ fn settled_runtime_result_records_final_gauges_and_stays_fixed_until_finished() 
     client.start(audio, render_config).unwrap();
     let mut driver = Driver { client, input, probe };
 
+    // The collector records at most one due sample per update. Visit the
+    // earlier sample times even if the worker has not run at clock zero.
+    driver.advance(1_000, Vec::new());
+    driver.advance(500_000, Vec::new());
     let end_ms = END_US / 1_000;
     driver.advance(END_US, vec![key(InputKind::Press, end_ms)]);
     driver.advance(END_US + 10_000, vec![key(InputKind::Release, end_ms + 10)]);
