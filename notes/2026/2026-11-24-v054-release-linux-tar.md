@@ -14,3 +14,14 @@
 Windows でフォーマット、`bmz-player` の `check`、全ターゲットの Clippy、テストを実行した。
 ライブラリテストは3472件成功、98件無視。対象テストは2プロセスで50回ずつ実行し、100回とも成功した。
 修正後の Linux リリースビルドは未実行。
+
+## 2026-11-24 公開確認
+
+元のタグからテスト修正と CHANGELOG の追記を取り込んだ `493124ec1` を、承認後に v0.5.4 のタグに設定した。
+[公開用 Release Apps](https://github.com/hyrorre/bmz-player/actions/runs/45367536665) で全5ビルドと添付工程が成功した。
+Linux tar の `bmz-player` ライブラリテストは3506件成功、69件無視。失敗していたゲージ履歴テストも通過し、
+実行用アーカイブと対応ソースからのオフライン再ビルドを検証した。
+
+[v0.5.4 prerelease](https://github.com/hyrorre/bmz-player/releases/tag/v0.5.4) の配布物7本を公開済みのチェックサムと照合した。
+`release.json` と `updates.json` の署名、Windows の最低 updater protocol 4 と橋渡し版 v0.5.3、
+macOS arm64 / x64 の prerelease フィードへの反映も確認した。
