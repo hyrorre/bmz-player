@@ -407,11 +407,6 @@ impl EguiLayer {
                 if let Some(preview) = course_preview {
                     build_course_preview_panel(ctx, preview, text);
                 }
-                let navigation = SettingsNavigation::load(ctx);
-                let page = navigation.page;
-                if page != SettingsPage::Ir || !settings_editable {
-                    self.ir_manual.queue_hidden();
-                }
                 let profile_name = profile_config.display_name.clone();
                 let build_contents = |ui: &mut egui::Ui, page| match page {
                     SettingsPage::Downloads => {
@@ -566,7 +561,7 @@ impl EguiLayer {
                             before_obs != serde_json::to_value(&app_config.obs).ok();
                     }
                 };
-                build_menu_window(
+                let menu_expanded = build_menu_window(
                     ctx,
                     visible_flag,
                     &profile_name,
@@ -589,7 +584,11 @@ impl EguiLayer {
                 if settings_editable {
                     build_ir_confirm_modal(ctx, &profile_config.ir, &mut self.ir_manual, text);
                 }
-                if !*visible_flag || !SettingsNavigation::load(ctx).accepts_key_capture() {
+                let navigation = SettingsNavigation::load(ctx);
+                if !menu_expanded || navigation.page != SettingsPage::Ir || !settings_editable {
+                    self.ir_manual.queue_hidden();
+                }
+                if !menu_expanded || !navigation.accepts_key_capture() {
                     self.key_config.listening = None;
                 }
             }

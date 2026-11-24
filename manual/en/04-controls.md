@@ -13,6 +13,8 @@ By default, KEY1 to KEY7 are **Z S X D C F V**, and E1 to E4 are **Q W E R**.
 | F1 | Open or close the BMZ Menu (settings and tools) |
 | F12 | Save a screenshot |
 
+Click the triangle on the left of the BMZ Menu title bar to collapse or expand the menu.
+
 Assign a shortcut in Key Config → Common / Song Selection → RANDOM TRAINER to open the tool directly. No key is assigned by default.
 In BMZ Menu → Music Select, set the ESC exit hold time to 0 to quit with a single press.
 Register another profile under Rivals on the same page to compare against past scores. Press 7 to cycle rivals and F5 to reload.

@@ -293,8 +293,8 @@ pub(super) fn build_menu_window(
     text: Localizer,
     course_stage_result: bool,
     contents: impl FnOnce(&mut egui::Ui, SettingsPage),
-) {
-    localized_sized_panel_window(
+) -> bool {
+    let window = localized_sized_panel_window(
         "settings_workspace",
         tr!(text, "menu-title"),
         ctx,
@@ -303,8 +303,8 @@ pub(super) fn build_menu_window(
         650.0,
         egui::pos2(220.0, 32.0),
     )
-    .collapsible(false)
-    .show(ctx, |ui| {
+    .collapsible(true);
+    let response = window.show(ctx, |ui| {
         ui.label(format!("{}: {profile_name}", tr!(text, "settings-nav-profile")));
         ui.separator();
         let mut navigation = SettingsNavigation::load(ctx);
@@ -428,6 +428,7 @@ pub(super) fn build_menu_window(
             }
         });
     });
+    *open && response.is_some_and(|response| response.inner.is_some())
 }
 
 fn build_manual_button(ui: &mut egui::Ui, text: Localizer) {
@@ -618,10 +619,12 @@ mod tests {
         ];
         let mut tops = [None; 7];
         for _ in 0..3 {
-            let output = ctx
-                .run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {
-                    build_menu_window(ui.ctx(), &mut true, "Default", text, false, |_, _| {})
-                });
+            let output = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(rect), ..Default::default() },
+                |ui| {
+                    build_menu_window(ui.ctx(), &mut true, "Default", text, false, |_, _| {});
+                },
+            );
             for shape in output.shapes {
                 if let egui::Shape::Text(label) = shape.shape
                     && let Some(index) =
@@ -677,6 +680,52 @@ mod tests {
         let save = save_rect.expect("save button is visible");
         assert!(license.top() > 400.0, "license should be pinned below the category list");
         assert!(license.bottom() < save.top(), "license should be above the footer");
+    }
+
+    #[test]
+    fn title_bar_button_collapses_and_restores_the_menu_page() {
+        let ctx = egui::Context::default();
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+        let text = Localizer::new(AppLocale::En);
+        let id = egui::Id::new("settings_workspace");
+        SettingsNavigation::select(&ctx, SettingsPage::KeyConfig);
+        let mut open = true;
+        let mut frame = |events| {
+            let mut page = None;
+            let mut expanded = false;
+            let _ = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(screen), events, ..Default::default() },
+                |ui| {
+                    expanded =
+                        build_menu_window(ui.ctx(), &mut open, "Default", text, false, |_, p| {
+                            page = Some(p);
+                        });
+                },
+            );
+            assert!(open, "the collapse button must leave the menu open");
+            (expanded, page)
+        };
+        for _ in 0..3 {
+            assert_eq!(frame(Vec::new()), (true, Some(SettingsPage::KeyConfig)));
+        }
+        let window = ctx.memory(|memory| memory.area_rect(id)).unwrap();
+        let button = window.min + egui::vec2(14.0, 14.0);
+        let click = |pressed| egui::Event::PointerButton {
+            pos: button,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![egui::Event::PointerMoved(button), click(true)]);
+        frame(vec![click(false)]);
+        assert_eq!(frame(Vec::new()), (false, None));
+        let collapsed = ctx.memory(|memory| memory.area_rect(id)).unwrap();
+        assert!(!collapsed.contains(window.center()));
+
+        frame(vec![click(true)]);
+        frame(vec![click(false)]);
+        assert_eq!(frame(Vec::new()), (true, Some(SettingsPage::KeyConfig)));
     }
 
     #[test]
