@@ -13,7 +13,7 @@ const xUrl = computed(() => {
   const query = new URLSearchParams({ text: props.shareText, url: shareUrl.value })
   return `https://x.com/intent/tweet?${query}`
 })
-const saving = ref(false)
+const imageAction = ref<'save' | 'copy' | null>(null)
 
 async function copyUrl() {
   try {
@@ -24,11 +24,7 @@ async function copyUrl() {
   }
 }
 
-async function saveImage() {
-  if (import.meta.server || saving.value || !props.captureTarget) return
-  saving.value = true
-  const target = props.captureTarget
-  const filename = props.filename
+async function captureReport(target: HTMLElement) {
   const preview = document.createElement('div')
   try {
     const clone = target.cloneNode(true) as HTMLElement
@@ -49,12 +45,46 @@ async function saveImage() {
     document.body.append(preview)
 
     const { snapdom } = await import('@zumer/snapdom')
-    await snapdom.download(clone, { filename, format: 'png', fast: false })
-  } catch {
-    toast.add({ title: t('reportShare.imageFailed'), color: 'error' })
+    return await snapdom(clone, { format: 'png', fast: false })
   } finally {
     preview.remove()
-    saving.value = false
+  }
+}
+
+async function copyReportImage(target: HTMLElement) {
+  if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+    throw new Error('Image clipboard is unavailable')
+  }
+  const png = captureReport(target).then((capture) => capture.toBlob({ format: 'png', dpr: 1 }))
+  const captureFinished = png.catch(() => undefined)
+  try {
+    // Start the clipboard write during the click, before the asynchronous PNG export completes.
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+  } finally {
+    await captureFinished
+  }
+}
+
+async function exportImage(action: 'save' | 'copy') {
+  if (import.meta.server || imageAction.value || !props.captureTarget) return
+  imageAction.value = action
+  try {
+    if (action === 'copy') {
+      await copyReportImage(props.captureTarget)
+      toast.add({ title: t('reportShare.imageCopied'), color: 'success', icon: 'i-lucide-check' })
+    } else {
+      const filename = props.filename
+      const capture = await captureReport(props.captureTarget)
+      await capture.download({ filename, format: 'png' })
+    }
+  } catch {
+    if (action === 'copy') {
+      toast.add({ title: t('reportShare.imageCopyFailed'), color: 'error' })
+    } else {
+      toast.add({ title: t('reportShare.imageFailed'), color: 'error' })
+    }
+  } finally {
+    imageAction.value = null
   }
 }
 </script>
@@ -67,10 +97,21 @@ async function saveImage() {
       variant="subtle"
       size="sm"
       icon="i-lucide-camera"
-      :loading="saving"
-      :disabled="!captureTarget"
+      :loading="imageAction === 'save'"
+      :disabled="!captureTarget || imageAction !== null"
       :label="t('reportShare.saveImage')"
-      @click="saveImage"
+      @click="exportImage('save')"
+    />
+    <UButton
+      type="button"
+      color="neutral"
+      variant="subtle"
+      size="sm"
+      icon="i-lucide-copy"
+      :loading="imageAction === 'copy'"
+      :disabled="!captureTarget || imageAction !== null"
+      :label="t('reportShare.copyImage')"
+      @click="exportImage('copy')"
     />
     <UButton
       type="button"
@@ -78,6 +119,7 @@ async function saveImage() {
       variant="subtle"
       size="sm"
       icon="i-lucide-link"
+      :disabled="imageAction === 'copy'"
       :label="t('reportShare.copyUrl')"
       @click="copyUrl"
     />

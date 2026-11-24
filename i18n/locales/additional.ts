@@ -2,6 +2,9 @@ const ja = {
   messages: {
     reportShare: {
       saveImage: '画像を保存',
+      copyImage: '画像をコピー',
+      imageCopied: '画像をコピーしました',
+      imageCopyFailed: '画像をコピーできませんでした。「画像を保存」を使ってください。',
       copyUrl: '共有URLをコピー',
       postOnX: 'Xで投稿',
       copied: '共有URLをコピーしました',
@@ -244,6 +247,9 @@ const en = {
   messages: {
     reportShare: {
       saveImage: 'Save image',
+      copyImage: 'Copy image',
+      imageCopied: 'Image copied',
+      imageCopyFailed: 'Could not copy the image. Use Save image to download it.',
       copyUrl: 'Copy share URL',
       postOnX: 'Post on X',
       copied: 'Share URL copied',
@@ -487,6 +493,9 @@ const ko = {
   messages: {
     reportShare: {
       saveImage: '이미지 저장',
+      copyImage: '이미지 복사',
+      imageCopied: '이미지를 복사했습니다',
+      imageCopyFailed: '이미지를 복사하지 못했습니다. 이미지 저장을 이용해 주세요.',
       copyUrl: '공유 URL 복사',
       postOnX: 'X에 게시',
       copied: '공유 URL을 복사했습니다',
@@ -725,6 +734,9 @@ const zhCN = {
   messages: {
     reportShare: {
       saveImage: '保存图片',
+      copyImage: '复制图片',
+      imageCopied: '已复制图片',
+      imageCopyFailed: '无法复制图片，请使用“保存图片”下载。',
       copyUrl: '复制分享链接',
       postOnX: '发布到 X',
       copied: '已复制分享链接',
@@ -962,6 +974,9 @@ const zhTW = {
   messages: {
     reportShare: {
       saveImage: '儲存圖片',
+      copyImage: '複製圖片',
+      imageCopied: '已複製圖片',
+      imageCopyFailed: '無法複製圖片，請使用「儲存圖片」下載。',
       copyUrl: '複製分享連結',
       postOnX: '在 X 上發布',
       copied: '已複製分享連結',
