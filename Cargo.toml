@@ -65,7 +65,7 @@ unicode-normalization = "0.1"
 cpal = "0.18"
 windows = "0.62"
 ctrlc = "3"
-ffmpeg-next = { version = "9", default-features = false, features = [
+ffmpeg-next = { version = "9.1", default-features = false, features = [
     "codec",
     "format",
     "software-resampling",

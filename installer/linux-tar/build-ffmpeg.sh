@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # Same upstream release as the macOS builder; Linux has its own configure line.
-version=9.0.1
-sha256=cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635
+version=9.1
+sha256=1a4d394ae63d190a526cd052eb4415c156b5c5e2df37efab41a7de0b8fde2433
 source_dir=${1:-/opt/ffmpeg-source}
 prefix=${2:-/opt/ffmpeg}
 mkdir -p "$source_dir"

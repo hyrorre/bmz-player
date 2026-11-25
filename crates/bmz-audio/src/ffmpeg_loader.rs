@@ -369,6 +369,9 @@ fn read_planar_plane(
             return Err("planar 64-bit integer audio is not supported".to_string());
         }
         FfmpegSample::None => return Err("decoder produced no sample format".to_string()),
+        // ffmpeg-next adds variants according to the linked FFmpeg version.
+        #[allow(unreachable_patterns)]
+        _ => return Err(format!("unsupported sample format: {}", format.name())),
     };
     Ok(values)
 }
@@ -402,6 +405,8 @@ fn sample_to_f32(format: FfmpegSample, buf: &[u8], offset: usize) -> Result<f32,
             f64::from_ne_bytes(bytes) as f32
         }
         FfmpegSample::None => return Err("decoder produced no sample format".to_string()),
+        #[allow(unreachable_patterns)]
+        _ => return Err(format!("unsupported sample format: {}", format.name())),
     };
     Ok(value)
 }
@@ -414,6 +419,15 @@ fn decode_error(path: &Path, message: impl Into<String>) -> SampleLoadError {
 mod tests {
     use super::*;
     use crate::decode_limits::MAX_SAMPLE_BYTES;
+
+    #[test]
+    fn packed_dsd_reports_unsupported_format_when_available() {
+        let format = FfmpegSample::from("dsd");
+        if format == FfmpegSample::None {
+            return;
+        }
+        assert_eq!(sample_to_f32(format, &[0], 0).unwrap_err(), "unsupported sample format: dsd");
+    }
 
     #[test]
     fn long_silent_wav_respects_small_native_and_ffmpeg_limits() {

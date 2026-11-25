@@ -177,7 +177,7 @@ dist/windows/installer/bmz-player-<version>-windows-<arch>-setup.exe
 ### Windowsのオプション
 
 GitHub ActionsのWindows release jobは`triplets/x64-windows-release.cmake`を
-overlay tripletとして使い、vcpkgのFFmpegをRelease-onlyでビルドします。
+overlay tripletとして使い、workflowで固定したvcpkgからFFmpeg 9.1をRelease-onlyでビルドします。
 
 debug buildで作る:
 
@@ -386,7 +386,7 @@ scripts/package-macos-app.sh --skip-rust-license-report
 
 公開用macOS artifactではHomebrewのFFmpeg bottleを同梱しません。bottleの
 deployment targetはrunner / Homebrew更新に追従して変わるため、
-`scripts/build-ffmpeg-macos.sh`でFFmpeg 9.0.1の公式source archiveを検証して
+`scripts/build-ffmpeg-macos.sh`でFFmpeg 9.1の公式source archiveを検証して
 artifactの最低対応OS向けshared libraryを作ります。BMZが使用しない`libavdevice` /
 `libavfilter`、encoder / muxer、外部codec library、network protocol、CLI programは
 無効化します。
@@ -624,8 +624,10 @@ macOSはSparkleで署名済み`.app.zip`を適用します。いずれも検証�
 
 release tagは`v0.1.0`のように`v` prefix付きでもよいが、数値部分は
 `Cargo.toml`のworkspace versionと一致する必要があります。手動実行では`tag` input
-を指定します。`upload_to_release=false`ならActions artifactの生成だけを行い、
-GitHub Releaseには添付しません。
+を指定します。`upload_to_release=false`ではブランチやコミットSHAも指定でき、
+workspace versionを使って各OSの配布物をActions artifactとして生成します。
+公開時は`tag`をGitタグとして解決します。メタデータ生成と成果物の取りまとめは読み取り権限で行い、
+GitHub Releaseと更新フィードへの書き込みは公開ジョブが担当します。
 
 Windows jobは`scripts/package-windows.ps1`をdefault featuresで実行するため、
 release artifactはASIO対応を含みます。`cpal/asio`が使う`asio-sys` build scriptは
@@ -646,10 +648,11 @@ Developer ID署名・公証を利用する場合だけ、次の任意secretsを�
 - `BMZ_MACOS_NOTARY_PASSWORD`
 - `BMZ_MACOS_NOTARY_TEAM_ID`
 
-署名用secretsが揃っている場合はDeveloper ID署名を使い、公証用secretsも揃っている場合は
+公開時に署名用secretsが揃っている場合はDeveloper ID署名を使い、公証用secretsも揃っている場合は
 notarization、stapling、`spctl`検証を行ってから`.app.zip`を作ります。
-未設定ならad-hoc署名で作成し、`upload_to_release=true`でも公開できます。
-どちらの場合も最終ZIPにはSparkleのEdDSA署名を付け、埋込み公開鍵との照合に成功してから公開します。
+secretsが未設定の場合と公開しない検証では、ad-hoc署名で作成します。
+Developer ID署名と公証のsecretsは、公開時に使う各ステップに渡します。
+公開するZIPにはSparkleのEdDSA署名を付け、埋込み公開鍵との照合に成功してから公開します。
 
 macOSのarm64 runnerは`macos-15`、x64 runnerは`macos-15-intel`を使います。
 workflow matrixからarm64には`MACOSX_DEPLOYMENT_TARGET=11.0`、x64には
