@@ -133,14 +133,14 @@ impl WinitApp {
                     .result_skin_document()
                     .map(|document| document.result_ir_scope_binding)
                     .unwrap_or_default();
-                let lane_note_counts = if self.result.finished_course.is_some() {
+                let lane_scores = if self.result.finished_course.is_some() {
                     Default::default()
                 } else {
                     self.result
                         .finished_play
                         .as_ref()
                         .and_then(|play| play.lane_details.as_deref())
-                        .map(|details| details.note_counts())
+                        .map(|details| details.skin_scores())
                         .unwrap_or_default()
                 };
                 AppSceneSnapshot::Result(ResultSnapshot {
@@ -192,7 +192,7 @@ impl WinitApp {
                     gauge_value: summary.gauge_value,
                     gauge_type: summary.gauge_type as i32,
                     total_notes: summary.total_notes,
-                    lane_note_counts,
+                    lane_scores,
                     duration_ms: summary.duration_ms,
                     note_display_duration_ms: Some(Self::select_note_display_duration_ms_for_skin(
                         &self.boot.profile_config,

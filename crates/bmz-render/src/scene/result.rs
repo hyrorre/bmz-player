@@ -160,6 +160,39 @@ pub enum ResultIrState {
     Restricted,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResultLaneScore {
+    pub notes: u32,
+    pub ex_score: u32,
+    pub bp: u32,
+    pub auto_scratch: bool,
+}
+
+impl ResultLaneScore {
+    /// Image index: 0 is reserved for a blank, 1 through 8 are AAA through F, and 9 is AUTO.
+    pub fn rank_index(self) -> Option<usize> {
+        if self.auto_scratch {
+            Some(9)
+        } else {
+            bmz_core::score::score_rank_index(self.ex_score, self.notes).map(|rank| rank + 1)
+        }
+    }
+
+    pub fn rank_label(self) -> Option<&'static str> {
+        const LABELS: [&str; 10] = ["", "AAA", "AA", "A", "B", "C", "D", "E", "F", "AUTO"];
+        self.rank_index().map(|index| LABELS[index])
+    }
+
+    pub fn ex_rate_label(self) -> Option<String> {
+        (self.notes > 0 && !self.auto_scratch)
+            .then(|| format!("{:.1}%", 50.0 * f64::from(self.ex_score) / f64::from(self.notes)))
+    }
+
+    pub fn displayed_bp(self) -> Option<u32> {
+        (!self.auto_scratch).then_some(self.bp)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultSnapshot {
     pub chart_md5: Option<[u8; 16]>,
@@ -207,8 +240,8 @@ pub struct ResultSnapshot {
     pub gauge_value: f32,
     pub gauge_type: i32,
     pub total_notes: u32,
-    /// Played note counts shown in Result Details, in BMZ lane order.
-    pub lane_note_counts: [Option<u32>; LANE_COUNT],
+    /// Single-song scores shown in Result Details, in BMZ lane order.
+    pub lane_scores: [Option<ResultLaneScore>; LANE_COUNT],
     pub duration_ms: i32,
     /// NUMBER_DURATION に渡す設定済みノーツ表示時間 ms。
     /// NUMBER_DURATION_GREEN は描画state構築時にこの値から導出する。

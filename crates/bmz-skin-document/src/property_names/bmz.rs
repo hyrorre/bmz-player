@@ -1,32 +1,20 @@
 //! BMZ extension property names. Kept apart from the generated beatoraja tables.
 
-use bmz_core::lane::Lane;
+use bmz_core::lane::LANE_COUNT;
 
 use super::PropertyFamily;
 use crate::{
     SKIN_OPTION_BMZ_CHART_MISS_TEXT_ACTIVE, SKIN_OPTION_BMZ_CHART_TEXT_VISIBLE,
-    SKIN_REF_BMZ_LANE_NOTES_BASE, SKIN_REF_BMZ_SELECT_MODE_INDEX, SKIN_TEXT_BMZ_CHART_MISS_TEXT,
-    SKIN_TEXT_BMZ_CHART_TEXT,
+    SKIN_REF_BMZ_LANE_BP_BASE, SKIN_REF_BMZ_LANE_NOTES_BASE, SKIN_REF_BMZ_LANE_RANK_BASE,
+    SKIN_REF_BMZ_SELECT_MODE_INDEX, SKIN_TEXT_BMZ_CHART_MISS_TEXT, SKIN_TEXT_BMZ_CHART_TEXT,
+    SKIN_TEXT_BMZ_LANE_EX_RATE_BASE,
 };
 
-const INTEGER_NAMES: &[(&str, i32)] = &[
-    ("bmz_select_mode_index", SKIN_REF_BMZ_SELECT_MODE_INDEX),
-    ("bmz_lane_notes_scratch", SKIN_REF_BMZ_LANE_NOTES_BASE + Lane::Scratch as i32),
-    ("bmz_lane_notes_key1", SKIN_REF_BMZ_LANE_NOTES_BASE + Lane::Key1 as i32),
-    ("bmz_lane_notes_key2", SKIN_REF_BMZ_LANE_NOTES_BASE + Lane::Key2 as i32),
-    ("bmz_lane_notes_key3", SKIN_REF_BMZ_LANE_NOTES_BASE + Lane::Key3 as i32),
-    ("bmz_lane_notes_key4", SKIN_REF_BMZ_LANE_NOTES_BASE + Lane::Key4 as i32),
-    ("bmz_lane_notes_key5", SKIN_REF_BMZ_LANE_NOTES_BASE + Lane::Key5 as i32),
-    ("bmz_lane_notes_key6", SKIN_REF_BMZ_LANE_NOTES_BASE + Lane::Key6 as i32),
-    ("bmz_lane_notes_key7", SKIN_REF_BMZ_LANE_NOTES_BASE + Lane::Key7 as i32),
-    ("bmz_lane_notes_key8", SKIN_REF_BMZ_LANE_NOTES_BASE + Lane::Key8 as i32),
-    ("bmz_lane_notes_key9", SKIN_REF_BMZ_LANE_NOTES_BASE + Lane::Key9 as i32),
-    ("bmz_lane_notes_key10", SKIN_REF_BMZ_LANE_NOTES_BASE + Lane::Key10 as i32),
-    ("bmz_lane_notes_key11", SKIN_REF_BMZ_LANE_NOTES_BASE + Lane::Key11 as i32),
-    ("bmz_lane_notes_key12", SKIN_REF_BMZ_LANE_NOTES_BASE + Lane::Key12 as i32),
-    ("bmz_lane_notes_key13", SKIN_REF_BMZ_LANE_NOTES_BASE + Lane::Key13 as i32),
-    ("bmz_lane_notes_key14", SKIN_REF_BMZ_LANE_NOTES_BASE + Lane::Key14 as i32),
-    ("bmz_lane_notes_scratch2", SKIN_REF_BMZ_LANE_NOTES_BASE + Lane::Scratch2 as i32),
+const INTEGER_NAMES: &[(&str, i32)] = &[("bmz_select_mode_index", SKIN_REF_BMZ_SELECT_MODE_INDEX)];
+
+const LANE_SUFFIXES: [&str; LANE_COUNT] = [
+    "scratch", "key1", "key2", "key3", "key4", "key5", "key6", "key7", "key8", "key9", "key10",
+    "key11", "key12", "key13", "key14", "scratch2",
 ];
 
 const STRING_NAMES: &[(&str, i32)] = &[
@@ -40,6 +28,22 @@ const BOOLEAN_NAMES: &[(&str, i32)] = &[
 ];
 
 pub(super) fn resolve(family: PropertyFamily, name: &str) -> Option<i32> {
+    if let Some(lane_property) = name.strip_prefix("bmz_lane_") {
+        let (property, lane) = lane_property.rsplit_once('_')?;
+        let base = match (family, property) {
+            (PropertyFamily::Integer, "notes") => SKIN_REF_BMZ_LANE_NOTES_BASE,
+            (PropertyFamily::Integer | PropertyFamily::String, "rank") => {
+                SKIN_REF_BMZ_LANE_RANK_BASE
+            }
+            (PropertyFamily::String, "ex_rate") => SKIN_TEXT_BMZ_LANE_EX_RATE_BASE,
+            (PropertyFamily::Integer, "bp") => SKIN_REF_BMZ_LANE_BP_BASE,
+            _ => return None,
+        };
+        return LANE_SUFFIXES
+            .iter()
+            .position(|&suffix| suffix == lane)
+            .map(|index| base + index as i32);
+    }
     let table = match family {
         PropertyFamily::Integer => INTEGER_NAMES,
         PropertyFamily::String => STRING_NAMES,
@@ -65,6 +69,19 @@ mod tests {
                 assert!(name.starts_with("bmz_"), "{name}");
                 assert_eq!(resolve_beatoraja_property_name(family, name), None, "{name}");
                 assert_eq!(resolve_property_name(family, name), Some(id), "{name}");
+            }
+        }
+        for (family, property, base) in [
+            (PropertyFamily::Integer, "notes", crate::SKIN_REF_BMZ_LANE_NOTES_BASE),
+            (PropertyFamily::Integer, "rank", crate::SKIN_REF_BMZ_LANE_RANK_BASE),
+            (PropertyFamily::String, "rank", crate::SKIN_REF_BMZ_LANE_RANK_BASE),
+            (PropertyFamily::String, "ex_rate", crate::SKIN_TEXT_BMZ_LANE_EX_RATE_BASE),
+            (PropertyFamily::Integer, "bp", crate::SKIN_REF_BMZ_LANE_BP_BASE),
+        ] {
+            for (index, suffix) in super::LANE_SUFFIXES.iter().enumerate() {
+                let name = format!("bmz_lane_{property}_{suffix}");
+                assert_eq!(resolve_beatoraja_property_name(family, &name), None);
+                assert_eq!(resolve_property_name(family, &name), Some(base + index as i32));
             }
         }
         assert_eq!(resolve_property_name(PropertyFamily::String, "bmz_chart_text"), Some(20_100));

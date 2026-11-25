@@ -1004,6 +1004,22 @@ Luxe Flat等が使う標準描画であり、スキン側で密度別の背景�
 
 Luaのruntime callbackでは`main_state.number("bmz_lane_notes_key1")`または`main_state.number(19271)`で参照できます。
 
+### 単曲リザルトのレーン別ランク・EX RATE・BP
+
+単曲リザルト（コース曲間を含む）のLua / JSONスキンには、「リザルト → 詳細」と同じレーン別ランク・EX RATE・BPも公開します。レーンの並びと名前の末尾はノーツ数と共通です。各基底IDに `scratch=0`、`key1〜key14=1〜14`、`scratch2=15` を足すと、対象レーンのIDになります。
+
+| ref | 名前（KEY1の例） | 種類・値 |
+| ---: | --- | --- |
+| 20230〜20245 | `bmz_lane_rank_key1` | textは`AAA`〜`F`または`AUTO`。number・画像インデックスは`1=AAA`、`2=AA`、`3=A`、`4=B`、`5=C`、`6=D`、`7=E`、`8=F`、`9=AUTO` |
+| 20246〜20261 | `bmz_lane_ex_rate_key1` | textは小数1桁のパーセント（`83.3%`など） |
+| 20262〜20277 | `bmz_lane_bp_key1` | numberはそのレーンのBP。FAILED時は詳細パネルと同じく未処理ノーツを含む |
+
+- プレイ時にAuto Scratchが適用されたレーンのランクは`AUTO`です。EX RATEとBPは空欄になります。
+- Auto Scratchが適用されていない使用レーンでは、ノーツ数が0でもBPを返します。ランクとEX RATEは空欄です。
+- 未使用レーンやコース総合リザルトでは参照値がありません。欠損時のtextは空文字、数値部品は非表示、Luaの`main_state.number()`は`-2147483648`です。ランクを`image.ref`や`imageset.ref`で描く場合は、欠損時に選ばれるインデックス`0`に透明画像を置きます。
+
+JSONでは、1Pスクラッチのランクを `text[].value: "bmz_lane_rank_scratch"`、KEY1のEX RATEを `text[].value: "bmz_lane_ex_rate_key1"`、KEY1のBPを `text[].numberRef: 20263` で表示できます。Luaでは `main_state.text("bmz_lane_rank_scratch")`、`main_state.text("bmz_lane_ex_rate_key1")`、`main_state.number("bmz_lane_bp_key1")` で同じ値を取得できます。
+
 ## Playのノート分布グラフ
 
 Playの`judgegraph`は、beatorajaの`SkinNoteDistributionGraph`と同じく1秒ごとのbucketを積み上げます。

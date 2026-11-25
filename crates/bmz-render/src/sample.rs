@@ -253,7 +253,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         gauge_value: 84.0,
         gauge_type: bmz_core::clear::GaugeType::Normal as i32,
         total_notes: 1000,
-        lane_note_counts: Default::default(),
+        lane_scores: Default::default(),
         duration_ms: 120_000,
         note_display_duration_ms: None,
         initial_bpm: 150.0,

@@ -403,8 +403,19 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
             bpm_change_number(ref_id, state)
         }
         SKIN_REF_BMZ_LANE_NOTES_BASE..=SKIN_REF_BMZ_LANE_NOTES_LAST => {
-            state.lane_note_counts[(ref_id - SKIN_REF_BMZ_LANE_NOTES_BASE) as usize].map(i64::from)
+            let lane = (ref_id - SKIN_REF_BMZ_LANE_NOTES_BASE) as usize;
+            state.lane_note_counts[lane]
+                .or_else(|| state.result_lane_scores[lane].map(|score| score.notes))
+                .map(i64::from)
         }
+        SKIN_REF_BMZ_LANE_RANK_BASE..=SKIN_REF_BMZ_LANE_RANK_LAST => state.result_lane_scores
+            [(ref_id - SKIN_REF_BMZ_LANE_RANK_BASE) as usize]?
+            .rank_index()
+            .map(|rank| rank as i64),
+        SKIN_REF_BMZ_LANE_BP_BASE..=SKIN_REF_BMZ_LANE_BP_LAST => state.result_lane_scores
+            [(ref_id - SKIN_REF_BMZ_LANE_BP_BASE) as usize]?
+            .displayed_bp()
+            .map(i64::from),
         SKIN_REF_BMZ_EXIT_HOLD_PERCENT => Some((state.exit_hold.progress() * 100.0).floor() as i64),
         SKIN_REF_BMZ_EXIT_HOLD_REMAINING_MS => Some(i64::from(state.exit_hold.remaining_ms())),
         SKIN_REF_BMZ_EXIT_HOLD_DURATION_MS => Some(i64::from(state.exit_hold.duration_ms)),
