@@ -64,6 +64,11 @@ pub(super) struct LrObject {
     pub ln_end_tick: Option<u64>,
     pub mine: f64,
     pub lnobj_end: bool,
+    /// The STOP time a `#xxx09` object adds, in ms: 0 when a later STOP at the
+    /// same position replaces it, as LR2 keeps only the last one.
+    pub stop_ms: f64,
+    /// The BPM a `#xxx03` / `#xxx08` object sets.
+    pub bpm: f64,
 }
 
 /// `bmsobj` after the real-time loop and the second sort.
@@ -375,6 +380,8 @@ pub(super) fn load(text: &str, source: &IntermediateChart, pms: bool) -> Loaded 
                     ln_end_tick: None,
                     mine: 0.0,
                     lnobj_end: false,
+                    stop_ms: 0.0,
+                    bpm: 0.0,
                 });
             }
         } else if upper.starts_with(b"#BPM ") {
@@ -411,6 +418,8 @@ pub(super) fn load(text: &str, source: &IntermediateChart, pms: bool) -> Loaded 
             ln_end_tick: None,
             mine: 0.0,
             lnobj_end: false,
+            stop_ms: 0.0,
+            bpm: 0.0,
         });
     }
     for measure in 0..MEASURE_OBJECTS {
@@ -429,6 +438,8 @@ pub(super) fn load(text: &str, source: &IntermediateChart, pms: bool) -> Loaded 
             ln_end_tick: None,
             mine: 0.0,
             lnobj_end: false,
+            stop_ms: 0.0,
+            bpm: 0.0,
         });
     }
 
@@ -458,10 +469,15 @@ pub(super) fn load(text: &str, source: &IntermediateChart, pms: bool) -> Loaded 
     let mut prev = 0.0f64;
     let mut realtime = 0.0f64;
     let mut pending = [usize::MAX; 30];
+    let mut stop_object = None;
     for i in 0..objects.len() {
         if objects[i].position != prev {
             if stop_realtime != 0.0 {
                 stop_realtime = (stop_val / 192.0) * (240000.0 / now_bpm);
+            }
+            if let Some(stop) = stop_object.take() {
+                let o: &mut LrObject = &mut objects[stop];
+                o.stop_ms = stop_realtime;
             }
             let add = 240.0 / now_bpm * mea_length * (objects[i].position - prev) * 1000.0;
             realtime += add + stop_realtime;
@@ -501,11 +517,18 @@ pub(super) fn load(text: &str, source: &IntermediateChart, pms: bool) -> Loaded 
         }
         match objects[i].op {
             2 => mea_length = objects[i].val,
-            3 if objects[i].val > 0.0 => now_bpm = objects[i].val,
-            8 => now_bpm = bpm_slots.get(&(objects[i].val as i32)).copied().unwrap_or(-1.0).abs(),
+            3 if objects[i].val > 0.0 => {
+                now_bpm = objects[i].val;
+                objects[i].bpm = now_bpm;
+            }
+            8 => {
+                now_bpm = bpm_slots.get(&(objects[i].val as i32)).copied().unwrap_or(-1.0).abs();
+                objects[i].bpm = now_bpm;
+            }
             9 => {
                 stop_val = stop_slots.get(&(objects[i].val as i32)).copied().unwrap_or(-1.0);
                 stop_realtime = stop_val / 192.0 * 240000.0 / now_bpm;
+                stop_object = Some(i);
             }
             _ => {}
         }

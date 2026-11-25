@@ -676,7 +676,11 @@ impl JudgeEngine {
                         state.next_note_index,
                         &self.judged_notes,
                     )
-                    .is_none()
+                    .is_none_or(|(_, note)| {
+                        // OpenLR2 never judges a single note past the cap, and
+                        // the note blocks everything after it in its lane.
+                        note.kind == NoteKind::Tap && self.legacy_capped(chart, 0)
+                    })
             })
     }
 

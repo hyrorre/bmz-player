@@ -6,6 +6,9 @@ the NORMAL arrangement and the same LR2 random seed. Compared:
 - key mode (song.db), total notes, judge widths (PGREAT..EMPTY POOR) and the GROOVE / HARD / DEATH /
   EASY damage tables (exact doubles; they also depend on the int TOTAL)
 - every note, LN and mine per lane: time floored to µs, LN end, mine damage
+- the time of every BGM, BGA, BPM and STOP event: each must be the time of an
+  OpenLR2 object of the same kind (BMZ may drop an object, e.g. one without a
+  #WAV, but must not move one). BMZ's #BMP00 POOR layer at 0 has no object.
 """
 
 import argparse
@@ -15,6 +18,7 @@ import random
 import sqlite3
 import subprocess
 import tempfile
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -30,7 +34,7 @@ def charts(openlr2: Path) -> list[dict]:
 
 
 def run_oracle(oracle: Path, chart: dict, seed: int) -> list[str]:
-    text = f"chart {chart['path']}\nkeymode {chart['keymode']}\nrandom 0 0\nseed {seed}\ngauge 0\nend 0\n"
+    text = f"chart {chart['path']}\nkeymode {chart['keymode']}\nrandom 0 0\nseed {seed}\ngauge 0\nobjects 1\nend 0\n"
     proc = subprocess.run([str(oracle)], input=text.encode("utf-8"), capture_output=True,
                           cwd=oracle.parent, timeout=300)
     if proc.returncode != 0:
@@ -38,12 +42,21 @@ def run_oracle(oracle: Path, chart: dict, seed: int) -> list[str]:
     return proc.stdout.decode("utf-8", "replace").splitlines()
 
 
+# OpenLR2 op -> event kind; extended BPM (8) is a BPM change like 3, and
+# OpenLR2 keeps a POOR image object (6) as 106 after loading.
+EVENT_OPS = {1: 1, 3: 3, 4: 4, 6: 6, 106: 6, 7: 7, 8: 3, 9: 9}
+
+
 def oracle_view(lines: list[str]) -> dict:
-    header, notes = {}, {}
+    header, notes, events = {}, {}, {}
     for line in lines:
         f = line.split(",")
         if f[0] == "H":
             header[f[1]] = f[2]
+        elif f[0] == "O":
+            kind = EVENT_OPS.get(int(f[2]))
+            if kind is not None:
+                events.setdefault(kind, []).append(math.floor(float(f[3]) * 1000))
         elif f[0] == "N":
             lane, rt, ln, mine = int(f[1]), float(f[3]), float(f[4]), int(f[5])
             end = math.floor(ln * 1000) if ln > rt else -1
@@ -51,18 +64,43 @@ def oracle_view(lines: list[str]) -> dict:
             # even a mine (one before -1 ms), so its damage is never used.
             mine = mine if mine > 0 and end == -1 else -1
             notes.setdefault(lane, []).append((math.floor(rt * 1000), end, mine))
-    return {"header": header, "notes": {k: sorted(v) for k, v in notes.items()}}
+    return {"header": header, "notes": {k: sorted(v) for k, v in notes.items()}, "events": events}
 
 
 def bmz_view(path: Path) -> dict:
-    header, notes = {}, {}
+    header, notes, events = {}, {}, {}
     for line in path.read_text(encoding="utf-8").splitlines():
         f = line.split(",")
         if f[0] == "H":
             header[f[1]] = f[2]
         elif f[0] == "N":
             notes.setdefault(int(f[1]), []).append((int(f[2]), int(f[3]), int(f[4])))
-    return {"header": header, "notes": {k: sorted(v) for k, v in notes.items()}}
+        elif f[0] == "E":
+            events.setdefault(int(f[1]), []).append(int(f[2]))
+    return {"header": header, "notes": {k: sorted(v) for k, v in notes.items()}, "events": events}
+
+
+EVENT_NAMES = {1: "bgm", 3: "bpm", 4: "bga_base", 6: "bga_poor", 7: "bga_layer", 9: "stop"}
+
+
+def compare_events(o: dict, b: dict) -> list[str]:
+    """Every BMZ event time must be an unused OpenLR2 object time of its kind."""
+    diffs = []
+    for kind, times in sorted(b.get("events", {}).items()):
+        left = Counter(o.get("events", {}).get(kind, []))
+        moved = []
+        for t in sorted(times):
+            if left[t] > 0:
+                left[t] -= 1
+            elif kind == 6 and t == 0:
+                # BMZ's #BMP00 POOR image from the start; LR2 shows it without an object.
+                continue
+            else:
+                moved.append(t)
+        if moved:
+            diffs.append(f"events {EVENT_NAMES[kind]}: {len(moved)} of {len(times)} at no OpenLR2 time, "
+                         f"first {moved[0]}")
+    return diffs
 
 
 def compare(o: dict, b: dict) -> list[str]:
@@ -145,7 +183,7 @@ def main() -> int:
         if c.get("bmz_status") != "dumped":
             return {**row, "status": "bmz_error", "reason": c.get("bmz_reason")}
         b = bmz_view(Path(c["dump"]))
-        diffs = compare(o, b)
+        diffs = compare(o, b) + compare_events(o, b)
         # The key mode LR2 stored in song.db, which LEGACY must reproduce.
         expected = {5: "K5", 7: "K7", 10: "K10", 14: "K14"}[c["keymode"]]
         if b["header"].get("keymode") != expected:

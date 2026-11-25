@@ -580,7 +580,13 @@ pub(super) fn process_timed_inputs(
     input_limit: usize,
 ) -> Vec<JudgementEvent> {
     let mut inputs = take_human_scoring_inputs(session, now);
-    append_replay_inputs(session, now, input_limit, &mut inputs);
+    // A LEGACY replay delivers the edges of the milliseconds it polls now.
+    let replay_now = match legacy_last_tick(session, now) {
+        _ if !uses_legacy_frame_clock(session) => now,
+        tick if tick < 0 => TimeUs(i64::MIN),
+        tick => TimeUs(tick + 999).min(now),
+    };
+    append_replay_inputs(session, replay_now, input_limit, &mut inputs);
     if let Some(auto) = &mut session.autoplay {
         inputs.extend(
             auto.poll_until(&session.chart, now)
@@ -604,32 +610,33 @@ pub(super) fn process_timed_inputs(
 /// gauge in that order. Mines share the lane cursor with notes.
 ///
 /// An edge is polled at its own millisecond. One that arrives after that
-/// millisecond was already polled is polled again at the processed
-/// millisecond, as OpenLR2 does on its next loop; `applied_after` records this
-/// so a replay polls it the same way.
+/// millisecond was already polled is polled again at the last processed
+/// millisecond, as OpenLR2 does on its next loop. Each update that does this
+/// is a poll of its own, and `applied_after` records its boundary: a time in
+/// that millisecond, the same for every edge of the update. A replay keeps
+/// the recorded boundaries and polls a millisecond only once all its edges
+/// are due, so it judges the same way however its updates are split.
 fn process_legacy_timed_inputs(
     session: &mut GameSession,
     mut inputs: Vec<TimedInput>,
     now: TimeUs,
 ) -> Vec<JudgementEvent> {
     let previous = session.conditional.processed_time.filter(|at| at.0 >= 0);
-    let ms_of = |time: TimeUs| time.0 / 1000 * 1000;
-    for timed in &mut inputs {
-        // A same-millisecond edge after the poll keeps its own time as the
-        // boundary: `TimedInput` drops a boundary earlier than the input.
-        if timed.applied_after.is_none()
-            && previous.is_some_and(|at| ms_of(timed.input.time) <= at.0)
-        {
-            timed.applied_after = Some(timed.input.time);
+    let ms_of = |time: TimeUs| time.0.div_euclid(1000) * 1000;
+    if let Some(at) = previous {
+        // The update's time if it is still in that millisecond, else its end.
+        let boundary = TimeUs(if ms_of(now) == at.0 { now.0 } else { at.0 + 999 });
+        for timed in &mut inputs {
+            if timed.input.source != InputSource::Replay && ms_of(timed.input.time) <= at.0 {
+                timed.applied_after = Some(boundary);
+            }
         }
     }
     inputs.sort_by_key(TimedInput::order);
-    let poll_of = |timed: &TimedInput| match timed.applied_after {
-        Some(after) => (ms_of(after), true),
-        None => (ms_of(timed.input.time), false),
-    };
-    let repoll_previous =
-        previous.is_some_and(|at| inputs.iter().any(|timed| poll_of(timed) == (at.0, true)));
+    let last_tick = legacy_last_tick(session, now);
+    let repoll_previous = previous.is_some_and(|at| {
+        inputs.iter().any(|timed| timed.applied_after.is_some_and(|b| ms_of(b) == at.0))
+    });
     let mut tick = match previous {
         Some(at) if repoll_previous => at.0,
         Some(at) => at.0 + 1000,
@@ -638,32 +645,56 @@ fn process_legacy_timed_inputs(
     let mut pending: std::collections::VecDeque<_> = inputs.into();
     let mut events = Vec::new();
     session.judge.set_legacy_inline_mines(true);
-    while tick <= now.0 && session.state == PlayState::Playing && !session.play_end_reached() {
+    while tick <= last_tick && session.state == PlayState::Playing && !session.play_end_reached() {
         let time = TimeUs(tick);
         super::frame::sync_judge_windows(session, time);
-        let first_poll = previous.is_none_or(|at| tick > at.0);
-        for repoll in [false, true] {
-            if !repoll && !first_poll {
-                continue;
-            }
-            let mut group = Vec::new();
-            pending.retain(|timed| {
-                let (at, again) = poll_of(timed);
-                let take = at <= tick && again == repoll;
-                if take {
-                    group.push(*timed);
-                }
-                !take
+        if previous.is_none_or(|at| tick > at.0) {
+            let group = take_legacy_poll(&mut pending, |timed| {
+                timed.applied_after.is_none() && ms_of(timed.input.time) <= tick
             });
-            if repoll && group.is_empty() {
-                continue;
-            }
+            legacy_poll(session, &group, time, now, &mut events);
+        }
+        // Each recorded boundary of this millisecond is one more poll.
+        while let Some(boundary) = pending
+            .iter()
+            .filter_map(|timed| timed.applied_after)
+            .filter(|&b| ms_of(b) <= tick)
+            .min()
+        {
+            let group =
+                take_legacy_poll(&mut pending, |timed| timed.applied_after == Some(boundary));
             legacy_poll(session, &group, time, now, &mut events);
         }
         session.conditional.processed_time = Some(time);
         tick += 1000;
     }
     events
+}
+
+/// The last millisecond a LEGACY update polls. A full replay polls a
+/// millisecond only once every edge recorded in it is due.
+fn legacy_last_tick(session: &GameSession, now: TimeUs) -> i64 {
+    if session.replay_player.is_some() && session.replay_lane_mask.is_none() {
+        (now.0 - 999).div_euclid(1000) * 1000
+    } else {
+        now.0
+    }
+}
+
+/// Removes the edges of one poll from `pending`, in order.
+fn take_legacy_poll(
+    pending: &mut std::collections::VecDeque<TimedInput>,
+    mut take: impl FnMut(&TimedInput) -> bool,
+) -> Vec<TimedInput> {
+    let mut group = Vec::new();
+    pending.retain(|timed| {
+        let taken = take(timed);
+        if taken {
+            group.push(*timed);
+        }
+        !taken
+    });
+    group
 }
 
 /// One OpenLR2 loop over all lanes at `time` with the edges of this poll.

@@ -118,13 +118,15 @@ BMZ側は`bmz_gameplay::lr2_score::Lr2ScoreRecorder`が、判定イベント（L
 
 `loader_vs_oracle.py`は、OpenLR2の`song.db`にある譜面を1つずつオラクルとBMZのランナー（`dump_path`付き）で読み込み、ノーツ数・判定幅・ゲージの増減量と、全ノート・LN終点・地雷の時刻（µs単位に切り捨て）を比べます。
 
+あわせて、BGM・BGA（基本・POOR・レイヤ）・BPM・STOPの各イベントの時刻が、同じ種類のOpenLR2のオブジェクトの時刻のどれかと一致するかを比べます。BMZが鳴らさずに捨てたオブジェクト（`#WAV`の無いBGMなど）は数えません。BMZが`#BMP00`から0ミリ秒に置くPOOR画像は、OpenLR2にオブジェクトがないので比べません。
+
 ```powershell
 python tools/legacy-compare/loader_vs_oracle.py --oracle .local/openlr2-oracle/openlr2_oracle.exe --runner target\debug\examples\legacy_compare.exe --output .local/loader-all --jobs 10
 ```
 
 - `--sample N`で無作為にN譜面、`--only <ファイル>`でファイルに書いたMD5の譜面だけを比べます。
 - 結果は`results.jsonl`（譜面ごと）と`summary.json`（集計）です。
-- オラクルへ`objects 1`を与えると、OpenLR2が読み込んだ全オブジェクトを、最終的な並び順で`O,番号,チャンネル,時刻,値`として出力します。時刻のずれを調べるときに使います。
+- オラクルへ`objects 1`を与えると、OpenLR2が読み込んだ全オブジェクトを、最終的な並び順で`O,番号,チャンネル,時刻,値`として出力します。イベント時刻の比較に使います。
 
 ## 合成入力での差分テスト
 

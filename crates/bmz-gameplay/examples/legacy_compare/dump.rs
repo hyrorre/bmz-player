@@ -12,7 +12,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use bmz_chart::{
     import::{AssetLookup, BmsRandomSource, import_chart_with_assets},
-    model::NoteKind,
+    model::{BgaEventKind, NoteKind, TimingEventKind},
 };
 use bmz_core::{clear::GaugeType, lane::Lane};
 use bmz_gameplay::{
@@ -96,6 +96,27 @@ pub fn dump_chart(chart_path: &str, md5: &str, seed: u32, out_path: &str) -> Res
                 _ => continue,
             };
             writeln!(out, "N,{},{},{end},{mine}", openlr2_lane(lane), note.time.0)?;
+        }
+    }
+    // Playback events by the LR2 op of their objects: BGM 1, BGA 4 / 6 / 7,
+    // BPM 3 (or 8), STOP 9.
+    for event in &chart.bgm_events {
+        writeln!(out, "E,1,{}", event.time.0)?;
+    }
+    for event in &chart.bga_events {
+        let op = match event.kind {
+            BgaEventKind::Base => 4,
+            BgaEventKind::Poor => 6,
+            BgaEventKind::Layer => 7,
+            BgaEventKind::Layer2 => continue,
+        };
+        writeln!(out, "E,{op},{}", event.time.0)?;
+    }
+    for event in &chart.timing_events {
+        match event.kind {
+            TimingEventKind::BpmChange { .. } => writeln!(out, "E,3,{}", event.time.0)?,
+            TimingEventKind::Stop { .. } => writeln!(out, "E,9,{}", event.time.0)?,
+            TimingEventKind::BpmReflection => {}
         }
     }
     for (index, bar) in chart.bar_lines.iter().enumerate() {

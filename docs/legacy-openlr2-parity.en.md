@@ -46,7 +46,7 @@ The submission fields are built from the judgement events by `bmz_gameplay::lr2_
 |---|---|
 | New real play | An instrumented OpenLR2 recorded the time and input actually passed to `ProcNoteOnTiming`; the same calls were given to BMZ and every judgement compared |
 | Saved replays | The inputs of 234 saved replays were given to both the oracle and BMZ |
-| Chart loading | For every SP/DP chart in song.db: note count, judge windows, gauge tables and the time (in µs) of every note, LN end and mine |
+| Chart loading | For every SP/DP chart in song.db: note count, judge windows, gauge tables, the time (in µs) of every note, LN end and mine, and the time of every BGM, BGA, BPM and STOP event |
 | Generated charts and plays | Random charts and key inputs given to both; 6,500 charts over four seeds |
 
 For saved replays and generated plays, the following are compared at zero tolerance:
@@ -104,6 +104,7 @@ Not covered:
 - playing on P-ATTACK / G-ATTACK (BMZ has no such gauges; the values of both gauges in the submission are equal on plays with the other gauges)
 - courses, GAS, maniac options
 - PMS (9 keys), BMSON, CN / HCN of `#LNMODE`
+- BMZ extensions (dynamic `#CONDITIONAL`, POTION and others). They still work in LEGACY, but OpenLR2 has no such features
 
 ## Known differences and undefined behaviour
 

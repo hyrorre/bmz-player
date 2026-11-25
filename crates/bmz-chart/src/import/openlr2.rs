@@ -40,6 +40,13 @@ pub fn apply_from_bytes(
             message: "chart source changed while preparing LEGACY timing".into(),
         });
     }
+    // A dynamic #CONDITIONAL is BMZ's own extension: LR2 has no such branch,
+    // and BMZ selects the branch during play. The chart keeps BMZ's clock and
+    // branches, so the extension works as without LEGACY. Channels LR2 drops,
+    // such as free zones, are still dropped as LR2 does.
+    if chart.metadata.conditional.is_some() {
+        return Ok(());
+    }
     // LR2 reads the file byte by byte with fgets: in UTF-16 every line starts
     // with a NUL or BOM byte instead of '#', so nothing is loaded.
     let utf16 = bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]);
@@ -163,11 +170,13 @@ fn apply(
         pair.start_tick.0 = pair.start_tick.0.saturating_add(shift_ticks);
         pair.end_tick.0 = pair.end_tick.0.saturating_add(shift_ticks);
     }
+    // BPM reflections keep BMZ's clock; the rebuild keeps them.
+    for e in chart.timing_events.iter_mut().filter(|e| e.kind.is_bpm_reflection()) {
+        e.time = at(e.tick, e.time);
+    }
+    rebuild_events(chart, source, &loaded.objects, shift_ticks);
     macro_rules! retime { ($($field:ident),*) => { $(for e in &mut chart.$field { e.time = at(e.tick,e.time); e.tick.0 = e.tick.0.saturating_add(shift_ticks); })* }; }
     retime!(
-        bgm_events,
-        bga_events,
-        timing_events,
         scroll_events,
         speed_events,
         judge_rank_events,
@@ -224,6 +233,99 @@ fn apply(
     }
     chart.judge_rank_events.clear();
     Ok(())
+}
+
+/// Rebuilds the BGM, BGA, BPM and STOP events from LR2's objects, as the
+/// notes are: the objects LR2 loads, at their own times. Several positions of
+/// a very short measure share one BMZ tick, so the tick cannot give their
+/// times; and BMZ's loader can read objects LR2 does not (or the reverse).
+/// A STOP has LR2's length. Kept from BMZ: a BPM reflection (LEGACY plays
+/// such a chart on BMZ's clock) and the implicit #BMP00 POOR image, which LR2
+/// shows from the start without an object. `shift_ticks` is the origin
+/// measure BMZ inserts for LR2's origin shift.
+fn rebuild_events(
+    chart: &mut PlayableChart,
+    source: &IntermediateChart,
+    objects: &[super::openlr2_objects::LrObject],
+    shift_ticks: u64,
+) {
+    use crate::model::{
+        BgaAssetId, BgaEvent, BgaEventKind, SoundEvent, TimingEvent, TimingEventKind,
+    };
+    use bmz_core::ids::SoundId;
+    use std::collections::HashMap;
+    let floor_us = |ms: f64| TimeUs((ms * 1000.0).floor() as i64);
+    let sound_of: HashMap<u16, SoundId> = source
+        .resources
+        .wavs
+        .iter()
+        .enumerate()
+        .map(|(index, wav)| (wav.key, SoundId(index as u32)))
+        .collect();
+    let mut bmp_keys: Vec<u16> = source.resources.bmps.iter().map(|bmp| bmp.key).collect();
+    bmp_keys.sort_unstable();
+    let asset_of =
+        |key: u16| bmp_keys.binary_search(&key).ok().map(|index| BgaAssetId(index as u32));
+    let initial_poor = chart
+        .bga_events
+        .iter()
+        .find(|e| e.kind == BgaEventKind::Poor && e.tick.0 == 0 && e.asset == asset_of(0))
+        .cloned();
+    let reflections = chart
+        .timing_events
+        .iter()
+        .filter(|e| e.kind.is_bpm_reflection())
+        .map(|e| TimingEvent { tick: ChartTick(e.tick.0.saturating_add(shift_ticks)), ..*e });
+    let mut bgm = Vec::new();
+    let mut bga = Vec::new();
+    let mut timing = Vec::new();
+    // LR2's real-time order; stable sorts below keep it for equal times.
+    for o in objects {
+        let Some(tick) = o.tick.map(|tick| ChartTick(tick.saturating_add(shift_ticks))) else {
+            continue;
+        };
+        let time = floor_us(o.realtime);
+        let bga_kind = match o.op {
+            4 => Some(BgaEventKind::Base),
+            6 => Some(BgaEventKind::Poor),
+            7 => Some(BgaEventKind::Layer),
+            _ => None,
+        };
+        match o.op {
+            1 => {
+                if let Some(&sound) = o.wav_key.and_then(|key| sound_of.get(&key)) {
+                    bgm.push(SoundEvent { tick, time, sound });
+                }
+            }
+            3 | 8 if o.bpm > 0.0 => timing.push(TimingEvent {
+                tick,
+                time,
+                kind: TimingEventKind::BpmChange { bpm: o.bpm },
+            }),
+            9 => timing.push(TimingEvent {
+                tick,
+                time,
+                kind: TimingEventKind::Stop { duration_us: (o.stop_ms * 1000.0).floor() as i64 },
+            }),
+            _ => {}
+        }
+        if let Some(kind) = bga_kind {
+            let asset = o.wav_key.and_then(asset_of);
+            bga.push(BgaEvent { tick, time, asset, kind });
+        }
+    }
+    if let Some(poor) = initial_poor
+        && !bga.iter().any(|e| e.kind == BgaEventKind::Poor && e.time.0 <= 0)
+    {
+        bga.insert(0, BgaEvent { tick: ChartTick(0), time: TimeUs(0), ..poor });
+    }
+    timing.extend(reflections);
+    timing.sort_by_key(|e| e.time);
+    bgm.sort_by_key(|e| e.time);
+    bga.sort_by_key(|e| e.time);
+    chart.bgm_events = bgm;
+    chart.bga_events = bga;
+    chart.timing_events = timing;
 }
 
 /// C `atol` limited to `int`: leading white space, an optional sign, then
@@ -388,6 +490,77 @@ mod tests {
             u64::from(crate::timing::TICKS_PER_MEASURE) * 2
         );
         assert_eq!(chart.bar_lines[0].time, TimeUs(0));
+    }
+
+    #[test]
+    fn events_in_one_tick_of_a_short_measure_keep_their_own_lr2_times() {
+        // Measure 1 is 1/10000 long: its start, its middle and measure 2 share
+        // one BMZ tick. The STOP at measure 1 lasts one 120 BPM measure.
+        let chart = load(
+            "#BPM 120
+#WAV01 key.wav
+#BMP01 image.png
+#STOP01 192
+#00102:0.0001
+             #00109:01
+#00101:0101
+#00104:0101
+#00111:0101
+#00211:01
+",
+        );
+        let ms = |time: TimeUs| time.0 / 1000;
+        let notes: Vec<_> =
+            chart.lane_notes[Lane::Key1.index()].iter().map(|n| ms(n.time)).collect();
+        assert_eq!(notes, [2_000, 4_000, 4_000]);
+        let bgm: Vec<_> = chart.bgm_events.iter().map(|e| ms(e.time)).collect();
+        assert_eq!(bgm, [2_000, 4_000]);
+        let bga: Vec<_> = chart.bga_events.iter().map(|e| ms(e.time)).collect();
+        assert_eq!(bga, [2_000, 4_000]);
+        let stops: Vec<_> = chart
+            .timing_events
+            .iter()
+            .filter_map(|e| match e.kind {
+                crate::model::TimingEventKind::Stop { duration_us } => {
+                    Some((ms(e.time), duration_us))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stops, [(2_000, 2_000_000)]);
+        // The clock built from these events puts the STOP where LR2 does.
+        let map = crate::timing::TimingMap::from_chart_timing_events(120.0, &chart.timing_events);
+        let tick = chart.bgm_events[0].tick;
+        assert_eq!(ms(map.tick_to_time(tick)), 2_000);
+    }
+
+    #[test]
+    fn a_dynamic_conditional_keeps_the_bmz_chart_and_its_branches() {
+        let text = "#BPM 120
+#WAV01 key.wav
+#00111:01
+#CONDITIONAL 2
+#WHEN RATE>=40
+                    #00312:01
+#DEFAULT
+#00313:01
+#ENDCONDITIONAL
+";
+        let path = Path::new("legacy.bms");
+        let source = BmsRandomSource::Lr2Seed(1);
+        let imported =
+            import_chart_bytes_with_assets(path, text.as_bytes(), source, AssetLookup::Declared)
+                .unwrap()
+                .chart;
+        let legacy = load(text);
+        assert!(legacy.metadata.conditional.is_some());
+        // Only the shared note and the DEFAULT branch, as without LEGACY.
+        assert_eq!(legacy.total_notes, 2);
+        assert_eq!(legacy.total_notes, imported.total_notes);
+        let notes = |chart: &PlayableChart| {
+            chart.lane_notes.iter().flatten().map(|n| (n.lane, n.time)).collect::<Vec<_>>()
+        };
+        assert_eq!(notes(&legacy), notes(&imported));
     }
 
     #[test]
@@ -564,15 +737,23 @@ mod tests {
     fn utf16_charts_load_no_notes() {
         let text: Vec<u8> = [0xFF, 0xFE]
             .into_iter()
-            .chain("#BPM 120\r\n#00111:01\r\n".encode_utf16().flat_map(u16::to_le_bytes))
+            .chain(
+                "#BPM 120\r\n#WAV01 a.wav\r\n#00111:01\r\n#00101:01\r\n#00103:FF\r\n"
+                    .encode_utf16()
+                    .flat_map(u16::to_le_bytes),
+            )
             .collect();
         let path = Path::new("legacy.bms");
         let source = BmsRandomSource::Lr2Seed(1);
         let mut imported =
             import_chart_bytes_with_assets(path, &text, source.clone(), AssetLookup::Declared)
                 .unwrap();
+        assert!(!imported.chart.bgm_events.is_empty());
         apply_from_bytes(&mut imported.chart, path, &text, &source, None).unwrap();
         assert_eq!(imported.chart.total_notes, 0);
+        // Nor any BGM or BPM change.
+        assert!(imported.chart.bgm_events.is_empty());
+        assert!(imported.chart.timing_events.is_empty());
     }
 
     #[test]

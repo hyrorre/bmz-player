@@ -971,3 +971,16 @@ fn legacy_clear_border_uses_the_double_hp() {
     assert_eq!(groove.value, 80.0);
     assert!(!groove.is_qualified());
 }
+
+/// A POTION recovery reaches LEGACY's exact HP, so the next judgement keeps it.
+#[test]
+fn legacy_potion_recovery_survives_the_next_judgement() {
+    let mut gauge = legacy_gauge(GaugeType::Normal, 400.0, 1_000);
+    gauge.set_initial_value(20.0);
+    gauge.apply_potion(10.0);
+    assert_eq!(legacy_hp(&gauge, GaugeType::Normal), 30.0);
+    gauge.apply_judge(Judge::PGreat, 1.0);
+    let hp = legacy_hp(&gauge, GaugeType::Normal);
+    assert!((hp - 30.4).abs() < 1e-6, "{hp}");
+    assert_eq!(gauge.current().value, hp as f32);
+}

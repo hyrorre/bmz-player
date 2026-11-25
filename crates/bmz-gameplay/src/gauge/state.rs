@@ -166,10 +166,15 @@ impl SingleGaugeState {
     }
 
     pub fn apply_potion(&mut self, recovery: f64) {
-        if self.value > 0.0 && recovery.is_finite() && recovery > 0.0 {
-            self.value =
-                (self.value + recovery as f32).clamp(self.definition.min, self.definition.max);
+        if !(self.value > 0.0 && recovery.is_finite() && recovery > 0.0) {
+            return;
         }
+        // LEGACY judges from the exact HP, so a recovery must reach it too.
+        if let (Some(rule), Some(hp)) = (self.definition.legacy, self.legacy_hp) {
+            self.set_legacy_hp(rule, (hp + recovery).clamp(0.0, 100.0));
+            return;
+        }
+        self.value = (self.value + recovery as f32).clamp(self.definition.min, self.definition.max);
     }
 
     fn apply_death_threshold(&mut self) {

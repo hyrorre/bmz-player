@@ -28,9 +28,13 @@ impl SharedBackend {
     }
 
     fn push(&self, kind: InputKind) {
+        self.push_key("Z", kind);
+    }
+
+    fn push_key(&self, key: &str, kind: InputKind) {
         self.0.lock().unwrap().push(DeviceInputEvent {
             device: DeviceId(1),
-            control: PhysicalControl::KeyboardKey("Z".to_string()),
+            control: PhysicalControl::KeyboardKey(key.to_string()),
             kind,
             timestamp: DeviceTimestamp::Unknown,
             bounce_policy: Default::default(),
@@ -79,18 +83,29 @@ fn legacy_session(chart: PlayableChart) -> GameSession {
 }
 
 fn legacy_human_session(chart: PlayableChart) -> (GameSession, SharedBackend) {
+    legacy_human_session_with(chart, &[("Z", Lane::Key1, None)])
+}
+
+/// A LEGACY session played from `keys`: (keyboard key, lane, scratch direction).
+fn legacy_human_session_with(
+    chart: PlayableChart,
+    keys: &[(&str, Lane, Option<ScratchDirection>)],
+) -> (GameSession, SharedBackend) {
     let mut session = legacy_session(chart);
     let backend = SharedBackend::default();
     session.input_system = InputSystem {
         backend: Box::new(backend.clone()),
         translator: Box::new(DefaultInputTranslator {
             binding: LaneBinding {
-                entries: vec![BindingEntry {
-                    device: None,
-                    control: PhysicalControl::KeyboardKey("Z".to_string()),
-                    lane: Lane::Key1,
-                    scratch_direction: None,
-                }],
+                entries: keys
+                    .iter()
+                    .map(|&(key, lane, scratch_direction)| BindingEntry {
+                        device: None,
+                        control: PhysicalControl::KeyboardKey(key.to_string()),
+                        lane,
+                        scratch_direction,
+                    })
+                    .collect(),
             },
         }),
         bounce_filter: Default::default(),
@@ -545,4 +560,107 @@ fn legacy_scratch_release_and_press_in_one_poll_is_a_press() {
     );
     advance_at(&mut session, &mut TestAudio::default(), 2_200_000);
     assert_eq!(judge_counts(&session), [1, 0, 0, 0, 0, 1]);
+}
+
+/// A lane of only mines judges its free slots, which can reach LR2's note
+/// count. The later single note is never judged then, and the song still ends.
+#[test]
+fn legacy_session_ends_when_the_note_count_leaves_a_note_unjudged() {
+    let mut chart = two_tap_chart(TimeUs(2_000_000), TimeUs(4_000_000));
+    let notes = &mut chart.lane_notes[Lane::Key1.index()];
+    let mut tap = notes.pop().unwrap();
+    notes[0].kind = NoteKind::Mine;
+    notes[0].damage = Some(10.0);
+    tap.lane = Lane::Key2;
+    chart.lane_notes[Lane::Key2.index()].push(tap);
+    chart.total_notes = 1;
+    let mut session = legacy_replay_session(chart, Vec::new());
+    let mut audio = TestAudio::default();
+    for ms in (0..=12_000).step_by(100) {
+        advance_at(&mut session, &mut audio, ms * 1_000);
+    }
+    assert_eq!(judge_counts(&session), [0, 0, 0, 0, 1, 0]);
+    assert_eq!(session.state, PlayState::Finished);
+}
+
+/// Replays `recorded` with an update at each of `updates` (µs).
+fn replay_counts_with_updates(
+    chart: PlayableChart,
+    recorded: Vec<ReplayEvent>,
+    updates: &[i64],
+) -> [u32; 6] {
+    let mut replay = legacy_replay_session(chart, recorded);
+    let mut audio = TestAudio::default();
+    for &now in updates {
+        advance_at(&mut replay, &mut audio, now);
+    }
+    judge_counts(&replay)
+}
+
+/// The replay polls a millisecond only once all its recorded edges are due,
+/// so an update inside the millisecond of a recorded press changes nothing.
+#[test]
+fn legacy_replay_split_inside_the_millisecond_of_a_press_judges_the_same() {
+    let chart = two_tap_chart(TimeUs(1_000_000), TimeUs(1_201_100));
+    let (mut human, keys) = legacy_human_session(chart.clone());
+    let mut audio = TestAudio::default();
+    advance_at(&mut human, &mut audio, 1_200_000);
+    keys.press();
+    advance_at(&mut human, &mut audio, 1_201_500);
+    keys.release();
+    advance_at(&mut human, &mut audio, 1_500_000);
+    // The press at 1201 ms consumes the passed first note; the second passes.
+    assert_eq!(judge_counts(&human), [0, 0, 0, 0, 2, 0]);
+    let recorded = human.replay_recorder.events.clone();
+    assert_eq!(recorded[0].applied_after, None, "{recorded:?}");
+
+    for updates in [
+        &[1_500_000][..],
+        &[1_201_100, 1_201_600, 1_500_000],
+        &[1_200_000, 1_201_000, 1_201_499, 1_201_500, 1_201_999, 1_202_000, 1_500_000],
+    ] {
+        assert_eq!(
+            replay_counts_with_updates(chart.clone(), recorded.clone(), updates),
+            judge_counts(&human),
+            "{updates:?}"
+        );
+    }
+}
+
+/// Two updates after the poll of one millisecond are two more polls of it.
+/// The replay keeps them apart, so a release and a press of the other
+/// scratch direction are not merged into one poll.
+#[test]
+fn legacy_replay_keeps_each_repoll_of_a_millisecond_apart() {
+    let chart = legacy_ln_chart(Lane::Scratch);
+    let (mut human, keys) = legacy_human_session_with(
+        chart.clone(),
+        &[
+            ("A", Lane::Scratch, Some(ScratchDirection::Up)),
+            ("S", Lane::Scratch, Some(ScratchDirection::Down)),
+        ],
+    );
+    let mut audio = TestAudio::default();
+    advance_at(&mut human, &mut audio, 999_000);
+    keys.push_key("A", InputKind::Press);
+    advance_at(&mut human, &mut audio, 1_000_000);
+    advance_at(&mut human, &mut audio, 1_500_000);
+    keys.push_key("A", InputKind::Release);
+    advance_at(&mut human, &mut audio, 1_500_100);
+    keys.push_key("S", InputKind::Press);
+    advance_at(&mut human, &mut audio, 1_500_500);
+    keys.push_key("S", InputKind::Release);
+    advance_at(&mut human, &mut audio, 2_200_000);
+    // The release is a poll of its own: an early release, BAD.
+    assert_eq!(judge_counts(&human), [0, 0, 0, 1, 0, 0]);
+    let recorded = human.replay_recorder.events.clone();
+    assert_ne!(recorded[1].applied_after, recorded[2].applied_after, "{recorded:?}");
+
+    for updates in [&[2_200_000][..], &[1_500_000, 1_500_300, 1_500_999, 2_200_000]] {
+        assert_eq!(
+            replay_counts_with_updates(chart.clone(), recorded.clone(), updates),
+            judge_counts(&human),
+            "{updates:?}"
+        );
+    }
 }
