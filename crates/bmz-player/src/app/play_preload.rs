@@ -112,9 +112,23 @@ impl WinitApp {
     pub(super) fn spawn_play_preload(
         &mut self,
         chart_id: i64,
-        mut options: PlaySessionOptions,
+        options: PlayStartOptions,
         source: PlayPreloadSource,
     ) -> u64 {
+        let key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
+        let profile = &self.boot.profile_config;
+        let mut options = play_preload_session_options(
+            &self.play_session_app_config(),
+            profile,
+            key_mode,
+            options,
+        );
+        (options.ln_policy_setting, options.rule_mode) = self
+            .play
+            .active_course
+            .as_ref()
+            .map(|course| (course.ln_policy_setting, course.rule_mode))
+            .unwrap_or((profile.play.ln_mode_policy, profile.play.rule_mode));
         options.read_archive_assets = true;
         self.skin.skin_pipeline.bump_generation(SkinKind::Play);
         self.skin.skin_pipeline.set_pending(SkinKind::Play, false);
@@ -133,4 +147,17 @@ impl WinitApp {
         tracing::info!(chart_id, generation, "play preload started");
         generation
     }
+}
+
+pub(super) fn play_preload_session_options(
+    app_config: &AppConfig,
+    profile: &ProfileConfig,
+    key_mode: KeyMode,
+    mut options: PlayStartOptions,
+) -> PlaySessionOptions {
+    // G-BATTLE's prepared chart can include a second side while play settings use the source mode.
+    options.hs_fix = hs_fix_option_from_profile(profile.play_mode_config(key_mode).hs_fix);
+    let mut session_options = play_session_options_from_start(app_config, options);
+    session_options.play_config_key_mode = Some(key_mode);
+    session_options
 }

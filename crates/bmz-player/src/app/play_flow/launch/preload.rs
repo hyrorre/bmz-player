@@ -261,31 +261,13 @@ impl WinitApp {
         self.jobs.song_scan.pause.set_paused(true);
         self.normalize_key_mode_conversion_options(chart_id, &mut options);
         self.resolve_play_target_from_cache(chart_id, &mut options);
-        let play_config_key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
-        options.hs_fix = hs_fix_option_from_profile(
-            self.boot.profile_config.play_mode_config(play_config_key_mode).hs_fix,
-        );
-        let (ln_policy_setting, rule_mode) = self
-            .play
-            .active_course
-            .as_ref()
-            .map(|course| (course.ln_policy_setting, course.rule_mode))
-            .unwrap_or((
-                self.boot.profile_config.play.ln_mode_policy,
-                self.boot.profile_config.play.rule_mode,
-            ));
-        let mut session_options =
-            play_session_options_from_start(&self.play_session_app_config(), options);
-        session_options.play_config_key_mode = Some(play_config_key_mode);
-        session_options.ln_policy_setting = ln_policy_setting;
-        session_options.rule_mode = rule_mode;
         let source = PlayPreloadSource::Import {
             library_db_path: self.boot.app_paths.library_db.clone(),
             normalization_output_gain: crate::config::play::chart_normalization_output_gain(
                 &self.boot.profile_config,
             ),
         };
-        let generation = self.spawn_play_preload(chart_id, session_options, source);
+        let generation = self.spawn_play_preload(chart_id, options, source);
         // Wait for the same prepared manifest used by audio before loading BGA.
         self.play.bga_preload.begin_unresolved(chart_id);
         generation
