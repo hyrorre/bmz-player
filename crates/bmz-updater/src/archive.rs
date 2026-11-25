@@ -177,4 +177,31 @@ mod tests {
         assert!(extract(&zip, &temp.path().join("stage"), || anyhow::bail!("canceled")).is_err());
         assert!(!temp.path().join("bmz-player.exe").exists());
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn extracts_and_applies_an_update_in_a_long_work_path() {
+        use crate::transaction;
+        use std::os::windows::ffi::OsStrExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("a".repeat(110)).join("b".repeat(110));
+        crate::manifest::write_test_package(
+            &root,
+            "0.4.0",
+            &[("bmz-player.exe", b"old app"), (crate::HELPER, b"old")],
+        );
+        let zip = temp.path().join("package.zip");
+        make_zip(&zip, true, None);
+        let work = transaction::new_work_dir(&root).unwrap();
+        assert!(work.as_os_str().encode_wide().count() > 260);
+
+        extract(&zip, &work.join("stage"), || Ok(())).unwrap();
+        transaction::apply(&root, &work).unwrap();
+
+        assert_eq!(PackageManifest::read(&root).unwrap().version, "0.5.0");
+        assert_eq!(fs::read(root.join("bmz-player.exe")).unwrap(), b"executable");
+        assert_eq!(fs::read(work.join("backup/0")).unwrap(), b"old app");
+        assert!(transaction::pending_update(&root).unwrap().is_none());
+    }
 }

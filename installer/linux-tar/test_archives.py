@@ -32,7 +32,7 @@ class ArchiveTests(unittest.TestCase):
         self.write(self.source, "data/skins/skin/file", "original skin")
         self.snapshot = inventory(self.source)
         self.write(self.source, "vendor/dependency/Cargo.toml", "dependency")
-        self.write(self.source, "ffmpeg/ffmpeg-9.0.1.tar.xz", "ffmpeg source")
+        self.write(self.source, "ffmpeg/ffmpeg-9.1.tar.xz", "ffmpeg source")
         self.write(self.source, "ffmpeg/configure.txt", "url=example\nsha256=example\n./configure --enable-shared\n")
         self.write(self.runtime, "resources/licenses/ffmpeg-build.txt",
                    (self.source / "ffmpeg/configure.txt").read_text())
@@ -49,7 +49,7 @@ class ArchiveTests(unittest.TestCase):
             "cargo_lock_sha256": sha256(self.source / "Cargo.lock"),
             "snapshot": self.snapshot, "rpm": [], "srpms": [], "custom_libraries": {},
             "pipewire_client": pipewire,
-            "ffmpeg": {"version": "9.0.1", "sha256": sha256(self.source / "ffmpeg/ffmpeg-9.0.1.tar.xz"),
+            "ffmpeg": {"version": "9.1", "sha256": sha256(self.source / "ffmpeg/ffmpeg-9.1.tar.xz"),
                        "configure": "./configure --enable-shared"},
             "files": {"runtime": inventory(self.runtime), "sources": inventory(self.source)},
         }

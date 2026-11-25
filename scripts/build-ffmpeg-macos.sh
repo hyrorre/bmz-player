@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly DEFAULT_FFMPEG_VERSION="9.0.1"
-readonly DEFAULT_FFMPEG_SHA256="cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635"
+readonly DEFAULT_FFMPEG_VERSION="9.1"
+readonly DEFAULT_FFMPEG_SHA256="1a4d394ae63d190a526cd052eb4415c156b5c5e2df37efab41a7de0b8fde2433"
 readonly DEFAULT_MACOS_DEPLOYMENT_TARGET="10.13"
 cleanup_dir=""
 
@@ -17,7 +17,7 @@ Required options:
   --prefix DIR            Empty installation prefix for headers, pkg-config files, and dylibs.
 
 Environment:
-  BMZ_FFMPEG_VERSION              FFmpeg release version (default: 9.0.1).
+  BMZ_FFMPEG_VERSION              FFmpeg release version (default: 9.1).
   BMZ_FFMPEG_SHA256               SHA-256 of the official source archive.
   BMZ_FFMPEG_SOURCE_ARCHIVE       Use an existing source archive instead of downloading.
   BMZ_MACOS_DEPLOYMENT_TARGET     Minimum macOS version (default: 10.13).

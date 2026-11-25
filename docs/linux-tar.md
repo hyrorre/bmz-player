@@ -220,7 +220,7 @@ manifest自身は一覧から除きます。圧縮ファイルのハッシュは
 非営利・改変禁止などの既存のスキンの制限は、引き続き適用されます。
 詳しくはアーカイブ内の`resources/licenses/license-notes.md`（ソースツリーでは`docs/licenses.md`）を参照してください。
 
-FFmpegは動的リンクし、ライブラリ名を変えずに同梱します。
+FFmpeg 9.1は動的リンクし、ライブラリ名を変えずに同梱します。
 検証済みの上流アーカイブそのものを、対応するソースのアーカイブの`ffmpeg/`に入れています。
 記録したconfigureコマンドと`installer/linux-tar/build-ffmpeg.sh`に、再ビルドの方法が書かれています。
 これは[FFmpegの配布チェックリスト](https://ffmpeg.org/legal.html)に従ったものです。

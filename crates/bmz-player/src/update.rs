@@ -109,7 +109,7 @@ pub fn installed_package() -> Option<(PathBuf, PackageManifest)> {
     .then_some((root, manifest))
 }
 
-pub fn startup_guard() -> Result<Option<Vec<File>>> {
+pub fn startup_guard() -> Result<Option<bmz_updater::process::InstanceGuard>> {
     #[cfg(windows)]
     {
         let exe = std::env::current_exe()?;

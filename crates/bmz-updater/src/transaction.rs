@@ -35,13 +35,27 @@ pub fn active_path(root: &Path) -> PathBuf {
 pub fn pending_update(root: &Path) -> Result<Option<PathBuf>> {
     let mut pending = None;
     for directory in [crate::WORK_DIR, crate::LEGACY_WORK_DIR] {
-        let path = checked_path(root, &format!("{directory}/active.json"))?;
-        if path.try_exists()? {
+        if let Some(path) = pending_update_in(root, directory)? {
             ensure!(pending.is_none(), "multiple unfinished updates; recovery is ambiguous");
             pending = Some(path);
         }
     }
     Ok(pending)
+}
+
+pub(crate) fn pending_update_in(root: &Path, directory: &str) -> Result<Option<PathBuf>> {
+    let result = checked_path(root, &format!("{directory}/active.json"))
+        .and_then(|path| Ok(path.try_exists()?.then_some(path)));
+    #[cfg(windows)]
+    if directory == crate::LEGACY_WORK_DIR
+        && result.as_ref().err().and_then(|error| error.downcast_ref()).is_some_and(|error| {
+            crate::windows_path::gone_or_deleting(&root.join(directory), error)
+        })
+    {
+        // Cleanup only removes the old directory when it is empty.
+        return Ok(None);
+    }
+    result
 }
 
 pub fn new_work_dir(root: &Path) -> Result<PathBuf> {
@@ -68,12 +82,12 @@ pub fn atomic_json(path: &Path, value: &impl Serialize) -> Result<()> {
 fn durable_rename(source_path: &Path, path: &Path) -> Result<()> {
     #[cfg(windows)]
     {
-        use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::Storage::FileSystem::{
             MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
         };
-        let source: Vec<u16> = source_path.as_os_str().encode_wide().chain(Some(0)).collect();
-        let dest: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        // Extended-length paths keep deep installations within reach of the Win32 API.
+        let source = crate::windows_path::verbatim_path(source_path)?;
+        let dest = crate::windows_path::verbatim_path(path)?;
         if unsafe {
             MoveFileExW(
                 source.as_ptr(),
@@ -539,6 +553,12 @@ mod tests {
         assert_eq!(PackageManifest::read(root).unwrap().version, "0.4.0");
         assert!(!root.join("dll/dll.manifest").exists());
         assert!(pending_update(root).unwrap().is_none());
+        assert!(work.join("startup-version.txt").is_file());
+        assert!(
+            !fs::read_dir(&work).unwrap().any(|entry| {
+                entry.unwrap().file_name().to_string_lossy().starts_with("bmz-sxs-")
+            })
+        );
         assert_user_data(root);
     }
 

@@ -53,13 +53,19 @@ async fn main() -> ExitCode {
         };
     }
     let profile_id = invocation.profile_id;
-    let _update_guard = match bmz_player::update::startup_guard() {
+    let update_guard = match bmz_player::update::startup_guard() {
         Ok(guard) => guard,
         Err(error) => {
             bmz_player::stdio::stderr_line(format_args!("Error: {error:#}"));
             return ExitCode::FAILURE;
         }
     };
+    let cleanup_error = update_guard.as_ref().and_then(|guard| guard.cleanup_error.as_ref());
+    if let Some(error) = cleanup_error {
+        bmz_player::stdio::stderr_line(format_args!(
+            "Warning: could not clean up legacy update files: {error:#}"
+        ));
+    }
     if matches!(command, Command::Monitors) {
         return match bmz_player::window_config::list_monitors() {
             Ok(()) => ExitCode::SUCCESS,
@@ -213,6 +219,9 @@ async fn main() -> ExitCode {
 
     install_panic_hook();
     log_session_start(&logging);
+    if let Some(error) = cleanup_error {
+        tracing::warn!(error = %format_args!("{error:#}"), "could not clean up legacy update files");
+    }
     if let Some(error) = startup_logging_error {
         tracing::warn!(%error, "startup logging settings could not be read; using defaults");
     }

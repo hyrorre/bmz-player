@@ -37,7 +37,7 @@ bash installer/linux-tar/rebuild.sh
 ```
 
 The script uses an empty CARGO_HOME and new target directory, verifies the pinned
-FFmpeg 9.0.1 and PipeWire 1.4.9 sources, rebuilds their private shared libraries,
+FFmpeg 9.1 and PipeWire 1.4.9 sources, rebuilds their private shared libraries,
 and runs:
 
 ```sh

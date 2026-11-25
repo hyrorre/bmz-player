@@ -14,8 +14,11 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(windows)]
+mod legacy_cleanup;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,27 +38,97 @@ pub struct Request {
     pub restart: RestartContext,
 }
 
+// Windows can take an exclusive byte-range lock on a read-only handle, so locks are opened
+// read-only. That keeps a lock file with the read-only attribute usable.
 fn lock_file(root: &Path, name: &str) -> Result<File> {
     let path = checked_path(root, name)?;
+    match File::open(&path) {
+        Ok(file) => return Ok(file),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
     fs::create_dir_all(path.parent().context("missing lock directory")?)?;
-    Ok(File::options().read(true).write(true).create(true).truncate(false).open(path)?)
+    create_lock(&path)
+}
+
+/// Creates a missing lock file, or opens the one that another process created first.
+fn create_lock(path: &Path) -> Result<File> {
+    let create = || match File::options().read(true).write(true).create_new(true).open(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => File::open(path),
+        result => result,
+    };
+    let result = create();
+    #[cfg(windows)]
+    if let Err(error) = &result
+        && missing_permission(path, error)
+    {
+        // A name waiting for deletion can disappear before the native query. Try once more,
+        // then report missing permission without the I/O error that callers retry.
+        return match create() {
+            Err(error) if missing_permission(path, &error) => {
+                bail!("could not create {}: {error}", path.display())
+            }
+            result => Ok(result?),
+        };
+    }
+    Ok(result?)
+}
+
+/// Win32 also reports a name waiting for deletion as access denied. Only that state is transient.
+#[cfg(windows)]
+fn missing_permission(path: &Path, error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32)
+        && !crate::windows_path::delete_pending(path)
+}
+
+/// A directory or reparse point cannot serve as a lock, so no BMZ process coordinates on it.
+fn regular_file(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        metadata.is_file() && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.is_file()
+    }
 }
 
 /// All packaged BMZ processes hold this until shutdown (including Viewer/CLI).
-pub fn instance_guard(root: &Path) -> Result<Vec<File>> {
-    let legacy = PackageManifest::read(root)?.manifest_path() == crate::LEGACY_MANIFEST;
+pub struct InstanceGuard {
+    _locks: Vec<File>,
+    pub cleanup_error: Option<anyhow::Error>,
+}
+
+pub fn instance_guard(root: &Path) -> Result<InstanceGuard> {
+    let package = PackageManifest::read(root)?;
+    let legacy = package.manifest_path() == crate::LEGACY_MANIFEST;
     let mut guards = Vec::new();
-    for name in [crate::INSTANCE_LOCK, crate::LEGACY_INSTANCE_LOCK] {
-        let path = checked_path(root, name)?;
-        let exists = path.try_exists()?;
-        if (legacy && name == crate::INSTANCE_LOCK
-            || !legacy && name == crate::LEGACY_INSTANCE_LOCK)
-            && !exists
-        {
-            continue;
-        }
+    let instance = checked_path(root, crate::INSTANCE_LOCK)?;
+    let exists = instance.try_exists()?;
+    if !legacy || exists {
         // Packages ship an empty instance lock, permitting read-only launches with data overrides.
-        let file = if exists { File::open(path)? } else { lock_file(root, name)? };
+        let file = lock_file(root, crate::INSTANCE_LOCK)?;
+        file.try_lock_shared().context("BMZ is being updated")?;
+        guards.push(file);
+    }
+
+    #[cfg(windows)]
+    let cleanup_error = if !legacy
+        && package.kind == crate::manifest::PackageKind::Portable
+        && package.version == env!("CARGO_PKG_VERSION")
+    {
+        // The shared modern lock protects against apply/recovery without blocking other launches.
+        legacy_cleanup::cleanup(root).err()
+    } else {
+        None
+    };
+    #[cfg(not(windows))]
+    let cleanup_error = None;
+
+    let old_instance = open_legacy_lock(root, crate::LEGACY_INSTANCE_LOCK, legacy)?;
+    if let Some(file) = old_instance {
         file.try_lock_shared().context("BMZ is being updated")?;
         guards.push(file);
     }
@@ -63,26 +136,56 @@ pub fn instance_guard(root: &Path) -> Result<Vec<File>> {
         transaction::pending_update(root)?.is_none(),
         "interrupted update: run bmz-updater --recover INSTALL_DIR before starting BMZ"
     );
-    Ok(guards)
+    Ok(InstanceGuard { _locks: guards, cleanup_error })
 }
 
-// Hold both generations during migration. Never delete legacy locks: replacing a lock file
-// can split the lock identity while another process still has the original file open.
+fn open_legacy_lock(root: &Path, name: &str, create: bool) -> Result<Option<File>> {
+    let open = || -> Result<Option<File>> {
+        crate::manifest::reject_link(root)?;
+        let path = root.join(name);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if !regular_file(&metadata) => {
+                ensure!(!create, "required legacy lock is not a regular file");
+                return Ok(None);
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        match File::open(&path) {
+            Ok(file) => Ok(Some(file)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if create {
+                    create_lock(&path).map(Some)
+                } else {
+                    Ok(None)
+                }
+            }
+            Err(error) => Err(error.into()),
+        }
+    };
+    #[cfg(windows)]
+    let result = legacy_cleanup::retry_legacy_open(&root.join(name), open);
+    #[cfg(not(windows))]
+    let result = open();
+    result.with_context(|| format!("could not open {name}"))
+}
+
 fn update_guards(root: &Path) -> Result<(Vec<File>, Vec<File>)> {
+    let update = lock_file(root, crate::UPDATE_LOCK)?;
+    update.try_lock().context("another updater is running")?;
     let legacy = checked_path(root, crate::LEGACY_MANIFEST)?.try_exists()?
-        || checked_path(root, crate::LEGACY_INSTANCE_LOCK)?.try_exists()?
-        || checked_path(root, &format!("{}/active.json", crate::LEGACY_WORK_DIR))?.try_exists()?;
-    let mut updates = vec![lock_file(root, crate::UPDATE_LOCK)?];
-    if legacy || checked_path(root, crate::LEGACY_UPDATE_LOCK)?.try_exists()? {
-        updates.push(lock_file(root, crate::LEGACY_UPDATE_LOCK)?);
-    }
-    for lock in &updates {
+        || transaction::pending_update_in(root, crate::LEGACY_WORK_DIR)?.is_some();
+    // Existing legacy locks are always joined. Every grouped helper also holds the modern update
+    // lock, so legacy locks are created only while a protocol 1 helper may use the installation.
+    let old_instance = open_legacy_lock(root, crate::LEGACY_INSTANCE_LOCK, legacy)?;
+    let mut updates = vec![update];
+    if let Some(lock) = open_legacy_lock(root, crate::LEGACY_UPDATE_LOCK, legacy)? {
         lock.try_lock().context("another updater is running")?;
+        updates.push(lock);
     }
     let mut instances = vec![lock_file(root, crate::INSTANCE_LOCK)?];
-    if legacy {
-        instances.push(lock_file(root, crate::LEGACY_INSTANCE_LOCK)?);
-    }
+    instances.extend(old_instance);
     Ok((updates, instances))
 }
 
@@ -151,7 +254,8 @@ pub fn start(request: &Request) -> Result<Handoff> {
     }
 }
 
-pub fn run_request(path: &Path) -> Result<()> {
+/// An applied update can return a warning if BMZ could not be restarted.
+pub fn run_request(path: &Path) -> Result<Option<anyhow::Error>> {
     ensure!(path.metadata()?.len() <= 64 * 1024, "invalid updater request");
     let request: Request = serde_json::from_reader(File::open(path)?)?;
     let root = request.root.canonicalize()?;
@@ -176,26 +280,81 @@ pub fn run_request(path: &Path) -> Result<()> {
     }
     let result = transaction::apply(&root, &work);
     drop(instances);
-    let log = match &result {
+    finish_request(&root, &work, &request.restart, result)
+}
+
+fn finish_request(
+    root: &Path,
+    work: &Path,
+    context: &RestartContext,
+    result: Result<()>,
+) -> Result<Option<anyhow::Error>> {
+    // Only launch if the installation is coherent; never run after failed rollback.
+    let restart_error = transaction::pending_update(root)
+        .and_then(|pending| {
+            ensure!(pending.is_none(), "update recovery is required before restarting BMZ");
+            restart(root, context)
+        })
+        .err();
+    let mut log = match &result {
         Ok(()) => "Update completed.\n".to_owned(),
         Err(e) => format!("{e:#}\n"),
     };
-    fs::write(work.join("update.log"), log)?;
-    // Only launch if the installation is coherent; never run after failed rollback.
-    if transaction::pending_update(&root)?.is_none() {
-        restart(&root, &request.restart)?;
+    if let Some(error) = &restart_error {
+        log.push_str(&format!("BMZ did not restart: {error:#}\n"));
     }
-    result
+    if let Err(error) = fs::write(work.join("update.log"), log) {
+        eprintln!("could not write update log: {error}");
+    }
+    result.map(|()| restart_error)
+}
+
+fn process_cwd_fits(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        // Leave room for the trailing separator and NUL. Count verbatim prefixes conservatively.
+        path.as_os_str().encode_wide().count() <= 258
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        true
+    }
+}
+
+struct StartupProbeDir(PathBuf);
+
+impl Drop for StartupProbeDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.0);
+    }
+}
+
+fn startup_probe_dir(work: &Path, temp: &Path) -> Result<StartupProbeDir> {
+    crate::manifest::reject_link(work)?;
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let name = format!("bmz-sxs-{}-{stamp}", std::process::id());
+    let path = std::path::absolute(work)?.join(&name);
+    let path = if process_cwd_fits(&path) { path } else { std::path::absolute(temp)?.join(name) };
+    ensure!(
+        process_cwd_fits(&path),
+        "SxS loader check needs a shorter temporary directory: {}",
+        path.display()
+    );
+    fs::create_dir(&path).with_context(|| {
+        format!("could not create a directory for the SxS loader check: {}", path.display())
+    })?;
+    Ok(StartupProbeDir(path))
 }
 
 pub(crate) fn verify_player_startup(root: &Path, work: &Path, version: &str) -> Result<()> {
-    let cwd = checked_path(work, "startup-probe")?;
-    fs::create_dir(&cwd)?;
+    let cwd = startup_probe_dir(work, &std::env::temp_dir())?;
     let output = checked_path(work, "startup-version.txt")?;
     let stdout = File::options().write(true).create_new(true).open(&output)?;
     let mut command = Command::new(checked_path(root, "bmz-player.exe")?);
     command
-        .current_dir(cwd)
+        .current_dir(&cwd.0)
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(stdout)
@@ -235,15 +394,18 @@ pub(crate) fn verify_player_startup(root: &Path, work: &Path, version: &str) -> 
     Ok(())
 }
 
-fn restart(root: &Path, context: &RestartContext) -> Result<()> {
+fn restart(root: &Path, context: &RestartContext) -> Result<Child> {
     ensure!(
         !context.profile.is_empty()
             && context.profile.len() <= 64
             && context.profile.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
         "invalid restart profile"
     );
-    Command::new(root.join("bmz-player.exe"))
-        .current_dir(root)
+    let mut command = Command::new(root.join("bmz-player.exe"));
+    if process_cwd_fits(root) {
+        command.current_dir(root);
+    }
+    command
         .arg("--profile")
         .arg(&context.profile)
         .env("BMZ_DATA_DIR", &context.data_dir)
@@ -251,8 +413,7 @@ fn restart(root: &Path, context: &RestartContext) -> Result<()> {
         .env("BMZ_LOGS_DIR", &context.logs_dir)
         .env("BMZ_RESOURCE_DIR", &context.resource_dir)
         .spawn()
-        .context("updated BMZ could not be restarted")?;
-    Ok(())
+        .context("updated BMZ could not be restarted")
 }
 
 pub fn recover(root: &Path) -> Result<()> {
@@ -267,8 +428,7 @@ pub fn recover(root: &Path) -> Result<()> {
 pub fn available_space(root: &Path) -> Result<u64> {
     #[cfg(windows)]
     {
-        use std::os::windows::ffi::OsStrExt;
-        let root: Vec<u16> = root.as_os_str().encode_wide().chain(Some(0)).collect();
+        let root = crate::windows_path::verbatim_path(root)?;
         let mut available = 0;
         if unsafe {
             windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
@@ -293,6 +453,102 @@ pub fn available_space(root: &Path) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn a_long_work_path_can_start_the_loader_probe() {
+        use std::os::windows::ffi::OsStrExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let work = temp.path().join("a".repeat(110)).join("b".repeat(110));
+        fs::create_dir_all(&work).unwrap();
+        let work = work.canonicalize().unwrap();
+        assert!(work.as_os_str().encode_wide().count() > 260);
+
+        let cwd = startup_probe_dir(&work, temp.path()).unwrap();
+        let path = cwd.0.clone();
+        assert_eq!(path.parent(), Some(temp.path()));
+        let status = Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .current_dir(&path)
+            .stdout(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        drop(cwd);
+        assert!(!path.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_loader_probe_rejects_a_long_temporary_path() {
+        let fixture = tempfile::tempdir().unwrap();
+        let work = fixture.path().join("a".repeat(110)).join("b".repeat(110));
+        let temp = fixture.path().join("c".repeat(110)).join("d".repeat(110));
+        fs::create_dir_all(&work).unwrap();
+        fs::create_dir_all(&temp).unwrap();
+
+        let error = startup_probe_dir(&work, &temp).err().expect("the probe path is too long");
+        assert!(error.to_string().contains("SxS loader check needs a shorter temporary directory"));
+        assert!(fs::read_dir(work).unwrap().next().is_none());
+        assert!(fs::read_dir(temp).unwrap().next().is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_player_can_be_spawned_from_a_deep_installation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("a".repeat(110)).join("b".repeat(110));
+        fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        assert!(!process_cwd_fits(&root));
+        fs::copy(std::env::current_exe().unwrap(), root.join("bmz-player.exe")).unwrap();
+        let context = RestartContext {
+            data_dir: temp.path().join("data"),
+            cache_dir: temp.path().join("cache"),
+            logs_dir: temp.path().join("logs"),
+            resource_dir: root.join("resources"),
+            profile: "default".to_owned(),
+        };
+
+        // The copied test executable exits after rejecting --profile. Only spawn is under test.
+        restart(&root, &context).unwrap().wait().unwrap();
+    }
+
+    #[test]
+    fn a_restart_failure_after_apply_preserves_the_update_and_reports_a_warning() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        crate::manifest::write_test_package(
+            root,
+            "0.4.0",
+            &[("bmz-player.exe", b"old app"), (crate::HELPER, b"old helper")],
+        );
+        let work = transaction::new_work_dir(root).unwrap();
+        crate::manifest::write_test_package(
+            &work.join("stage"),
+            "0.5.0",
+            &[("bmz-player.exe", b"new app"), (crate::HELPER, b"new helper")],
+        );
+        let context = RestartContext {
+            data_dir: root.join("data"),
+            cache_dir: root.join("cache"),
+            logs_dir: root.join("logs"),
+            resource_dir: root.join("resources"),
+            profile: String::new(),
+        };
+
+        let result = transaction::apply(root, &work);
+        let warning = finish_request(root, &work, &context, result).unwrap().unwrap();
+        assert_eq!(warning.to_string(), "invalid restart profile");
+        assert_eq!(PackageManifest::read(root).unwrap().version, "0.5.0");
+        assert!(transaction::pending_update(root).unwrap().is_none());
+        assert_eq!(
+            fs::read_to_string(work.join("update.log")).unwrap(),
+            "Update completed.\nBMZ did not restart: invalid restart profile\n"
+        );
+    }
+
     #[test]
     fn all_running_instances_block_exclusive_update_lock() {
         let temp = tempfile::tempdir().unwrap();
@@ -330,5 +586,24 @@ mod tests {
         }
         assert!(instance_guard(temp.path()).is_err());
         assert!(update_guards(temp.path()).is_err());
+    }
+
+    #[test]
+    fn a_legacy_install_requires_its_instance_lock_for_startup_and_recovery() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        crate::manifest::write_test_package(
+            root,
+            "0.4.0",
+            &[("bmz-player.exe", b"app"), (crate::LEGACY_HELPER, b"helper")],
+        );
+        let legacy_lock = root.join(crate::LEGACY_INSTANCE_LOCK);
+        fs::create_dir(&legacy_lock).unwrap();
+        assert!(!root.join(crate::INSTANCE_LOCK).exists());
+
+        assert!(instance_guard(root).is_err());
+        assert!(recover(root).is_err());
+        assert!(!root.join(crate::INSTANCE_LOCK).exists());
+        assert!(legacy_lock.is_dir());
     }
 }
