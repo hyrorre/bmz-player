@@ -100,6 +100,82 @@ fn select_render_items_passes_selected_row_genre_to_string_ref_13() {
 }
 
 #[test]
+fn select_render_items_show_artist_refs_for_the_selected_chart() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "text": [
+                    { "id": "artist", "size": 6, "ref": 14 },
+                    { "id": "subartist", "size": 6, "ref": 15 },
+                    { "id": "fullartist", "size": 6, "ref": 16 }
+                ],
+                "destination": [
+                    { "id": "artist", "dst": [{ "x": 10, "y": 60, "w": 80, "h": 6 }] },
+                    { "id": "subartist", "dst": [{ "x": 10, "y": 50, "w": 80, "h": 6 }] },
+                    { "id": "fullartist", "dst": [{ "x": 10, "y": 40, "w": 80, "h": 6 }] }
+                ]
+            }
+            "#,
+    )
+    .unwrap();
+    let mut snapshot = SelectSnapshot {
+        rows: vec![
+            SelectRowSnapshot {
+                index: 0,
+                artist: "MainArtist".to_string(),
+                subartist: "GuestArtist".to_string(),
+                kind: SelectRowKind::Song,
+                ..SelectRowSnapshot::default()
+            },
+            SelectRowSnapshot {
+                index: 1,
+                artist: "SoloArtist".to_string(),
+                kind: SelectRowKind::Song,
+                ..SelectRowSnapshot::default()
+            },
+            SelectRowSnapshot {
+                index: 2,
+                kind: SelectRowKind::Folder,
+                ..SelectRowSnapshot::default()
+            },
+            SelectRowSnapshot {
+                index: 3,
+                artist: "25".to_string(),
+                kind: SelectRowKind::Config,
+                ..SelectRowSnapshot::default()
+            },
+        ],
+        ..SelectSnapshot::default()
+    };
+    let rendered_text = |snapshot: &SelectSnapshot| {
+        document
+            .select_render_items(&HashMap::new(), snapshot)
+            .into_iter()
+            .filter_map(|item| match item {
+                SkinRenderItem::Text { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(rendered_text(&snapshot), ["MainArtist", "GuestArtist", "MainArtist GuestArtist"]);
+    snapshot.rows[0].artist.clear();
+    assert_eq!(rendered_text(&snapshot), ["GuestArtist", "GuestArtist"]);
+    snapshot.rows[0].subartist.clear();
+    assert!(rendered_text(&snapshot).is_empty());
+    snapshot.selected_index = 1;
+    assert_eq!(rendered_text(&snapshot), ["SoloArtist", "SoloArtist"]);
+    snapshot.selected_index = 2;
+    assert!(rendered_text(&snapshot).is_empty());
+    snapshot.selected_index = 3;
+    snapshot.in_settings = true;
+    assert_eq!(rendered_text(&snapshot), ["25", "25"]);
+}
+
+#[test]
 fn select_render_items_show_editing_marker_in_setting_genre() {
     let document: SkinDocument = serde_json::from_str(
         r#"

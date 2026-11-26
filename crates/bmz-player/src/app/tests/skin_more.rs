@@ -1,6 +1,34 @@
 use super::*;
 
 #[test]
+fn play_and_result_lua_load_preserve_a_lone_subtitle_and_subartist() {
+    let facts = crate::screens::play_snapshot::PlaySkinChartFacts {
+        subtitle: "Sub".to_string(),
+        subartist: "GuestArtist".to_string(),
+        ..Default::default()
+    };
+    let mut play = bmz_skin::LuaLoadRuntimeState::default();
+    apply_play_chart_facts_lua_load_state(&mut play, &facts);
+
+    let mut summary = debug_boot_result_summary();
+    summary.title.clear();
+    summary.subtitle.clone_from(&facts.subtitle);
+    summary.artist.clear();
+    summary.subartist.clone_from(&facts.subartist);
+    let mut result = bmz_skin::LuaLoadRuntimeState::default();
+    apply_result_summary_lua_load_state(&mut result, &summary, "", "", "");
+
+    for state in [play, result] {
+        assert_eq!(state.text_values[&10], "");
+        assert_eq!(state.text_values[&11], "Sub");
+        assert_eq!(state.text_values[&12], "Sub");
+        assert_eq!(state.text_values[&14], "");
+        assert_eq!(state.text_values[&15], "GuestArtist");
+        assert_eq!(state.text_values[&16], "GuestArtist");
+    }
+}
+
+#[test]
 fn chart_hashes_are_available_during_lua_load_and_cleared_without_a_chart() {
     let root = std::env::temp_dir().join(format!(
         "bmz-chart-hashes-{}-{}",

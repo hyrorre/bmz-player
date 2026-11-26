@@ -356,6 +356,7 @@ fn select_chart_snapshot(
         ),
         subtitle: chart.map(|chart| chart.subtitle.clone()).unwrap_or_default(),
         artist: row.display_artist().to_string(),
+        subartist: chart.map(|chart| chart.subartist.clone()).unwrap_or_default(),
         genre: chart.map(|chart| chart.genre.clone()).unwrap_or_default(),
         difficulty_name: chart.map(|chart| chart.difficulty_name.clone()).unwrap_or_default(),
         play_level: chart.map(|chart| chart.play_level.clone()).unwrap_or_default(),

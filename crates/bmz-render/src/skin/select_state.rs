@@ -54,7 +54,8 @@ pub(super) fn select_rival_index(target: &str) -> Option<u8> {
     target.strip_prefix("RIVAL_")?.parse::<u8>().ok().filter(|&index| index > 0)
 }
 
-pub(super) fn full_label(primary: &str, secondary: &str) -> String {
+/// Join two skin metadata fields with a space when both are present.
+pub fn full_label(primary: &str, secondary: &str) -> String {
     match (primary.is_empty(), secondary.is_empty()) {
         (true, true) => String::new(),
         (false, true) => primary.to_string(),
@@ -429,6 +430,19 @@ pub(super) fn select_detail_artist<'a>(
     selected_row
         .filter(|row| row.kind == SelectRowKind::Config)
         .map(|row| row.artist.as_str())
+        .unwrap_or_default()
+}
+
+pub(super) fn select_detail_subartist<'a>(
+    snapshot: &SelectSnapshot,
+    selected_row: Option<&'a SelectRowSnapshot>,
+) -> &'a str {
+    if snapshot.in_settings {
+        return "";
+    }
+    selected_row
+        .filter(|row| row.kind == SelectRowKind::Song)
+        .map(|row| row.subartist.as_str())
         .unwrap_or_default()
 }
 
