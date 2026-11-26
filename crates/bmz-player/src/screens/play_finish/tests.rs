@@ -1513,6 +1513,7 @@ fn spawned_settled_session_result_persists_on_background_worker() {
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let mut session = session();
+    Arc::make_mut(&mut session.chart).end_time = TimeUs(120_000_000);
     session.state = PlayState::Playing;
     session.judge.process_input(
         &session.chart,
@@ -1567,6 +1568,8 @@ fn spawned_settled_session_result_persists_on_background_worker() {
     assert_eq!(finished.summary.target, crate::select_options::TargetOption::IrTop);
     assert!(!finished.summary.graph.note_graph_buckets.is_empty());
     assert!(root.join(&finished.stored.replay_path).is_file());
+    let stats = ScoreDatabase::open(&paths.score_db).unwrap().player_stats().unwrap();
+    assert_eq!(stats.playtime_seconds, 120);
 
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -1765,6 +1768,66 @@ fn manual_stop_replays_the_last_scored_press_without_hitting_the_next_mine() {
     assert_eq!(history.gauge_value, Some(100.0));
     assert!(frame.mine_hits.is_empty());
     assert_eq!(replay.replay_player.unwrap().scored_until(), Some(TimeUs(250_125)));
+}
+
+#[test]
+fn manual_stop_adds_only_elapsed_time_to_player_stats() {
+    use bmz_gameplay::session::PlayEndRequest;
+
+    let replay_config = ReplayConfig {
+        auto_save: false,
+        slot_rules: crate::config::profile_config::default_slot_rules(),
+    };
+    for (finish_mode, assist) in [
+        (FinishResultMode::Normal, AssistLevel::None),
+        (FinishResultMode::Normal, AssistLevel::Assist),
+        (FinishResultMode::CourseStage, AssistLevel::None),
+    ] {
+        let mut live = session();
+        let chart = Arc::make_mut(&mut live.chart);
+        chart.end_time = TimeUs(120_000_000);
+        chart.lane_notes[Lane::Key1.index()][0].time = chart.end_time;
+        live.assist.level = assist;
+        live.state = PlayState::Playing;
+        let stopped_at = TimeUs(10_750_000);
+        live.audio_clock.pause_at(stopped_at);
+        live.play_end.request(PlayEndRequest::ManualStop);
+        bmz_gameplay::session::advance_session_frame(
+            &mut live,
+            &mut bmz_audio::queue::ScheduledSoundQueue::new(),
+        );
+        assert!(live.manually_stopped);
+        assert_eq!(live.result_settled_at(), Some(stopped_at));
+        // The clock can advance during the exit transition before the save.
+        live.audio_clock.pause_at(TimeUs(13_000_000));
+
+        let root = tempfile::tempdir().unwrap();
+        let mut scores = open_score_db();
+        finish_session_result(
+            &mut scores,
+            &mut open_network_db(),
+            FinishSessionResultRequest {
+                profile_paths: &profile_paths(root.path()),
+                replay_config: &replay_config,
+                ir_config: &IrConfig::default(),
+                session: &live,
+                played_at: 1_700_000_114,
+                applied_arrange: &AppliedArrange::default(),
+                source_ln_profile: ChartLnProfile::from_chart(&live.chart),
+                chart_length_ms: None,
+                play_duration_ms: None,
+                target_ex_score: None,
+                score_key: score_key(&live),
+                practice_mode: false,
+                finish_mode,
+            },
+        )
+        .unwrap();
+
+        let stats = scores.player_stats().unwrap();
+        assert_eq!(stats.play_count, 1, "{finish_mode:?}, {assist:?}");
+        assert_eq!(stats.playtime_seconds, 10, "{finish_mode:?}, {assist:?}");
+    }
 }
 
 #[test]
