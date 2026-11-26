@@ -579,7 +579,7 @@ fn apply_chart_text_lua_load_state(
     state.text_values.extend([
         (10, title.to_string()),
         (11, subtitle.to_string()),
-        (12, if subtitle.is_empty() { title.to_string() } else { format!("{title} {subtitle}") }),
+        (12, bmz_render::skin::full_label(title, subtitle)),
         (13, genre.to_string()),
         (14, artist.to_string()),
         (15, subartist.to_string()),
