@@ -95,12 +95,7 @@ watch([open, page], () => {
                     v-if="scoreDetailId"
                     :id="scoreDetailsId"
                     :score-id="scoreDetailId(score)"
-                  >
-                    <ScoreRowMetadata
-                      :device="score.device_type"
-                      :date="score.played_at ?? score.server_received_at"
-                    />
-                  </ScoreInlineDetails>
+                  />
                   <ScoreRowMetadata
                     v-else
                     :id="scoreDetailsId"

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { BatchItem } from 'drizzle-orm/batch'
-import { and, asc, eq, exists, inArray, ne, notExists, or, sql, type SQL } from 'drizzle-orm'
+import { and, asc, eq, exists, inArray, ne, not, notExists, or, sql, type SQL } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/sqlite-core'
 import { db, schema } from 'hub:db'
 import type { IrDifficultyLabel, IrDifficultyTableOption } from '../../shared/types/ir'
@@ -407,6 +407,7 @@ function unregisteredDifficultyCharts(tableId: string, level?: string) {
   const resolvedName = 'resolved_table_entries'
   const resolved = db
     .select({
+      sourceSha256: sql<string>`${entries.sha256}`.as('source_sha256'),
       md5: sql<string>`coalesce(nullif(${entries.md5}, ''), (${pairedHash('md5', 'sha256')}), '')`.as(
         'md5',
       ),
@@ -435,6 +436,19 @@ function unregisteredDifficultyCharts(tableId: string, level?: string) {
     .select({ value: sql`1` })
     .from(charts)
     .where(eq(charts.sha256, resolvedSha256))
+  // An MD5-only row can identify a moderated SHA-256 through another active table.
+  // An explicit SHA-256 keeps its own visibility even when another chart shares its MD5.
+  const moderatedMd5Match = db
+    .select({ value: sql`1` })
+    .from(sql`${entries} indexed by idx_difficulty_table_entries_md5`)
+    .innerJoin(tables, activeDifficultyGeneration())
+    .where(
+      and(
+        eq(entries.md5, resolvedMd5),
+        ne(entries.sha256, ''),
+        not(publicChartCondition(entries.sha256)),
+      ),
+    )
   const identity = sql`coalesce(nullif(${resolved.md5}, ''), ${resolved.sha256})`
 
   return db
@@ -456,7 +470,8 @@ function unregisteredDifficultyCharts(tableId: string, level?: string) {
         // Registered charts with hidden or suppressed labels must not reappear as unregistered.
         notExists(knownMd5),
         notExists(knownSha256),
-        publicChartCondition(sql`${resolved.sha256}`),
+        publicChartCondition(resolvedSha256),
+        or(ne(resolved.sourceSha256, ''), notExists(moderatedMd5Match)),
       ),
     )
     .groupBy(resolved.level, identity)

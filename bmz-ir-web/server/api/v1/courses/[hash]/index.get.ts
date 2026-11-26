@@ -1,6 +1,8 @@
-import { and, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, count, eq, inArray, sql } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
+import type { LnScorePolicy } from '../../../../../shared/types/ir'
 import { requireHex } from '../../../../services/ir'
+import { LN_POLICIES } from '../../../../services/ir/common'
 import { isPublicCourse, publicPlayerCondition } from '../../../../services/moderation/visibility'
 
 export default defineEventHandler(async (event) => {
@@ -21,7 +23,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const stats = await db
-    .select({ play_count: sql<number>`count(*)` })
+    .select({ ln_policy: schema.courseScores.lnPolicy, play_count: count() })
     .from(schema.courseScores)
     .where(
       and(
@@ -30,6 +32,8 @@ export default defineEventHandler(async (event) => {
         publicPlayerCondition(schema.courseScores.playerId),
       ),
     )
+    .groupBy(schema.courseScores.lnPolicy)
+    .orderBy(asc(schema.courseScores.lnPolicy))
 
   const courseCharts =
     course.charts.length > 0
@@ -58,16 +62,22 @@ export default defineEventHandler(async (event) => {
           .where(inArray(schema.charts.sha256, course.charts))
       : []
   const chartMap = new Map(courseCharts.map((chart) => [chart.sha256, chart]))
+  const recordedPolicies = course.charts.some((sha256) => !chartMap.has(sha256))
+    ? stats
+        .map((row) => row.ln_policy)
+        .filter((policy): policy is LnScorePolicy => LN_POLICIES.has(policy))
+    : []
 
   return {
-    course: courseToResponse(course, chartMap),
-    stats: { play_count: Number(stats[0]?.play_count ?? 0) },
+    course: courseToResponse(course, chartMap, recordedPolicies),
+    stats: { play_count: stats.reduce((total, row) => total + row.play_count, 0) },
   }
 })
 
 function courseToResponse(
   course: typeof schema.irCourses.$inferSelect,
   chartMap: Map<string, CourseChartResponse>,
+  recordedPolicies: LnScorePolicy[],
 ) {
   const charts = [...chartMap.values()]
   return {
@@ -87,6 +97,7 @@ function courseToResponse(
       }
     }),
     chart_count: course.chartCount,
+    ln_policies: recordedPolicies,
     ln_profile: {
       has_undefined_ln: charts.some((chart) => chart.has_undefined_ln),
       has_defined_ln: charts.some((chart) => chart.has_defined_ln),

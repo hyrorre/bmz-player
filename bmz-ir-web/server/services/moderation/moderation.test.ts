@@ -289,7 +289,7 @@ test('player detail pages filter public bests and include each score source and 
   )
   const filtered = await load('ln_policy=AutoLn&rule_mode=Dx')
   expect(filtered.pagination.total).toBe(1)
-  expect(filtered.ln_filters).toEqual({ has_ln: true, has_mixed_ln: true })
+  expect(filtered.ln_filters).toEqual({ has_ln: true, has_mixed_ln: true, has_auto_ln: true })
   expect(filtered.best_scores[0]).toMatchObject({
     best_ex_score_id: exBest.score_id,
     best_clear_score_id: clearBest.score_id,
@@ -310,9 +310,34 @@ test('player detail pages filter public bests and include each score source and 
 
   await setChartStatus(CHART_A, 'hidden')
   const remaining = await load('ln_policy=AutoLn')
-  expect(remaining.ln_filters).toEqual({ has_ln: false, has_mixed_ln: false })
+  expect(remaining.ln_filters).toEqual({ has_ln: false, has_mixed_ln: false, has_auto_ln: false })
   expect(remaining.pagination.total).toBe(1)
   expect(remaining.best_scores[0].score_id).toBe(noLn.score_id)
+})
+
+test('player AutoLn filter includes charts with several defined types and no undefined LNs', async () => {
+  const auto = submission()
+  auto.chart.ln_profile = { has_defined_cn: true, has_defined_hcn: true }
+  auto.rule.ln_policy = 'AutoLn'
+  const score = await submitScore({ id: 'alice' }, auto, [], 10)
+  await submitScore({ id: 'alice' }, submission({ sha256: CHART_B }), [], 10)
+
+  const load = () =>
+    playerDetailHandler(
+      event({ path: '/api/v1/players/alice?ln_policy=AutoLn', params: { id: 'alice' } }),
+    )
+  const result = await load()
+  expect(result.ln_filters).toEqual({ has_ln: true, has_mixed_ln: false, has_auto_ln: true })
+  expect(result.best_scores).toMatchObject([{ score_id: score.score_id }])
+
+  // An undefined + defined chart enables all AUTO filters, and must keep the first chart visible.
+  const mixed = submission({ sha256: 'd'.repeat(64) })
+  mixed.chart.ln_profile = { has_undefined_ln: true, has_defined_cn: true }
+  mixed.rule.ln_policy = 'AutoLn'
+  await submitScore({ id: 'alice' }, mixed, [], 10)
+  const withMixed = await load()
+  expect(withMixed.ln_filters.has_mixed_ln).toBeTrue()
+  expect(withMixed.pagination.total).toBe(2)
 })
 
 function submission(
@@ -1519,6 +1544,36 @@ function coursePayload(charts: string[], key: string, exScore = 100) {
 }
 
 describe('rankings, courses, and aggregates', () => {
+  test('course details use public score policies when chart metadata is incomplete', async () => {
+    const charts = [CHART_A, CHART_B]
+    for (const [id, policy] of [
+      ['alice', 'ForceCn'],
+      ['alice', 'ForceHcn'],
+      ['bob', 'AutoHcn'],
+      ['carol', 'AutoCn'],
+    ] as const) {
+      const payload = coursePayload(charts, policy)
+      payload.rule.ln_policy = policy
+      await submitCourseScore({ id }, payload)
+    }
+    await setUserStatus('carol', 'banned')
+    await db
+      .update(schema.courseScores)
+      .set({ accepted: false })
+      .where(eq(schema.courseScores.playerId, 'bob'))
+    const hash = computeCourseHash(charts, {})
+    const load = () =>
+      courseDetailHandler(event({ path: `/api/v1/courses/${hash}`, params: { hash } }))
+    const expected = { course: { ln_policies: ['ForceCn', 'ForceHcn'] }, stats: { play_count: 2 } }
+    expect(await load()).toMatchObject(expected)
+    await db.insert(schema.charts).values({ sha256: CHART_A, mode: '7K' })
+    expect(await load()).toMatchObject(expected)
+    await db.insert(schema.charts).values({ sha256: CHART_B, mode: '7K', hasUndefinedLn: true })
+    expect(await load()).toMatchObject({
+      course: { ln_policies: [], ln_profile: { has_undefined_ln: true } },
+    })
+  })
+
   test('course rankings and self history return the client version of each score', async () => {
     const charts = [CHART_A, CHART_B]
     const bestPayload = coursePayload(charts, 'best-attempt', 300)
@@ -1926,6 +1981,61 @@ describe('rankings, courses, and aggregates', () => {
       null,
     ])
     expect(after.pagination.total).toBe(3)
+  })
+
+  test('MD5-only table entries respect SHA-256 moderation from other active tables', async () => {
+    const md5 = 'd'.repeat(32)
+    const otherMd5 = 'e'.repeat(32)
+    const blocked = 'd'.repeat(64)
+    const publicSha256 = 'c'.repeat(64)
+    await setChartStatus(blocked, 'blocked')
+    await db.insert(schema.difficultyTables).values(
+      ['selected', 'reference'].map((id) => ({
+        id,
+        sourceUrl: `https://example.invalid/${id}`,
+        activeGeneration: 'current',
+      })),
+    )
+    const selected = { tableId: 'selected', generation: 'current' }
+    const reference = { tableId: 'reference', generation: 'current', level: '1' }
+    await db.insert(schema.difficultyTableEntries).values([
+      { ...selected, level: '1', md5, title: 'Blocked row' },
+      { ...selected, level: '2', md5: otherMd5, title: 'Visible row' },
+      { ...reference, md5, sha256: blocked },
+      { ...reference, generation: 'retired', md5: otherMd5, sha256: blocked },
+    ])
+    for (const mode of ['lamp', 'score']) {
+      const query = `player=alice&table=selected&mode=${mode}`
+      const report = await analysisHandler(
+        event({ path: `/api/v1/analysis?${query}&include=first_pages` }),
+      )
+      expect(report.levels).toMatchObject([{ level: '2', total: 1 }])
+      const list = await analysisChartsHandler(
+        event({ path: `/api/v1/analysis/charts?${query}&level=1&rank=0` }),
+      )
+      expect(list.charts).toEqual([])
+    }
+
+    // A different public SHA-256 sharing the MD5 remains visible, before and after IR registration.
+    await db.insert(schema.difficultyTableEntries).values({
+      ...selected,
+      level: '1',
+      md5,
+      sha256: publicSha256,
+      title: 'Public row',
+    })
+    const load = () =>
+      analysisChartsHandler(
+        event({
+          path: '/api/v1/analysis/charts?player=alice&table=selected&level=1&rank=0',
+        }),
+      )
+    const unresolved = await load()
+    expect(unresolved.charts).toMatchObject([{ sha256: null, title: 'Public row' }])
+    await db
+      .insert(schema.charts)
+      .values({ sha256: publicSha256, md5, mode: '7K', title: 'Public chart' })
+    expect((await load()).charts).toMatchObject([{ sha256: publicSha256, title: 'Public chart' }])
   })
 
   test('distribution first pages keep complete segment counts and match the chart listing order', async () => {

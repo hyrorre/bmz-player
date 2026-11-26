@@ -1,5 +1,10 @@
 <script setup lang="ts">
-import type { IrArrangeOptions, IrChartLnProfile, IrRanking } from '../../../shared/types/ir'
+import type {
+  IrArrangeOptions,
+  IrChartLnProfile,
+  IrRanking,
+  LnScorePolicy,
+} from '../../../shared/types/ir'
 import type { ScoreClient } from '../../types/scoreDetails'
 
 interface CourseDetail {
@@ -18,6 +23,7 @@ interface CourseDetail {
     }[]
     chart_count: number
     ln_profile: IrChartLnProfile & { has_ln: boolean }
+    ln_policies: LnScorePolicy[]
     constraints: Record<string, unknown>
   }
   stats: { play_count: number }
@@ -100,7 +106,9 @@ const courseHash = computed(() => String(route.params.hash ?? ''))
 const { data: detail, error: detailError } = await useFetch<CourseDetail>(
   () => `/api/v1/courses/${courseHash.value}`,
 )
-const lnPolicies = computed(() => lnFilterItems(detail.value?.course.ln_profile))
+const lnPolicies = computed(() =>
+  lnFilterItems(detail.value?.course.ln_profile, detail.value?.course.ln_policies),
+)
 const {
   lnPolicy,
   ruleMode,

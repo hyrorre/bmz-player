@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { IR_PLAYER_SCORE_PAGE_SIZE } from '~~/bmz-ir-web/shared/constants/ir'
 import type { IrArrangeOptions, IrDifficultyLabel, IrRanking } from '~~/bmz-ir-web/shared/types/ir'
+import type { RankingLnFilters } from '../../utils/rankingDisplay'
 
 interface PlayerDetail {
   player: {
@@ -13,7 +14,7 @@ interface PlayerDetail {
     is_rival: boolean
     is_rivaled_by: boolean
   }
-  ln_filters: { has_ln: boolean; has_mixed_ln: boolean }
+  ln_filters: RankingLnFilters
   pagination: IrRanking['ranking']['pagination']
   best_scores: (IrArrangeOptions & {
     id: string
@@ -60,13 +61,12 @@ const rivalUpdating = ref(false)
 const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclosure()
 const wideScoreTable = useWideScoreTable()
 
-const selectableLnPolicies = availableLnFilterItems(true, true)
-const lnPolicies = computed(() =>
-  availableLnFilterItems(
-    data.value?.ln_filters.has_ln ?? false,
-    data.value?.ln_filters.has_mixed_ln ?? false,
-  ),
-)
+const selectableLnPolicies = availableLnFilterItems({
+  has_ln: true,
+  has_mixed_ln: true,
+  has_auto_ln: true,
+})
+const lnPolicies = computed(() => availableLnFilterItems(data.value?.ln_filters))
 const { lnPolicy, ruleMode, page, pageSize, maxPage, offset, pageLocation, correctOutOfRangePage } =
   useRankingQuery(lnPolicies, { queryKey: 'score_page', pageSize: IR_PLAYER_SCORE_PAGE_SIZE })
 // A direct link can set an LN filter before the profile's available options arrive.
@@ -308,13 +308,7 @@ useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player')
                       :id="scoreDetailsId"
                       :score-id="score.best_ex_score_id ?? score.score_id"
                       :other-score-id="score.best_clear_score_id"
-                    >
-                      <ScoreRowMetadata
-                        :device="score.device_type"
-                        :date="score.played_at ?? score.server_received_at"
-                        class="xl:hidden"
-                      />
-                    </ScoreInlineDetails>
+                    />
                   </td>
                 </tr>
               </template>

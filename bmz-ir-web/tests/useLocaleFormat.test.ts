@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { computed, ref } from 'vue'
+import { createI18n } from 'vue-i18n'
+import { additional } from '../../i18n/locales/additional'
+import { useDailyBoundaryLabel } from '../app/composables/useDailyBoundaryLabel'
 import { useLocaleFormat } from '../app/composables/useLocaleFormat'
+import {
+  dailyBoundaryForLocalTime,
+  formatClockMinutes,
+  localDailyBoundary,
+} from '../app/utils/timeZone'
 
 const viewerTimeZone = ref('Asia/Tokyo')
 const originalTimeZone = process.env.TZ
@@ -50,4 +58,19 @@ test('keeps an explicit time zone and names the viewer time zone for boundaries'
   expect(format.formatTimeWithZone('2026-11-25T08:00:00Z')).toBe('0:00 GMT-8')
   viewerTimeZone.value = 'Asia/Tokyo'
   expect(format.formatTimeWithZone('2026-11-25T08:00:00Z')).toBe('17:00 JST')
+})
+
+test('labels result days across the date line with the actual local day offset', () => {
+  const i18n = createI18n({ legacy: false, locale: 'ja', messages: { ja: additional.ja.messages } })
+  Object.assign(globalThis, { useI18n: () => i18n.global })
+  const label = useDailyBoundaryLabel()
+  const samoa = -11 * 60
+  const kiritimati = 14 * 60
+  const next = localDailyBoundary(dailyBoundaryForLocalTime(23 * 60 + 30, samoa), kiritimati)
+  expect(label(formatClockMinutes(next.minutes), next.dayOffset)).toBe('2日後 00:30')
+  const previous = localDailyBoundary(dailyBoundaryForLocalTime(0, kiritimati), samoa)
+  expect(label(formatClockMinutes(previous.minutes), previous.dayOffset)).toBe('2日前 23:00')
+  expect(label('15:00', -1)).toBe('前日 15:00')
+  expect(label('15:00', 0)).toBe('15:00')
+  expect(label('15:00', 1)).toBe('翌日 15:00')
 })

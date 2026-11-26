@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { IrJudges } from '../../shared/types/ir'
-import type { ScoreClient, ScoreReplay } from '../types/scoreDetails'
+import type { ScoreDetailResponse } from '../types/scoreDetails'
+import { selectedScoreAttempt } from '../utils/rankingDisplay'
 
 const props = defineProps<{
   scoreId: string
@@ -22,16 +22,15 @@ const scoreChoices = computed(() =>
       ]
     : [],
 )
-const { data, status, error, refresh } = useFetch<{
-  score: ScoreClient & { id: string; judges: Partial<IrJudges> | null }
-  replay: ScoreReplay | null
-}>(() => `/api/v1/scores/${encodeURIComponent(selectedScore.value)}`, { lazy: true })
-const detail = computed(() => (data.value?.score.id === selectedScore.value ? data.value : null))
+const { data, status, error, refresh } = useFetch<ScoreDetailResponse>(
+  () => `/api/v1/scores/${encodeURIComponent(selectedScore.value)}`,
+  { lazy: true },
+)
+const detail = computed(() => selectedScoreAttempt(selectedScore.value, data.value))
 </script>
 
 <template>
   <div class="sticky left-0 w-full max-w-[calc(100vw-3rem)] space-y-3 px-3 py-4 sm:px-4">
-    <slot />
     <UTabs
       v-if="scoreChoices.length"
       v-model="selectedScore"
@@ -53,14 +52,21 @@ const detail = computed(() => (data.value?.score.id === selectedScore.value ? da
         }}</UButton>
       </template>
     </UAlert>
-    <ScoreAttemptDetails
-      v-else-if="detail && status === 'success'"
-      :key="detail.score.id"
-      :score-id="detail.score.id"
-      :judges="detail.score.judges"
-      :replay="detail.replay"
-      :client="detail.score"
-    />
+    <template v-else-if="detail && status === 'success'">
+      <div class="flex flex-wrap items-center gap-4">
+        <ScoreRowMetadata v-bind="detail.metadata" />
+        <UBadge :color="detail.verification.color" size="sm" variant="subtle">
+          {{ t(detail.verification.label) }}
+        </UBadge>
+      </div>
+      <ScoreAttemptDetails
+        :key="detail.score.id"
+        :score-id="detail.score.id"
+        :judges="detail.score.judges"
+        :replay="detail.replay"
+        :client="detail.score"
+      />
+    </template>
     <p v-else role="status" class="text-sm text-muted">{{ t('common.loading') }}</p>
   </div>
 </template>

@@ -86,6 +86,11 @@ export default defineEventHandler(async (event) => {
     chart.hasDefinedHln,
   )
   const hasMixedLn = and(chart.hasUndefinedLn, hasDefinedLn)
+  // AUTO with multiple explicitly defined types is saved as AutoLn even without undefined LNs.
+  const hasAutoLn = or(
+    hasMixedLn,
+    sql`(${chart.hasDefinedLn} + ${chart.hasDefinedCn} + ${chart.hasDefinedHcn} + ${chart.hasDefinedHln}) > 1`,
+  )
   const hasLn = or(
     hasDefinedLn,
     chart.hasUndefinedLn,
@@ -102,15 +107,19 @@ export default defineEventHandler(async (event) => {
     .select({
       has_ln: sql`max(${hasLn})`.mapWith(Boolean),
       has_mixed_ln: sql`max(${hasMixedLn})`.mapWith(Boolean),
+      has_auto_ln: sql`max(${hasAutoLn})`.mapWith(Boolean),
     })
     .from(best)
     .leftJoin(chart, chartJoin)
     .where(publicBests)
-  const autoLn = lnPolicy?.startsWith('Auto')
-  const filterLn = lnPolicy && (autoLn ? lnFilters?.has_mixed_ln : lnFilters?.has_ln)
+  const lnConditions = { has_ln: hasLn, has_mixed_ln: hasMixedLn, has_auto_ln: hasAutoLn }
+  const lnFilter =
+    lnPolicy === 'AutoLn' ? 'has_auto_ln' : lnPolicy?.startsWith('Auto') ? 'has_mixed_ln' : 'has_ln'
   const where = and(
     publicBests,
-    filterLn ? and(eq(best.lnPolicy, lnPolicy), autoLn ? hasMixedLn : hasLn) : undefined,
+    lnPolicy && lnFilters?.[lnFilter]
+      ? and(eq(best.lnPolicy, lnPolicy), lnConditions[lnFilter])
+      : undefined,
     ruleMode ? eq(best.ruleMode, ruleMode) : undefined,
   )
 
@@ -182,6 +191,7 @@ export default defineEventHandler(async (event) => {
     ln_filters: {
       has_ln: lnFilters?.has_ln ?? false,
       has_mixed_ln: lnFilters?.has_mixed_ln ?? false,
+      has_auto_ln: lnFilters?.has_auto_ln ?? false,
     },
     pagination: { limit, offset, total, has_more: offset + limit < total },
     best_scores: bests.map(

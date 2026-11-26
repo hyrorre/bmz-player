@@ -5,8 +5,10 @@ import {
   formatScoreClientVersion,
   lnFilterItems,
   rankingScoreDisplay,
+  selectedScoreAttempt,
 } from '../app/utils/rankingDisplay'
 import { listReturnQuery } from '../app/composables/useRoutePagination'
+import type { ScoreDetailResponse } from '../app/types/scoreDetails'
 
 const noLn = {
   has_undefined_ln: false,
@@ -16,15 +18,18 @@ const noLn = {
   has_defined_hln: false,
 }
 
-test('shows LN filters for legacy metadata and offers AUTO only with defined and undefined LN', () => {
+test('shows AUTO(LN) for mixed defined types and all AUTO policies when undefined notes coexist', () => {
   expect(lnFilterItems(noLn)).toEqual([])
   const forceLabels = ['ALL', 'LN', 'CN', 'HCN', 'HLN']
   expect(lnFilterItems({ ...noLn, cn_notes: 3 }).map(({ label }) => label)).toEqual(forceLabels)
   expect(
-    lnFilterItems({ ...noLn, has_defined_ln: true, has_defined_hcn: true }).map(
+    lnFilterItems({ ...noLn, has_defined_cn: true, has_defined_hcn: true }).map(
       ({ label }) => label,
     ),
-  ).toEqual(forceLabels)
+  ).toEqual([...forceLabels, 'AUTO(LN)'])
+  expect(lnFilterItems({ ...noLn, has_defined_cn: true }).map(({ label }) => label)).toEqual(
+    forceLabels,
+  )
   expect(lnFilterItems({ ...noLn, has_undefined_ln: true }).map(({ label }) => label)).toEqual(
     forceLabels,
   )
@@ -33,6 +38,56 @@ test('shows LN filters for legacy metadata and offers AUTO only with defined and
       ({ label }) => label,
     ),
   ).toEqual([...forceLabels, 'AUTO(LN)', 'AUTO(CN)', 'AUTO(HCN)'])
+})
+
+test('includes the recorded course policies when chart metadata is incomplete', () => {
+  expect(lnFilterItems(noLn, ['ForceCn']).map(({ value }) => value)).toEqual(['ALL', 'ForceCn'])
+  expect(
+    lnFilterItems({ ...noLn, has_defined_cn: true }, ['AutoHcn', 'ForceCn']).map(
+      ({ value }) => value,
+    ),
+  ).toEqual(['ALL', 'ForceLn', 'ForceCn', 'ForceHcn', 'ForceHln', 'AutoHcn'])
+})
+
+test('switching score tabs uses the selected attempt for time, device and signature', () => {
+  const ex: ScoreDetailResponse = {
+    score: {
+      id: 'ex',
+      client_name: 'BMZ',
+      client_version: '1',
+      judges: null,
+      device_type: 'keyboard',
+      played_at: '2026-11-01T12:00:00Z',
+      server_received_at: '2026-11-01T12:01:00Z',
+      verification: 'verified_play',
+    },
+    replay: null,
+  }
+  const clear: ScoreDetailResponse = {
+    ...ex,
+    score: {
+      ...ex.score,
+      id: 'clear',
+      device_type: 'controller',
+      played_at: null,
+      server_received_at: '2026-11-03T15:00:00Z',
+      verification: 'signed_backfill',
+    },
+  }
+  expect(selectedScoreAttempt('ex', ex)).toMatchObject({
+    metadata: { device: 'keyboard', date: ex.score.played_at },
+    verification: { label: 'score.verifiedPlay' },
+  })
+  expect(selectedScoreAttempt('clear', ex)).toBeNull()
+  expect(selectedScoreAttempt('clear', clear)).toMatchObject({
+    metadata: { device: 'controller', date: clear.score.server_received_at },
+    verification: { label: 'score.signedBackfill' },
+  })
+  const unsigned: ScoreDetailResponse = {
+    ...ex,
+    score: { ...ex.score, verification: 'unverified' },
+  }
+  expect(selectedScoreAttempt('ex', unsigned)?.verification.label).toBe('score.unsigned')
 })
 
 test('formats the nearest grade border separately from the achieved grade', () => {

@@ -358,12 +358,7 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
             "
             :other-score-id="selfBestEntry.score.source_score_ids?.clear"
             class="mt-3 border-t border-default"
-          >
-            <ScoreRowMetadata
-              :device="selfBestEntry.score.device_type"
-              :date="selfBestEntry.score.played_at"
-            />
-          </ScoreInlineDetails>
+          />
         </div>
 
         <RankingPagination
@@ -476,13 +471,7 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
                       :id="scoreDetailsId"
                       :score-id="entry.score.source_score_ids?.ex_score ?? entry.score.score_id"
                       :other-score-id="entry.score.source_score_ids?.clear"
-                    >
-                      <ScoreRowMetadata
-                        :device="entry.score.device_type"
-                        :date="entry.score.played_at"
-                        class="xl:hidden"
-                      />
-                    </ScoreInlineDetails>
+                    />
                   </td>
                 </tr>
               </template>

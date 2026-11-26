@@ -42,6 +42,8 @@ const ja = {
     dailyBoundary: {
       previousDay: '前日 {time}',
       nextDay: '翌日 {time}',
+      daysBefore: '{days}日前 {time}',
+      daysAfter: '{days}日後 {time}',
       timeZoneHelp:
         '{timeZone} の時刻で表示しています。夏時間のある地域では、季節によって切り替わりが1時間ずれます。',
     },
@@ -121,6 +123,9 @@ const ja = {
     score: {
       title: 'スコア詳細',
       clientVersion: '送信時のバージョン',
+      verifiedPlay: 'プレイ署名済み',
+      signedBackfill: '履歴署名済み',
+      unsigned: '未署名',
       bestEx: 'EXスコアベスト',
       bestClear: 'クリアベスト',
       retry: '再試行',
@@ -292,6 +297,8 @@ const en = {
     dailyBoundary: {
       previousDay: '{time} (previous day)',
       nextDay: '{time} (next day)',
+      daysBefore: '{time} ({days} days before)',
+      daysAfter: '{time} ({days} days after)',
       timeZoneHelp:
         'Times are shown in {timeZone}. In regions with daylight saving time, the boundary shifts by one hour with the season.',
     },
@@ -371,6 +378,9 @@ const en = {
     score: {
       title: 'Score details',
       clientVersion: 'Client version at submission',
+      verifiedPlay: 'Play signed',
+      signedBackfill: 'History signed',
+      unsigned: 'Unsigned',
       bestEx: 'Best EX score',
       bestClear: 'Best clear',
       retry: 'Retry',
@@ -543,6 +553,8 @@ const ko = {
     dailyBoundary: {
       previousDay: '전날 {time}',
       nextDay: '다음 날 {time}',
+      daysBefore: '{days}일 전 {time}',
+      daysAfter: '{days}일 후 {time}',
       timeZoneHelp:
         '{timeZone} 기준 시각으로 표시합니다. 서머타임이 있는 지역에서는 계절에 따라 경계가 1시간 달라집니다.',
     },
@@ -622,6 +634,9 @@ const ko = {
     score: {
       title: '스코어 상세',
       clientVersion: '전송 시 버전',
+      verifiedPlay: '플레이 서명 완료',
+      signedBackfill: '기록 서명 완료',
+      unsigned: '미서명',
       bestEx: '최고 EX 스코어',
       bestClear: '최고 클리어',
       retry: '다시 시도',
@@ -789,6 +804,8 @@ const zhCN = {
     dailyBoundary: {
       previousDay: '前一天 {time}',
       nextDay: '后一天 {time}',
+      daysBefore: '{days} 天前 {time}',
+      daysAfter: '{days} 天后 {time}',
       timeZoneHelp: '按 {timeZone} 的时间显示。在实行夏令时的地区，切换时间会随季节相差1小时。',
     },
     charts: {
@@ -867,6 +884,9 @@ const zhCN = {
     score: {
       title: '成绩详情',
       clientVersion: '提交时的版本',
+      verifiedPlay: '游玩已签名',
+      signedBackfill: '历史已签名',
+      unsigned: '未签名',
       bestEx: '最高 EX 分数',
       bestClear: '最佳通关',
       retry: '重试',
@@ -1033,6 +1053,8 @@ const zhTW = {
     dailyBoundary: {
       previousDay: '前一天 {time}',
       nextDay: '後一天 {time}',
+      daysBefore: '{days} 天前 {time}',
+      daysAfter: '{days} 天後 {time}',
       timeZoneHelp: '依 {timeZone} 的時間顯示。在實施夏令時間的地區，切換時間會隨季節相差1小時。',
     },
     charts: {
@@ -1111,6 +1133,9 @@ const zhTW = {
     score: {
       title: '成績詳情',
       clientVersion: '提交時的版本',
+      verifiedPlay: '遊玩已簽署',
+      signedBackfill: '歷史已簽署',
+      unsigned: '未簽署',
       bestEx: '最高 EX 分數',
       bestClear: '最佳通關',
       retry: '重試',

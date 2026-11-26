@@ -5,7 +5,7 @@ import type {
   IrRuleMode,
   LnScorePolicy,
 } from '../../shared/types/ir'
-import type { ScoreClient } from '../types/scoreDetails'
+import type { ScoreClient, ScoreDetailResponse } from '../types/scoreDetails'
 
 const lnLabels: Record<LnScorePolicy, string> = {
   ForceLn: 'LN',
@@ -42,33 +42,54 @@ export const ruleModeItems = [
   ...Object.entries(ruleLabels).map(([value, label]) => filterItem(value as IrRuleMode, label)),
 ]
 
-export function lnFilterItems(profile: RankingLnProfile | undefined) {
-  if (!profile) return []
-  const hasDefined =
-    profile.has_defined_ln ||
-    profile.has_defined_cn ||
-    profile.has_defined_hcn ||
-    profile.has_defined_hln
+export function lnFilterItems(profile?: RankingLnProfile, recordedPolicies: LnScorePolicy[] = []) {
+  const definedTypes = [
+    profile?.has_defined_ln,
+    profile?.has_defined_cn,
+    profile?.has_defined_hcn,
+    profile?.has_defined_hln,
+  ].filter(Boolean).length
   const hasLn =
-    hasDefined ||
-    profile.has_undefined_ln ||
-    profile.has_ln ||
-    profile.has_cn ||
-    profile.has_hcn ||
-    profile.has_hln ||
-    profile.ln_notes ||
-    profile.cn_notes ||
-    profile.hcn_notes ||
-    profile.hln_notes
-  return availableLnFilterItems(Boolean(hasLn), profile.has_undefined_ln && hasDefined)
+    definedTypes > 0 ||
+    profile?.has_undefined_ln ||
+    profile?.has_ln ||
+    profile?.has_cn ||
+    profile?.has_hcn ||
+    profile?.has_hln ||
+    profile?.ln_notes ||
+    profile?.cn_notes ||
+    profile?.hcn_notes ||
+    profile?.hln_notes
+  const hasMixedLn = Boolean(profile?.has_undefined_ln && definedTypes > 0)
+  return availableLnFilterItems(
+    {
+      has_ln: Boolean(hasLn),
+      has_mixed_ln: hasMixedLn,
+      has_auto_ln: definedTypes > 1 || hasMixedLn,
+    },
+    recordedPolicies,
+  )
 }
 
-export function availableLnFilterItems(hasLn: boolean, showAuto: boolean) {
-  if (!hasLn) return []
+export interface RankingLnFilters {
+  has_ln: boolean
+  has_mixed_ln: boolean
+  has_auto_ln: boolean
+}
+
+export function availableLnFilterItems(
+  filters?: RankingLnFilters,
+  recordedPolicies: LnScorePolicy[] = [],
+) {
+  if (!filters?.has_ln && !recordedPolicies.length) return []
   return [
     filterItem('ALL', 'ALL'),
     ...Object.entries(lnLabels)
-      .filter(([value]) => showAuto || value.startsWith('Force'))
+      .filter(([value]) => {
+        if (recordedPolicies.includes(value as LnScorePolicy)) return true
+        if (value.startsWith('Force')) return filters?.has_ln
+        return value === 'AutoLn' ? filters?.has_auto_ln : filters?.has_mixed_ln
+      })
       .map(([value, label]) => filterItem(value as LnScorePolicy, label)),
   ]
 }
@@ -113,6 +134,22 @@ export function formatScoreClientVersion(client?: Partial<ScoreClient> | null) {
   const name = client?.client_name?.trim()
   const displayName = name && /^(bmz|bmz[ -]player)$/i.test(name) ? 'bmz-player' : name
   return [displayName, version].filter(Boolean).join(' ')
+}
+
+const verificationBadges = {
+  verified_play: { color: 'success', label: 'score.verifiedPlay' },
+  signed_backfill: { color: 'info', label: 'score.signedBackfill' },
+  unverified: { color: 'neutral', label: 'score.unsigned' },
+} as const
+
+export function selectedScoreAttempt(scoreId: string, response?: ScoreDetailResponse | null) {
+  if (!response || response.score.id !== scoreId) return null
+  const { score } = response
+  return {
+    ...response,
+    metadata: { device: score.device_type, date: score.played_at ?? score.server_received_at },
+    verification: verificationBadges[score.verification],
+  }
 }
 
 // Match the ceil-based grade borders and nearest-grade display in BMZ Player.
