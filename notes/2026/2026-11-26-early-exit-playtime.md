@@ -7,3 +7,5 @@
 macOS arm64の回帰テストで、保存時までに時計が13秒へ進む条件でも、通常プレイ、実効アシスト、コース各曲の手動中断がいずれも10秒を加算することを確認した。採点確定後の非同期保存では完走として120秒を加算した。Windows実機での操作確認は未実施。
 
 `cargo fmt --check`、`cargo check -p bmz-player --locked`、`cargo clippy -p bmz-player --all-targets --locked -- -D warnings`が通過した。全テストは模擬サーバーの起動を許可し、`cargo test -p bmz-player --locked -- --test-threads=6`で3,498件成功、69件無視だった。
+
+レビューでFREQ +12の中断も調べた。譜面の10.75秒地点で中断すると、修正前は10秒を加算した。中断時の譜面時刻を再生速度で換算し、2倍速では5秒、FREQ +3（119%）のコースでは9秒を加算する回帰テストを追加した。完走時はFREQ +12でも譜面長の120秒を加算する。

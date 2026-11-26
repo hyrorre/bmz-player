@@ -1514,6 +1514,10 @@ fn spawned_settled_session_result_persists_on_background_worker() {
     };
     let mut session = session();
     Arc::make_mut(&mut session.chart).end_time = TimeUs(120_000_000);
+    let applied_arrange = AppliedArrange { freq_semitones: 12, ..Default::default() };
+    session.audio_clock.set_playback_rate_percent(crate::config::play::freq_playback_rate_percent(
+        applied_arrange.freq_semitones,
+    ));
     session.state = PlayState::Playing;
     session.judge.process_input(
         &session.chart,
@@ -1539,7 +1543,7 @@ fn spawned_settled_session_result_persists_on_background_worker() {
             chart_length_ms: None,
             play_duration_ms: None,
             played_at: 1_700_000_112,
-            applied_arrange: &AppliedArrange::default(),
+            applied_arrange: &applied_arrange,
             target_ex_score: None,
             target_name: "RANK_AAA",
             target: crate::select_options::TargetOption::IrTop,
@@ -1778,10 +1782,10 @@ fn manual_stop_adds_only_elapsed_time_to_player_stats() {
         auto_save: false,
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
-    for (finish_mode, assist) in [
-        (FinishResultMode::Normal, AssistLevel::None),
-        (FinishResultMode::Normal, AssistLevel::Assist),
-        (FinishResultMode::CourseStage, AssistLevel::None),
+    for (finish_mode, assist, freq_semitones, expected_seconds) in [
+        (FinishResultMode::Normal, AssistLevel::None, 0, 10),
+        (FinishResultMode::Normal, AssistLevel::Assist, 12, 5),
+        (FinishResultMode::CourseStage, AssistLevel::None, 3, 9),
     ] {
         let mut live = session();
         let chart = Arc::make_mut(&mut live.chart);
@@ -1789,6 +1793,10 @@ fn manual_stop_adds_only_elapsed_time_to_player_stats() {
         chart.lane_notes[Lane::Key1.index()][0].time = chart.end_time;
         live.assist.level = assist;
         live.state = PlayState::Playing;
+        let applied_arrange = AppliedArrange { freq_semitones, ..Default::default() };
+        live.audio_clock.set_playback_rate_percent(
+            crate::config::play::freq_playback_rate_percent(freq_semitones),
+        );
         let stopped_at = TimeUs(10_750_000);
         live.audio_clock.pause_at(stopped_at);
         live.play_end.request(PlayEndRequest::ManualStop);
@@ -1812,7 +1820,7 @@ fn manual_stop_adds_only_elapsed_time_to_player_stats() {
                 ir_config: &IrConfig::default(),
                 session: &live,
                 played_at: 1_700_000_114,
-                applied_arrange: &AppliedArrange::default(),
+                applied_arrange: &applied_arrange,
                 source_ln_profile: ChartLnProfile::from_chart(&live.chart),
                 chart_length_ms: None,
                 play_duration_ms: None,
@@ -1826,7 +1834,7 @@ fn manual_stop_adds_only_elapsed_time_to_player_stats() {
 
         let stats = scores.player_stats().unwrap();
         assert_eq!(stats.play_count, 1, "{finish_mode:?}, {assist:?}");
-        assert_eq!(stats.playtime_seconds, 10, "{finish_mode:?}, {assist:?}");
+        assert_eq!(stats.playtime_seconds, expected_seconds, "{finish_mode:?}, {assist:?}");
     }
 }
 

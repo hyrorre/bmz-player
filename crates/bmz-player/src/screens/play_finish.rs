@@ -333,10 +333,13 @@ impl FinishSessionSnapshot {
         let ended_at = settled_time
             .filter(|_| recorded_stop)
             .unwrap_or_else(|| session.audio_clock.now().max(TimeUs(0)));
-        let playtime_end = if recorded_stop || session.state == PlayState::Failed {
-            settled_time.unwrap_or(ended_at).min(chart.end_time)
+        let playtime_seconds = if recorded_stop || session.state == PlayState::Failed {
+            let stop = settled_time.unwrap_or(ended_at).min(chart.end_time);
+            let chart_us_per_second =
+                1_000_000 * i64::from(session.audio_clock.playback_rate_percent()) / 100;
+            stop.0.max(0) / chart_us_per_second
         } else {
-            chart.end_time
+            chart.end_time.0.max(0) / 1_000_000
         };
         Self {
             completed: !session.manually_stopped
@@ -346,7 +349,7 @@ impl FinishSessionSnapshot {
                             bmz_gameplay::session::result_is_settled(session, at)
                         }))),
             chart,
-            playtime_seconds: (playtime_end.0.max(0) / 1_000_000).min(i64::from(u32::MAX)) as u32,
+            playtime_seconds: playtime_seconds.min(i64::from(u32::MAX)) as u32,
             skin_attempt: bmz_render::snapshot::SkinAttemptState {
                 best_score_options: None,
                 source_key_mode: Some(source_key_mode),
