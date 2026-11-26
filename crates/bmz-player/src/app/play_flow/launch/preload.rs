@@ -185,9 +185,6 @@ impl WinitApp {
         // presentation images. The options and source copy are fixed above.
         let preparation_started_at = Instant::now();
         self.start_play_preload(chart_id, options.clone());
-        self.reload_decide_skin_for_chart(&snapshot);
-        // Play スキンは裏で decode+upload を進めるが、Decide 入場では待たない。
-        // Play 入場時も完了をフレーム間で確認し、READY の開始を待機する。
         let play_skin_key_mode = chart_metadata
             .as_ref()
             .and_then(|chart| KeyMode::from_str_opt(&chart.mode))
@@ -201,6 +198,12 @@ impl WinitApp {
                 )
             })
             .unwrap_or_else(|| self.play_skin_key_mode_for_chart(chart_id, &options));
+        snapshot.note_display_duration_ms = Self::configured_note_display_duration_ms(
+            &self.boot.profile_config.play_mode_config(play_skin_key_mode),
+        );
+        self.reload_decide_skin_for_chart(&snapshot);
+        // Play スキンは裏で decode+upload を進めるが、Decide 入場では待たない。
+        // Play 入場時も完了をフレーム間で確認し、READY の開始を待機する。
         let skin_attempt = self.skin_attempt_for_chart(chart_id, &options);
         snapshot.skin_attempt = skin_attempt;
         let mut play_skin_runtime_state = lua_runtime_state_for_play(

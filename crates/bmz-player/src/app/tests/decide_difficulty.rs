@@ -18,6 +18,8 @@ local label = s.number(96)
 if s.option(150) then label = 'UNKNOWN' .. label .. ' ' .. s.text(1003)
 elseif s.option(153) then label = 'HYPER' .. label .. ' ' .. s.text(1003)
 end
+local duration = s.number(312)
+if duration > 0 then label = label .. string.format(' | %d ms | %d', duration, s.number(313)) end
 return {type=6, name=string.format('%d,%d,%d|%s', rgb[1], rgb[2], rgb[3], label)}
 "#;
 
@@ -108,10 +110,11 @@ fn decide_scene_entry_reload_passes_the_selected_chart_to_lua_skins() {
     assert!((151..=155).all(|option| state.option_values.get(&option) == Some(&false)));
     assert_eq!(result.unwrap().document.name, "195,195,195|UNKNOWN0 ");
 
-    let hyper = decide_snapshot("HYPER", "12", "★12");
+    let hyper =
+        RenderSnapshot { note_display_duration_ms: 472, ..decide_snapshot("HYPER", "12", "★12") };
     let (state, result) = decide(&mut pipeline, Some(&hyper));
     assert_eq!(state.option_values.get(&153), Some(&true));
-    assert_eq!(result.unwrap().document.name, "255,192,0|HYPER12 ★12");
+    assert_eq!(result.unwrap().document.name, "255,192,0|HYPER12 ★12 | 472 ms | 283");
 
     // The difficulty is a document dependency, so a different chart reloads.
     let unknown = decide_snapshot("", "", "");

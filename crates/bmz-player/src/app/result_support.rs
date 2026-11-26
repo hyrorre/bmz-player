@@ -877,6 +877,13 @@ pub(super) fn apply_decide_chart_lua_load_state(
         &snapshot.difficulty_name,
         &snapshot.play_level,
     );
+    let duration_ms = snapshot.note_display_duration_ms;
+    if duration_ms > 0 {
+        runtime_state.number_values.extend([
+            (312, duration_ms),
+            (313, bmz_render::skin::duration_to_green_number_ms(duration_ms)),
+        ]);
+    }
     // Without these, a skin that concatenates the table text at load would
     // embed the unresolved text-ref sentinel instead of the table label.
     runtime_state.text_values.extend([

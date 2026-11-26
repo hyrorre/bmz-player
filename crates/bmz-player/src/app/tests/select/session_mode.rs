@@ -243,20 +243,20 @@ fn d_battle_select_preload_and_start_activate_the_dp_profile_slot() {
     app.viewer_mode = false;
     // Distinct HS-FIX and duration values show which slot each step uses.
     let slots = [
-        (KeyMode::K5, HsFixConfig::StartBpm),
-        (KeyMode::K7, HsFixConfig::MinBpm),
-        (KeyMode::K10, HsFixConfig::MaxBpm),
-        (KeyMode::K14, HsFixConfig::MainBpm),
+        (KeyMode::K5, HsFixConfig::StartBpm, 450),
+        (KeyMode::K7, HsFixConfig::MinBpm, 472),
+        (KeyMode::K10, HsFixConfig::MaxBpm, 417),
+        (KeyMode::K14, HsFixConfig::MainBpm, 400),
     ];
-    for (mode, hs_fix) in slots {
+    for (mode, hs_fix, duration_ms) in slots {
         app.boot.profile_config.activate_play_mode(mode);
         app.boot.profile_config.play.hs_fix = hs_fix;
-        app.boot.profile_config.lane.target_green_number = 240;
+        app.boot.profile_config.lane.target_green_number =
+            crate::config::play::green_number_from_duration_ms(duration_ms);
         if mode == KeyMode::K7 {
             app.boot.profile_config.play.lane_effect = LaneEffectConfig::HiddenSudden;
             let lane = &mut app.boot.profile_config.lane;
             lane.floating_policy = FloatingPolicyConfig::Locked;
-            lane.target_green_number = 283;
             lane.sudden = 224;
             lane.lift = 136;
             lane.lift_enabled = true;
@@ -264,12 +264,11 @@ fn d_battle_select_preload_and_start_activate_the_dp_profile_slot() {
         }
         app.boot.profile_config.sync_active_play_mode();
     }
-    let hs_fix_of =
-        |mode: KeyMode| slots.iter().find(|(slot, _)| *slot == mode).map(|(_, hs_fix)| *hs_fix);
+    let slot_settings = |mode: KeyMode| slots.iter().find(|(slot, _, _)| *slot == mode).unwrap();
     let assert_slot = |app: &WinitApp, mode: KeyMode, context: &str| {
         assert_eq!(app.boot.profile_config.active_play_mode, mode, "{context}");
-        assert_eq!(Some(app.boot.profile_config.play.hs_fix), hs_fix_of(mode), "{context}");
-        assert_eq!(app.select.hs_fix_option, hs_fix_option_from_profile(hs_fix_of(mode).unwrap()));
+        assert_eq!(app.boot.profile_config.play.hs_fix, slot_settings(mode).1, "{context}");
+        assert_eq!(app.select.hs_fix_option, hs_fix_option_from_profile(slot_settings(mode).1));
     };
     app.select.select_items = vec![
         chart_row_with_mode(1, "7K"),
@@ -300,13 +299,34 @@ fn d_battle_select_preload_and_start_activate_the_dp_profile_slot() {
             app.sync_selected_play_mode();
             assert_eq!(app.boot.profile_config.active_play_mode, expected, "{context}");
 
-            // Leave the other slot active, so preload and start must switch it.
+            // Leave the other slot active, so Decide and Play must resolve their own mode.
             let other = if expected == source { doubled } else { source };
             app.boot.profile_config.activate_play_mode(other);
             let mut options = app.play_start_options();
             assert_eq!(options.double_option, double, "{context}");
             app.normalize_key_mode_conversion_options(chart_id, &mut options);
             assert_eq!(app.play_skin_key_mode_for_chart(chart_id, &options), expected, "{context}");
+
+            let chart = app.selected_chart_row().unwrap().chart.clone().unwrap();
+            app.begin_decide_for_chart_with_snapshot(
+                chart_id,
+                options.clone(),
+                RenderSnapshot::default(),
+                None,
+                Some(chart),
+                DecideLaunch::Play,
+            );
+            let AppSceneSnapshot::Decide(snapshot) = app.scene_snapshot() else {
+                panic!("expected Decide for {context}");
+            };
+            assert_eq!(
+                snapshot.note_display_duration_ms,
+                slot_settings(expected).2 as i32,
+                "{context}"
+            );
+            assert_eq!(app.boot.profile_config.active_play_mode, other, "{context}");
+            app.play.pending_decide = None;
+            app.invalidate_play_preload();
 
             assert_eq!(app.activate_play_start_key_mode(chart_id, &mut options), expected);
             assert_slot(&app, expected, &context);
