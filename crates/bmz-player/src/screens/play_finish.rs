@@ -252,6 +252,7 @@ pub struct FinishSessionResultRequest<'a> {
 pub struct FinishSessionSnapshot {
     completed: bool,
     chart: Arc<PlayableChart>,
+    playtime_seconds: u32,
     skin_attempt: bmz_render::snapshot::SkinAttemptState,
     result: PlayResult,
     result_lane_key_mode: KeyMode,
@@ -328,8 +329,18 @@ impl FinishSessionSnapshot {
         };
         // End the presentation at the recorded audio time, even if scoring lagged behind it.
         let recorded_stop = session.finished_early || session.manually_stopped;
-        let ended_at = if recorded_stop { session.result_settled_at() } else { None }
+        let settled_time = session.result_settled_at();
+        let ended_at = settled_time
+            .filter(|_| recorded_stop)
             .unwrap_or_else(|| session.audio_clock.now().max(TimeUs(0)));
+        let playtime_end = if recorded_stop || session.state == PlayState::Failed {
+            settled_time.unwrap_or(ended_at).min(chart.end_time)
+        } else {
+            chart.end_time
+        };
+        let chart_us_per_second =
+            1_000_000 * i64::from(session.audio_clock.playback_rate_percent()) / 100;
+        let playtime_seconds = playtime_end.0.max(0) / chart_us_per_second;
         Self {
             completed: !session.manually_stopped
                 && (session.state == PlayState::Finished
@@ -338,6 +349,7 @@ impl FinishSessionSnapshot {
                             bmz_gameplay::session::result_is_settled(session, at)
                         }))),
             chart,
+            playtime_seconds: playtime_seconds.min(i64::from(u32::MAX)) as u32,
             skin_attempt: bmz_render::snapshot::SkinAttemptState {
                 best_score_options: None,
                 source_key_mode: Some(source_key_mode),
@@ -593,7 +605,7 @@ fn finish_session_snapshot_result(
                 &result,
                 StorePlayResultRequest {
                     played_at,
-                    playtime_seconds: chart_playtime_seconds(&snapshot.chart),
+                    playtime_seconds: snapshot.playtime_seconds,
                     ln_policy: score_key.ln_policy,
                     double_option: score_key.double_option,
                     applied_double_option: applied_arrange.double_option,
@@ -756,10 +768,6 @@ fn finish_session_snapshot_result(
         assist: snapshot.assist,
         score_data_changed,
     })
-}
-
-fn chart_playtime_seconds(chart: &bmz_chart::model::PlayableChart) -> u32 {
-    (chart.end_time.0.max(0) / 1_000_000).min(i64::from(u32::MAX)) as u32
 }
 
 fn clear_type_from_name(name: &str) -> Option<ClearType> {
