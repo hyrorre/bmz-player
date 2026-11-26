@@ -675,6 +675,19 @@ fn parse_search_query_round_trips() {
 }
 
 #[test]
+fn search_folder_name_formats_the_full_query_for_the_current_locale() {
+    let query = parse_search_query("bmz-search:Angel dust [7key//Beginner]").unwrap();
+    let history = [query.to_owned()];
+    let text = Localizer::new(AppLocale::En);
+    let name = search_folder_name(query, text);
+    assert_eq!(name, "Search: 'Angel dust [7key//Beginner]'");
+    assert_eq!(
+        search_history_folder_items_for_locale(&history, text.locale())[0].display_name(),
+        name
+    );
+}
+
+#[test]
 fn search_history_folder_items_formats_each_entry() {
     let history = vec!["alpha".to_string(), "beta".to_string()];
     let items = search_history_folder_items(&history);

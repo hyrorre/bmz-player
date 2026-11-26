@@ -47,7 +47,6 @@ pub use folder::{
     load_select_items_in_folder_for_rule_mode_with_filters,
     load_select_items_in_folder_for_rule_mode_with_table_order, reachable_chart_folders,
 };
-pub(crate) use paths::chart_is_in_active_song_roots;
 pub use paths::{
     COURSE_CONTENTS_PATH_PREFIX, COURSE_ROOT_PATH, FAVORITE_CHART_PATH, FAVORITE_ROOT_PATH,
     FAVORITE_SONG_DETAIL_PREFIX, FAVORITE_SONG_PATH, MAX_SEARCH_HISTORY, SAME_FOLDER_PATH_PREFIX,
@@ -57,6 +56,7 @@ pub use paths::{
     search_history_folder_items, search_history_folder_items_for_locale,
     song_scan_path_from_context, table_source_url_from_context,
 };
+pub(crate) use paths::{chart_is_in_active_song_roots, search_folder_name};
 pub use root::{
     favorite_root_item, favorite_root_items, random_mix_item, random_select_items_from_items,
     root_folder_items,

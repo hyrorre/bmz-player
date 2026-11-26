@@ -1,4 +1,5 @@
 use super::*;
+use crate::screens::select_model::search_folder_name;
 
 impl WinitApp {
     pub(super) fn select_snapshot(&self) -> SelectSnapshot {
@@ -82,6 +83,9 @@ impl WinitApp {
                     "FAVORITE SONG".to_string()
                 }
                 Some(path) if parse_course_contents_path(path).is_some() => "COURSE".to_string(),
+                Some(path) if let Some(query) = parse_search_query(path) => {
+                    search_folder_name(query, text)
+                }
                 Some(path) if path.starts_with(VIRTUAL_FOLDER_PATH_PREFIX) => self
                     .select
                     .virtual_folders
