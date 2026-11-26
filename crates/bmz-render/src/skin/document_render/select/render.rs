@@ -75,6 +75,7 @@ macro_rules! skin_document_render_select_render_methods {
                 title: select_detail_title(snapshot, selected_row),
                 subtitle: select_detail_subtitle(snapshot, selected_row),
                 artist: select_detail_artist(snapshot, selected_row),
+                subartist: select_detail_subartist(snapshot, selected_row),
                 genre: select_detail_genre(snapshot, selected_row),
                 difficulty_name: if snapshot.in_settings {
                     ""

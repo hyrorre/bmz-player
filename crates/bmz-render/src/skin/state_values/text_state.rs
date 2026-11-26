@@ -221,7 +221,9 @@ pub(super) fn skin_main_state_text(
         13 => state.genre.to_string(),
         14 => state.artist.to_string(),
         15 => state.subartist.to_string(),
-        16 => full_label(state.artist, state.subartist),
+        // beatoraja SongData.getFullArtist() inserts a space whenever SUBARTIST is present.
+        16 if !state.subartist.is_empty() => format!("{} {}", state.artist, state.subartist),
+        16 => state.artist.to_string(),
         17 => state.table_level.to_string(),
         30 => state.search_word.to_string(),
         86 => state.select_chart_replication.to_string(),

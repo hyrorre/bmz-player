@@ -432,6 +432,19 @@ pub(super) fn select_detail_artist<'a>(
         .unwrap_or_default()
 }
 
+pub(super) fn select_detail_subartist<'a>(
+    snapshot: &SelectSnapshot,
+    selected_row: Option<&'a SelectRowSnapshot>,
+) -> &'a str {
+    if snapshot.in_settings {
+        return "";
+    }
+    selected_row
+        .filter(|row| row.kind == SelectRowKind::Song)
+        .map(|row| row.subartist.as_str())
+        .unwrap_or_default()
+}
+
 pub(super) fn select_detail_title<'a>(
     snapshot: &'a SelectSnapshot,
     selected_row: Option<&'a SelectRowSnapshot>,

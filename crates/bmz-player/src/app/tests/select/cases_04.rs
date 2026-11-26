@@ -525,6 +525,19 @@ fn select_snapshot_song_bars_show_full_title_and_keep_plain_title() {
 }
 
 #[test]
+fn select_snapshot_rows_preserve_chart_subartist() {
+    let profile = ProfileConfig::new_default("default", "Default", 0);
+    let mut with_subartist = select_chart_row(1);
+    with_subartist.chart.as_mut().unwrap().subartist = "GuestArtist".to_string();
+    let rows = [SelectItem::Chart(with_subartist), SelectItem::Chart(select_chart_row(2))];
+
+    let snapshots = select_snapshot_rows(&rows, 0, 2, &profile, None, &HashMap::new());
+
+    assert_eq!(snapshots.iter().find(|row| row.index == 0).unwrap().subartist, "GuestArtist");
+    assert!(snapshots.iter().find(|row| row.index == 1).unwrap().subartist.is_empty());
+}
+
+#[test]
 fn select_snapshot_rows_append_values_only_to_config_bar_text() {
     let mut profile = ProfileConfig::new_default("default", "Default", 0);
     profile.audio_mix.master_volume = 37;
