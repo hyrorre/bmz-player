@@ -52,6 +52,22 @@ impl WinitApp {
             .or_else(|| self.result.finished_play.as_ref().map(|finished| &finished.summary))
     }
 
+    pub(super) fn result_lane_scores_for_slot(
+        &self,
+        slot: ResultSkinSlot,
+    ) -> [Option<bmz_render::scene::ResultLaneScore>; LANE_COUNT] {
+        match slot {
+            ResultSkinSlot::Normal => self
+                .result
+                .finished_play
+                .as_ref()
+                .and_then(|play| play.lane_details.as_deref())
+                .map(|details| details.skin_scores())
+                .unwrap_or_default(),
+            ResultSkinSlot::Course => Default::default(),
+        }
+    }
+
     pub(super) fn install_finished_course(
         &mut self,
         course: CourseResultSummary,
@@ -133,16 +149,6 @@ impl WinitApp {
                     .result_skin_document()
                     .map(|document| document.result_ir_scope_binding)
                     .unwrap_or_default();
-                let lane_scores = if self.result.finished_course.is_some() {
-                    Default::default()
-                } else {
-                    self.result
-                        .finished_play
-                        .as_ref()
-                        .and_then(|play| play.lane_details.as_deref())
-                        .map(|details| details.skin_scores())
-                        .unwrap_or_default()
-                };
                 AppSceneSnapshot::Result(ResultSnapshot {
                     chart_md5: summary.chart_md5,
                     chart_sha256: summary.chart_sha256,
@@ -192,7 +198,7 @@ impl WinitApp {
                     gauge_value: summary.gauge_value,
                     gauge_type: summary.gauge_type as i32,
                     total_notes: summary.total_notes,
-                    lane_scores,
+                    lane_scores: self.result_lane_scores_for_slot(self.current_result_skin_slot()),
                     duration_ms: summary.duration_ms,
                     note_display_duration_ms: Some(Self::select_note_display_duration_ms_for_skin(
                         &self.boot.profile_config,

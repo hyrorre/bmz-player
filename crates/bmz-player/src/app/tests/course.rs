@@ -355,6 +355,7 @@ fn course_result_summary_for_skin_uses_aggregate_course_values() {
         false,
         KeyMode::K7,
         number_values,
+        Default::default(),
         "Player",
     );
     apply_result_summary_lua_load_state(&mut runtime_state, &summary, "Table", "★12", "Table ★12");

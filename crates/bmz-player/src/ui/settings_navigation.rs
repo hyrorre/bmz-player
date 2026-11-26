@@ -294,8 +294,9 @@ pub(super) fn build_menu_window(
     course_stage_result: bool,
     contents: impl FnOnce(&mut egui::Ui, SettingsPage),
 ) -> bool {
+    const WINDOW_ID: &str = "settings_workspace";
     let window = localized_sized_panel_window(
-        "settings_workspace",
+        WINDOW_ID,
         tr!(text, "menu-title"),
         ctx,
         open,
@@ -304,7 +305,7 @@ pub(super) fn build_menu_window(
         egui::pos2(220.0, 32.0),
     )
     .collapsible(true);
-    let response = window.show(ctx, |ui| {
+    window.show(ctx, |ui| {
         ui.label(format!("{}: {profile_name}", tr!(text, "settings-nav-profile")));
         ui.separator();
         let mut navigation = SettingsNavigation::load(ctx);
@@ -428,7 +429,14 @@ pub(super) fn build_menu_window(
             }
         });
     });
-    *open && response.is_some_and(|response| response.inner.is_some())
+    // egui still paints the body while closing. The title bar updates this state
+    // before show returns, so input capture can end on the actual click.
+    *open
+        && egui::collapsing_header::CollapsingState::load(
+            ctx,
+            egui::Id::new(WINDOW_ID).with("collapsing"),
+        )
+        .is_some_and(|state| state.is_open())
 }
 
 fn build_manual_button(ui: &mut egui::Ui, text: Localizer) {
@@ -685,17 +693,21 @@ mod tests {
     #[test]
     fn title_bar_button_collapses_and_restores_the_menu_page() {
         let ctx = egui::Context::default();
-        ctx.global_style_mut(|style| style.animation_time = 0.0);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
         let text = Localizer::new(AppLocale::En);
         let id = egui::Id::new("settings_workspace");
         SettingsNavigation::select(&ctx, SettingsPage::KeyConfig);
         let mut open = true;
-        let mut frame = |events| {
+        let mut frame = |time, events| {
             let mut page = None;
             let mut expanded = false;
             let _ = ctx.run_ui(
-                egui::RawInput { screen_rect: Some(screen), events, ..Default::default() },
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
                 |ui| {
                     expanded =
                         build_menu_window(ui.ctx(), &mut open, "Default", text, false, |_, p| {
@@ -706,8 +718,8 @@ mod tests {
             assert!(open, "the collapse button must leave the menu open");
             (expanded, page)
         };
-        for _ in 0..3 {
-            assert_eq!(frame(Vec::new()), (true, Some(SettingsPage::KeyConfig)));
+        for time in [0.0, 0.02, 0.04] {
+            assert_eq!(frame(time, Vec::new()), (true, Some(SettingsPage::KeyConfig)));
         }
         let window = ctx.memory(|memory| memory.area_rect(id)).unwrap();
         let button = window.min + egui::vec2(14.0, 14.0);
@@ -717,15 +729,17 @@ mod tests {
             pressed,
             modifiers: egui::Modifiers::NONE,
         };
-        frame(vec![egui::Event::PointerMoved(button), click(true)]);
-        frame(vec![click(false)]);
-        assert_eq!(frame(Vec::new()), (false, None));
+        frame(0.06, vec![egui::Event::PointerMoved(button), click(true)]);
+        assert_eq!(frame(0.08, vec![click(false)]), (false, Some(SettingsPage::KeyConfig)));
+        frame(0.10, Vec::new());
+        assert_eq!(frame(0.30, Vec::new()), (false, None));
         let collapsed = ctx.memory(|memory| memory.area_rect(id)).unwrap();
         assert!(!collapsed.contains(window.center()));
 
-        frame(vec![click(true)]);
-        frame(vec![click(false)]);
-        assert_eq!(frame(Vec::new()), (true, Some(SettingsPage::KeyConfig)));
+        frame(0.32, vec![click(true)]);
+        assert!(frame(0.34, vec![click(false)]).0);
+        frame(0.36, Vec::new());
+        assert_eq!(frame(0.54, Vec::new()), (true, Some(SettingsPage::KeyConfig)));
     }
 
     #[test]

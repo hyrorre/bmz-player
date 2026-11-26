@@ -72,6 +72,7 @@ pub(super) fn load_initial_skin_textures(
                                 false,
                                 KeyMode::default(),
                                 BTreeMap::new(),
+                                Default::default(),
                                 frontend.player_name,
                             ),
                             &skin.result_offsets,

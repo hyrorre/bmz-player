@@ -10,6 +10,7 @@ fn difficulty_runtime(summary: &ResultSummary) -> bmz_skin::LuaLoadRuntimeState 
         false,
         summary.key_mode,
         result_lua_runtime_number_values_for_summary(summary),
+        Default::default(),
         "test",
     );
     apply_skin_attempt_lua_load_state(&mut runtime, summary.skin_attempt);

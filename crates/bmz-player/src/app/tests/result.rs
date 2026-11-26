@@ -670,6 +670,65 @@ fn result_lua_runtime_values_cover_load_time_result_decisions() {
 }
 
 #[test]
+fn result_lua_load_selects_lane_assets_from_the_finished_score() {
+    use bmz_render::scene::ResultLaneScore;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lane-result.lua");
+    std::fs::write(
+        &path,
+        r#"
+        if not skin_config then return {type=7} end
+        local state = require("main_state")
+        local missing = -2147483648
+        local notes = state.number("bmz_lane_notes_key1")
+        local rank = state.text("bmz_lane_rank_key1")
+        local rate = state.text("bmz_lane_ex_rate_key1")
+        local bp = state.number("bmz_lane_bp_key1")
+        assert(state.number("bmz_lane_notes_key14") == missing)
+        if notes == missing then
+            assert(rank == "" and rate == "" and bp == missing)
+            return {type=7}
+        end
+        assert(notes == 3 and state.number("bmz_lane_rank_key1") == 2 and bp == 1)
+        assert(state.text("bmz_lane_rank_scratch") == "AUTO")
+        assert(state.text("bmz_lane_ex_rate_scratch") == "")
+        assert(state.number("bmz_lane_bp_scratch") == missing)
+        assert(state.number("bmz_lane_notes_key2") == 0 and state.number("bmz_lane_bp_key2") == 0)
+        return {type=7, image={{id=rank .. " " .. rate}}}
+    "#,
+    )
+    .unwrap();
+    let mut scores = [None; LANE_COUNT];
+    scores[Lane::Key1.index()] =
+        Some(ResultLaneScore { notes: 3, ex_score: 5, bp: 1, auto_scratch: false });
+    scores[Lane::Key2.index()] =
+        Some(ResultLaneScore { notes: 0, ex_score: 0, bp: 0, auto_scratch: false });
+    scores[Lane::Scratch.index()] =
+        Some(ResultLaneScore { notes: 0, ex_score: 0, bp: 0, auto_scratch: true });
+    for (lanes, expected) in [(Default::default(), None), (scores, Some("AA 83.3%"))] {
+        let runtime = lua_runtime_state_for_result(
+            false,
+            None,
+            true,
+            false,
+            KeyMode::K7,
+            BTreeMap::new(),
+            lanes,
+            "Player",
+        );
+        let loaded = bmz_skin::load_lua_skin_with_runtime_state(
+            &path,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &runtime,
+        )
+        .unwrap();
+        assert_eq!(loaded.document.image.first().map(|image| image.id.as_str()), expected);
+    }
+}
+
+#[test]
 fn result_lua_next_rank_matches_rendering_before_skin_load() {
     let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
     std::fs::create_dir_all(&data.paths.data_dir).unwrap();
@@ -703,6 +762,7 @@ fn result_lua_next_rank_matches_rendering_before_skin_load() {
             false,
             summary.key_mode,
             values,
+            Default::default(),
             "test",
         );
         assert_eq!(runtime.number_values.get(&154), Some(&expected));
@@ -849,6 +909,7 @@ fn result_lr2_red_belt_selects_rank_assets_when_available() {
         false,
         KeyMode::K7,
         BTreeMap::new(),
+        Default::default(),
         "test",
     );
     for (score, rank) in [(800, "AAA"), (700, "AA")] {
@@ -894,6 +955,7 @@ fn result_load_state_selects_normal_lr2_bga_layout_includes() {
             false,
             key_mode,
             BTreeMap::new(),
+            Default::default(),
             "test",
         );
         for finished in [false, true] {
@@ -934,6 +996,7 @@ fn result_lr2_3r_loads_with_app_state_when_available() {
         false,
         KeyMode::K7,
         BTreeMap::new(),
+        Default::default(),
         "test",
     );
     let decoded = crate::skin_loader::decode_beatoraja_skin_request(
@@ -971,6 +1034,7 @@ fn result_lua_runtime_state_exposes_scene_options() {
         true,
         KeyMode::K7,
         BTreeMap::new(),
+        Default::default(),
         "Player",
     );
     assert_eq!(online.option_values.get(&50), Some(&false));
@@ -992,6 +1056,7 @@ fn result_lua_runtime_state_exposes_scene_options() {
         false,
         KeyMode::K5,
         BTreeMap::new(),
+        Default::default(),
         "Player",
     );
     assert_eq!(offline.option_values.get(&50), Some(&true));

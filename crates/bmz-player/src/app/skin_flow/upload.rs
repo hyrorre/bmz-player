@@ -364,6 +364,7 @@ impl WinitApp {
             self.current_result_autoplay(),
             key_mode,
             number_values,
+            self.result_lane_scores_for_slot(slot),
             &self.boot.profile_config.display_name,
         );
         if let Some(summary) = summary {

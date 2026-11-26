@@ -1003,6 +1003,7 @@ Luxe Flat等が使う標準描画であり、スキン側で密度別の背景�
 ```
 
 Luaのruntime callbackでは`main_state.number("bmz_lane_notes_key1")`または`main_state.number(19271)`で参照できます。
+単曲リザルトとコース曲間では、Luaスキンのロード時にも確定済みのノーツ数を取得できます。
 
 ### 単曲リザルトのレーン別ランク・EX RATE・BP
 
@@ -1015,6 +1016,7 @@ Luaのruntime callbackでは`main_state.number("bmz_lane_notes_key1")`または`
 | 20262〜20277 | `bmz_lane_bp_key1` | numberはそのレーンのBP。FAILED時は詳細パネルと同じく未処理ノーツを含む |
 
 - プレイ時にAuto Scratchが適用されたレーンのランクは`AUTO`です。EX RATEとBPは空欄になります。
+- Luaスキンのロード時にも同じランク・EX RATE・BPを取得できます。成績に応じて表示列や画像を選べます。
 - Auto Scratchが適用されていない使用レーンでは、ノーツ数が0でもBPを返します。ランクとEX RATEは空欄です。
 - 未使用レーンやコース総合リザルトでは参照値がありません。欠損時のtextは空文字、数値部品は非表示、Luaの`main_state.number()`は`-2147483648`です。ランクを`image.ref`や`imageset.ref`で描く場合は、欠損時に選ばれるインデックス`0`に透明画像を置きます。
 
