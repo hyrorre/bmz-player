@@ -8,9 +8,6 @@ fn menu_collapse_id() -> egui::Id {
 }
 
 pub(super) fn open_menu_window(ctx: &egui::Context, visible: &mut bool) {
-    if *visible {
-        return;
-    }
     *visible = true;
     let id = menu_collapse_id();
     if let Some(mut collapse) = egui::collapsing_header::CollapsingState::load(ctx, id) {
@@ -758,7 +755,16 @@ mod tests {
     }
 
     #[test]
+    fn opening_settings_while_the_menu_is_collapsed_shows_the_page_immediately() {
+        assert_opening_collapsed_menu_shows_page(false);
+    }
+
+    #[test]
     fn reopening_a_menu_closed_while_collapsed_shows_the_saved_page_immediately() {
+        assert_opening_collapsed_menu_shows_page(true);
+    }
+
+    fn assert_opening_collapsed_menu_shows_page(close_first: bool) {
         let ctx = egui::Context::default();
         let text = Localizer::new(AppLocale::En);
         let id = egui::Id::new(MENU_WINDOW_ID);
@@ -795,16 +801,19 @@ mod tests {
             assert_eq!(frame(&mut open, vec![]), (false, None));
         }
         let title = ctx.memory(|memory| memory.area_rect(id)).unwrap();
-        let button = title.right_top() + egui::vec2(-14.0, 14.0);
-        let click = |pressed| egui::Event::PointerButton {
-            pos: button,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::NONE,
-        };
-        frame(&mut open, vec![egui::Event::PointerMoved(button), click(true)]);
-        frame(&mut open, vec![click(false)]);
-        assert!(!open);
+        assert!(open);
+        if close_first {
+            let button = title.right_top() + egui::vec2(-14.0, 14.0);
+            let click = |pressed| egui::Event::PointerButton {
+                pos: button,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            frame(&mut open, vec![egui::Event::PointerMoved(button), click(true)]);
+            frame(&mut open, vec![click(false)]);
+            assert!(!open);
+        }
 
         open_menu_window(&ctx, &mut open);
         assert_eq!(frame(&mut open, vec![]), (true, Some(SettingsPage::KeyConfig)));
