@@ -707,6 +707,9 @@ macro_rules! skin_document_render_select_render_methods {
                 fast_slow_counts: selected_row.and_then(|row| row.fast_slow_counts),
                 max_combo: selected_row.and_then(|row| row.max_combo).unwrap_or(0),
                 total_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
+                lane_note_counts: selected_chart
+                    .map(|_| snapshot.lane_note_counts)
+                    .unwrap_or_default(),
                 past_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
                 gauge: selected_row.and_then(|row| row.gauge_value).unwrap_or(0.0),
                 gauge_auto_shift: snapshot.gauge_auto_shift != "OFF",

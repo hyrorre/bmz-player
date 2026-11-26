@@ -251,6 +251,7 @@ impl WinitApp {
                         false,
                         KeyMode::default(),
                         BTreeMap::new(),
+                        Default::default(),
                         &boot.profile_config.display_name,
                     ),
                     options.lua_skin_runtime_mode,

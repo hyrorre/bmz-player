@@ -315,6 +315,9 @@ fn lr2_gauge_image_index(gauge_type: i32) -> i64 {
 /// value の `skin_state_number` (ValueType) とは ID が重なっても別解決する。
 fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
     match ref_id {
+        SKIN_REF_BMZ_LANE_RANK_BASE..=SKIN_REF_BMZ_LANE_RANK_LAST => {
+            skin_state_number(ref_id, state)
+        }
         SKIN_REF_BMZ_LR2_GAUGE_TYPE_1P => Some(lr2_gauge_image_index(state.gauge_type)),
         SKIN_REF_BMZ_LR2_GAUGE_TYPE_2P => state.opponent_gauge_type.map(lr2_gauge_image_index),
         11 if state.select_screen => Some(state.select_mode_index as i64),

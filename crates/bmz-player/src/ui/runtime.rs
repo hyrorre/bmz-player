@@ -75,11 +75,12 @@ impl EguiLayer {
 
     /// BMZ メニューの表示状態を反転する (F1)。
     pub fn toggle(&mut self) {
-        self.visible = !self.visible;
         if self.visible {
-            self.result_panel.request_raise();
-        } else {
+            self.visible = false;
             self.cancel_key_config_listening();
+        } else {
+            open_menu_window(&self.ctx, &mut self.visible);
+            self.result_panel.request_raise();
         }
         tracing::info!(visible = self.visible, "egui menu toggled");
     }
@@ -100,19 +101,19 @@ impl EguiLayer {
 
     /// 選曲画面の「詳細設定」から BMZ メニューを開く。表示中のページは維持する。
     pub fn open_advanced_settings(&mut self) {
-        self.visible = true;
+        open_menu_window(&self.ctx, &mut self.visible);
         tracing::info!("egui advanced settings opened from select");
     }
 
     /// 選曲スキンの beatoraja event 14 からスキン設定を直接開く。
     pub fn open_skin_settings(&mut self) {
-        self.visible = true;
+        open_menu_window(&self.ctx, &mut self.visible);
         SettingsNavigation::select(&self.ctx, SettingsPage::Skin);
         tracing::info!("egui skin settings opened from select");
     }
 
     pub fn open_random_trainer(&mut self) {
-        self.visible = true;
+        open_menu_window(&self.ctx, &mut self.visible);
         SettingsNavigation::select(&self.ctx, SettingsPage::RandomTrainer);
     }
 
@@ -407,11 +408,6 @@ impl EguiLayer {
                 if let Some(preview) = course_preview {
                     build_course_preview_panel(ctx, preview, text);
                 }
-                let navigation = SettingsNavigation::load(ctx);
-                let page = navigation.page;
-                if page != SettingsPage::Ir || !settings_editable {
-                    self.ir_manual.queue_hidden();
-                }
                 let profile_name = profile_config.display_name.clone();
                 let build_contents = |ui: &mut egui::Ui, page| match page {
                     SettingsPage::Downloads => {
@@ -566,7 +562,7 @@ impl EguiLayer {
                             before_obs != serde_json::to_value(&app_config.obs).ok();
                     }
                 };
-                build_menu_window(
+                let menu_expanded = build_menu_window(
                     ctx,
                     visible_flag,
                     &profile_name,
@@ -589,7 +585,11 @@ impl EguiLayer {
                 if settings_editable {
                     build_ir_confirm_modal(ctx, &profile_config.ir, &mut self.ir_manual, text);
                 }
-                if !*visible_flag || !SettingsNavigation::load(ctx).accepts_key_capture() {
+                let navigation = SettingsNavigation::load(ctx);
+                if !menu_expanded || navigation.page != SettingsPage::Ir || !settings_editable {
+                    self.ir_manual.queue_hidden();
+                }
+                if !menu_expanded || !navigation.accepts_key_capture() {
                     self.key_config.listening = None;
                 }
             }

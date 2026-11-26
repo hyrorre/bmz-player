@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+fn selected_lane_count_renders_on_the_chart_and_disappears_on_other_rows() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"{
+            "type": 5, "w": 100, "h": 100,
+            "text": [{"id": "key1_count", "size": 12, "numberRef": 19271}],
+            "destination": [{"id": "key1_count", "dst": [{"x": 10, "y": 10, "w": 40, "h": 20}]}]
+        }"#,
+    )
+    .unwrap();
+    let mut snapshot = SelectSnapshot {
+        rows: vec![
+            SelectRowSnapshot { in_library: true, ..Default::default() },
+            SelectRowSnapshot { index: 1, in_library: false, ..Default::default() },
+            SelectRowSnapshot { index: 2, kind: SelectRowKind::Course, ..Default::default() },
+            SelectRowSnapshot { index: 3, kind: SelectRowKind::Folder, ..Default::default() },
+        ],
+        ..Default::default()
+    };
+    let render =
+        |snapshot: &SelectSnapshot| document.select_render_items(&HashMap::new(), snapshot);
+    assert!(render(&snapshot).is_empty());
+    for count in [123, 0] {
+        snapshot.lane_note_counts[Lane::Key1.index()] = Some(count);
+        assert!(matches!(
+            &render(&snapshot)[..],
+            [SkinRenderItem::Text { text, .. }] if *text == count.to_string()
+        ));
+    }
+    for index in 1..=3 {
+        snapshot.selected_index = index;
+        assert!(render(&snapshot).is_empty(), "row {index} has no available lane counts");
+    }
+}
+
+#[test]
 fn select_chart_length_for_missing_song_defaults_to_zero_in_lua() {
     let mut state = SkinDrawState {
         select_screen: true,

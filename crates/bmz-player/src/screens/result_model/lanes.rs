@@ -3,6 +3,7 @@ use bmz_core::clear::ClearType;
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::scored_notes_by_lane;
+use bmz_render::scene::ResultLaneScore;
 
 use crate::config::profile_config::KeyModeConversionConfig;
 use crate::screens::play_session::{
@@ -19,10 +20,7 @@ pub enum ResultLaneSource {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResultLaneStats {
-    pub notes: u32,
-    pub ex_score: u32,
-    pub bp: u32,
-    pub auto_scratch: bool,
+    pub score: ResultLaneScore,
     pub source: ResultLaneSource,
 }
 
@@ -34,6 +32,15 @@ pub struct ResultLaneDetails {
 }
 
 impl ResultLaneDetails {
+    pub(crate) fn skin_scores(&self) -> [Option<ResultLaneScore>; LANE_COUNT] {
+        let mut scores = [None; LANE_COUNT];
+        for lane in self.key_mode.active_lanes() {
+            let index = lane.index();
+            scores[index] = Some(self.lanes[index].score);
+        }
+        scores
+    }
+
     pub(crate) fn new(
         chart: &PlayableChart,
         result: &PlayResult,
@@ -70,10 +77,12 @@ impl ResultLaneDetails {
                     None => lane_source(arrange, lane, key_mode),
                 };
                 ResultLaneStats {
-                    notes,
-                    ex_score: score.ex_score,
-                    bp: score.bp.saturating_add(unprocessed),
-                    auto_scratch: auto_scratch_lanes[index],
+                    score: ResultLaneScore {
+                        notes,
+                        ex_score: score.ex_score,
+                        bp: score.bp.saturating_add(unprocessed),
+                        auto_scratch: auto_scratch_lanes[index],
+                    },
                     source,
                 }
             }),

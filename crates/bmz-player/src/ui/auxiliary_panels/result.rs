@@ -1,7 +1,6 @@
 use std::time::Instant;
 
 use bmz_core::lane::Lane;
-use bmz_core::score::score_rank_index;
 
 use super::*;
 use crate::screens::result_ir::ResultIrState;
@@ -139,7 +138,7 @@ fn show_lane_grid(
         });
     });
     ui.separator();
-    let max_bp = lanes.iter().map(|lane| stats(lane).bp).max().unwrap_or(0);
+    let max_bp = lanes.iter().map(|lane| stats(lane).score.bp).max().unwrap_or(0);
     let cell = |ui: &mut egui::Ui, label: egui::RichText| {
         ui.allocate_ui_with_layout(
             egui::vec2(46.0, 19.0),
@@ -204,33 +203,22 @@ fn show_lane_grid(
         ui.end_row();
         ui.label(tr!(text, "result-panel-lane-rank"));
         for lane in lanes {
-            let stats = stats(lane);
-            let rank = if stats.auto_scratch {
-                "AUTO"
-            } else {
-                score_rank_index(stats.ex_score, stats.notes)
-                    .map_or("—", |rank| ["AAA", "AA", "A", "B", "C", "D", "E", "F"][rank])
-            };
+            let rank = stats(lane).score.rank_label().unwrap_or("—");
             cell(ui, egui::RichText::new(rank).strong());
         }
         ui.end_row();
         ui.label(tr!(text, "result-panel-ex-rate"));
         for lane in lanes {
-            let stats = stats(lane);
-            let label = if stats.notes > 0 && !stats.auto_scratch {
-                format!("{:.1}%", 50.0 * f64::from(stats.ex_score) / f64::from(stats.notes))
-            } else {
-                "—".into()
-            };
+            let label = stats(lane).score.ex_rate_label().unwrap_or_else(|| "—".into());
             cell(ui, egui::RichText::new(label).monospace());
         }
         ui.end_row();
         ui.label("BP");
         for lane in lanes {
-            let stats = stats(lane);
-            let label = if stats.auto_scratch { "—".into() } else { stats.bp.to_string() };
+            let score = stats(lane).score;
+            let label = score.displayed_bp().map_or_else(|| "—".into(), |bp| bp.to_string());
             let mut label = egui::RichText::new(label).monospace();
-            if stats.bp > 0 && stats.bp == max_bp {
+            if score.bp > 0 && score.bp == max_bp {
                 label = label.color(ui.visuals().warn_fg_color).strong();
             }
             cell(ui, label);
@@ -238,7 +226,7 @@ fn show_lane_grid(
         ui.end_row();
         ui.label(tr!(text, "course-notes"));
         for lane in lanes {
-            cell(ui, egui::RichText::new(stats(lane).notes.to_string()).monospace());
+            cell(ui, egui::RichText::new(stats(lane).score.notes.to_string()).monospace());
         }
         ui.end_row();
     });

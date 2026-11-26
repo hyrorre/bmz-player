@@ -147,6 +147,10 @@ impl WinitApp {
             _ => None,
         };
         let source_key_mode = self.selected_source_key_mode();
+        let selected_chart_id = match selected {
+            Some(SelectItem::Chart(row)) => row.chart.as_ref().map(|chart| chart.chart_id),
+            _ => None,
+        };
         let conversion = source_key_mode
             .filter(|mode| self.selected_key_mode_conversion().applies_to(*mode))
             .map(|_| self.selected_key_mode_conversion())
@@ -375,10 +379,11 @@ impl WinitApp {
             },
             bar_scroll_progress: select_scroll_fraction(scroll_remaining),
             bar_scroll_rows,
-            selected_chart_id: match selected {
-                Some(SelectItem::Chart(row)) => row.chart.as_ref().map(|chart| chart.chart_id),
-                _ => None,
-            },
+            selected_chart_id,
+            lane_note_counts: selected_chart_id
+                .and_then(|id| chart_distributions.get(&id))
+                .map(|chart| chart.lane_note_counts)
+                .unwrap_or_default(),
             selected_replay_slot: if self.select.ir_battle.active {
                 None
             } else {

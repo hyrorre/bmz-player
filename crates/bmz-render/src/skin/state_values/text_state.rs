@@ -194,6 +194,19 @@ pub(super) fn skin_main_state_text(
         return value.to_string();
     }
     match ref_id {
+        SKIN_REF_BMZ_LANE_RANK_BASE..=SKIN_REF_BMZ_LANE_RANK_LAST => draw_state
+            .and_then(|state| {
+                state.result_lane_scores[(ref_id - SKIN_REF_BMZ_LANE_RANK_BASE) as usize]
+            })
+            .and_then(|score| score.rank_label())
+            .unwrap_or_default()
+            .to_string(),
+        SKIN_TEXT_BMZ_LANE_EX_RATE_BASE..=SKIN_TEXT_BMZ_LANE_EX_RATE_LAST => draw_state
+            .and_then(|state| {
+                state.result_lane_scores[(ref_id - SKIN_TEXT_BMZ_LANE_EX_RATE_BASE) as usize]
+            })
+            .and_then(|score| score.ex_rate_label())
+            .unwrap_or_default(),
         SKIN_TEXT_BMZ_SELECT_BATTLE_NAME..=SKIN_TEXT_BMZ_SELECT_BATTLE_DOUBLE => draw_state
             .filter(|state| state.select_screen)
             .and_then(|state| state.select_battle.as_ref())
@@ -441,6 +454,12 @@ pub(super) fn lua_main_state_text_values(
     refs.extend(190..=196);
     refs.extend(200..=219);
     refs.extend(SKIN_TEXT_BMZ_DAILY_RECENT_BASE..=SKIN_TEXT_BMZ_DAILY_RECENT_LAST);
+    for (index, score) in draw_state.result_lane_scores.iter().enumerate() {
+        if score.is_some() {
+            refs.push(SKIN_REF_BMZ_LANE_RANK_BASE + index as i32);
+            refs.push(SKIN_TEXT_BMZ_LANE_EX_RATE_BASE + index as i32);
+        }
+    }
     if draw_state.detail_options.is_some() {
         refs.extend(SKIN_TEXT_DETAIL_OPTIONS_BASE..=SKIN_TEXT_DETAIL_OPTIONS_LAST);
         for slot in 0..crate::scene::detail_options::DETAIL_OPTION_DRAW_SLOTS as i32 {
@@ -547,8 +566,13 @@ pub(in crate::skin) fn lua_missing_number(ref_id: i32, state: &SkinDrawState) ->
         // beatorajaでは難易度表の未所持譜面にも譜面情報があり、譜面長の初期値は0。
         return Some(0);
     }
-    (matches!(ref_id, 243..=249 | 380..=399 | 1163 | 1164)
-        || (state.result_failed.is_some() && matches!(ref_id, 176 | 178)))
+    (matches!(
+        ref_id,
+        243..=249 | 380..=399 | 1163 | 1164
+            | SKIN_REF_BMZ_LANE_NOTES_BASE..=SKIN_REF_BMZ_LANE_NOTES_LAST
+            | SKIN_REF_BMZ_LANE_RANK_BASE..=SKIN_REF_BMZ_LANE_RANK_LAST
+            | SKIN_REF_BMZ_LANE_BP_BASE..=SKIN_REF_BMZ_LANE_BP_LAST
+    ) || (state.result_failed.is_some() && matches!(ref_id, 176 | 178)))
     .then_some(i64::from(i32::MIN))
 }
 

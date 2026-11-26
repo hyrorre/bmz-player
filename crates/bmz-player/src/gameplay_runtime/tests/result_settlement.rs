@@ -189,7 +189,7 @@ fn settled_runtime_result_records_final_gauges_and_stays_fixed_until_finished() 
 
     let finished = finish(&driver.client);
     let details = finished.lane_details.as_ref().unwrap();
-    let lane = details.lanes[Lane::Key1.index()];
+    let lane = details.lanes[Lane::Key1.index()].score;
     assert_eq!((lane.notes, lane.ex_score, lane.bp), (1, 2, 1));
     let graph = &finished.summary.graph;
     assert!(!finished.gauge_carry.is_empty());

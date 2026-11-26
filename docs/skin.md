@@ -977,6 +977,51 @@ Selectの`judgegraph`（type 0、`backTexOff=0`）は、密度10刻みの帯で�
 Luxe Flat等が使う標準描画であり、スキン側で密度別の背景を定義する必要はありません。
 `backTexOff=1`では帯と時間の補助線を描きません。
 
+### レーン別ノーツ数
+
+選曲と単曲リザルトのLua / JSONスキンでは、スクラッチと各鍵盤のノーツ数をBMZ拡張の数値refで取得できます。
+
+| 数値ref | 名前 | レーン |
+| ---: | --- | --- |
+| 19270 | `bmz_lane_notes_scratch` | 1Pスクラッチ |
+| 19271〜19277 | `bmz_lane_notes_key1` 〜 `bmz_lane_notes_key7` | 1Pの鍵盤1〜7 |
+| 19278〜19284 | `bmz_lane_notes_key8` 〜 `bmz_lane_notes_key14` | DPの2P側の鍵盤1〜7。8Kは`key8`まで、9Kは`key9`までを鍵盤の続きとして使用 |
+| 19285 | `bmz_lane_notes_scratch2` | 2Pスクラッチ |
+
+- 選曲では、ライブラリ解析が集計した元譜面の通常ノートとロングノートの合計です。譜面定義上のCN / HCN終端を含みます。プレイ設定によるレーン変更やLNモード変更はリザルトの集計に反映されます。
+- リザルトでは、「リザルト → 詳細」のノーツ数と同じです。プレイ時の配置と判定方式で数え、コース曲間では該当ステージの値が入ります。
+- 使用レーンにノーツがなければ値は`0`です。未使用レーン、曲以外の選択行、未所持譜面、解析待ち、コース総合リザルトなどで値がない場合、数値部品は非表示になり、Luaの`main_state.number()`は`-2147483648`を返します。
+
+数字画像は`value[].ref`に数値ID、または`value[].value`に名前を指定します。フォントを使う場合は
+`text[].numberRef`に数値IDを指定します。次のJSONは、登録済みフォント`count_font`を使ってKEY1のノーツ数を表示します。
+
+```json
+{
+  "text": [{ "id": "key1_notes", "font": "count_font", "size": 28, "numberRef": 19271 }],
+  "destination": [{ "id": "key1_notes", "dst": [{ "x": 100, "y": 120, "w": 100, "h": 30 }] }]
+}
+```
+
+Luaのruntime callbackでは`main_state.number("bmz_lane_notes_key1")`または`main_state.number(19271)`で参照できます。
+単曲リザルトとコース曲間では、Luaスキンのロード時にも確定済みのノーツ数を取得できます。
+
+### 単曲リザルトのレーン別ランク・EX RATE・BP
+
+単曲リザルト（コース曲間を含む）のLua / JSONスキンには、「リザルト → 詳細」と同じレーン別ランク・EX RATE・BPも公開します。レーンの並びと名前の末尾はノーツ数と共通です。各基底IDに `scratch=0`、`key1〜key14=1〜14`、`scratch2=15` を足すと、対象レーンのIDになります。
+
+| ref | 名前（KEY1の例） | 種類・値 |
+| ---: | --- | --- |
+| 20230〜20245 | `bmz_lane_rank_key1` | textは`AAA`〜`F`または`AUTO`。number・画像インデックスは`1=AAA`、`2=AA`、`3=A`、`4=B`、`5=C`、`6=D`、`7=E`、`8=F`、`9=AUTO` |
+| 20246〜20261 | `bmz_lane_ex_rate_key1` | textは小数1桁のパーセント（`83.3%`など） |
+| 20262〜20277 | `bmz_lane_bp_key1` | numberはそのレーンのBP。FAILED時は詳細パネルと同じく未処理ノーツを含む |
+
+- プレイ時にAuto Scratchが適用されたレーンのランクは`AUTO`です。EX RATEとBPは空欄になります。
+- Luaスキンのロード時にも同じランク・EX RATE・BPを取得できます。成績に応じて表示列や画像を選べます。
+- Auto Scratchが適用されていない使用レーンでは、ノーツ数が0でもBPを返します。ランクとEX RATEは空欄です。
+- 未使用レーンやコース総合リザルトでは参照値がありません。欠損時のtextは空文字、数値部品は非表示、Luaの`main_state.number()`は`-2147483648`です。ランクを`image.ref`や`imageset.ref`で描く場合は、欠損時に選ばれるインデックス`0`に透明画像を置きます。
+
+JSONでは、1Pスクラッチのランクを `text[].value: "bmz_lane_rank_scratch"`、KEY1のEX RATEを `text[].value: "bmz_lane_ex_rate_key1"`、KEY1のBPを `text[].numberRef: 20263` で表示できます。Luaでは `main_state.text("bmz_lane_rank_scratch")`、`main_state.text("bmz_lane_ex_rate_key1")`、`main_state.number("bmz_lane_bp_key1")` で同じ値を取得できます。
+
 ## Playのノート分布グラフ
 
 Playの`judgegraph`は、beatorajaの`SkinNoteDistributionGraph`と同じく1秒ごとのbucketを積み上げます。
@@ -1141,7 +1186,8 @@ callback内で呼ぶと現在フレームの値を取得します。`local numbe
 `floatvalue`等の新しいスキーマやLua APIはこの対応には含みません。
 
 BMZ拡張の名前（`bmz_`で始まる名前）は生成表とは別の表で解決し、生成表に同名がある場合は
-beatorajaの名前を優先します。現在は[BMZ Chart Text Refs](#bmz-chart-text-refs)の名前があります。
+beatorajaの名前を優先します。[レーン別ノーツ数](#レーン別ノーツ数)や
+[BMZ Chart Text Refs](#bmz-chart-text-refs)にBMZ拡張の名前があります。
 
 ## 最終プレイ日時の数値ref
 

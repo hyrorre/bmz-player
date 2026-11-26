@@ -523,8 +523,14 @@ pub(super) fn lua_runtime_state_for_result(
     autoplay: bool,
     key_mode: KeyMode,
     mut number_values: BTreeMap<i32, i32>,
+    lane_scores: [Option<bmz_render::scene::ResultLaneScore>; LANE_COUNT],
     player_name: &str,
 ) -> bmz_skin::LuaLoadRuntimeState {
+    use bmz_render::skin::{
+        SKIN_REF_BMZ_LANE_BP_BASE, SKIN_REF_BMZ_LANE_NOTES_BASE, SKIN_REF_BMZ_LANE_RANK_BASE,
+        SKIN_TEXT_BMZ_LANE_EX_RATE_BASE,
+    };
+
     let ir_online = ir_name.is_some();
     let mut option_values = BTreeMap::new();
     option_values.insert(1008, table_song);
@@ -547,12 +553,32 @@ pub(super) fn lua_runtime_state_for_result(
         option_values.insert(option, result_key_mode_option_matches(option, key_mode));
     }
     extend_bmz_key_mode_lua_state(&mut number_values, &mut option_values, key_mode);
+    let mut text_values = BTreeMap::from([
+        (2, player_name.to_string()),
+        (1020, ir_name.unwrap_or_default().to_string()),
+    ]);
+    let count = |value: u32| i32::try_from(value).unwrap_or(i32::MAX);
+    for (index, score) in lane_scores.into_iter().enumerate() {
+        let offset = index as i32;
+        let rank = SKIN_REF_BMZ_LANE_RANK_BASE + offset;
+        number_values.extend([
+            (SKIN_REF_BMZ_LANE_NOTES_BASE + offset, score.map_or(i32::MIN, |s| count(s.notes))),
+            (rank, score.and_then(|s| s.rank_index()).map_or(i32::MIN, |n| n as i32)),
+            (
+                SKIN_REF_BMZ_LANE_BP_BASE + offset,
+                score.and_then(|s| s.displayed_bp()).map_or(i32::MIN, count),
+            ),
+        ]);
+        if let Some(label) = score.and_then(|s| s.rank_label()) {
+            text_values.insert(rank, label.to_string());
+        }
+        if let Some(rate) = score.and_then(|s| s.ex_rate_label()) {
+            text_values.insert(SKIN_TEXT_BMZ_LANE_EX_RATE_BASE + offset, rate);
+        }
+    }
     bmz_skin::LuaLoadRuntimeState {
         number_values,
-        text_values: BTreeMap::from([
-            (2, player_name.to_string()),
-            (1020, ir_name.unwrap_or_default().to_string()),
-        ]),
+        text_values,
         option_values,
         ..Default::default()
     }

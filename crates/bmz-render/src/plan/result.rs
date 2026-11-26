@@ -228,6 +228,7 @@ pub(super) fn build_result_skin_draw_state(
         auto_scratch_setting: snapshot.auto_scratch,
         ex_score: snapshot.ex_score,
         total_notes: snapshot.total_notes,
+        result_lane_scores: snapshot.lane_scores,
         past_notes: snapshot.total_notes,
         total_duration_ms: snapshot.note_display_duration_ms.unwrap_or(snapshot.duration_ms),
         duration_green_ms: snapshot

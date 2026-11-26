@@ -372,14 +372,30 @@ fn select_distributions_load_in_background_and_reuse_cached_results() {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("CREATE TABLE chart_analysis(chart_id INTEGER PRIMARY KEY, distribution_json TEXT NOT NULL, speed_changes_json TEXT)").unwrap();
+    conn.execute_batch(
+        "CREATE TABLE chart_analysis(
+            chart_id INTEGER PRIMARY KEY,
+            distribution_json TEXT NOT NULL,
+            speed_changes_json TEXT,
+            lane_notes_json TEXT NOT NULL
+        )",
+    )
+    .unwrap();
     let notes = vec![crate::storage::library_db::ChartDistributionSecond {
         key_taps: 12,
         ..Default::default()
     }];
     conn.execute(
-        "INSERT INTO chart_analysis VALUES (1, ?1, '[{\"speed\":120.0,\"time_ms\":0}]')",
-        [serde_json::to_string(&notes).unwrap()],
+        "INSERT INTO chart_analysis VALUES (1, ?1, '[{\"speed\":120.0,\"time_ms\":0}]', ?2)",
+        [
+            serde_json::to_string(&notes).unwrap(),
+            r#"[
+                {"lane_index":1,"normal_notes":12,"long_notes":2,"mines":3},
+                {"lane_index":0,"normal_notes":0,"long_notes":0,"mines":1},
+                {"lane_index":15,"normal_notes":5,"long_notes":4,"mines":0}
+            ]"#
+            .to_string(),
+        ],
     )
     .unwrap();
     drop(conn);
@@ -398,12 +414,18 @@ fn select_distributions_load_in_background_and_reuse_cached_results() {
     assert_eq!(cache[&1].notes[0].key_taps, 12);
     assert!(cache[&1].end_density.is_some());
     assert_eq!(cache[&1].bpm_graph_segments.len(), 1);
+    let counts = cache[&1].lane_note_counts;
+    assert_eq!(counts[Lane::Key1.index()], Some(14));
+    assert_eq!(counts[Lane::Scratch.index()], Some(0));
+    assert_eq!(counts[Lane::Scratch2.index()], None);
     assert!(cache[&2].bpm_graph_segments.is_empty());
     assert!(cache[&2].notes.is_empty());
+    assert_eq!(cache[&2].lane_note_counts, [None; LANE_COUNT]);
     std::fs::remove_file(&path).unwrap();
     runtime.refresh(&path, &[], &mut cache);
     runtime.refresh(&path, &[&chart, &missing], &mut cache);
     assert_eq!(cache[&1].notes[0].key_taps, 12);
+    assert_eq!(cache[&1].lane_note_counts, counts);
 }
 
 #[test]
@@ -436,6 +458,7 @@ fn select_snapshot_rows_centers_selection_and_copies_score_summary() {
                 key_long_heads: 1,
                 ..Default::default()
             }],
+            lane_note_counts: Default::default(),
             end_density: Some(21.6),
             bpm_graph_segments: select_bpm_graph_segments(
                 &[

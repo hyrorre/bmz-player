@@ -268,6 +268,25 @@ pub const SKIN_REF_BMZ_CHART_TOTAL_MINUTES: i32 = 19_262;
 /// Current BMZ FREQ playback multiplier, integer and hundredths.
 pub const SKIN_REF_BMZ_PLAYBACK_INTEGER: i32 = 19_263;
 pub const SKIN_REF_BMZ_PLAYBACK_FRACTION: i32 = 19_264;
+
+/// Selected or played chart's note count, indexed by BMZ lane.
+pub const SKIN_REF_BMZ_LANE_NOTES_BASE: i32 = 19_270;
+pub const SKIN_REF_BMZ_LANE_NOTES_LAST: i32 =
+    SKIN_REF_BMZ_LANE_NOTES_BASE + bmz_core::lane::LANE_COUNT as i32 - 1;
+
+/// Single-song Result lane ranks (number, text and image index).
+pub const SKIN_REF_BMZ_LANE_RANK_BASE: i32 = 20_230;
+pub const SKIN_REF_BMZ_LANE_RANK_LAST: i32 =
+    SKIN_REF_BMZ_LANE_RANK_BASE + bmz_core::lane::LANE_COUNT as i32 - 1;
+/// Single-song Result lane EX rates, formatted as percent text.
+pub const SKIN_TEXT_BMZ_LANE_EX_RATE_BASE: i32 = 20_246;
+pub const SKIN_TEXT_BMZ_LANE_EX_RATE_LAST: i32 =
+    SKIN_TEXT_BMZ_LANE_EX_RATE_BASE + bmz_core::lane::LANE_COUNT as i32 - 1;
+/// Single-song Result lane BP (number).
+pub const SKIN_REF_BMZ_LANE_BP_BASE: i32 = 20_262;
+pub const SKIN_REF_BMZ_LANE_BP_LAST: i32 =
+    SKIN_REF_BMZ_LANE_BP_BASE + bmz_core::lane::LANE_COUNT as i32 - 1;
+
 /// DETAIL OPTIONS v1. Number/text/option are independent namespaces.
 pub const SKIN_REF_DETAIL_OPTIONS_BASE: i32 = 19_300;
 pub const SKIN_REF_DETAIL_OPTIONS_LAST: i32 = 19_312;

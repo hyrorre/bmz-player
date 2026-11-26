@@ -115,13 +115,17 @@ fn lane_details_count_missed_cn_end_but_ignore_auto_scratch() {
         KeyMode::K7,
         &Lane::ALL.map(|lane| lane == Lane::Scratch),
     );
-    let key = details.lanes[Lane::Key2.index()];
-    let scratch = details.lanes[Lane::Scratch.index()];
+    let key = details.lanes[Lane::Key2.index()].score;
+    let scratch = details.lanes[Lane::Scratch.index()].score;
     assert_eq!((key.notes, key.ex_score, key.bp), (result.total_notes, 2, result.record_bp()));
     assert_eq!(
         (scratch.notes, scratch.ex_score, scratch.bp, scratch.auto_scratch),
         (0, 0, 0, true)
     );
+    let scores = details.skin_scores();
+    assert_eq!(scores[Lane::Key2.index()], Some(key));
+    assert_eq!(scores[Lane::Scratch.index()], Some(scratch));
+    assert_eq!(scores[Lane::Key8.index()], None);
 }
 
 #[test]

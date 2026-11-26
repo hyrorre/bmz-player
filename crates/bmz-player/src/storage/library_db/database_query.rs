@@ -704,7 +704,7 @@ impl LibraryDatabase {
             return Ok(HashMap::new());
         }
         let mut stmt = self.conn.prepare(
-            "SELECT chart_id, distribution_json, speed_changes_json
+            "SELECT chart_id, distribution_json, speed_changes_json, lane_notes_json
              FROM chart_analysis
              WHERE chart_id = ?1",
         )?;
@@ -719,7 +719,11 @@ impl LibraryDatabase {
                         } else {
                             serde_json::from_str(&analysis_text(row, 2)?).unwrap_or_default()
                         };
-                    Ok((row.get(0)?, ChartGraphData { distribution, speed_changes }))
+                    let lane_notes = analysis_text(row, 3)
+                        .ok()
+                        .and_then(|text| serde_json::from_str(&text).ok())
+                        .unwrap_or_default();
+                    Ok((row.get(0)?, ChartGraphData { distribution, speed_changes, lane_notes }))
                 })
                 .optional()?
             {

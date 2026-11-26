@@ -1,6 +1,53 @@
 use super::*;
 
 #[test]
+fn result_lane_refs_show_scores_and_distinguish_auto_empty_and_unused_lanes() {
+    use crate::scene::ResultLaneScore;
+
+    let crate::scene::AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene()
+    else {
+        unreachable!();
+    };
+    snapshot.lane_scores[Lane::Scratch.index()] =
+        Some(ResultLaneScore { notes: 0, ex_score: 0, bp: 0, auto_scratch: false });
+    snapshot.lane_scores[Lane::Key1.index()] =
+        Some(ResultLaneScore { notes: 3, ex_score: 5, bp: 0, auto_scratch: false });
+    snapshot.lane_scores[Lane::Scratch2.index()] =
+        Some(ResultLaneScore { notes: 51, ex_score: 0, bp: 51, auto_scratch: true });
+    let state = crate::plan::result_skin_draw_state(&snapshot, 0);
+    let text_state = SkinTextState::default();
+
+    let rate: SkinTextDef = serde_json::from_str(r#"{"value": "bmz_lane_ex_rate_key1"}"#).unwrap();
+    let rank: SkinTextDef = serde_json::from_str(r#"{"value": "bmz_lane_rank_scratch2"}"#).unwrap();
+    let bp = serde_json::from_str(r#"{"value": "bmz_lane_bp_key1"}"#).unwrap();
+    assert_eq!(skin_state_text_with_draw_state(&rate, Some(&state), &text_state), "83.3%");
+    assert_eq!(skin_state_text_with_draw_state(&rank, Some(&state), &text_state), "AUTO");
+    assert_eq!(skin_value_number_for_destination(&bp, &state), Some(0));
+    assert_eq!(skin_image_index_number(SKIN_REF_BMZ_LANE_RANK_LAST, &state), Some(9));
+    assert_eq!(skin_state_number(SKIN_REF_BMZ_LANE_BP_LAST, &state), None);
+    assert_eq!(lua_main_state_number(SKIN_REF_BMZ_LANE_BP_LAST, &state), i64::from(i32::MIN));
+
+    let texts = lua_main_state_text_values(&state, &text_state);
+    assert_eq!(texts[&(SKIN_REF_BMZ_LANE_RANK_BASE + 1)], "AA");
+    assert_eq!(texts[&(SKIN_TEXT_BMZ_LANE_EX_RATE_BASE + 1)], "83.3%");
+    assert_eq!(texts[&SKIN_REF_BMZ_LANE_RANK_LAST], "AUTO");
+    assert_eq!(texts[&SKIN_TEXT_BMZ_LANE_EX_RATE_LAST], "");
+    assert_eq!(texts[&SKIN_REF_BMZ_LANE_RANK_BASE], "");
+    assert_eq!(texts[&SKIN_TEXT_BMZ_LANE_EX_RATE_BASE], "");
+    assert_eq!(lua_main_state_number(SKIN_REF_BMZ_LANE_NOTES_BASE, &state), 0);
+    assert_eq!(lua_main_state_number(SKIN_REF_BMZ_LANE_NOTES_LAST, &state), 51);
+    let value = serde_json::from_str(r#"{"value": "bmz_lane_notes_scratch2"}"#).unwrap();
+    assert_eq!(skin_value_number_for_destination(&value, &state), Some(51));
+    for base in
+        [SKIN_REF_BMZ_LANE_NOTES_BASE, SKIN_REF_BMZ_LANE_RANK_BASE, SKIN_REF_BMZ_LANE_BP_BASE]
+    {
+        let missing = base + Lane::Key2 as i32;
+        assert_eq!(skin_state_number(missing, &state), None);
+        assert_eq!(lua_main_state_number(missing, &state), i64::from(i32::MIN));
+    }
+}
+
+#[test]
 fn result_destination_negative_image_id_renders_runtime_stagefile_source() {
     let document: SkinDocument = serde_json::from_str(
         r#"
