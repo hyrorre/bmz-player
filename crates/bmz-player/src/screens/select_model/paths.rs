@@ -36,6 +36,12 @@ pub fn parse_search_query(path: &str) -> Option<&str> {
     if rest.is_empty() { None } else { Some(rest) }
 }
 
+pub(crate) fn search_folder_name(query: &str, text: Localizer) -> String {
+    let mut args = FluentArgs::new();
+    args.set("query", query);
+    text.format("select-search-history", &args)
+}
+
 pub fn same_folder_path(folder_path: &str) -> String {
     format!("{SAME_FOLDER_PATH_PREFIX}{folder_path}")
 }
@@ -78,15 +84,11 @@ pub fn search_history_folder_items_for_locale(
     let text = Localizer::new(locale);
     history
         .iter()
-        .map(|query| {
-            let mut args = FluentArgs::new();
-            args.set("query", query.as_str());
-            SelectItem::Folder {
-                path: format!("{SEARCH_PATH_PREFIX}{query}"),
-                name: text.format("select-search-history", &args),
-                kind: SelectRowKind::SearchFolder,
-                summary: None,
-            }
+        .map(|query| SelectItem::Folder {
+            path: format!("{SEARCH_PATH_PREFIX}{query}"),
+            name: search_folder_name(query, text),
+            kind: SelectRowKind::SearchFolder,
+            summary: None,
         })
         .collect()
 }

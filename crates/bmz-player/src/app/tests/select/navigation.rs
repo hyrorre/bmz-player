@@ -278,6 +278,40 @@ fn folder_entry_accepts_subfolders_settings_and_course_actions_without_charts() 
 }
 
 #[test]
+fn same_folder_entry_preserves_the_chart_after_random_select_rows() {
+    let charts =
+        vec![SelectItem::Chart(select_chart_row(1)), SelectItem::Chart(select_chart_row(2))];
+    let selected_key = select_item_key(&charts[1]);
+    let config = crate::config::profile_config::SelectStateConfig {
+        random_select: true,
+        ..Default::default()
+    };
+    let mut items = random_select_items_from_items(&charts, &config);
+    assert!(matches!(items.as_slice(), [SelectItem::Executable(_)]));
+    items.extend(charts);
+
+    let parent = "parent".to_string();
+    let destination = same_folder_path("songs/example");
+    let prepared = prepare_select_list(
+        &SelectListAction::Enter(destination.clone()),
+        std::slice::from_ref(&parent),
+        &[5],
+        7,
+        Some(selected_key.clone()),
+        |stack| {
+            assert_eq!(stack, [parent.clone(), destination.clone()]);
+            Ok((items.clone(), SelectModeFilter::K7))
+        },
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(prepared.selected_index, 2);
+    assert_eq!(select_item_key(&prepared.items[prepared.selected_index]), selected_key);
+    assert_eq!(prepared.selected_index_stack, [5, 7]);
+}
+
+#[test]
 fn folder_entry_keeps_missing_table_chart_rows() {
     let mut row = select_chart_row(1);
     row.chart = None;

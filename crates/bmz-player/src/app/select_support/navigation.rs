@@ -39,7 +39,9 @@ pub(in crate::app) fn prepare_select_list(
             stack.push(path.clone());
             indices.push(index);
             index = 0;
-            key = None;
+            if parse_same_folder_path(path).is_none() {
+                key = None;
+            }
         }
         SelectListAction::Exit => {
             let Some(path) = stack.pop() else {
