@@ -1573,7 +1573,7 @@ fn spawned_settled_session_result_persists_on_background_worker() {
     assert!(!finished.summary.graph.note_graph_buckets.is_empty());
     assert!(root.join(&finished.stored.replay_path).is_file());
     let stats = ScoreDatabase::open(&paths.score_db).unwrap().player_stats().unwrap();
-    assert_eq!(stats.playtime_seconds, 120);
+    assert_eq!(stats.playtime_seconds, 60);
 
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -1772,6 +1772,33 @@ fn manual_stop_replays_the_last_scored_press_without_hitting_the_next_mine() {
     assert_eq!(history.gauge_value, Some(100.0));
     assert!(frame.mine_hits.is_empty());
     assert_eq!(replay.replay_player.unwrap().scored_until(), Some(TimeUs(250_125)));
+}
+
+#[test]
+fn finish_playtime_uses_the_same_clock_for_stops_and_completions() {
+    for (freq_semitones, stop_seconds, stopped_playtime, completed_playtime) in
+        [(-12, 110, 220, 240), (0, 119, 119, 120), (12, 119, 59, 60)]
+    {
+        let mut live = session();
+        Arc::make_mut(&mut live.chart).end_time = TimeUs(120_000_000);
+        let arrange = AppliedArrange { freq_semitones, ..Default::default() };
+        live.audio_clock.set_playback_rate_percent(
+            crate::config::play::freq_playback_rate_percent(freq_semitones),
+        );
+        live.audio_clock.pause_at(TimeUs(stop_seconds * 1_000_000));
+        for (state, expected) in
+            [(PlayState::Failed, stopped_playtime), (PlayState::Finished, completed_playtime)]
+        {
+            live.state = state;
+            let snapshot = FinishSessionSnapshot::from_session(
+                &live,
+                ChartLnProfile::default(),
+                &arrange,
+                None,
+            );
+            assert_eq!(snapshot.playtime_seconds, expected, "FREQ {freq_semitones}, {state:?}");
+        }
+    }
 }
 
 #[test]

@@ -333,14 +333,14 @@ impl FinishSessionSnapshot {
         let ended_at = settled_time
             .filter(|_| recorded_stop)
             .unwrap_or_else(|| session.audio_clock.now().max(TimeUs(0)));
-        let playtime_seconds = if recorded_stop || session.state == PlayState::Failed {
-            let stop = settled_time.unwrap_or(ended_at).min(chart.end_time);
-            let chart_us_per_second =
-                1_000_000 * i64::from(session.audio_clock.playback_rate_percent()) / 100;
-            stop.0.max(0) / chart_us_per_second
+        let playtime_end = if recorded_stop || session.state == PlayState::Failed {
+            settled_time.unwrap_or(ended_at).min(chart.end_time)
         } else {
-            chart.end_time.0.max(0) / 1_000_000
+            chart.end_time
         };
+        let chart_us_per_second =
+            1_000_000 * i64::from(session.audio_clock.playback_rate_percent()) / 100;
+        let playtime_seconds = playtime_end.0.max(0) / chart_us_per_second;
         Self {
             completed: !session.manually_stopped
                 && (session.state == PlayState::Finished
