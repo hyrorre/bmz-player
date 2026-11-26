@@ -200,8 +200,11 @@ impl WinitApp {
                     total_notes: summary.total_notes,
                     lane_scores: self.result_lane_scores_for_slot(self.current_result_skin_slot()),
                     duration_ms: summary.duration_ms,
-                    note_display_duration_ms: Some(Self::select_note_display_duration_ms_for_skin(
-                        &self.boot.profile_config,
+                    note_display_duration_ms: Some(Self::configured_note_display_duration_ms(
+                        &self
+                            .boot
+                            .profile_config
+                            .play_mode_config(self.boot.profile_config.active_play_mode),
                     )),
                     initial_bpm: summary.initial_bpm,
                     min_bpm: result_min_bpm(summary),

@@ -163,11 +163,10 @@ skinの`NUMBER_DURATION` (312)には導出した表示時間、
 表示境界に使い、`constant_fade_ms`は`-1000..=1000ms`の範囲で境界前後を
 フェードさせます。Practiceの区間プレビューと区間プレイではCONSTANTを無効にします。
 
-選曲画面の`NUMBER_DURATION`と`NUMBER_DURATION_GREEN`は、選択中のキーモードで
-有効なSUDDEN+とHIDDEN+を上下のカバーとして扱い、両者の間でノーツが見える割合を
-反映します。無効なカバーの保存値は無視し、カバーが重なる場合は表示時間を0に収めます。
-FloatingではSUDDEN+とLIFTを反映済みの目標緑数字を基準にし、HIDDEN+が隠す範囲だけを
-残りの可視レーンに対する相対比で反映します。
+選曲画面の`NUMBER_DURATION`と`NUMBER_DURATION_GREEN`は、選択中の譜面に適用される
+キーモードの「ノーツ表示時間」と、その時間に対応する緑数字を返します。
+設定の「ノーツ表示時間」は`floating_target_green`から換算した値です。
+ハイスピード方式やレーンカバーの設定にかかわらず、この値を使います。
 
 ## HS-FIX
 

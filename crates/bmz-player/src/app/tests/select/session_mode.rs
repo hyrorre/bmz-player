@@ -241,7 +241,7 @@ fn d_battle_select_preload_and_start_activate_the_dp_profile_slot() {
     )
     .unwrap();
     app.viewer_mode = false;
-    // A distinct HS-FIX per slot shows which slot each step activated.
+    // Distinct HS-FIX and duration values show which slot each step uses.
     let slots = [
         (KeyMode::K5, HsFixConfig::StartBpm),
         (KeyMode::K7, HsFixConfig::MinBpm),
@@ -251,6 +251,17 @@ fn d_battle_select_preload_and_start_activate_the_dp_profile_slot() {
     for (mode, hs_fix) in slots {
         app.boot.profile_config.activate_play_mode(mode);
         app.boot.profile_config.play.hs_fix = hs_fix;
+        app.boot.profile_config.lane.target_green_number = 240;
+        if mode == KeyMode::K7 {
+            app.boot.profile_config.play.lane_effect = LaneEffectConfig::HiddenSudden;
+            let lane = &mut app.boot.profile_config.lane;
+            lane.floating_policy = FloatingPolicyConfig::Locked;
+            lane.target_green_number = 283;
+            lane.sudden = 224;
+            lane.lift = 136;
+            lane.lift_enabled = true;
+            lane.hidden = 150;
+        }
         app.boot.profile_config.sync_active_play_mode();
     }
     let hs_fix_of =
@@ -260,7 +271,15 @@ fn d_battle_select_preload_and_start_activate_the_dp_profile_slot() {
         assert_eq!(Some(app.boot.profile_config.play.hs_fix), hs_fix_of(mode), "{context}");
         assert_eq!(app.select.hs_fix_option, hs_fix_option_from_profile(hs_fix_of(mode).unwrap()));
     };
-    app.select.select_items = vec![chart_row_with_mode(1, "7K"), chart_row_with_mode(2, "5K")];
+    app.select.select_items = vec![
+        chart_row_with_mode(1, "7K"),
+        chart_row_with_mode(2, "5K"),
+        chart_row_with_mode(3, "14K"),
+    ];
+    for (index, expected) in [(0, 472), (2, 400), (0, 472)] {
+        app.select.selected_index = index;
+        assert_eq!(app.select_snapshot().note_display_duration_ms, Some(expected));
+    }
 
     for (index, source, doubled) in [(0, KeyMode::K7, KeyMode::K14), (1, KeyMode::K5, KeyMode::K10)]
     {

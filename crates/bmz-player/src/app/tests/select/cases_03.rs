@@ -328,125 +328,31 @@ fn play_option_control_uses_chart_mode_instead_of_select_input_mode() {
 }
 
 #[test]
-fn select_skin_duration_is_derived_from_green_number_for_nhs() {
-    let mut profile = ProfileConfig::new_default("default", "Default", 1);
-    profile.lane.hispeed = 2.0;
-    profile.lane.base_hispeed = BaseHispeedConfig::Normal;
-    profile.lane.floating_policy = FloatingPolicyConfig::Disabled;
-    profile.lane.normal_hispeed_level = 18;
-
-    assert_eq!(
-        WinitApp::select_note_display_duration_ms_for_config(
-            &profile.play_mode_config(profile.active_play_mode),
-            false,
-        ),
-        500
-    );
-}
-
-#[test]
-fn select_skin_duration_is_derived_from_green_number_for_fhs() {
-    let mut profile = ProfileConfig::new_default("default", "Default", 1);
-    profile.lane.floating_policy = FloatingPolicyConfig::Locked;
-    profile.lane.target_green_number = 280;
-
-    assert_eq!(
-        WinitApp::select_note_display_duration_ms_for_config(
-            &profile.play_mode_config(profile.active_play_mode),
-            true,
-        ),
-        467
-    );
-}
-
-#[test]
-fn select_skin_floating_duration_does_not_reapply_sudden_cover() {
-    let mut profile = ProfileConfig::new_default("default", "Default", 1);
-    profile.lane.floating_policy = FloatingPolicyConfig::Locked;
-    profile.lane.target_green_number = 300;
-    profile.play.lane_effect = LaneEffectConfig::Sudden;
-    profile.lane.sudden = 200;
-
-    assert_eq!(
-        WinitApp::select_note_display_duration_ms_for_config(
-            &profile.play_mode_config(profile.active_play_mode),
-            true,
-        ),
-        500
-    );
-}
-
-#[test]
-fn select_skin_floating_duration_applies_hidden_to_remaining_lane() {
-    let mut profile = ProfileConfig::new_default("default", "Default", 1);
-    profile.lane.floating_policy = FloatingPolicyConfig::Locked;
-    profile.lane.target_green_number = 300;
-    profile.play.lane_effect = LaneEffectConfig::HiddenSudden;
-    profile.lane.sudden = 200;
-    profile.lane.hidden = 300;
-
-    assert_eq!(
-        WinitApp::select_note_display_duration_ms_for_config(
-            &profile.play_mode_config(profile.active_play_mode),
-            true,
-        ),
-        313
-    );
-
-    profile.lane.lift_enabled = true;
-    profile.lane.lift = 200;
-    assert_eq!(
-        WinitApp::select_note_display_duration_ms_for_config(
-            &profile.play_mode_config(profile.active_play_mode),
-            true,
-        ),
-        300
-    );
-}
-
-#[test]
-fn select_skin_duration_accounts_for_enabled_sudden_and_hidden_covers() {
-    let mut profile = ProfileConfig::new_default("default", "Default", 1);
-    profile.lane.base_hispeed = BaseHispeedConfig::Normal;
-    profile.lane.floating_policy = FloatingPolicyConfig::Disabled;
-    profile.lane.normal_hispeed_level = 18;
-    profile.play.lane_effect = LaneEffectConfig::HiddenSudden;
-    profile.lane.sudden = 200;
-    profile.lane.hidden = 300;
-
-    let duration_ms = WinitApp::select_note_display_duration_ms_for_config(
-        &profile.play_mode_config(profile.active_play_mode),
-        false,
-    );
-    assert_eq!(duration_ms, 250);
-    assert_eq!(crate::config::play::green_number_from_duration_ms(duration_ms as u32), 150);
-}
-
-#[test]
-fn select_skin_duration_ignores_disabled_cover_values_and_clamps_overlap() {
-    let mut profile = ProfileConfig::new_default("default", "Default", 1);
-    profile.lane.base_hispeed = BaseHispeedConfig::Normal;
-    profile.lane.floating_policy = FloatingPolicyConfig::Disabled;
-    profile.lane.normal_hispeed_level = 18;
-    profile.lane.sudden = 700;
-    profile.lane.hidden = 600;
-
-    assert_eq!(
-        WinitApp::select_note_display_duration_ms_for_config(
-            &profile.play_mode_config(profile.active_play_mode),
-            false,
-        ),
-        500
-    );
-
-    profile.play.lane_effect = LaneEffectConfig::HiddenSudden;
-    assert_eq!(
-        WinitApp::select_note_display_duration_ms_for_config(
-            &profile.play_mode_config(profile.active_play_mode),
-            false,
-        ),
-        0
-    );
+fn configured_note_duration_uses_saved_target_with_covers_in_every_hispeed_mode() {
+    for (base_hispeed, floating_policy) in [
+        (BaseHispeedConfig::Normal, FloatingPolicyConfig::Disabled),
+        (BaseHispeedConfig::Classic, FloatingPolicyConfig::Disabled),
+        (BaseHispeedConfig::Lr2, FloatingPolicyConfig::Disabled),
+        (BaseHispeedConfig::Classic, FloatingPolicyConfig::Locked),
+        (BaseHispeedConfig::Normal, FloatingPolicyConfig::Toggle),
+        (BaseHispeedConfig::Classic, FloatingPolicyConfig::Toggle),
+    ] {
+        let config = PlayModeConfig {
+            base_hispeed,
+            floating_policy,
+            normal_hispeed_level: 18,
+            target_green_number: 283,
+            lane_effect: LaneEffectConfig::HiddenSudden,
+            sudden: 224,
+            lift: 136,
+            lift_enabled: true,
+            hidden: 150,
+            ..PlayModeConfig::default()
+        };
+        let duration_ms = WinitApp::configured_note_display_duration_ms(&config);
+        assert_eq!(duration_ms, 472, "{base_hispeed:?}, {floating_policy:?}");
+        assert_eq!(bmz_render::skin::duration_to_green_number_ms(duration_ms), 283);
+    }
 }
 
 #[test]
