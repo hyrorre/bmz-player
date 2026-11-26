@@ -2655,6 +2655,15 @@ image / imageset refから現在値を取得でき、option 400はCONSTANT有効
 スコアがあれば、プレイ開始時のターゲットへ自動設定します。未プレイ譜面では通常の
 TARGET設定を使います。名前の表示と比較スコアの有無は独立して扱います。
 
+### アーティスト名のtext ref
+
+選曲中の譜面では、`ref=14`（`artist`）にアーティスト名、`ref=15`（`subartist`）に
+サブアーティスト名を渡します。`ref=16`（`fullartist`）は両方あるときに半角スペースで結び、
+片方だけならその名前、両方とも空なら空文字を返します。たとえば `#SUBARTIST obj: Alice` だけの
+譜面では、`ref=15` と `ref=16` はともに `obj: Alice` です。
+この結合規則はDecide・Play・Resultの描画と、Play・ResultのLuaスキンがロード時に読む
+`main_state.text(16)` にも適用します。
+
 ### ターゲット名のtext ref (BMZ仕様)
 
 Select / Play / Resultで次の意味に統一します。beatorajaのPlay / Resultでref 1とref 3が

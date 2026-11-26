@@ -576,17 +576,14 @@ fn apply_chart_text_lua_load_state(
     artist: &str,
     subartist: &str,
 ) {
-    let full = |main: &str, sub: &str| {
-        if sub.is_empty() { main.to_string() } else { format!("{main} {sub}") }
-    };
     state.text_values.extend([
         (10, title.to_string()),
         (11, subtitle.to_string()),
-        (12, full(title, subtitle)),
+        (12, if subtitle.is_empty() { title.to_string() } else { format!("{title} {subtitle}") }),
         (13, genre.to_string()),
         (14, artist.to_string()),
         (15, subartist.to_string()),
-        (16, full(artist, subartist)),
+        (16, bmz_render::skin::full_label(artist, subartist)),
     ]);
 }
 

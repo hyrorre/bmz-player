@@ -100,7 +100,7 @@ fn select_render_items_passes_selected_row_genre_to_string_ref_13() {
 }
 
 #[test]
-fn select_render_items_show_beatoraja_artist_refs_for_the_selected_chart() {
+fn select_render_items_show_artist_refs_for_the_selected_chart() {
     let document: SkinDocument = serde_json::from_str(
         r#"
             {
@@ -163,7 +163,9 @@ fn select_render_items_show_beatoraja_artist_refs_for_the_selected_chart() {
 
     assert_eq!(rendered_text(&snapshot), ["MainArtist", "GuestArtist", "MainArtist GuestArtist"]);
     snapshot.rows[0].artist.clear();
-    assert_eq!(rendered_text(&snapshot), ["GuestArtist", " GuestArtist"]);
+    assert_eq!(rendered_text(&snapshot), ["GuestArtist", "GuestArtist"]);
+    snapshot.rows[0].subartist.clear();
+    assert!(rendered_text(&snapshot).is_empty());
     snapshot.selected_index = 1;
     assert_eq!(rendered_text(&snapshot), ["SoloArtist", "SoloArtist"]);
     snapshot.selected_index = 2;

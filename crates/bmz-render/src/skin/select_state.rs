@@ -54,7 +54,8 @@ pub(super) fn select_rival_index(target: &str) -> Option<u8> {
     target.strip_prefix("RIVAL_")?.parse::<u8>().ok().filter(|&index| index > 0)
 }
 
-pub(super) fn full_label(primary: &str, secondary: &str) -> String {
+/// Join two skin metadata fields with a space when both are present.
+pub fn full_label(primary: &str, secondary: &str) -> String {
     match (primary.is_empty(), secondary.is_empty()) {
         (true, true) => String::new(),
         (false, true) => primary.to_string(),

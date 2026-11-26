@@ -86,9 +86,8 @@ pub use runtime::{
     SkinContext, SkinDrawState, SkinLuaDrawRuntime, SkinLuaRuntimeContext, SkinSliderHit,
     build_judge_region_state, lane_judge_region,
 };
-pub use select_state::play_target_name;
-pub use select_state::target_setting_name;
 use select_state::*;
+pub use select_state::{full_label, play_target_name, target_setting_name};
 use state_value_bpm_change::*;
 use state_value_gauge_graph::*;
 use state_value_graph::*;
