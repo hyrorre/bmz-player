@@ -75,11 +75,12 @@ impl EguiLayer {
 
     /// BMZ メニューの表示状態を反転する (F1)。
     pub fn toggle(&mut self) {
-        self.visible = !self.visible;
         if self.visible {
-            self.result_panel.request_raise();
-        } else {
+            self.visible = false;
             self.cancel_key_config_listening();
+        } else {
+            open_menu_window(&self.ctx, &mut self.visible);
+            self.result_panel.request_raise();
         }
         tracing::info!(visible = self.visible, "egui menu toggled");
     }
@@ -100,19 +101,19 @@ impl EguiLayer {
 
     /// 選曲画面の「詳細設定」から BMZ メニューを開く。表示中のページは維持する。
     pub fn open_advanced_settings(&mut self) {
-        self.visible = true;
+        open_menu_window(&self.ctx, &mut self.visible);
         tracing::info!("egui advanced settings opened from select");
     }
 
     /// 選曲スキンの beatoraja event 14 からスキン設定を直接開く。
     pub fn open_skin_settings(&mut self) {
-        self.visible = true;
+        open_menu_window(&self.ctx, &mut self.visible);
         SettingsNavigation::select(&self.ctx, SettingsPage::Skin);
         tracing::info!("egui skin settings opened from select");
     }
 
     pub fn open_random_trainer(&mut self) {
-        self.visible = true;
+        open_menu_window(&self.ctx, &mut self.visible);
         SettingsNavigation::select(&self.ctx, SettingsPage::RandomTrainer);
     }
 

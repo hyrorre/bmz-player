@@ -1,6 +1,25 @@
 use super::*;
 
 const PAGE_COUNT: usize = 19;
+const MENU_WINDOW_ID: &str = "settings_workspace";
+
+fn menu_collapse_id() -> egui::Id {
+    egui::Id::new(MENU_WINDOW_ID).with("collapsing")
+}
+
+pub(super) fn open_menu_window(ctx: &egui::Context, visible: &mut bool) {
+    if *visible {
+        return;
+    }
+    *visible = true;
+    let id = menu_collapse_id();
+    if let Some(mut collapse) = egui::collapsing_header::CollapsingState::load(ctx, id) {
+        collapse.set_open(true);
+        collapse.store(ctx);
+        // Show the full page on the first frame, even after closing mid-animation.
+        ctx.animate_bool_with_time(id, true, 0.0);
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(super) enum SettingsPage {
@@ -294,9 +313,8 @@ pub(super) fn build_menu_window(
     course_stage_result: bool,
     contents: impl FnOnce(&mut egui::Ui, SettingsPage),
 ) -> bool {
-    const WINDOW_ID: &str = "settings_workspace";
     let window = localized_sized_panel_window(
-        WINDOW_ID,
+        MENU_WINDOW_ID,
         tr!(text, "menu-title"),
         ctx,
         open,
@@ -432,11 +450,8 @@ pub(super) fn build_menu_window(
     // egui still paints the body while closing. The title bar updates this state
     // before show returns, so input capture can end on the actual click.
     *open
-        && egui::collapsing_header::CollapsingState::load(
-            ctx,
-            egui::Id::new(WINDOW_ID).with("collapsing"),
-        )
-        .is_some_and(|state| state.is_open())
+        && egui::collapsing_header::CollapsingState::load(ctx, menu_collapse_id())
+            .is_some_and(|state| state.is_open())
 }
 
 fn build_manual_button(ui: &mut egui::Ui, text: Localizer) {
@@ -740,6 +755,61 @@ mod tests {
         assert!(frame(0.34, vec![click(false)]).0);
         frame(0.36, Vec::new());
         assert_eq!(frame(0.54, Vec::new()), (true, Some(SettingsPage::KeyConfig)));
+    }
+
+    #[test]
+    fn reopening_a_menu_closed_while_collapsed_shows_the_saved_page_immediately() {
+        let ctx = egui::Context::default();
+        let text = Localizer::new(AppLocale::En);
+        let id = egui::Id::new(MENU_WINDOW_ID);
+        SettingsNavigation::select(&ctx, SettingsPage::KeyConfig);
+        let collapsed = egui::collapsing_header::CollapsingState::load_with_default_open(
+            &ctx,
+            menu_collapse_id(),
+            false,
+        );
+        collapsed.store(&ctx);
+        let mut open = true;
+        let frame = |open: &mut bool, events| {
+            let mut page = None;
+            let mut expanded = false;
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280.0, 800.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    expanded = build_menu_window(ui.ctx(), open, "Default", text, false, |_, p| {
+                        page = Some(p)
+                    });
+                },
+            );
+            (expanded, page)
+        };
+
+        for _ in 0..3 {
+            assert_eq!(frame(&mut open, vec![]), (false, None));
+        }
+        let title = ctx.memory(|memory| memory.area_rect(id)).unwrap();
+        let button = title.right_top() + egui::vec2(-14.0, 14.0);
+        let click = |pressed| egui::Event::PointerButton {
+            pos: button,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut open, vec![egui::Event::PointerMoved(button), click(true)]);
+        frame(&mut open, vec![click(false)]);
+        assert!(!open);
+
+        open_menu_window(&ctx, &mut open);
+        assert_eq!(frame(&mut open, vec![]), (true, Some(SettingsPage::KeyConfig)));
+        let reopened = ctx.memory(|memory| memory.area_rect(id)).unwrap();
+        assert!(reopened.height() > title.height() + 100.0);
     }
 
     #[test]
