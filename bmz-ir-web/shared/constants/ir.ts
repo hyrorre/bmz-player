@@ -6,3 +6,56 @@
  * ストレージ DoS が可能になるため、余裕を持たせた固定上限で拒否する。
  */
 export const MAX_REPLAY_BYTES = 4 * 1024 * 1024
+
+export const IR_RANKING_MAX_OFFSET = 100_000
+export const IR_PLAYER_SCORE_PAGE_SIZE = 50
+export const IR_DISTRIBUTION_PAGE_SIZE = 50
+export const IR_DIFFICULTY_TABLE_NOT_FOUND = 'Difficulty table not found'
+
+/** 成果日は、日付の JST 00:00 に保存済みの切り替わり分を足した時刻から始まる。 */
+export const JST_UTC_OFFSET_MINUTES = 9 * 60
+/**
+ * UTC-12:00〜UTC+14:00 のどの地域でも、現地の任意の時刻を切り替わりにでき、
+ * 成果日の日付が現地の日付と一致する範囲。
+ */
+export const DAILY_BOUNDARY_MIN_MINUTES = JST_UTC_OFFSET_MINUTES - 14 * 60
+export const DAILY_BOUNDARY_MAX_MINUTES = JST_UTC_OFFSET_MINUTES + 12 * 60 + 24 * 60 - 1
+
+export const IR_CLEAR_LABELS = [
+  'NO PLAY',
+  'FAILED',
+  'ASSIST',
+  'EASY',
+  'CLEAR',
+  'HARD',
+  'EX HARD',
+  'FULL COMBO',
+  'PERFECT',
+  'MAX',
+] as const
+
+export const IR_SCORE_GRADES = ['F', 'E', 'D', 'C', 'B', 'A', 'AA', 'AAA', 'MAX'] as const
+export const IR_SCORE_RANK_LABELS = ['NO PLAY', ...IR_SCORE_GRADES] as const
+
+export const CLEAR_RANK: Record<string, number> = {
+  no_play: 0,
+  NoPlay: 0,
+  failed: 1,
+  Failed: 1,
+  assisted_easy_clear: 2,
+  AssistEasy: 2,
+  LightAssistEasy: 2,
+  easy_clear: 3,
+  Easy: 3,
+  clear: 4,
+  Normal: 4,
+  hard_clear: 5,
+  Hard: 5,
+  ex_hard_clear: 6,
+  ExHard: 6,
+  full_combo: 7,
+  FullCombo: 7,
+  perfect: 8,
+  Perfect: 8,
+  Max: 9,
+}

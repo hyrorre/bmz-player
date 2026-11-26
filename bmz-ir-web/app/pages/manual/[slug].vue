@@ -9,6 +9,9 @@ const index = computed(() => pages.value.findIndex((page) => page.slug === slug.
 const page = computed(() => pages.value[index.value])
 const previous = computed(() => (index.value > 0 ? pages.value[index.value - 1] : undefined))
 const next = computed(() => pages.value[index.value + 1])
+const chapterItems = computed(() =>
+  pages.value.map(({ title, slug: value }) => ({ label: title, value })),
+)
 
 if (!page.value) {
   throw createError({ statusCode: 404, statusMessage: 'Not Found' })
@@ -38,13 +41,26 @@ useSeoMeta({
 <template>
   <main>
     <section v-if="page" class="mx-auto w-full max-w-4xl px-5 py-10">
-      <ULink
-        :to="localePath('/manual')"
-        class="mb-2 inline-flex items-center gap-1 text-sm font-medium text-primary-300 hover:opacity-80"
+      <nav
+        :aria-label="t('manual.title')"
+        class="mb-6 flex flex-wrap items-center justify-between gap-3"
       >
-        <UIcon name="i-lucide-book-open" />
-        {{ t('manual.title') }}
-      </ULink>
+        <ULink
+          :to="localePath('/manual')"
+          class="inline-flex items-center gap-1 text-sm font-medium text-primary hover:opacity-80"
+        >
+          <UIcon name="i-lucide-book-open" />
+          {{ t('manual.title') }}
+        </ULink>
+        <USelect
+          :aria-label="t('manual.chapters')"
+          :items="chapterItems"
+          :model-value="slug"
+          class="w-full sm:w-64"
+          size="sm"
+          @update:model-value="(chapter) => navigateTo(pagePath(chapter))"
+        />
+      </nav>
       <UAlert
         v-if="showsFallback"
         class="mb-6"

@@ -31,10 +31,7 @@ useSeoMeta({ description: () => t('meta.description') })
   <UApp :locale="uiLocale">
     <NuxtRouteAnnouncer />
     <AppHeader />
-    <UContainer class="flex">
-      <AppSidebar />
-      <NuxtPage class="grow" />
-    </UContainer>
+    <NuxtPage />
     <AppFooter />
   </UApp>
 </template>

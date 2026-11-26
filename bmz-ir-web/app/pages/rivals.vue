@@ -12,6 +12,7 @@ const { user } = useUserSession()
 const { t } = useI18n()
 const { translateApiError } = useApiError()
 const toast = useToast()
+const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclosure()
 
 if (!user.value) {
   await navigateTo(localePath('/login'))
@@ -24,15 +25,29 @@ const {
   refresh: refreshRivals,
 } = await useFetch<IrRivalsResponse>('/api/v1/rivals')
 
-const requestedPlayerId = queryString(route.query.player)
-const selectedRivalId = ref(
-  rivalLists.value?.rivals.some((entry) => entry.player_id === requestedPlayerId)
-    ? requestedPlayerId!
-    : (rivalLists.value?.rivals[0]?.player_id ?? ''),
-)
-const page = ref(1)
-const pageSize = 50
-const offset = computed(() => (page.value - 1) * pageSize)
+const selectedRivalId = computed({
+  get() {
+    const requestedPlayerId = queryString(route.query.player)
+    return (
+      rivalLists.value?.rivals.find((entry) => entry.player_id === requestedPlayerId)?.player_id ??
+      rivalLists.value?.rivals[0]?.player_id ??
+      ''
+    )
+  },
+  set(playerId) {
+    if (playerId !== selectedRivalId.value) {
+      void navigateTo({
+        path: route.path,
+        query: { ...route.query, player: playerId, page: undefined },
+      })
+    }
+  },
+})
+const { page, pageSize, maxPage, offset, pageLocation } = useRoutePagination({ maxOffset: 100_000 })
+function comparisonPageLocation(nextPage: number) {
+  const location = pageLocation(nextPage)
+  return { ...location, query: { ...location.query, player: selectedRivalId.value } }
+}
 const rivalOptions = computed(() =>
   (rivalLists.value?.rivals ?? []).map((entry) => ({
     label: rivalName(entry),
@@ -66,21 +81,12 @@ const comparisonErrorDescription = computed(() =>
     : '',
 )
 
-watch(selectedRivalId, async (playerId) => {
-  if (!playerId) {
+watch([selectedRivalId, page], () => {
+  if (selectedRivalId.value) {
+    void loadComparison()
+  } else {
     clearComparison()
-    return
   }
-  await navigateTo({ path: localePath('/rivals'), query: { player: playerId } }, { replace: true })
-  if (page.value !== 1) {
-    page.value = 1
-    return
-  }
-  await loadComparison()
-})
-
-watch(page, async () => {
-  if (selectedRivalId.value) await loadComparison()
 })
 
 async function removeSelectedRival() {
@@ -95,12 +101,17 @@ async function removeSelectedRival() {
       color: 'success',
       icon: 'i-lucide-circle-check',
     })
-    clearComparison()
+    const remainingRival = rivalLists.value?.rivals.find(
+      (entry) => entry.player_id !== selectedRivalId.value,
+    )
+    await navigateTo(
+      {
+        path: route.path,
+        query: { ...route.query, player: remainingRival?.player_id, page: undefined },
+      },
+      { replace: true },
+    )
     await refreshRivals()
-    selectedRivalId.value = rivalLists.value?.rivals[0]?.player_id ?? ''
-    if (!selectedRivalId.value) {
-      await navigateTo(localePath('/rivals'), { replace: true })
-    }
   } catch (requestError) {
     toast.add({
       title: t('rivals.updateFailed'),
@@ -121,12 +132,6 @@ function rivalName(entry: IrRivalEntry): string {
   return entry.profile?.display_name || entry.player_id
 }
 
-function difficultyLabel(
-  label: IrRivalComparison['comparisons'][number]['difficulty_labels'][number],
-) {
-  return `${label.symbol}${label.level}`
-}
-
 function signed(value: number): string {
   return value > 0 ? `+${value}` : String(value)
 }
@@ -141,7 +146,7 @@ useSeoMeta({ title: () => t('rivals.title') })
 </script>
 
 <template>
-  <main>
+  <main class="min-w-0">
     <section class="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
       <div class="mb-8">
         <p class="mb-2 text-sm font-medium text-primary">BMZ Internet Ranking</p>
@@ -269,78 +274,85 @@ useSeoMeta({ title: () => t('rivals.title') })
                     <th class="w-20 px-4 py-3 text-right">{{ t('rivals.myBp') }}</th>
                     <th class="w-20 px-4 py-3 text-right">{{ t('rivals.rivalBp') }}</th>
                     <th class="w-20 px-4 py-3 text-right">{{ t('rivals.difference') }}</th>
+                    <th scope="col" class="sticky right-0 z-10 w-px bg-elevated px-1">
+                      <span class="sr-only">{{ t('score.title') }}</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr
+                  <template
                     v-for="row in comparison.comparisons"
                     :key="`${row.chart.sha256}-${row.rule.ln_policy}-${row.rule.double_option}-${row.rule.rule_mode}-${row.rule.scoring}`"
-                    class="border-t border-muted"
                   >
-                    <td class="px-4 py-3 align-top">
-                      <div v-if="row.difficulty_labels.length" class="flex flex-wrap gap-1">
-                        <UBadge
-                          v-for="label in row.difficulty_labels"
-                          :key="`${label.table_id}-${label.level}`"
-                          color="primary"
-                          size="sm"
-                          :title="label.table_name"
-                          variant="subtle"
-                        >
-                          {{ difficultyLabel(label) }}
+                    <tr class="border-t border-muted">
+                      <td class="px-4 py-3 align-top">
+                        <DifficultyTableBadges
+                          v-if="row.difficulty_labels.length"
+                          :labels="row.difficulty_labels"
+                        />
+                        <UBadge v-else color="neutral" size="sm" variant="subtle">
+                          ☆{{ row.chart.level ?? '?' }}
                         </UBadge>
-                      </div>
-                      <UBadge v-else color="neutral" size="sm" variant="subtle">
-                        ☆{{ row.chart.level ?? '?' }}
-                      </UBadge>
-                    </td>
-                    <td class="max-w-80 px-4 py-3 align-top">
-                      <NuxtLink
-                        :to="localePath(`/charts/${row.chart.sha256}`)"
-                        class="font-semibold text-highlighted hover:underline"
-                      >
-                        {{ row.chart.title || row.chart.sha256.slice(0, 12) }}
-                      </NuxtLink>
-                      <p v-if="row.chart.subtitle" class="mt-0.5 text-xs text-muted">
-                        {{ row.chart.subtitle }}
-                      </p>
-                      <p class="mt-0.5 text-xs text-muted">{{ row.chart.artist ?? '' }}</p>
-                    </td>
-                    <td class="px-4 py-3 align-top text-muted">
-                      {{ row.rule.ln_policy }} / {{ row.rule.double_option }} /
-                      {{ row.rule.rule_mode }} / {{ row.rule.scoring }}
-                    </td>
-                    <td class="px-4 py-3 text-right font-medium">
-                      <NuxtLink
-                        :to="localePath(`/scores/${row.self.score_id}`)"
-                        class="hover:underline"
-                      >
+                      </td>
+                      <td class="max-w-80 px-4 py-3 align-top">
+                        <NuxtLink
+                          :to="localePath(`/charts/${row.chart.sha256}`)"
+                          class="font-semibold text-highlighted hover:underline"
+                        >
+                          {{ row.chart.title || row.chart.sha256.slice(0, 12) }}
+                        </NuxtLink>
+                        <p v-if="row.chart.subtitle" class="mt-0.5 text-xs text-muted">
+                          {{ row.chart.subtitle }}
+                        </p>
+                        <p class="mt-0.5 text-xs text-muted">{{ row.chart.artist ?? '' }}</p>
+                      </td>
+                      <td class="px-4 py-3 align-top text-muted">
+                        {{ row.rule.ln_policy }} / {{ row.rule.double_option }} /
+                        {{ row.rule.rule_mode }} / {{ row.rule.scoring }}
+                      </td>
+                      <td class="px-4 py-3 text-right font-medium">
                         {{ row.self.ex_score }}
-                      </NuxtLink>
-                    </td>
-                    <td class="px-4 py-3 text-right font-medium">
-                      <NuxtLink
-                        :to="localePath(`/scores/${row.rival.score_id}`)"
-                        class="hover:underline"
-                      >
+                      </td>
+                      <td class="px-4 py-3 text-right font-medium">
                         {{ row.rival.ex_score }}
-                      </NuxtLink>
-                    </td>
-                    <td
-                      class="px-4 py-3 text-right font-semibold"
-                      :class="outcomeClass(row.outcome.ex_score)"
+                      </td>
+                      <td
+                        class="px-4 py-3 text-right font-semibold"
+                        :class="outcomeClass(row.outcome.ex_score)"
+                      >
+                        {{ signed(row.difference.ex_score) }}
+                      </td>
+                      <td class="px-4 py-3 text-right">{{ row.self.min_bp }}</td>
+                      <td class="px-4 py-3 text-right">{{ row.rival.min_bp }}</td>
+                      <td
+                        class="px-4 py-3 text-right font-semibold"
+                        :class="outcomeClass(row.outcome.min_bp)"
+                      >
+                        {{ signed(row.difference.min_bp) }}
+                      </td>
+                      <td class="sticky right-0 z-10 bg-default px-1 py-1 align-top">
+                        <ScoreDetailToggle
+                          :expanded="expandedScoreRow === row.self.score_id"
+                          :controls="scoreDetailsId"
+                          @toggle="toggleScoreDetails(row.self.score_id)"
+                        />
+                      </td>
+                    </tr>
+                    <tr
+                      v-if="expandedScoreRow === row.self.score_id"
+                      class="border-t border-default bg-elevated"
                     >
-                      {{ signed(row.difference.ex_score) }}
-                    </td>
-                    <td class="px-4 py-3 text-right">{{ row.self.min_bp }}</td>
-                    <td class="px-4 py-3 text-right">{{ row.rival.min_bp }}</td>
-                    <td
-                      class="px-4 py-3 text-right font-semibold"
-                      :class="outcomeClass(row.outcome.min_bp)"
-                    >
-                      {{ signed(row.difference.min_bp) }}
-                    </td>
-                  </tr>
+                      <td colspan="10">
+                        <ScoreInlineDetails
+                          :id="scoreDetailsId"
+                          :score-id="row.self.score_id"
+                          :other-score-id="row.rival.score_id"
+                          :score-label="t('rivals.myEx')"
+                          :other-score-label="t('rivals.rivalEx')"
+                        />
+                      </td>
+                    </tr>
+                  </template>
                 </tbody>
               </table>
             </div>
@@ -349,11 +361,18 @@ useSeoMeta({ title: () => t('rivals.title') })
               <p class="font-medium">{{ t('rivals.noCommonScores') }}</p>
             </div>
 
-            <div v-if="comparison.pagination.total > pageSize" class="mt-5 flex justify-end">
+            <div
+              v-if="comparison.pagination.total > pageSize || page > 1"
+              class="mt-5 flex justify-end"
+            >
               <UPagination
-                v-model:page="page"
+                :page="
+                  Math.min(page, Math.max(1, Math.ceil(comparison.pagination.total / pageSize)))
+                "
+                :to="comparisonPageLocation"
+                :sibling-count="1"
                 :items-per-page="pageSize"
-                :total="comparison.pagination.total"
+                :total="Math.min(maxPage * pageSize, Math.max(1, comparison.pagination.total))"
               />
             </div>
           </template>

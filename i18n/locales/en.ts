@@ -11,7 +11,6 @@ export default defineI18nLocale(() =>
       common: {
         language: 'Language',
         openMenu: 'Open menu',
-        licenses: 'Licenses',
         backHome: 'Back to home',
         loading: 'Loading...',
         search: 'Search',
@@ -22,9 +21,11 @@ export default defineI18nLocale(() =>
         save: 'Save',
       },
       nav: {
+        account: 'Account',
         charts: 'Charts',
         courses: 'Courses',
         players: 'Players',
+        myPage: 'My page',
         daily: "Today's results",
         rivals: 'Rivals',
         profile: 'Profile',
@@ -89,6 +90,8 @@ export default defineI18nLocale(() =>
           'Password reset by email is not supported yet. Change it from Account settings while logged in.',
       },
       manual: {
+        contents: 'All chapters',
+        chapters: 'Select a chapter',
         title: 'Manual',
         description:
           'How to get started with BMZ Player, how to play, and what to do when something goes wrong.',

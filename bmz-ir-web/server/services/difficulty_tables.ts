@@ -1,7 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { BatchItem } from 'drizzle-orm/batch'
-import { and, eq, inArray, ne, or } from 'drizzle-orm'
+import { and, asc, eq, exists, inArray, ne, not, notExists, or, sql, type SQL } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/sqlite-core'
 import { db, schema } from 'hub:db'
+import type { IrDifficultyLabel, IrDifficultyTableOption } from '../../shared/types/ir'
+import type { DifficultyFilter } from '../../shared/utils/difficulty_filter'
+import { DIFFICULTY_TABLE_SOURCES } from '../constants/difficulty_tables'
+import { publicChartCondition } from './moderation/visibility'
 
 const DEFAULT_TIMEOUT_MS = 15_000
 const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -12,6 +17,23 @@ export const DIFFICULTY_LABEL_LOOKUP_CHUNK_SIZE = 40
 const MAX_REDIRECTS = 5
 const FAILURE_LOG_LIMIT = 10
 const FAILURE_ERROR_MAX_LENGTH = 500
+
+// The existing storage IDs keep synced generations and old links addressable.
+const storageIds = new Map(
+  DIFFICULTY_TABLE_SOURCES.map(({ id, sourceUrl }) => [
+    id,
+    difficultyTableId(normalizeHttpUrl(sourceUrl)),
+  ]),
+)
+const publicIds = new Map([...storageIds].map(([id, storageId]) => [storageId, id]))
+
+export function difficultyTablePublicId(storageId: string): string {
+  return publicIds.get(storageId) ?? storageId
+}
+
+export function difficultyTableStorageId(id: string): string {
+  return storageIds.get(id) ?? id
+}
 
 export interface DifficultyTableSource {
   sourceUrl: string
@@ -105,14 +127,7 @@ export interface DifficultyLabelChart {
   md5?: string | null
 }
 
-export interface DifficultyTableLabel {
-  table_id: string
-  table_name: string
-  symbol: string
-  level: string
-}
-
-interface DifficultyLabelRow extends DifficultyTableLabel {
+interface DifficultyLabelRow extends IrDifficultyLabel {
   priority: number
   levelOrder: string[]
   md5: string
@@ -158,7 +173,7 @@ export async function syncDifficultyTable(
   await persistDifficultyTableGeneration(store, tableId, generation, normalizedSource, table)
 
   return {
-    tableId,
+    tableId: difficultyTablePublicId(tableId),
     sourceUrl: table.sourceUrl,
     generation,
     entryCount: table.entries.length,
@@ -175,7 +190,7 @@ export async function syncDifficultyTable(
  */
 export async function lookupDifficultyLabels(
   charts: readonly DifficultyLabelChart[],
-): Promise<Map<string, DifficultyTableLabel[]>> {
+): Promise<Map<string, IrDifficultyLabel[]>> {
   const normalized = charts.map((chart) => ({
     sha256: chart.sha256.toLowerCase(),
     md5: chart.md5?.toLowerCase() || null,
@@ -211,24 +226,273 @@ export async function lookupDifficultyLabels(
         sha256: schema.difficultyTableEntries.sha256,
       })
       .from(schema.difficultyTableEntries)
-      .innerJoin(
-        schema.difficultyTables,
-        and(
-          eq(schema.difficultyTables.id, schema.difficultyTableEntries.tableId),
-          eq(schema.difficultyTables.activeGeneration, schema.difficultyTableEntries.generation),
-        ),
-      )
+      .innerJoin(schema.difficultyTables, activeDifficultyGeneration())
       .where(hashCondition)
 
     rows.push(
       ...chunkRows.map((row) => ({
         ...row,
-        table_id: String(row.table_id),
+        table_id: difficultyTablePublicId(row.table_id),
       })),
     )
   }
 
   return difficultyLabelsFromRows(normalized, rows)
+}
+
+function activeDifficultyGeneration() {
+  return and(
+    eq(schema.difficultyTables.id, schema.difficultyTableEntries.tableId),
+    eq(schema.difficultyTables.activeGeneration, schema.difficultyTableEntries.generation),
+  )
+}
+
+export async function listDifficultyTableOptions(): Promise<IrDifficultyTableOption[]> {
+  const { difficultyTables: tables, difficultyTableEntries: entries } = schema
+  const rows = await db
+    .select({
+      id: tables.id,
+      name: tables.name,
+      symbol: tables.symbol,
+      levelOrder: tables.levelOrder,
+      levels: sql`json_group_array(distinct ${entries.level})`.mapWith(
+        (value: string) => JSON.parse(value) as string[],
+      ),
+    })
+    .from(tables)
+    .innerJoin(entries, activeDifficultyGeneration())
+    .groupBy(tables.id)
+    .orderBy(asc(tables.priority), asc(tables.name), asc(tables.id))
+  return rows.map(({ id: storageId, levelOrder, levels, ...table }) => {
+    const id = difficultyTablePublicId(storageId)
+    return {
+      ...table,
+      id,
+      ...(id === storageId ? {} : { legacy_id: storageId }),
+      levels: levels.sort(compareDifficultyLevels(levelOrder)),
+    }
+  })
+}
+
+export function compareDifficultyLevels(levelOrder: string[]) {
+  const order = new Map(levelOrder.map((level, index) => [level, index]))
+  const collator = new Intl.Collator('en', { numeric: true })
+  return (left: string, right: string) =>
+    (order.get(left) ?? levelOrder.length) - (order.get(right) ?? levelOrder.length) ||
+    collator.compare(left, right) ||
+    left.localeCompare(right)
+}
+
+function chartMd5Match() {
+  return eq(schema.difficultyTableEntries.md5, sql`lower(${schema.charts.md5})`)
+}
+
+function chartMd5Lookup(hash: SQL | typeof schema.difficultyTableEntries.md5) {
+  return eq(sql`${schema.charts.md5} collate nocase`, hash)
+}
+
+function chartSha256Match() {
+  return eq(schema.difficultyTableEntries.sha256, schema.charts.sha256)
+}
+
+function activeDifficultyEntries(hash: 'md5' | 'sha256', condition?: SQL, value = sql`1`) {
+  const entries = schema.difficultyTableEntries
+  const index = sql.identifier(`idx_difficulty_table_entries_${hash}`)
+  const match = hash === 'md5' ? chartMd5Match() : chartSha256Match()
+  // Start with the chart hash to avoid rereading the entire table for each chart.
+  return db
+    .select({ value })
+    .from(sql`${entries} indexed by ${index}`)
+    .innerJoin(schema.difficultyTables, activeDifficultyGeneration())
+    .where(and(match, ne(entries[hash], ''), condition))
+}
+
+function selectedDifficultyEntries(filter: DifficultyFilter) {
+  const entries = schema.difficultyTableEntries
+  return and(
+    eq(entries.tableId, difficultyTableStorageId(filter.difficulty_table)),
+    filter.difficulty_level === undefined ? undefined : eq(entries.level, filter.difficulty_level),
+  )
+}
+
+export function chartDifficultyCondition(filter: DifficultyFilter): SQL {
+  const selectedDifficulty = selectedDifficultyEntries(filter)
+  // An MD5 match in any active table suppresses every SHA-256 label for the chart.
+  return or(
+    exists(activeDifficultyEntries('md5', selectedDifficulty)),
+    and(
+      notExists(activeDifficultyEntries('md5')),
+      exists(activeDifficultyEntries('sha256', selectedDifficulty)),
+    ),
+  )!
+}
+
+export function chartDifficultyLevelOrder(filter: DifficultyFilter): SQL {
+  const { difficultyTables: tables, difficultyTableEntries: entries } = schema
+  const position = sql`coalesce(
+    (select level_order.key from json_each(${tables.levelOrder}) as level_order
+      where level_order.value = ${entries.level}),
+    json_array_length(${tables.levelOrder})
+  )`
+  const selected = selectedDifficultyEntries(filter)
+  // A chart listed at multiple levels sorts by its first level in this table.
+  const md5 = activeDifficultyEntries('md5', selected, sql`min(${position})`)
+  const sha256 = activeDifficultyEntries('sha256', selected, sql`min(${position})`)
+  // chartDifficultyCondition already excludes SHA-256 matches suppressed by MD5 in another table.
+  return sql`coalesce((${md5}), (${sha256}))`
+}
+
+/** One row per registered public chart or unresolved table entry at each level. */
+export function difficultyTableCharts(tableId: string, level?: string) {
+  const { charts, difficultyTableEntries: entries, difficultyTables: tables } = schema
+  function registered(hash: 'md5' | 'sha256', fallback?: SQL) {
+    const match = hash === 'md5' ? chartMd5Lookup(entries.md5) : chartSha256Match()
+    return (
+      db
+        .selectDistinct({
+          id: sql<string>`${charts.sha256}`.as('chart_key'),
+          sha256: sql<string | null>`${charts.sha256}`.as('sha256'),
+          level: entries.level,
+          title: charts.title,
+          subtitle: charts.subtitle,
+          artist: charts.artist,
+        })
+        .from(entries)
+        .innerJoin(tables, activeDifficultyGeneration())
+        // Keep the selected generation outermost, then look up each digest by index.
+        .crossJoin(charts)
+        .where(
+          and(
+            eq(entries.tableId, tableId),
+            level === undefined ? undefined : eq(entries.level, level),
+            ne(entries[hash], ''),
+            match,
+            publicChartCondition(charts.sha256),
+            fallback,
+          ),
+        )
+    )
+  }
+
+  // Separate equality joins let SQLite use the digest indexes for both branches.
+  return registered('md5')
+    .unionAll(registered('sha256', notExists(activeDifficultyEntries('md5'))))
+    .unionAll(unregisteredDifficultyCharts(tableId, level))
+    .as('difficulty_charts')
+}
+
+function unregisteredDifficultyCharts(tableId: string, level?: string) {
+  const { charts, difficultyTableEntries: entries, difficultyTables: tables } = schema
+  const pairedName = 'paired_entry'
+  const paired = alias(entries, pairedName)
+  function pairedHash(field: 'md5' | 'sha256', shared: 'md5' | 'sha256') {
+    const index = sql.identifier(`idx_difficulty_table_entries_${shared}`)
+    return db
+      .select({ hash: sql<string>`${paired[field]}` })
+      .from(sql`${entries} as ${sql.identifier(pairedName)} indexed by ${index}`)
+      .where(
+        and(
+          eq(paired.tableId, entries.tableId),
+          eq(paired.generation, entries.generation),
+          ne(entries[shared], ''),
+          eq(paired[shared], entries[shared]),
+          ne(paired[field], ''),
+        ),
+      )
+      .orderBy(paired.id)
+      .limit(1)
+  }
+
+  // Rows with both digests can resolve hash-only duplicates from the same generation.
+  const resolvedName = 'resolved_table_entries'
+  const resolved = db
+    .select({
+      sourceSha256: sql<string>`${entries.sha256}`.as('source_sha256'),
+      md5: sql<string>`coalesce(nullif(${entries.md5}, ''), (${pairedHash('md5', 'sha256')}), '')`.as(
+        'md5',
+      ),
+      sha256:
+        sql<string>`coalesce(nullif(${entries.sha256}, ''), (${pairedHash('sha256', 'md5')}), '')`.as(
+          'sha256',
+        ),
+      level: entries.level,
+      title: entries.title,
+      artist: entries.artist,
+    })
+    .from(entries)
+    .innerJoin(tables, activeDifficultyGeneration())
+    .where(
+      and(eq(entries.tableId, tableId), level === undefined ? undefined : eq(entries.level, level)),
+    )
+    .as(resolvedName)
+  // SQL aliases are unqualified unless explicitly scoped inside the chart lookups.
+  const resolvedMd5 = sql`${sql.identifier(resolvedName)}.${resolved.md5}`
+  const resolvedSha256 = sql`${sql.identifier(resolvedName)}.${resolved.sha256}`
+  const knownMd5 = db
+    .select({ value: sql`1` })
+    .from(charts)
+    .where(and(ne(resolvedMd5, ''), chartMd5Lookup(resolvedMd5)))
+  const knownSha256 = db
+    .select({ value: sql`1` })
+    .from(charts)
+    .where(eq(charts.sha256, resolvedSha256))
+  // An MD5-only row can identify a moderated SHA-256 through another active table.
+  // An explicit SHA-256 keeps its own visibility even when another chart shares its MD5.
+  const moderatedMd5Match = db
+    .select({ value: sql`1` })
+    .from(sql`${entries} indexed by idx_difficulty_table_entries_md5`)
+    .innerJoin(tables, activeDifficultyGeneration())
+    .where(
+      and(
+        eq(entries.md5, resolvedMd5),
+        ne(entries.sha256, ''),
+        not(publicChartCondition(entries.sha256)),
+      ),
+    )
+  const identity = sql`coalesce(nullif(${resolved.md5}, ''), ${resolved.sha256})`
+
+  return db
+    .select({
+      id: sql<string>`'table:' || ${identity}`.as('chart_key'),
+      sha256: sql<string | null>`null`.as('sha256'),
+      level: resolved.level,
+      title:
+        sql<string>`coalesce(min(nullif(${resolved.title}, '')), substr(${identity}, 1, 12))`.as(
+          'title',
+        ),
+      subtitle: sql<string | null>`null`.as('subtitle'),
+      artist: sql<string | null>`min(nullif(${resolved.artist}, ''))`.as('artist'),
+    })
+    .from(resolved)
+    .where(
+      and(
+        sql`${identity} <> ''`,
+        // Registered charts with hidden or suppressed labels must not reappear as unregistered.
+        notExists(knownMd5),
+        notExists(knownSha256),
+        publicChartCondition(resolvedSha256),
+        or(ne(resolved.sourceSha256, ''), notExists(moderatedMd5Match)),
+      ),
+    )
+    .groupBy(resolved.level, identity)
+}
+
+export async function difficultyFilterLabel(
+  filter: DifficultyFilter,
+): Promise<IrDifficultyLabel | null> {
+  if (filter.difficulty_level === undefined) return null
+  const tables = schema.difficultyTables
+  const [table] = await db
+    .select({ table_id: tables.id, table_name: tables.name, symbol: tables.symbol })
+    .from(tables)
+    .where(eq(tables.id, difficultyTableStorageId(filter.difficulty_table)))
+  return table
+    ? {
+        ...table,
+        table_id: difficultyTablePublicId(table.table_id),
+        level: filter.difficulty_level,
+      }
+    : null
 }
 
 /** Synchronizes every configured table without letting one failure stop the rest. */
@@ -729,10 +993,10 @@ function normalizeDiagnosticText(value: string): string {
 function difficultyLabelsFromRows(
   charts: readonly { sha256: string; md5: string | null }[],
   rows: readonly DifficultyLabelRow[],
-): Map<string, DifficultyTableLabel[]> {
+): Map<string, IrDifficultyLabel[]> {
   const byMd5 = groupDifficultyRows(rows, (row) => row.md5)
   const bySha256 = groupDifficultyRows(rows, (row) => row.sha256)
-  const result = new Map<string, DifficultyTableLabel[]>()
+  const result = new Map<string, IrDifficultyLabel[]>()
 
   for (const chart of charts) {
     const md5Matches = chart.md5 ? (byMd5.get(chart.md5) ?? []) : []

@@ -1,6 +1,11 @@
 import { eq } from 'drizzle-orm'
 import { createError, readBody } from 'h3'
 import { db, schema } from 'hub:db'
+import {
+  DAILY_BOUNDARY_MAX_MINUTES,
+  DAILY_BOUNDARY_MIN_MINUTES,
+} from '../../../shared/constants/ir'
+import { isDailyBoundaryMinutes } from '../../services/daily_report_core'
 import { requireIrUser } from '../../utils/auth'
 import { requireDisplayName } from '../../utils/auth_input'
 
@@ -20,13 +25,10 @@ export default defineEventHandler(async (event) => {
   if (bio.length > 1000) {
     throw createError({ statusCode: 400, statusMessage: 'bio is too long' })
   }
-  if (
-    requestedBoundary !== undefined &&
-    (!Number.isInteger(requestedBoundary) || requestedBoundary < 0 || requestedBoundary > 1439)
-  ) {
+  if (requestedBoundary !== undefined && !isDailyBoundaryMinutes(requestedBoundary)) {
     throw createError({
       statusCode: 400,
-      statusMessage: 'daily_boundary_minutes must be an integer from 0 to 1439',
+      statusMessage: `daily_boundary_minutes must be an integer from ${DAILY_BOUNDARY_MIN_MINUTES} to ${DAILY_BOUNDARY_MAX_MINUTES}`,
     })
   }
 

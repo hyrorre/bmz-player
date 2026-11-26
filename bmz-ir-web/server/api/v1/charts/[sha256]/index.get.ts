@@ -1,5 +1,6 @@
 import { and, eq, sql } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
+import { lookupDifficultyLabels } from '../../../../services/difficulty_tables'
 import { isPublicChart, publicPlayerCondition } from '../../../../services/moderation/visibility'
 import { resolveIrUser } from '../../../../utils/auth'
 
@@ -20,11 +21,14 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Chart not found' })
   }
 
-  const globalStats = await scoreStats(sha256)
-  const selfStats = user ? await scoreStats(sha256, user.id) : null
+  const [globalStats, selfStats, labels] = await Promise.all([
+    scoreStats(sha256),
+    user ? scoreStats(sha256, user.id) : null,
+    lookupDifficultyLabels([chart]),
+  ])
 
   return {
-    chart: chartToResponse(chart),
+    chart: { ...chartToResponse(chart), difficulty_labels: labels.get(sha256) ?? [] },
     stats: {
       global: globalStats,
       self: selfStats,

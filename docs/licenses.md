@@ -290,6 +290,8 @@ The generated report is written to:
 inputs and the matching Nuxt/Nitro sourcemaps under `.output/server`, maps
 bundled files back to installed npm packages, applies `web-license-policy.json`,
 and fails when a bundled package has an unaccepted or review-required license.
+The policy's `browserPackages` list includes browser-only dependencies loaded by
+interactive features, such as SnapDOM for report PNG exports.
 The policy currently chooses the BSD side of
 `node-forge`'s `(BSD-3-Clause OR GPL-2.0)` expression and does not accept GPL /
 LGPL / AGPL-only packages without review.

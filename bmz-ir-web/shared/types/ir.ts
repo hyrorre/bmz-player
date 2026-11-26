@@ -1,12 +1,6 @@
 // ForceHln is a canonical native-HLN score bucket, not an additional player setting.
 export type LnScorePolicy =
-  | 'AutoLn'
-  | 'AutoCn'
-  | 'AutoHcn'
-  | 'ForceLn'
-  | 'ForceCn'
-  | 'ForceHcn'
-  | 'ForceHln'
+  'AutoLn' | 'AutoCn' | 'AutoHcn' | 'ForceLn' | 'ForceCn' | 'ForceHcn' | 'ForceHln'
 
 export type EffectiveLnMode = 'ln' | 'cn' | 'hcn' | 'hln'
 
@@ -30,6 +24,11 @@ export interface IrChartLnProfile {
   has_defined_cn: boolean
   has_defined_hcn: boolean
   has_defined_hln: boolean
+}
+
+export interface IrArrangeOptions {
+  arrange_1p?: string
+  arrange_2p?: string
 }
 
 export interface KaleidProvenance {
@@ -220,7 +219,11 @@ export interface IrRankingEntry {
     score_id: string
     clear: string
     ex_score: number
+    /** Maximum EX score of the attempt that supplied ex_score. */
+    max_ex_score?: number | null
     max_combo: number
+    /** Scoring note count of the attempt that supplied max_combo. */
+    max_combo_notes?: number | null
     min_bp: number
     min_cb: number
     gauge: string
@@ -280,6 +283,7 @@ export interface IrScoreHistoryEntry {
   score_id: string
   clear: string
   ex_score: number
+  max_ex_score?: number | null
   max_combo: number
   min_bp: number
   min_cb: number
@@ -404,15 +408,58 @@ export interface IrDailyChartResult {
     notes: number
   }
   /** 難易度表同期データとの突合結果。未同期時は空配列。 */
-  difficulty_labels: IrDailyDifficultyLabel[]
+  difficulty_labels: IrDifficultyLabel[]
   rules: IrDailyRuleResult[]
 }
 
-export interface IrDailyDifficultyLabel {
+export interface IrDifficultyLabel {
   table_id: string
   table_name: string
   symbol: string
   level: string
+}
+
+export interface IrDifficultyTable {
+  id: string
+  name: string
+  symbol: string
+}
+
+export interface IrDifficultyTableOption extends IrDifficultyTable {
+  /** Previous public ID accepted by links using difficulty_table. */
+  legacy_id?: string
+  levels: string[]
+}
+
+export type IrDistributionMode = 'lamp' | 'score'
+
+export interface IrDifficultyDistribution {
+  player: { id: string; display_name: string }
+  tables: IrDifficultyTable[]
+  table: IrDifficultyTable | null
+  levels: {
+    level: string
+    total: number
+    segments: {
+      rank: number
+      count: number
+      first_page?: IrDistributionChart[]
+    }[]
+  }[]
+}
+
+export interface IrDistributionChart {
+  id: string
+  /** Null when the chart is only present in the synced difficulty table. */
+  sha256: string | null
+  title: string
+  subtitle: string | null
+  artist: string | null
+}
+
+export interface IrDistributionCharts {
+  charts: IrDistributionChart[]
+  pagination: IrRanking['ranking']['pagination']
 }
 
 export interface IrDailyRuleResult {
@@ -503,7 +550,7 @@ export interface IrRivalComparison {
       level: number | null
       difficulty: string | null
     }
-    difficulty_labels: IrDailyDifficultyLabel[]
+    difficulty_labels: IrDifficultyLabel[]
     rule: {
       ln_policy: LnScorePolicy
       double_option: IrDoubleOption

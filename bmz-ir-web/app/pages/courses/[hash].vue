@@ -1,5 +1,11 @@
 <script setup lang="ts">
-import type { IrRuleMode, LnScorePolicy } from '../../../shared/types/ir'
+import type {
+  IrArrangeOptions,
+  IrChartLnProfile,
+  IrRanking,
+  LnScorePolicy,
+} from '../../../shared/types/ir'
+import type { ScoreClient } from '../../types/scoreDetails'
 
 interface CourseDetail {
   course: {
@@ -16,6 +22,8 @@ interface CourseDetail {
       difficulty: string | null
     }[]
     chart_count: number
+    ln_profile: IrChartLnProfile & { has_ln: boolean }
+    ln_policies: LnScorePolicy[]
     constraints: Record<string, unknown>
   }
   stats: { play_count: number }
@@ -24,15 +32,19 @@ interface CourseDetail {
 interface CourseRankingEntry {
   rank: number
   player: { id: string; display_name: string }
-  score: {
+  score: ScoreClient & {
     course_score_id: string
     clear: string
     course_clear: boolean
     ex_score: number
+    max_ex_score: number
     max_combo: number
     bp: number
+    cb: number | null
     device_type: string
+    ln_policy: string
     rule_mode: string
+    arrange_options: (IrArrangeOptions | null)[]
     played_at: string | null
     verification: string
   }
@@ -42,6 +54,7 @@ interface CourseRankingEntry {
 interface CourseRanking {
   ranking: {
     entries: CourseRankingEntry[]
+    pagination: IrRanking['ranking']['pagination']
     self?: {
       rank: number
       score_id: string
@@ -52,21 +65,24 @@ interface CourseRanking {
 }
 
 interface CourseSelfScoresResult {
-  scores: {
+  scores: (ScoreClient & {
     course_score_id: string
     clear: string
     course_clear: boolean
     ex_score: number
+    max_ex_score: number
     max_combo: number
     bp: number
+    cb: number | null
     gauge: string
     ln_policy: string
     rule_mode: string
+    arrange_options: (IrArrangeOptions | null)[]
     device_type: string
     played_at: string | null
     server_received_at: string
     verification: string
-  }[]
+  })[]
   pagination: {
     limit: number
     offset: number
@@ -78,45 +94,40 @@ interface CourseSelfScoresResult {
 const route = useRoute()
 const { user } = useUserSession()
 const localePath = useLocalePath()
+const listLocation = computed(() =>
+  localePath({ path: '/courses', query: listReturnQuery(route.query) }),
+)
 const { t } = useI18n()
-const { formatDateTime } = useLocaleFormat()
+const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclosure()
+const wideScoreTable = useWideScoreTable()
 const { translateApiError } = useApiError()
 const courseHash = computed(() => String(route.params.hash ?? ''))
-
-type CourseGaugeFilter = 'ALL' | 'Class' | 'ExClass' | 'ExHardClass' | 'Normal' | 'Hard'
-type CourseLnPolicyFilter = 'ALL' | LnScorePolicy
-type CourseRuleModeFilter = 'ALL' | IrRuleMode
-
-const gauge = ref<CourseGaugeFilter>('ALL')
-const lnPolicy = ref<CourseLnPolicyFilter>('ALL')
-const ruleMode = ref<CourseRuleModeFilter>('ALL')
-const gauges: CourseGaugeFilter[] = ['ALL', 'Class', 'ExClass', 'ExHardClass', 'Normal', 'Hard']
-const lnPolicies: CourseLnPolicyFilter[] = [
-  'ALL',
-  'AutoLn',
-  'AutoCn',
-  'AutoHcn',
-  'ForceLn',
-  'ForceCn',
-  'ForceHcn',
-  'ForceHln',
-]
-const ruleModes: CourseRuleModeFilter[] = ['ALL', 'Beatoraja', 'Lr2Oraja', 'Dx']
 
 const { data: detail, error: detailError } = await useFetch<CourseDetail>(
   () => `/api/v1/courses/${courseHash.value}`,
 )
+const lnPolicies = computed(() =>
+  lnFilterItems(detail.value?.course.ln_profile, detail.value?.course.ln_policies),
+)
+const {
+  lnPolicy,
+  ruleMode,
+  ruleQuery,
+  rankingQuery,
+  page,
+  pageSize,
+  maxPage,
+  pageLocation,
+  correctOutOfRangePage,
+} = useRankingQuery(lnPolicies)
 const {
   data: ranking,
   pending: rankingPending,
   error: rankingError,
 } = await useFetch<CourseRanking>(() => `/api/v1/courses/${courseHash.value}/ranking`, {
-  query: computed(() => ({
-    ...(gauge.value === 'ALL' ? {} : { gauge: gauge.value }),
-    ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
-    ...(ruleMode.value === 'ALL' ? {} : { rule_mode: ruleMode.value }),
-  })),
+  query: rankingQuery,
 })
+await correctOutOfRangePage(() => ranking.value?.ranking.pagination)
 
 const selfBestEntry = computed<CourseRankingEntry | null>(
   () =>
@@ -135,11 +146,7 @@ const {
   openHistory,
 } = useSelfScoreHistory<CourseSelfScoresResult>(
   () => `/api/v1/courses/${courseHash.value}/self-scores`,
-  () => ({
-    ...(gauge.value === 'ALL' ? {} : { gauge: gauge.value }),
-    ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
-    ...(ruleMode.value === 'ALL' ? {} : { rule_mode: ruleMode.value }),
-  }),
+  () => ruleQuery.value,
 )
 
 function chartTitle(chart: CourseDetail['course']['charts'][number]): string {
@@ -157,8 +164,8 @@ function chartMeta(chart: CourseDetail['course']['charts'][number]): string {
     .join(' / ')
 }
 
-function formatScoreDate(value: string | null) {
-  return value ? formatDateTime(value) : '-'
+function scoreOption(score: { arrange_options: (IrArrangeOptions | null)[] }) {
+  return formatCourseArrange(score.arrange_options, detail.value?.course.charts ?? [])
 }
 
 const detailErrorDescription = computed(() =>
@@ -176,15 +183,13 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
 </script>
 
 <template>
-  <main>
-    <section class="mx-auto w-full max-w-4xl px-5 py-10">
+  <main class="min-w-0">
+    <section class="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
       <UAlert v-if="detailError" color="error" :description="detailErrorDescription" class="mb-6" />
       <template v-else-if="detail">
         <div class="mb-8">
           <p class="mb-2 text-sm font-medium text-primary-300">
-            <NuxtLink :to="localePath('/courses')" class="hover:underline">{{
-              t('courses.title')
-            }}</NuxtLink>
+            <NuxtLink :to="listLocation" class="hover:underline">{{ t('courses.title') }}</NuxtLink>
           </p>
           <h1 class="text-3xl font-semibold">
             {{ detail.course.title || t('common.untitled') }}
@@ -208,7 +213,7 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
 
         <h2 class="mb-2 text-lg font-medium">{{ t('course.charts') }}</h2>
         <ol class="mb-8 list-inside list-decimal space-y-1 text-sm">
-          <li v-for="chart in detail.course.charts" :key="chart.sha256">
+          <li v-for="(chart, index) in detail.course.charts" :key="index">
             <NuxtLink :to="localePath(`/charts/${chart.sha256}`)" class="hover:underline">
               {{ chartTitle(chart) }}
               <span v-if="chart.subtitle" class="text-neutral-400">{{ chart.subtitle }}</span>
@@ -219,10 +224,13 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
           </li>
         </ol>
 
-        <div class="mb-4 flex flex-wrap gap-3">
-          <USelect v-model="gauge" :items="gauges" class="w-44" />
-          <USelect v-model="lnPolicy" :items="lnPolicies" class="w-40" />
-          <USelect v-model="ruleMode" :items="ruleModes" class="w-40" />
+        <div class="mb-4 flex flex-wrap items-center gap-3">
+          <UFormField v-if="lnPolicies.length" label="LN" orientation="horizontal">
+            <USelect v-model="lnPolicy" :items="lnPolicies" class="w-28" />
+          </UFormField>
+          <UFormField label="RULE" orientation="horizontal">
+            <USelect v-model="ruleMode" :items="ruleModeItems" class="w-32" />
+          </UFormField>
         </div>
 
         <div
@@ -233,13 +241,31 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
             <p class="text-xs text-neutral-500">{{ t('ranking.personalBest') }}</p>
             <div class="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1">
               <p class="text-sm text-neutral-300">#{{ selfBestEntry.rank }}</p>
-              <p class="text-xl font-semibold">EX {{ selfBestEntry.score.ex_score }}</p>
-              <p class="text-sm">CLEAR {{ selfBestEntry.score.clear }}</p>
-              <p class="text-sm">COMBO {{ selfBestEntry.score.max_combo }}</p>
+              <RankingExScore
+                :score="selfBestEntry.score.ex_score"
+                :max="selfBestEntry.score.max_ex_score"
+              />
+              <RankingScoreRank
+                :score="selfBestEntry.score.ex_score"
+                :max="selfBestEntry.score.max_ex_score"
+              />
+              <IrClearBadge :clear="selfBestEntry.score.clear" />
+              <p class="text-sm">
+                MAX COMBO
+                <RankingMaxCombo
+                  :combo="selfBestEntry.score.max_combo"
+                  :total-notes="totalNotesFromMaxExScore(selfBestEntry.score.max_ex_score)"
+                />
+              </p>
               <p class="text-sm">BP {{ selfBestEntry.score.bp }}</p>
+              <p class="text-sm">CB {{ selfBestEntry.score.cb ?? '-' }}</p>
             </div>
             <p class="mt-1 text-xs text-neutral-500">
-              {{ selfBestEntry.score.rule_mode }} / {{ selfBestEntry.score.device_type }}
+              <template v-if="lnPolicies.length"
+                >{{ lnPolicyLabel(selfBestEntry.score.ln_policy) }} ·</template
+              >
+              {{ ruleModeLabel(selfBestEntry.score.rule_mode) }} ·
+              {{ scoreOption(selfBestEntry.score) }} · {{ selfBestEntry.score.device_type }}
             </p>
           </div>
           <p v-else class="text-sm text-neutral-400">{{ t('ranking.noPersonalBest') }}</p>
@@ -254,6 +280,15 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
           </UButton>
         </div>
 
+        <RankingPagination
+          v-if="ranking && !rankingPending && !rankingError"
+          :page="page"
+          :page-size="pageSize"
+          :max-page="maxPage"
+          :total="ranking.ranking.pagination.total"
+          :page-location="pageLocation"
+        />
+
         <UAlert v-if="rankingError" color="error" :description="rankingErrorDescription" />
         <p v-else-if="rankingPending" class="text-sm text-neutral-400">
           {{ t('ranking.loading') }}
@@ -261,49 +296,92 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
         <p v-else-if="!ranking?.ranking.entries.length" class="text-sm text-neutral-400">
           {{ t('ranking.noScores') }}
         </p>
-        <div v-else class="overflow-x-auto rounded-lg border border-neutral-800">
+        <div v-else class="overflow-x-auto rounded-lg border border-default">
           <table class="w-full text-sm">
-            <thead class="bg-neutral-900 text-left text-neutral-300">
+            <thead class="bg-elevated text-left text-toned">
               <tr>
                 <th class="px-3 py-2">#</th>
                 <th class="px-3 py-2">{{ t('table.player') }}</th>
-                <th class="px-3 py-2 text-right">EX</th>
+                <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
+                <th class="px-3 py-2 text-center">RANK</th>
                 <th class="px-3 py-2">{{ t('table.clear') }}</th>
-                <th class="px-3 py-2 text-right">COMBO</th>
-                <th class="px-3 py-2 text-right">BP</th>
-                <th class="px-3 py-2">{{ t('table.date') }}</th>
+                <th v-if="lnPolicies.length" class="px-3 py-2">LN</th>
+                <th class="px-3 py-2">RULE</th>
+                <th class="px-3 py-2">OPTION</th>
+                <th class="px-3 py-2 text-right whitespace-nowrap">MAX COMBO</th>
+                <th class="px-2 py-2 text-right">BP</th>
+                <th class="px-2 py-2 text-right">CB</th>
+                <th class="hidden w-px px-3 py-2 whitespace-nowrap xl:table-cell">
+                  {{ t('table.date') }}
+                </th>
+                <th scope="col" class="sticky right-0 z-10 w-px bg-elevated px-1">
+                  <span class="sr-only">{{ t('score.title') }}</span>
+                </th>
               </tr>
             </thead>
             <tbody>
-              <tr
-                v-for="entry in ranking.ranking.entries"
-                :key="entry.score.course_score_id"
-                class="border-t border-neutral-800"
-              >
-                <td class="px-3 py-2 text-neutral-300">{{ entry.rank }}</td>
-                <td class="px-3 py-2">
-                  <NuxtLink :to="localePath(`/players/${entry.player.id}`)" class="hover:underline">
-                    {{ entry.player.display_name }}
-                  </NuxtLink>
-                </td>
-                <td class="px-3 py-2 text-right font-medium">{{ entry.score.ex_score }}</td>
-                <td class="px-3 py-2">
-                  {{ entry.score.clear }}
-                  <UBadge
-                    v-if="entry.score.course_clear"
-                    color="success"
-                    size="sm"
-                    variant="subtle"
-                  >
-                    CLEAR
-                  </UBadge>
-                </td>
-                <td class="px-3 py-2 text-right">{{ entry.score.max_combo }}</td>
-                <td class="px-3 py-2 text-right">{{ entry.score.bp }}</td>
-                <td class="px-3 py-2 text-neutral-400">
-                  {{ formatScoreDate(entry.score.played_at) }}
-                </td>
-              </tr>
+              <template v-for="entry in ranking.ranking.entries" :key="entry.score.course_score_id">
+                <tr class="border-t border-default">
+                  <td class="px-3 py-2 text-toned">{{ entry.rank }}</td>
+                  <td class="px-3 py-2">
+                    <NuxtLink
+                      :to="localePath(`/players/${entry.player.id}`)"
+                      class="hover:underline"
+                    >
+                      {{ entry.player.display_name }}
+                    </NuxtLink>
+                  </td>
+                  <td class="px-3 py-2 text-right">
+                    <RankingExScore :score="entry.score.ex_score" :max="entry.score.max_ex_score" />
+                  </td>
+                  <td class="px-3 py-2 text-center">
+                    <RankingScoreRank
+                      :score="entry.score.ex_score"
+                      :max="entry.score.max_ex_score"
+                    />
+                  </td>
+                  <td class="px-3 py-2">
+                    <IrClearBadge :clear="entry.score.clear" compact />
+                  </td>
+                  <td v-if="lnPolicies.length" class="px-3 py-2 text-muted">
+                    {{ lnPolicyLabel(entry.score.ln_policy) }}
+                  </td>
+                  <td class="px-3 py-2 text-muted">{{ ruleModeLabel(entry.score.rule_mode) }}</td>
+                  <td class="px-3 py-2 text-xs text-muted">{{ scoreOption(entry.score) }}</td>
+                  <td class="px-3 py-2 text-right">
+                    <RankingMaxCombo
+                      :combo="entry.score.max_combo"
+                      :total-notes="totalNotesFromMaxExScore(entry.score.max_ex_score)"
+                    />
+                  </td>
+                  <td class="px-2 py-2 text-right tabular-nums">{{ entry.score.bp }}</td>
+                  <td class="px-2 py-2 text-right tabular-nums">{{ entry.score.cb ?? '-' }}</td>
+                  <td class="hidden px-3 py-2 text-muted xl:table-cell">
+                    <ScoreTableDateTime :value="entry.score.played_at" />
+                  </td>
+                  <td class="sticky right-0 z-10 bg-default px-1 py-1">
+                    <ScoreDetailToggle
+                      :expanded="expandedScoreRow === entry.score.course_score_id"
+                      :controls="scoreDetailsId"
+                      @toggle="toggleScoreDetails(entry.score.course_score_id)"
+                    />
+                  </td>
+                </tr>
+                <tr
+                  v-if="expandedScoreRow === entry.score.course_score_id"
+                  class="border-t border-default bg-elevated"
+                >
+                  <td :colspan="11 + (lnPolicies.length ? 1 : 0) + (wideScoreTable ? 1 : 0)">
+                    <ScoreRowMetadata
+                      :id="scoreDetailsId"
+                      :device="entry.score.device_type"
+                      :date="entry.score.played_at"
+                      :client="entry.score"
+                      class="sticky left-0 w-fit max-w-[calc(100vw-3rem)] px-3 py-3"
+                    />
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
         </div>
@@ -317,6 +395,9 @@ useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
           :limit="historyLimit"
           :score-key="(score) => score.course_score_id"
           :score-bp="(score) => score.bp"
+          :score-cb="(score) => score.cb"
+          :show-ln="Boolean(lnPolicies.length)"
+          :score-option="scoreOption"
         />
       </template>
     </section>

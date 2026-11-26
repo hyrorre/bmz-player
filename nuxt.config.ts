@@ -74,6 +74,12 @@ export default defineNuxtConfig({
     },
   },
   vite: {
+    environments: {
+      ssr: {
+        // Keep shared module paths resolvable when Nitro bundles the Vite SSR output.
+        build: { rolldownOptions: { makeAbsoluteExternalsRelative: false } },
+      },
+    },
     optimizeDeps: {
       include: ['@vue/devtools-core', '@vue/devtools-kit'],
     },

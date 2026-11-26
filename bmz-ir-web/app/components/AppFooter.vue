@@ -1,18 +1,16 @@
+<script setup lang="ts">
+const localePath = useLocalePath()
+</script>
+
 <template>
   <UFooter class="pt-8 pb-4">
-    <div class="text-center text-sm">
-      <p>{{ t('footer.tagline') }}</p>
-      <p class="mt-1">{{ t('footer.rights') }}</p>
-      <p class="mt-2 flex justify-center gap-4">
-        <u-link :to="localePath('/licenses')">{{ t('common.licenses') }}</u-link>
-        <u-link to="https://github.com/hyrorre/bmz-player" target="_blank">GitHub</u-link>
-        <u-link to="https://x.com/hyrorre" target="_blank">Twitter</u-link>
+    <div lang="en" class="text-center text-sm">
+      <p>BMZ Internet Ranking - made by hyrorre</p>
+      <p class="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1">
+        <ULink :to="localePath('/licenses')">Licenses</ULink>
+        <ULink to="https://github.com/hyrorre/bmz-player" target="_blank">GitHub</ULink>
+        <ULink to="https://x.com/hyrorre" target="_blank">Twitter</ULink>
       </p>
     </div>
   </UFooter>
 </template>
-
-<script setup lang="ts">
-const localePath = useLocalePath()
-const { t } = useI18n()
-</script>

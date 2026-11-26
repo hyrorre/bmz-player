@@ -1,5 +1,7 @@
+import { IR_RANKING_MAX_OFFSET } from '../../../shared/constants/ir'
 import type {
   IrAppliedDoubleOption,
+  IrArrangeOptions,
   IrChartLnProfile,
   IrDeviceType,
   IrDoubleOption,
@@ -20,6 +22,7 @@ import {
   validateChartInputLimits,
   validateSubmissionJsonLimits,
 } from './input_limits'
+export { CLEAR_RANK } from '../../../shared/constants/ir'
 
 export const LN_POLICIES = new Set([
   'AutoLn',
@@ -44,28 +47,6 @@ export const LOCAL_BACKFILL_SOURCE = 'local_backfill'
 // D1 は 1 query あたり最大100 bind parameter。best score 再集計は score key ごとに
 // 5 bind を使うため、player / accepted 条件を含めても余裕を持てる19件に制限する。
 export const MAX_LOCAL_BACKFILL_DELETE_BATCH_SIZE = 19
-export const CLEAR_RANK: Record<string, number> = {
-  no_play: 0,
-  NoPlay: 0,
-  failed: 1,
-  Failed: 1,
-  assisted_easy_clear: 2,
-  AssistEasy: 2,
-  LightAssistEasy: 2,
-  easy_clear: 3,
-  Easy: 3,
-  clear: 4,
-  Normal: 4,
-  hard_clear: 5,
-  Hard: 5,
-  ex_hard_clear: 6,
-  ExHard: 6,
-  full_combo: 7,
-  FullCombo: 7,
-  perfect: 8,
-  Perfect: 8,
-  Max: 9,
-}
 
 export interface IrRequestUser {
   id: string
@@ -167,7 +148,7 @@ export interface LocalBackfillDeleteResult {
 export function parseRankingQuery(query: Record<string, unknown>): RankingQuery {
   const scope = asScope(String(query.scope ?? 'global'))
   const limit = clampInteger(query.limit, 100, 1, 200)
-  const offset = clampInteger(query.offset, 0, 0, 100_000)
+  const offset = clampInteger(query.offset, 0, 0, IR_RANKING_MAX_OFFSET)
   const lnPolicy =
     typeof query.ln_policy === 'string' && query.ln_policy ? asLnPolicy(query.ln_policy) : undefined
   const doubleOption = normalizeDoubleOption(query.double_option)
@@ -188,7 +169,7 @@ export function parseRankingScope(value: string): IrRankingScope {
 
 export function arrangeOptionsFromPlayOptions(
   playOptions: Record<string, unknown> | null | undefined,
-): { arrange_1p?: string; arrange_2p?: string } {
+): IrArrangeOptions {
   const legacyOption =
     typeof playOptions?.option === 'string' && playOptions.option.length > 0
       ? playOptions.option

@@ -152,11 +152,17 @@ function packageJsonFromSourcePath(input, relativeToFile, installedIndex) {
   return packageName ? (installedIndex.get(packageName) ?? null) : null
 }
 
-function packagesFromMetafile(metafilePath, sourcemapRoot) {
+function packagesFromMetafile(metafilePath, sourcemapRoot, browserPackages = []) {
   const meta = readJson(metafilePath)
   const installedIndex = buildInstalledPackageIndex()
   const packageJsonPaths = new Set()
   const missing = new Set()
+
+  for (const name of browserPackages) {
+    const packageJson = installedIndex.get(name)
+    if (packageJson) packageJsonPaths.add(packageJson)
+    else missing.add(name)
+  }
 
   for (const input of Object.keys(meta.inputs ?? {})) {
     const packageJson = packageJsonFromSourcePath(input, null, installedIndex)
@@ -366,8 +372,8 @@ function renderReport({ packages, missing, source, policyPath }) {
   lines.push('BMZ IR Web Dependency Licenses')
   lines.push('================================')
   lines.push('')
-  lines.push('This report is generated from the Worker bundle metafile or installed')
-  lines.push('node_modules package metadata. It is not legal advice.')
+  lines.push('This report uses the Worker bundle metafile and configured browser packages,')
+  lines.push('or installed node_modules package metadata. It is not legal advice.')
   lines.push('')
   lines.push(`Source: ${source}`)
   lines.push(`Policy: ${path.relative(repoRoot, policyPath)}`)
@@ -435,7 +441,11 @@ function main() {
     const policy = readJson(policyPath)
     const packageSource = args.allInstalled
       ? packageJsonPathsFromInstalled()
-      : packagesFromMetafile(path.resolve(args.metafile), args.sourcemapRoot)
+      : packagesFromMetafile(
+          path.resolve(args.metafile),
+          args.sourcemapRoot,
+          policy.browserPackages,
+        )
     const source = args.allInstalled
       ? 'all installed node_modules packages'
       : `${path.relative(repoRoot, path.resolve(args.metafile))}${
@@ -451,9 +461,7 @@ function main() {
         )
       }
       for (const name of details.missing) {
-        console.error(
-          `package referenced by bundle metafile but not found in node_modules: ${name}`,
-        )
+        console.error(`deployed package not found in node_modules: ${name}`)
       }
       process.exitCode = 1
       return

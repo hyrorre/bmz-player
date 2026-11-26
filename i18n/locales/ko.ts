@@ -10,7 +10,6 @@ export default defineI18nLocale(() =>
       common: {
         language: '언어',
         openMenu: '메뉴 열기',
-        licenses: '라이선스',
         backHome: '홈으로 돌아가기',
         loading: '로드 중...',
         search: '검색',
@@ -21,9 +20,11 @@ export default defineI18nLocale(() =>
         save: '저장',
       },
       nav: {
+        account: '계정',
         charts: '차트',
         courses: '코스',
         players: '플레이어',
+        myPage: '마이페이지',
         daily: '오늘의 성과',
         rivals: '라이벌',
         profile: '프로필',
@@ -87,6 +88,8 @@ export default defineI18nLocale(() =>
           '이메일 비밀번호 재설정은 아직 지원하지 않습니다. 로그인 후 계정 설정에서 변경하세요.',
       },
       manual: {
+        contents: '목차',
+        chapters: '장 선택',
         title: '매뉴얼',
         description: 'BMZ Player 시작 방법, 조작 방법, 문제 해결 방법을 정리했습니다.',
         englishOnly: '이 언어의 매뉴얼은 아직 없어 영어판을 표시합니다.',

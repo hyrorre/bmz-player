@@ -226,6 +226,12 @@ describe('difficulty table fetching', () => {
 })
 
 describe('difficulty table synchronization', () => {
+  test('configured public IDs are unique and simple', () => {
+    const ids = DIFFICULTY_TABLE_SOURCES.map(({ id }) => id)
+    expect(new Set(ids).size).toBe(ids.length)
+    for (const id of ids) expect(id).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+  })
+
   test('rejects non-allowlisted sources before fetching', async () => {
     let fetched = false
     const fetchImpl = (async () => {

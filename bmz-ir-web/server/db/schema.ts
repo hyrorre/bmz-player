@@ -5,6 +5,7 @@ import {
   MODERATION_ACTIONS,
   USER_MODERATION_STATUSES,
 } from '../../shared/constants/moderation'
+import type { IrArrangeOptions } from '../../shared/types/ir'
 
 const jsonText = <T>(name: string, fallback: string) =>
   text(name, { mode: 'json' })
@@ -149,7 +150,11 @@ export const charts = sqliteTable(
       .notNull()
       .default(sql`(unixepoch('subsec') * 1000)`),
   },
-  (table) => [index('idx_charts_md5').on(table.md5), index('idx_charts_title').on(table.title)],
+  (table) => [
+    index('idx_charts_md5').on(table.md5),
+    index('idx_charts_md5_nocase').on(sql`${table.md5} collate nocase`),
+    index('idx_charts_title').on(table.title),
+  ],
 )
 
 export const difficultyTables = sqliteTable(
@@ -521,6 +526,7 @@ export const courseScores = sqliteTable(
     judges: jsonText<Record<string, unknown>>('judges', '{}'),
     gaugeValue: integer('gauge_value').notNull(),
     entries: jsonText<Record<string, unknown>[]>('entries', '[]'),
+    arrangeOptions: jsonText<(IrArrangeOptions | null)[]>('arrange_options', '[]'),
     playedAt: integer('played_at', { mode: 'timestamp_ms' }),
     serverReceivedAt: integer('server_received_at', { mode: 'timestamp_ms' })
       .notNull()
@@ -536,6 +542,7 @@ export const courseScores = sqliteTable(
   (table) => [
     uniqueIndex('idx_course_scores_player_idempotency').on(table.playerId, table.idempotencyKey),
     index('idx_course_scores_course').on(table.courseHash, table.serverReceivedAt),
+    index('idx_course_scores_player_received_at').on(table.playerId, table.serverReceivedAt),
   ],
 )
 

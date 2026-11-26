@@ -45,7 +45,8 @@ const { getRanking, getRankingWithPreviousRank } = await import('./ranking')
 const { IrIdempotencyCollisionError } = await import('./idempotency')
 const { submitCourseScore, computeCourseHash, validateCourseScoreSubmission } =
   await import('../course_ir')
-const { fetchCourseRankingRows, rankCourseRows } = await import('../course_ranking')
+const { courseComboBreaks, fetchCourseRankingRows, rankCourseRows } =
+  await import('../course_ranking')
 const migrations = new URL('../../../../server/db/migrations/sqlite/', import.meta.url)
 for (const name of (await readdir(migrations)).filter((name) => name.endsWith('.sql')).sort()) {
   await client.executeMultiple(await readFile(new URL(name, migrations), 'utf8'))
@@ -177,6 +178,7 @@ test('joins details only for a full ranking page and the player outside that pag
 
 test('keeps independent bests and their details when falling back to history', async () => {
   const bestEx = submission()
+  bestEx.result.max_combo = 80
   bestEx.play_options.arrange_1p = 'random'
   const ex = await submitScore(user, validateScoreSubmission(bestEx), [], 10)
   const bestClear = submission()
@@ -185,10 +187,18 @@ test('keeps independent bests and their details when falling back to history', a
   bestClear.rule.effective_ln_mode = 'cn'
   bestClear.result.clear = 'Hard'
   bestClear.result.ex_score = 100
+  bestClear.result.max_combo = 90
+  bestClear.result.notes = 110
   bestClear.result.judges.fast.pgreat = 0
   bestClear.result.judges.fast.great = 100
   bestClear.play_options.arrange_1p = 'mirror'
   const clear = await submitScore(user, validateScoreSubmission(bestClear), [], 10)
+  const bestCombo = structuredClone(bestClear)
+  bestCombo.idempotency_key = 'best-combo'
+  bestCombo.result.clear = 'Normal'
+  bestCombo.result.max_combo = 100
+  bestCombo.result.notes = 120
+  const combo = await submitScore(user, validateScoreSubmission(bestCombo), [], 10)
   const query = parseRankingQuery({ scope: 'around_self', limit: 1 })
   const cached = await getRanking(user, bestEx.chart.sha256, query)
   expect(cached.ranking.entries[0]).toMatchObject({
@@ -196,9 +206,12 @@ test('keeps independent bests and their details when falling back to history', a
     score: {
       score_id: ex.score_id,
       clear: 'Hard',
+      max_ex_score: 200,
+      max_combo: 100,
+      max_combo_notes: 120,
       arrange_1p: 'random',
       judges: bestEx.result.judges,
-      source_score_ids: { ex_score: ex.score_id, clear: clear.score_id },
+      source_score_ids: { ex_score: ex.score_id, clear: clear.score_id, max_combo: combo.score_id },
     },
   })
   expect(cached.ranking.self?.included_in_entries).toBe(true)
@@ -236,6 +249,36 @@ function courseSubmission() {
     idempotency_key: 'course-test',
   }
 }
+
+test('course ranking reads recorded arrangements and accepts retries of legacy scores', async () => {
+  const payload: CourseScoreSubmission = courseSubmission()
+  payload.play_options = {
+    device_type: 'keyboard',
+    option: 'normal',
+    entry_randomizations: [{ arrange_1p: 'random', arrange_2p: 'mirror', seed: '5' }],
+  }
+  const submitted = await submitCourseScore(user, validateCourseScoreSubmission(payload))
+  const conditions = [eq(schema.courseScores.courseHash, payload.course.course_hash)]
+  expect((await fetchCourseRankingRows(conditions))[0]).toMatchObject({
+    max_ex_score: 200,
+    ln_policy: 'AutoLn',
+  })
+  expect((await db.select().from(schema.courseScores))[0]?.arrangeOptions).toEqual([
+    { arrange_1p: 'random', arrange_2p: 'mirror' },
+  ])
+  await db.update(schema.courseScores).set({ arrangeOptions: [] })
+  expect(await submitCourseScore(user, validateCourseScoreSubmission(payload))).toMatchObject({
+    course_score_id: submitted.course_score_id,
+  })
+  expect((await db.select().from(schema.courseScores))[0]?.arrangeOptions).toEqual([])
+})
+
+test('course CB retains unplayed notes and excludes only recorded empty POORs', () => {
+  expect(courseComboBreaks(275, { bad: 0, poor: 13, empty_poor: 2 })).toBe(273)
+  expect(courseComboBreaks(2, { empty_poor: 2 })).toBe(0)
+  expect(courseComboBreaks(5, {})).toBeNull()
+  expect(courseComboBreaks(5, { empty_poor: 6 })).toBeNull()
+})
 
 test.each([false, true])(
   'keeps a concurrent score when cleanup commits first=%s',

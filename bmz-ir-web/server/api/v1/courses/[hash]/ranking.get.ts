@@ -1,10 +1,13 @@
-import { eq, inArray } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { getQuery } from 'h3'
 import { db, schema } from 'hub:db'
+import { IR_RANKING_MAX_OFFSET } from '../../../../../shared/constants/ir'
 import { asRuleMode, normalizeGaugeName, requireHex } from '../../../../services/ir'
+import { clampInteger } from '../../../../services/ir/common'
 import { isPublicCourse, publicPlayerCondition } from '../../../../services/moderation/visibility'
 import { resolveIrUser } from '../../../../utils/auth'
 import {
+  courseComboBreaks,
   fetchCourseRankingRows,
   rankCourseRows,
   type RankedCourseRow,
@@ -35,7 +38,8 @@ export default defineEventHandler(async (event) => {
     typeof query.rule_mode === 'string' && query.rule_mode && query.rule_mode !== 'ALL'
       ? asRuleMode(query.rule_mode)
       : null
-  const limit = Math.max(1, Math.min(200, Number(query.limit ?? 100) || 100))
+  const limit = clampInteger(query.limit, 100, 1, 200)
+  const offset = clampInteger(query.offset, 0, 0, IR_RANKING_MAX_OFFSET)
   const conditions = [
     eq(schema.courseScores.courseHash, courseHash),
     eq(schema.courseScores.accepted, true),
@@ -53,38 +57,65 @@ export default defineEventHandler(async (event) => {
     conditions.push(eq(schema.courseScores.ruleMode, ruleMode))
   }
 
-  const ranked = rankCourseRows(await fetchCourseRankingRows(conditions), user?.id ?? null, limit)
-  const visibleRows = ranked.self ? [...ranked.entries, ranked.self] : ranked.entries
-  const playerIds = [...new Set(visibleRows.map(({ row }) => row.player_id))]
-  const profiles =
-    playerIds.length > 0
+  const ranked = rankCourseRows(
+    await fetchCourseRankingRows(conditions),
+    user?.id ?? null,
+    limit,
+    offset,
+  )
+  const visibleIds = new Set(ranked.entries.map(({ row }) => row.course_score_id))
+  if (ranked.self) visibleIds.add(ranked.self.row.course_score_id)
+  const details =
+    visibleIds.size > 0
       ? await db
-          .select({ id: schema.profiles.id, display_name: schema.profiles.displayName })
-          .from(schema.profiles)
-          .where(inArray(schema.profiles.id, playerIds))
+          .select({
+            id: schema.courseScores.id,
+            display_name: schema.profiles.displayName,
+            client_name: schema.courseScores.clientName,
+            client_version: schema.courseScores.clientVersion,
+            arrange_options: schema.courseScores.arrangeOptions,
+            judges: schema.courseScores.judges,
+          })
+          .from(schema.courseScores)
+          .leftJoin(schema.profiles, eq(schema.profiles.id, schema.courseScores.playerId))
+          .where(
+            sql`${schema.courseScores.id} in (select value from json_each(${JSON.stringify([...visibleIds])}))`,
+          )
       : []
-  const names = new Map(profiles.map((profile) => [profile.id, profile.display_name]))
+  const detailsById = new Map(details.map((detail) => [detail.id, detail]))
 
-  const toEntry = ({ rank, row }: RankedCourseRow) => ({
-    rank,
-    player: { id: row.player_id, display_name: names.get(row.player_id) || 'Player' },
-    score: {
-      course_score_id: row.course_score_id,
-      clear: row.clear_type,
-      course_clear: row.course_clear,
-      ex_score: row.ex_score,
-      max_combo: row.max_combo,
-      bp: row.bp,
-      device_type: row.device_type,
-      rule_mode: row.rule_mode,
-      played_at: row.played_at,
-      verification: row.verification,
-    },
-    relation: {
-      is_self: row.player_id === user?.id,
-      is_rival: false,
-    },
-  })
+  const toEntry = ({ rank, row }: RankedCourseRow) => {
+    const detail = detailsById.get(row.course_score_id)
+    return {
+      rank,
+      player: {
+        id: row.player_id,
+        display_name: detail?.display_name || 'Player',
+      },
+      score: {
+        course_score_id: row.course_score_id,
+        client_name: detail?.client_name ?? null,
+        client_version: detail?.client_version ?? null,
+        clear: row.clear_type,
+        course_clear: row.course_clear,
+        ex_score: row.ex_score,
+        max_ex_score: row.max_ex_score,
+        max_combo: row.max_combo,
+        bp: row.bp,
+        cb: courseComboBreaks(row.bp, detail?.judges),
+        device_type: row.device_type,
+        ln_policy: row.ln_policy,
+        rule_mode: row.rule_mode,
+        arrange_options: detail?.arrange_options ?? [],
+        played_at: row.played_at,
+        verification: row.verification,
+      },
+      relation: {
+        is_self: row.player_id === user?.id,
+        is_rival: false,
+      },
+    }
+  }
   const entries = ranked.entries.map(toEntry)
   const selfEntry = ranked.self ? toEntry(ranked.self) : undefined
 
@@ -105,9 +136,9 @@ export default defineEventHandler(async (event) => {
         : undefined,
       pagination: {
         limit,
-        offset: 0,
+        offset,
         total: ranked.total,
-        has_more: limit < ranked.total,
+        has_more: offset + limit < ranked.total,
       },
     },
   }

@@ -22,6 +22,7 @@ export default defineEventHandler(async (event) => {
       clear_type: schema.scores.clearType,
       ex_score: schema.scores.exScore,
       max_combo: schema.scores.maxCombo,
+      notes: schema.scores.notes,
       min_bp: schema.scores.minBp,
       min_cb: schema.scores.minCb,
       bp: schema.scores.bp,

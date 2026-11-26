@@ -1,6 +1,17 @@
 import { and, asc, desc, eq, sql, type SQL } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
 
+/** Course BP includes empty POORs and unplayed notes. CB excludes only empty POORs. */
+export function courseComboBreaks(bp: number, judges?: Record<string, unknown>) {
+  const emptyPoor = judges?.empty_poor
+  return typeof emptyPoor === 'number' &&
+    Number.isSafeInteger(emptyPoor) &&
+    emptyPoor >= 0 &&
+    emptyPoor <= bp
+    ? bp - emptyPoor
+    : null
+}
+
 /** player 単位の best 行を順位順に返す。limit 省略時は全行。 */
 export async function fetchCourseRankingRows(conditions: SQL[], limit?: number) {
   const scores = schema.courseScores
@@ -9,12 +20,14 @@ export async function fetchCourseRankingRows(conditions: SQL[], limit?: number) 
       player_id: scores.playerId,
       course_score_id: scores.id,
       ex_score: scores.exScore,
+      max_ex_score: scores.maxExScore,
       clear_type: scores.clearType,
       clear_rank: scores.clearRank,
       course_clear: scores.courseClear,
       max_combo: scores.maxCombo,
       bp: scores.bp,
       device_type: scores.deviceType,
+      ln_policy: scores.lnPolicy,
       rule_mode: scores.ruleMode,
       played_at: scores.playedAt,
       server_received_at: scores.serverReceivedAt,
@@ -51,10 +64,15 @@ export interface RankedCourseRow {
 }
 
 /**
- * 全 best 行に同点同順位の順位を付け、先頭 limit 件と自分の行を返す。
+ * 全 best 行に同点同順位の順位を付け、指定ページと自分の行を返す。
  * 自分の順位と total は表示範囲外の行も含めて求める。
  */
-export function rankCourseRows(rows: CourseRankingRow[], selfId: string | null, limit: number) {
+export function rankCourseRows(
+  rows: CourseRankingRow[],
+  selfId: string | null,
+  limit: number,
+  offset = 0,
+) {
   let previousEx: number | null = null
   let rank = 0
   const ranked: RankedCourseRow[] = rows.map((row, index) => {
@@ -65,7 +83,7 @@ export function rankCourseRows(rows: CourseRankingRow[], selfId: string | null, 
     return { rank, row }
   })
   return {
-    entries: ranked.slice(0, limit),
+    entries: ranked.slice(offset, offset + limit),
     self: selfId ? ranked.find((entry) => entry.row.player_id === selfId) : undefined,
     total: ranked.length,
   }

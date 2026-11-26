@@ -1,4 +1,5 @@
 {
+  "browserPackages": ["@zumer/snapdom"],
   "accepted": [
     "0BSD",
     "Apache-2.0",

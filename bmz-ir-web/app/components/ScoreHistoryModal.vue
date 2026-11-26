@@ -8,20 +8,23 @@ defineProps<{
   limit: number
   scoreKey: (score: T) => string
   scoreBp: (score: T) => number
-  scoreTo?: (score: T) => string
+  scoreCb: (score: T) => number | null
+  scoreDetailId?: (score: T) => string
+  showLn: boolean
+  scoreOption: (score: T) => string
 }>()
 const open = defineModel<boolean>('open', { required: true })
 const page = defineModel<number>('page', { required: true })
 const { t } = useI18n()
-const { formatDateTime } = useLocaleFormat()
-
-function formatScoreDate(value: string | null) {
-  return value ? formatDateTime(value) : '-'
-}
+const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclosure()
+const wideScoreTable = useWideScoreTable()
+watch([open, page], () => {
+  expandedScoreRow.value = null
+})
 </script>
 
 <template>
-  <UModal v-model:open="open" :title="t('ranking.selfHistory')">
+  <UModal v-model:open="open" :title="t('ranking.selfHistory')" :ui="{ content: 'sm:max-w-5xl' }">
     <template #body>
       <UAlert v-if="errorDescription" color="error" :description="errorDescription" class="mb-4" />
       <p v-else-if="pending" class="text-sm text-muted">{{ t('common.loading') }}</p>
@@ -32,37 +35,78 @@ function formatScoreDate(value: string | null) {
         <table class="w-full text-sm">
           <thead class="bg-elevated text-left text-toned">
             <tr>
-              <th class="px-3 py-2">{{ t('table.date') }}</th>
-              <th class="px-3 py-2 text-right">EX</th>
+              <th class="hidden w-px px-3 py-2 whitespace-nowrap xl:table-cell">
+                {{ t('table.date') }}
+              </th>
+              <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
+              <th class="px-3 py-2 text-center">RANK</th>
               <th class="px-3 py-2">{{ t('table.clear') }}</th>
-              <th class="px-3 py-2 text-right">COMBO</th>
-              <th class="px-3 py-2 text-right">BP</th>
-              <th class="px-3 py-2">{{ t('table.conditions') }}</th>
+              <th v-if="showLn" class="px-3 py-2">LN</th>
+              <th class="px-3 py-2">RULE</th>
+              <th class="px-3 py-2">OPTION</th>
+              <th class="px-3 py-2 text-right whitespace-nowrap">MAX COMBO</th>
+              <th class="px-2 py-2 text-right">BP</th>
+              <th class="px-2 py-2 text-right">CB</th>
+              <th scope="col" class="sticky right-0 z-10 w-px bg-elevated px-1">
+                <span class="sr-only">{{ t('score.title') }}</span>
+              </th>
             </tr>
           </thead>
           <tbody>
-            <tr
-              v-for="score in history.scores"
-              :key="scoreKey(score)"
-              class="border-t border-default"
-            >
-              <td class="px-3 py-2 text-muted">
-                {{ formatScoreDate(score.played_at ?? score.server_received_at) }}
-              </td>
-              <td class="px-3 py-2 text-right font-medium">
-                <NuxtLink v-if="scoreTo" :to="scoreTo(score)" class="hover:underline">{{
-                  score.ex_score
-                }}</NuxtLink>
-                <template v-else>{{ score.ex_score }}</template>
-              </td>
-              <td class="px-3 py-2">{{ score.clear }}</td>
-              <td class="px-3 py-2 text-right">{{ score.max_combo }}</td>
-              <td class="px-3 py-2 text-right">{{ scoreBp(score) }}</td>
-              <td class="px-3 py-2 text-muted">
-                <p>{{ score.gauge }} / {{ score.ln_policy }} / {{ score.rule_mode }}</p>
-                <slot name="conditions" :score="score" />
-              </td>
-            </tr>
+            <template v-for="score in history.scores" :key="scoreKey(score)">
+              <tr class="border-t border-default">
+                <td class="hidden px-3 py-2 text-muted xl:table-cell">
+                  <ScoreTableDateTime :value="score.played_at ?? score.server_received_at" />
+                </td>
+                <td class="px-3 py-2 text-right">
+                  <RankingExScore :score="score.ex_score" :max="score.max_ex_score" />
+                </td>
+                <td class="px-3 py-2 text-center">
+                  <RankingScoreRank :score="score.ex_score" :max="score.max_ex_score" />
+                </td>
+                <td class="px-3 py-2"><IrClearBadge :clear="score.clear" compact /></td>
+                <td v-if="showLn" class="px-3 py-2 text-muted">
+                  {{ lnPolicyLabel(score.ln_policy) }}
+                </td>
+                <td class="px-3 py-2 text-muted">{{ ruleModeLabel(score.rule_mode) }}</td>
+                <td class="px-3 py-2 text-xs text-muted">{{ scoreOption(score) }}</td>
+                <td class="px-3 py-2 text-right">
+                  <RankingMaxCombo
+                    :combo="score.max_combo"
+                    :total-notes="totalNotesFromMaxExScore(score.max_ex_score)"
+                  />
+                </td>
+                <td class="px-2 py-2 text-right tabular-nums">{{ scoreBp(score) }}</td>
+                <td class="px-2 py-2 text-right tabular-nums">{{ scoreCb(score) ?? '-' }}</td>
+                <td class="sticky right-0 z-10 bg-default px-1 py-1">
+                  <ScoreDetailToggle
+                    :expanded="expandedScoreRow === scoreKey(score)"
+                    :controls="scoreDetailsId"
+                    @toggle="toggleScoreDetails(scoreKey(score))"
+                  />
+                </td>
+              </tr>
+              <tr
+                v-if="expandedScoreRow === scoreKey(score)"
+                class="border-t border-default bg-elevated"
+              >
+                <td :colspan="9 + (showLn ? 1 : 0) + (wideScoreTable ? 1 : 0)">
+                  <ScoreInlineDetails
+                    v-if="scoreDetailId"
+                    :id="scoreDetailsId"
+                    :score-id="scoreDetailId(score)"
+                  />
+                  <ScoreRowMetadata
+                    v-else
+                    :id="scoreDetailsId"
+                    :device="score.device_type"
+                    :date="score.played_at ?? score.server_received_at"
+                    :client="score"
+                    class="sticky left-0 w-fit max-w-[calc(100vw-5rem)] px-3 py-3"
+                  />
+                </td>
+              </tr>
+            </template>
           </tbody>
         </table>
       </div>

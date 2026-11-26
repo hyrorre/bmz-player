@@ -42,6 +42,7 @@ export default defineEventHandler(async (event): Promise<IrScoreHistoryResult> =
         score_id: schema.scores.id,
         clear: schema.scores.clearType,
         ex_score: schema.scores.exScore,
+        max_ex_score: sql<number>`${schema.scores.notes} * 2`,
         max_combo: schema.scores.maxCombo,
         min_bp: schema.scores.minBp,
         min_cb: schema.scores.minCb,

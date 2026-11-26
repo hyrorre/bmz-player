@@ -26,6 +26,44 @@ body,
   @apply w-full h-full;
 }
 
+/* 成績分布とバッジで共通の配色 */
+[data-rank] {
+  --ir-rank-text: #172033;
+}
+
+[data-rank='0'] {
+  --ir-rank-fill: #778397;
+  --ir-rank-text: #101827;
+}
+[data-rank='1'] {
+  --ir-rank-fill: #d27b86;
+  --ir-rank-text: #101827;
+}
+[data-rank='2'] {
+  --ir-rank-fill: #d5a0b9;
+}
+[data-rank='3'] {
+  --ir-rank-fill: #91d989;
+}
+[data-rank='4'] {
+  --ir-rank-fill: #80bbfb;
+}
+[data-rank='5'] {
+  --ir-rank-fill: #ff8181;
+}
+[data-rank='6'] {
+  --ir-rank-fill: #ffd685;
+}
+[data-rank='7'] {
+  --ir-rank-fill: #8de2de;
+}
+[data-rank='8'] {
+  --ir-rank-fill: #c1b4fb;
+}
+[data-rank='9'] {
+  --ir-rank-fill: #f4f2d2;
+}
+
 /* manual/ の原稿を表示する本文 */
 .manual-content {
   @apply leading-7 text-default;

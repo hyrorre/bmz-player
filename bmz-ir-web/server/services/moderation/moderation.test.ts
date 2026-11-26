@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { createClient } from '@libsql/client'
 import { drizzle } from 'drizzle-orm/libsql'
 import { and, eq, isNull } from 'drizzle-orm'
@@ -90,6 +90,10 @@ const logoutHandler = (await import('../../api/v1/auth/logout.post')).default as
 const registerHandler = (await import('../../api/v1/auth/register.post')).default as Handler
 const scoresPostHandler = (await import('../../api/v1/scores.post')).default as Handler
 const chartsIndexHandler = (await import('../../api/v1/charts/index.get')).default as Handler
+const difficultyTablesHandler = (await import('../../api/v1/difficulty-tables.get'))
+  .default as Handler
+const analysisHandler = (await import('../../api/v1/analysis/index.get')).default as Handler
+const analysisChartsHandler = (await import('../../api/v1/analysis/charts.get')).default as Handler
 const chartDetailHandler = (await import('../../api/v1/charts/[sha256]/index.get'))
   .default as Handler
 const playersIndexHandler = (await import('../../api/v1/players/index.get')).default as Handler
@@ -99,6 +103,8 @@ const playerDetailHandler = (await import('../../api/v1/players/[id]/index.get')
 const scoreDetailHandler = (await import('../../api/v1/scores/[id]/index.get')).default as Handler
 const replayHandler = (await import('../../api/v1/scores/[id]/replay/index.get')).default as Handler
 const courseRankingHandler = (await import('../../api/v1/courses/[hash]/ranking.get'))
+  .default as Handler
+const courseSelfScoresHandler = (await import('../../api/v1/courses/[hash]/self-scores.get'))
   .default as Handler
 const coursesIndexHandler = (await import('../../api/v1/courses/index.get')).default as Handler
 const courseDetailHandler = (await import('../../api/v1/courses/[hash]/index.get'))
@@ -134,6 +140,8 @@ beforeEach(async () => {
   await db.delete(schema.bestScores)
   await db.delete(schema.scores)
   await db.delete(schema.charts)
+  await db.delete(schema.difficultyTableEntries)
+  await db.delete(schema.difficultyTables)
   await db.delete(schema.userModeration)
   await db.delete(schema.chartModeration)
   await db.delete(schema.authRateLimits)
@@ -234,6 +242,102 @@ test('rival best scores page through identities, protect visibility, and use the
     rivalScoresHandler(event({ path: `${path}&cursor=invalid`, params, token })),
     400,
   )
+})
+
+test('player detail pages filter public bests and include each score source and difficulty labels', async () => {
+  const md5 = 'a'.repeat(32)
+  const ex = submission({ key: 'player-ex', md5, clear: 'Normal' })
+  ex.chart.ln_profile = { has_undefined_ln: true, has_defined_cn: true }
+  ex.chart.notes = { total: 114 }
+  ex.rule.ln_policy = 'AutoLn'
+  ex.rule.rule_mode = 'Dx'
+  ex.result.notes = 110
+  ex.result.max_combo = 80
+  ex.play_options = { arrange_1p: 'random', arrange_2p: 'mirror' }
+  const exBest = await submitScore({ id: 'alice' }, ex, [], 10)
+  const clear = structuredClone(ex)
+  clear.idempotency_key = 'player-clear'
+  clear.result.clear = 'Hard'
+  clear.result.ex_score = 180
+  clear.result.judges.fast.pgreat = 90
+  clear.result.notes = 105
+  clear.result.max_combo = 90
+  clear.play_options = { arrange_1p: 'mirror' }
+  const clearBest = await submitScore({ id: 'alice' }, clear, [], 10)
+  const noLn = await submitScore({ id: 'alice' }, submission({ sha256: CHART_B }), [], 10)
+  await db.insert(schema.difficultyTables).values({
+    id: 'player-fixture',
+    sourceUrl: 'https://example.invalid/player-table',
+    name: 'Fixture',
+    symbol: 'st',
+    activeGeneration: 'current',
+  })
+  await db.insert(schema.difficultyTableEntries).values({
+    tableId: 'player-fixture',
+    generation: 'current',
+    level: '1',
+    md5,
+  })
+
+  const load = (query = '') =>
+    playerDetailHandler(event({ path: `/api/v1/players/alice?${query}`, params: { id: 'alice' } }))
+  const [first, second] = await Promise.all([load('limit=1'), load('limit=1&offset=1')])
+  expect(first.pagination).toEqual({ limit: 1, offset: 0, total: 2, has_more: true })
+  expect(second.pagination).toEqual({ limit: 1, offset: 1, total: 2, has_more: false })
+  expect(new Set([...first.best_scores, ...second.best_scores].map((row) => row.score_id))).toEqual(
+    new Set([exBest.score_id, noLn.score_id]),
+  )
+  const filtered = await load('ln_policy=AutoLn&rule_mode=Dx')
+  expect(filtered.pagination.total).toBe(1)
+  expect(filtered.ln_filters).toEqual({ has_ln: true, has_mixed_ln: true, has_auto_ln: true })
+  expect(filtered.best_scores[0]).toMatchObject({
+    best_ex_score_id: exBest.score_id,
+    best_clear_score_id: clearBest.score_id,
+    ex_score: 200,
+    max_ex_score: 220,
+    max_combo: 90,
+    max_combo_notes: 105,
+    clear_type: 'Hard',
+    arrange_1p: 'random',
+    arrange_2p: 'mirror',
+    ln_policy: 'AutoLn',
+    rule_mode: 'Dx',
+    chart: { has_ln: true, difficulty_labels: [{ symbol: 'st', level: '1' }] },
+  })
+  expect((await load('ln_policy=AutoLn&rule_mode=Beatoraja')).pagination.total).toBe(0)
+  expect((await load('ln_policy=ForceLn')).pagination.total).toBe(0)
+  expect((await load('rule_mode=Beatoraja')).best_scores[0].chart.has_ln).toBe(false)
+
+  await setChartStatus(CHART_A, 'hidden')
+  const remaining = await load('ln_policy=AutoLn')
+  expect(remaining.ln_filters).toEqual({ has_ln: false, has_mixed_ln: false, has_auto_ln: false })
+  expect(remaining.pagination.total).toBe(1)
+  expect(remaining.best_scores[0].score_id).toBe(noLn.score_id)
+})
+
+test('player AutoLn filter includes charts with several defined types and no undefined LNs', async () => {
+  const auto = submission()
+  auto.chart.ln_profile = { has_defined_cn: true, has_defined_hcn: true }
+  auto.rule.ln_policy = 'AutoLn'
+  const score = await submitScore({ id: 'alice' }, auto, [], 10)
+  await submitScore({ id: 'alice' }, submission({ sha256: CHART_B }), [], 10)
+
+  const load = () =>
+    playerDetailHandler(
+      event({ path: '/api/v1/players/alice?ln_policy=AutoLn', params: { id: 'alice' } }),
+    )
+  const result = await load()
+  expect(result.ln_filters).toEqual({ has_ln: true, has_mixed_ln: false, has_auto_ln: true })
+  expect(result.best_scores).toMatchObject([{ score_id: score.score_id }])
+
+  // An undefined + defined chart enables all AUTO filters, and must keep the first chart visible.
+  const mixed = submission({ sha256: 'd'.repeat(64) })
+  mixed.chart.ln_profile = { has_undefined_ln: true, has_defined_cn: true }
+  mixed.rule.ln_policy = 'AutoLn'
+  await submitScore({ id: 'alice' }, mixed, [], 10)
+  const withMixed = await load()
+  expect(withMixed.ln_filters.has_mixed_ln).toBeTrue()
+  expect(withMixed.pagination.total).toBe(2)
 })
 
 function submission(
@@ -1440,8 +1544,635 @@ function coursePayload(charts: string[], key: string, exScore = 100) {
 }
 
 describe('rankings, courses, and aggregates', () => {
+  test('course details use public score policies when chart metadata is incomplete', async () => {
+    const charts = [CHART_A, CHART_B]
+    for (const [id, policy] of [
+      ['alice', 'ForceCn'],
+      ['alice', 'ForceHcn'],
+      ['bob', 'AutoHcn'],
+      ['carol', 'AutoCn'],
+    ] as const) {
+      const payload = coursePayload(charts, policy)
+      payload.rule.ln_policy = policy
+      await submitCourseScore({ id }, payload)
+    }
+    await setUserStatus('carol', 'banned')
+    await db
+      .update(schema.courseScores)
+      .set({ accepted: false })
+      .where(eq(schema.courseScores.playerId, 'bob'))
+    const hash = computeCourseHash(charts, {})
+    const load = () =>
+      courseDetailHandler(event({ path: `/api/v1/courses/${hash}`, params: { hash } }))
+    const expected = { course: { ln_policies: ['ForceCn', 'ForceHcn'] }, stats: { play_count: 2 } }
+    expect(await load()).toMatchObject(expected)
+    await db.insert(schema.charts).values({ sha256: CHART_A, mode: '7K' })
+    expect(await load()).toMatchObject(expected)
+    await db.insert(schema.charts).values({ sha256: CHART_B, mode: '7K', hasUndefinedLn: true })
+    expect(await load()).toMatchObject({
+      course: { ln_policies: [], ln_profile: { has_undefined_ln: true } },
+    })
+  })
+
+  test('course rankings and self history return the client version of each score', async () => {
+    const charts = [CHART_A, CHART_B]
+    const bestPayload = coursePayload(charts, 'best-attempt', 300)
+    bestPayload.client.version = '0.5.3'
+    const best = await submitCourseScore({ id: 'alice' }, bestPayload)
+    const newerPayload = coursePayload(charts, 'another-attempt', 200)
+    newerPayload.client.version = '0.5.4'
+    const newer = await submitCourseScore({ id: 'alice' }, newerPayload)
+    const hash = bestPayload.course.course_hash
+
+    const ranking = await courseRankingHandler(
+      event({ path: `/api/v1/courses/${hash}/ranking`, params: { hash } }),
+    )
+    expect(ranking.ranking.entries[0].score).toMatchObject({
+      course_score_id: best.course_score_id,
+      client_name: 'BMZ',
+      client_version: '0.5.3',
+    })
+
+    const { accessToken: token } = await createAuthTokens('alice')
+    const history = await courseSelfScoresHandler(
+      event({ path: `/api/v1/courses/${hash}/self-scores`, params: { hash }, token }),
+    )
+    expect(history.scores).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ course_score_id: best.course_score_id, client_version: '0.5.3' }),
+        expect.objectContaining({
+          course_score_id: newer.course_score_id,
+          client_version: '0.5.4',
+        }),
+      ]),
+    )
+  })
+
+  test('difficulty table options use the active generation and preserve the level order', async () => {
+    await db.insert(schema.difficultyTables).values([
+      {
+        id: 'stella',
+        name: 'Stella',
+        symbol: 'st',
+        sourceUrl: 'https://example.invalid/st',
+        activeGeneration: 'current',
+        levelOrder: ['10', 'declared-only', '2'],
+        priority: 1,
+      },
+      { id: 'unsynced', sourceUrl: 'https://example.invalid/unsynced' },
+      {
+        id: 'insane',
+        name: 'Insane',
+        symbol: '★',
+        sourceUrl: 'https://example.invalid/insane',
+        activeGeneration: 'current',
+      },
+    ])
+    const stella = { tableId: 'stella', generation: 'current' }
+    await db.insert(schema.difficultyTableEntries).values([
+      { ...stella, level: '30' },
+      { ...stella, level: '2' },
+      { ...stella, level: '3' },
+      { ...stella, level: '2' },
+      { ...stella, level: '10' },
+      { ...stella, level: 'retired', generation: 'old' },
+      { tableId: 'unsynced', generation: 'current', level: '1' },
+      { tableId: 'insane', generation: 'current', level: '1' },
+    ])
+    const result = await difficultyTablesHandler(event({ path: '/api/v1/difficulty-tables' }))
+    expect(result.tables).toEqual([
+      { id: 'insane', name: 'Insane', symbol: '★', levels: ['1'] },
+      { id: 'stella', name: 'Stella', symbol: 'st', levels: ['10', '2', '3', '30'] },
+    ])
+  })
+
+  test('difficulty filters match displayed labels before paging and respect visibility', async () => {
+    const stellaStorageId = 'table_9abc25b8185039f40a7775156f4092b5'
+    const hashes = ['a', 'b', 'c', 'd', 'e', 'f'].map((value) => value.repeat(64))
+    const md5s = ['a', 'b', 'c', 'd', 'e', 'f'].map((value) => value.repeat(32))
+    for (const [i, sha256] of hashes.entries()) {
+      await db.insert(schema.charts).values({
+        sha256,
+        md5: md5s[i]!.toUpperCase(),
+        mode: '7K',
+        title: [0, 2, 4].includes(i) ? 'Stella fixture' : 'Other chart',
+        createdAt: new Date(1000 + i),
+      })
+    }
+    await db.insert(schema.difficultyTables).values([
+      {
+        id: stellaStorageId,
+        name: 'Stella',
+        symbol: 'st',
+        sourceUrl: 'https://stellabms.xyz/st/table.html',
+        activeGeneration: 'current',
+        levelOrder: ['2', '1+'],
+      },
+      {
+        id: 'insane',
+        name: 'Insane',
+        symbol: '★',
+        sourceUrl: 'https://example.invalid/insane',
+        activeGeneration: 'current',
+      },
+    ])
+    const level = { tableId: stellaStorageId, level: '1+', generation: 'current' }
+    await db.insert(schema.difficultyTableEntries).values([
+      { ...level, md5: md5s[0] },
+      { ...level, sha256: hashes[1] },
+      { ...level, sha256: hashes[2] },
+      { ...level, sha256: hashes[3], generation: 'old' },
+      { ...level, sha256: hashes[4] },
+      { ...level, level: '2', md5: md5s[5] },
+      { tableId: 'insane', level: '20', md5: md5s[1], generation: 'current' },
+      { tableId: 'insane', level: '20', md5: md5s[2], generation: 'old' },
+    ])
+    await setChartStatus(hashes[4]!, 'hidden')
+    const url = '/api/v1/charts?difficulty_table=stella&difficulty_level=1%2B&q=Stella&limit=1'
+    const first = await chartsIndexHandler(event({ path: url }))
+    expect(
+      await chartsIndexHandler(event({ path: url.replace('stella', stellaStorageId) })),
+    ).toEqual(first)
+    const catalog = await difficultyTablesHandler(event({ path: '/api/v1/difficulty-tables' }))
+    expect(catalog.tables).toContainEqual({
+      id: 'stella',
+      legacy_id: stellaStorageId,
+      name: 'Stella',
+      symbol: 'st',
+      levels: ['2', '1+'],
+    })
+    expect(first.pagination).toEqual({ limit: 1, offset: 0, total: 2, has_more: true })
+    expect(first.difficulty_filter).toEqual({
+      table_id: 'stella',
+      table_name: 'Stella',
+      symbol: 'st',
+      level: '1+',
+    })
+    expect(first.charts).toMatchObject([
+      { sha256: hashes[2], difficulty_labels: [first.difficulty_filter] },
+    ])
+    const second = await chartsIndexHandler(event({ path: `${url}&offset=1` }))
+    expect(second.charts).toMatchObject([
+      { sha256: hashes[0], difficulty_labels: [first.difficulty_filter] },
+    ])
+    const all = await chartsIndexHandler(
+      event({ path: '/api/v1/charts?difficulty_table=stella&difficulty_level=1%2B' }),
+    )
+    expect(all.pagination.total).toBe(2)
+    const noTitleMatch = await chartsIndexHandler(
+      event({ path: url.replace('q=Stella', 'q=Other') }),
+    )
+    expect(noTitleMatch.pagination.total).toBe(0)
+    const tableOnly = await chartsIndexHandler(
+      event({ path: '/api/v1/charts?difficulty_table=stella' }),
+    )
+    expect(tableOnly.pagination.total).toBe(3)
+    expect(tableOnly.charts.map((chart: { sha256: string }) => chart.sha256)).toEqual([
+      hashes[5],
+      hashes[2],
+      hashes[0],
+    ])
+    const sortedUrl = '/api/v1/charts?difficulty_table=stella&sort=table_level'
+    const sorted = await chartsIndexHandler(event({ path: sortedUrl }))
+    expect(sorted.charts.map((chart: { sha256: string }) => chart.sha256)).toEqual([
+      hashes[5],
+      hashes[0],
+      hashes[2],
+    ])
+    const sortedPage = await chartsIndexHandler(
+      event({ path: `${sortedUrl}&order=desc&limit=1&offset=2` }),
+    )
+    expect(sortedPage.charts).toMatchObject([{ sha256: hashes[5] }])
+    const tableAndTitle = await chartsIndexHandler(
+      event({ path: '/api/v1/charts?difficulty_table=stella&q=Other' }),
+    )
+    expect(tableAndTitle.charts.map((chart: { sha256: string }) => chart.sha256)).toEqual([
+      hashes[5],
+    ])
+    const distribution = await analysisHandler(
+      event({ path: '/api/v1/analysis?player=alice&table=stella' }),
+    )
+    expect(distribution.table).toEqual({ id: 'stella', name: 'Stella', symbol: 'st' })
+    expect(
+      await analysisHandler(
+        event({ path: `/api/v1/analysis?player=alice&table=${stellaStorageId}` }),
+      ),
+    ).toEqual(distribution)
+    expect(distribution.levels).toEqual([
+      { level: '2', total: 1, segments: [{ rank: 0, count: 1 }] },
+      { level: '1+', total: 2, segments: [{ rank: 0, count: 2 }] },
+    ])
+    const segmentUrl = '/api/v1/analysis/charts?player=alice&level=1%2B&rank=0&table='
+    const segment = await analysisChartsHandler(event({ path: `${segmentUrl}stella` }))
+    expect(segment.pagination.total).toBe(2)
+    expect(await analysisChartsHandler(event({ path: segmentUrl + stellaStorageId }))).toEqual(
+      segment,
+    )
+  })
+
+  test('chart and course lists sort matching rows in both directions before slicing a page', async () => {
+    const hashes = [CHART_A, CHART_B, 'c'.repeat(64)]
+    await db.insert(schema.charts).values([
+      {
+        sha256: hashes[0]!,
+        mode: '7K',
+        title: 'Zebra',
+        artist: 'Aaron',
+        level: 4,
+        notes: 100,
+        createdAt: new Date(1000),
+      },
+      {
+        sha256: hashes[1]!,
+        mode: '7K',
+        title: 'alfa',
+        artist: 'Zed',
+        level: 9,
+        notes: 50,
+        createdAt: new Date(2000),
+      },
+      { sha256: hashes[2]!, mode: '7K', title: 'beta', notes: 200, createdAt: new Date(3000) },
+    ])
+    for (const [sort, ascending, descending] of [
+      ['created_at', [0, 1, 2], [2, 1, 0]],
+      ['title', [1, 2, 0], [0, 2, 1]],
+      ['artist', [0, 1, 2], [1, 0, 2]],
+      ['level', [0, 1, 2], [1, 0, 2]],
+      ['notes', [1, 0, 2], [2, 0, 1]],
+    ] as const) {
+      for (const [order, positions] of [
+        ['asc', ascending],
+        ['desc', descending],
+      ] as const) {
+        const page = await chartsIndexHandler(
+          event({ path: `/api/v1/charts?sort=${sort}&order=${order}&limit=2&offset=1` }),
+        )
+        expect(page.charts.map((chart: { sha256: string }) => chart.sha256)).toEqual(
+          positions.slice(1).map((i) => hashes[i]),
+        )
+      }
+    }
+    const defaultCharts = await chartsIndexHandler(
+      event({ path: '/api/v1/charts?sort=table_level&order=asc&limit=1' }),
+    )
+    expect(defaultCharts.charts).toMatchObject([{ sha256: hashes[2] }])
+
+    const courses = [
+      { courseHash: 'z', title: 'Zebra', charts: hashes, chartCount: 3, createdAt: new Date(1000) },
+      {
+        courseHash: 'a',
+        title: 'alfa',
+        charts: hashes.slice(0, 1),
+        chartCount: 1,
+        createdAt: new Date(2000),
+      },
+      {
+        courseHash: 'b',
+        title: 'beta',
+        charts: hashes.slice(0, 2),
+        chartCount: 2,
+        createdAt: new Date(3000),
+      },
+    ]
+    await db.insert(schema.irCourses).values(courses)
+    for (const [query, expected] of [
+      ['', ['b', 'a', 'z']],
+      ['sort=created_at&order=asc', ['z', 'a', 'b']],
+      ['sort=title', ['a', 'b', 'z']],
+      ['sort=title&order=desc', ['z', 'b', 'a']],
+      ['sort=chart_count', ['a', 'b', 'z']],
+      ['sort=chart_count&order=desc', ['z', 'b', 'a']],
+    ] as const) {
+      const page = await coursesIndexHandler(
+        event({ path: `/api/v1/courses?${query}&limit=2&offset=1` }),
+      )
+      expect(page.courses.map((course: { course_hash: string }) => course.course_hash)).toEqual(
+        expected.slice(1),
+      )
+    }
+  })
+
+  test('difficulty distributions show best lamps and score grades and page through the selected segment', async () => {
+    const thirdChart = 'c'.repeat(64)
+    const md5 = 'a'.repeat(32)
+    const bestLamp = submission({ md5, exScore: 176, clear: 'Hard', key: 'high-lamp' })
+    await submitScore({ id: 'alice' }, bestLamp, [], 10)
+    const bestRate = submission({ md5, exScore: 160, clear: 'Normal', key: 'high-rate' })
+    bestRate.chart.notes = { total: 100 }
+    bestRate.result.notes = 90
+    bestRate.result.max_combo = 90
+    await submitScore({ id: 'alice' }, bestRate, [], 10)
+    const battle = submission({ md5, clear: 'Max', key: 'battle' })
+    battle.play_options.double_option = 'battle'
+    await submitScore({ id: 'alice' }, battle, [], 10)
+    await submitScore({ id: 'bob' }, submission({ sha256: CHART_B, md5: MD5_B }), [], 10)
+    await db.insert(schema.charts).values({ sha256: thirdChart, title: 'Third chart', mode: '7K' })
+    await db.insert(schema.difficultyTables).values({
+      id: 'fixture',
+      sourceUrl: 'https://example.invalid/table',
+      symbol: 'st',
+      name: 'Fixture',
+      activeGeneration: 'current',
+      levelOrder: ['10', '2'],
+    })
+    const level2 = { tableId: 'fixture', level: '2', generation: 'current' }
+    await db.insert(schema.difficultyTableEntries).values([
+      { ...level2, md5 },
+      { ...level2, md5, sha256: CHART_A },
+      { ...level2, level: '10', sha256: CHART_A },
+      { ...level2, level: '10', md5: MD5_B },
+      { ...level2, level: '10', sha256: thirdChart },
+    ])
+
+    const token = (await createAuthTokens('alice')).accessToken
+    await expectHttpError(analysisHandler(event({ path: '/api/v1/analysis' })), 401)
+    const clearReport = await analysisHandler(event({ path: '/api/v1/analysis', token }))
+    expect(clearReport.player.id).toBe('alice')
+    expect(clearReport.table.id).toBe('fixture')
+    expect(clearReport.levels).toEqual([
+      { level: '10', total: 2, segments: [{ rank: 0, count: 2 }] },
+      { level: '2', total: 1, segments: [{ rank: 5, count: 1 }] },
+    ])
+    const grades = await analysisHandler(
+      event({ path: '/api/v1/analysis?player=alice&mode=score' }),
+    )
+    expect(grades.levels[1]).toEqual({ level: '2', total: 1, segments: [{ rank: 8, count: 1 }] })
+    const url = '/api/v1/analysis/charts?player=alice&table=fixture'
+    const aaa = await analysisChartsHandler(event({ path: `${url}&level=2&rank=8&mode=score` }))
+    expect(aaa.charts).toMatchObject([{ sha256: CHART_A }])
+    const noPlay = await analysisChartsHandler(
+      event({ path: `${url}&level=10&rank=0&limit=1&offset=1` }),
+    )
+    expect(noPlay.charts).toMatchObject([{ sha256: thirdChart }])
+    expect(noPlay.pagination).toEqual({ limit: 1, offset: 1, total: 2, has_more: false })
+    await expectHttpError(analysisChartsHandler(event({ path: `${url}&level=2&rank=10` })), 400)
+    await setUserStatus('alice', 'banned')
+    await expectHttpError(analysisHandler(event({ path: '/api/v1/analysis?player=alice' })), 404)
+    await expectHttpError(analysisChartsHandler(event({ path: `${url}&level=2&rank=5` })), 404)
+  })
+
+  test('unregistered difficulty entries are counted once in both distributions until a matching chart is registered', async () => {
+    const pairedMd5 = 'd'.repeat(32)
+    const pairedSha256 = 'd'.repeat(64)
+    const shaOnly = 'f'.repeat(64)
+    const blockedMd5 = 'c'.repeat(32)
+    const blockedSha256 = 'c'.repeat(64)
+    const registeredMd5 = 'a'.repeat(32)
+    await submitScore({ id: 'bob' }, submission({ md5: registeredMd5 }), [], 10)
+    // Older imports can contain uppercase MD5 values.
+    await db.update(schema.charts).set({ md5: registeredMd5.toUpperCase() })
+    await setChartStatus(blockedSha256, 'blocked')
+    await db.insert(schema.difficultyTables).values({
+      id: 'fixture',
+      sourceUrl: 'https://example.invalid/table',
+      symbol: 'st',
+      name: 'Fixture',
+      activeGeneration: 'current',
+    })
+    const entry = { tableId: 'fixture', generation: 'current', level: '1' }
+    await db.insert(schema.difficultyTableEntries).values([
+      { ...entry, md5: registeredMd5 },
+      { ...entry, md5: pairedMd5, title: 'Paired chart' },
+      { ...entry, md5: pairedMd5, sha256: pairedSha256, artist: 'Table artist' },
+      { ...entry, sha256: pairedSha256 },
+      { ...entry, sha256: shaOnly, title: 'SHA-only chart' },
+      { ...entry, level: '2', md5: 'e'.repeat(32), title: 'MD5-only chart' },
+      { ...entry, md5: blockedMd5, sha256: blockedSha256 },
+      { ...entry, md5: blockedMd5 },
+      { ...entry, md5: MD5_B, generation: 'old' },
+    ])
+
+    const base = '/api/v1/analysis?player=alice&table=fixture'
+    const detail = '/api/v1/analysis/charts?player=alice&table=fixture&rank=0'
+    for (const mode of ['lamp', 'score']) {
+      const summary = await analysisHandler(event({ path: `${base}&mode=${mode}` }))
+      expect(summary.levels).toEqual([
+        { level: '1', total: 3, segments: [{ rank: 0, count: 3 }] },
+        { level: '2', total: 1, segments: [{ rank: 0, count: 1 }] },
+      ])
+      const result = await analysisChartsHandler(
+        event({ path: `${detail}&level=1&mode=${mode}&limit=2&offset=1` }),
+      )
+      expect(result.charts).toEqual([
+        {
+          id: `table:${pairedMd5}`,
+          sha256: null,
+          title: 'Paired chart',
+          artist: 'Table artist',
+          subtitle: null,
+        },
+        {
+          id: `table:${shaOnly}`,
+          sha256: null,
+          title: 'SHA-only chart',
+          artist: null,
+          subtitle: null,
+        },
+      ])
+      expect(result.pagination).toEqual({ limit: 2, offset: 1, total: 3, has_more: false })
+    }
+
+    // The already-synced SHA-256 links the MD5-only row as soon as a chart appears in the IR.
+    await submitScore({ id: 'bob' }, submission({ sha256: pairedSha256 }), [], 10)
+    const after = await analysisChartsHandler(event({ path: `${detail}&level=1` }))
+    expect(after.charts.map((chart: { sha256: string | null }) => chart.sha256)).toEqual([
+      CHART_A,
+      pairedSha256,
+      null,
+    ])
+    expect(after.pagination.total).toBe(3)
+  })
+
+  test('MD5-only table entries respect SHA-256 moderation from other active tables', async () => {
+    const md5 = 'd'.repeat(32)
+    const otherMd5 = 'e'.repeat(32)
+    const blocked = 'd'.repeat(64)
+    const publicSha256 = 'c'.repeat(64)
+    await setChartStatus(blocked, 'blocked')
+    await db.insert(schema.difficultyTables).values(
+      ['selected', 'reference'].map((id) => ({
+        id,
+        sourceUrl: `https://example.invalid/${id}`,
+        activeGeneration: 'current',
+      })),
+    )
+    const selected = { tableId: 'selected', generation: 'current' }
+    const reference = { tableId: 'reference', generation: 'current', level: '1' }
+    await db.insert(schema.difficultyTableEntries).values([
+      { ...selected, level: '1', md5, title: 'Blocked row' },
+      { ...selected, level: '2', md5: otherMd5, title: 'Visible row' },
+      { ...reference, md5, sha256: blocked },
+      { ...reference, generation: 'retired', md5: otherMd5, sha256: blocked },
+    ])
+    for (const mode of ['lamp', 'score']) {
+      const query = `player=alice&table=selected&mode=${mode}`
+      const report = await analysisHandler(
+        event({ path: `/api/v1/analysis?${query}&include=first_pages` }),
+      )
+      expect(report.levels).toMatchObject([{ level: '2', total: 1 }])
+      const list = await analysisChartsHandler(
+        event({ path: `/api/v1/analysis/charts?${query}&level=1&rank=0` }),
+      )
+      expect(list.charts).toEqual([])
+    }
+
+    // A different public SHA-256 sharing the MD5 remains visible, before and after IR registration.
+    await db.insert(schema.difficultyTableEntries).values({
+      ...selected,
+      level: '1',
+      md5,
+      sha256: publicSha256,
+      title: 'Public row',
+    })
+    const load = () =>
+      analysisChartsHandler(
+        event({
+          path: '/api/v1/analysis/charts?player=alice&table=selected&level=1&rank=0',
+        }),
+      )
+    const unresolved = await load()
+    expect(unresolved.charts).toMatchObject([{ sha256: null, title: 'Public row' }])
+    await db
+      .insert(schema.charts)
+      .values({ sha256: publicSha256, md5, mode: '7K', title: 'Public chart' })
+    expect((await load()).charts).toMatchObject([{ sha256: publicSha256, title: 'Public chart' }])
+  })
+
+  test('distribution first pages keep complete segment counts and match the chart listing order', async () => {
+    await submitScore({ id: 'alice' }, submission({ clear: 'Hard' }), [], 10)
+    await db.insert(schema.difficultyTables).values({
+      id: 'fixture',
+      sourceUrl: 'https://example.invalid/table',
+      symbol: 'st',
+      name: 'Fixture',
+      activeGeneration: 'current',
+    })
+    const entry = { tableId: 'fixture', generation: 'current', level: '1' }
+    await db.insert(schema.difficultyTableEntries).values({ ...entry, sha256: CHART_A })
+    for (let i = 51; i >= 0; i--) {
+      await db.insert(schema.difficultyTableEntries).values({
+        ...entry,
+        md5: i.toString(16).padStart(32, '0'),
+        title: `Table chart ${String(i).padStart(2, '0')}`,
+      })
+    }
+
+    for (const [mode, playedRank] of [
+      ['lamp', 5],
+      ['score', 9],
+    ] as const) {
+      const query = `player=alice&table=fixture&mode=${mode}`
+      const summary = await analysisHandler(
+        event({ path: `/api/v1/analysis?${query}&include=first_pages` }),
+      )
+      const first = await analysisChartsHandler(
+        event({ path: `/api/v1/analysis/charts?${query}&level=1&rank=0` }),
+      )
+      expect(summary.levels[0]).toMatchObject({
+        level: '1',
+        total: 53,
+        segments: [
+          { rank: playedRank, count: 1, first_page: [{ sha256: CHART_A }] },
+          { rank: 0, count: 52, first_page: first.charts },
+        ],
+      })
+      expect(first.pagination).toEqual({ limit: 50, offset: 0, total: 52, has_more: true })
+      expect(first.charts).toHaveLength(50)
+      expect(first.charts[0]).toMatchObject({ title: 'Table chart 00', sha256: null })
+      expect(first.charts[49]).toMatchObject({ title: 'Table chart 49', sha256: null })
+    }
+  })
+
+  test('distribution endpoints return 404 for unknown and inactive tables', async () => {
+    await db.insert(schema.difficultyTables).values([
+      { id: 'inactive', sourceUrl: 'https://example.invalid/inactive' },
+      { id: 'fixture', sourceUrl: 'https://example.invalid/table', activeGeneration: 'current' },
+    ])
+    const summary = '/api/v1/analysis?player=alice'
+    const charts = '/api/v1/analysis/charts?player=alice&level=1&rank=0'
+    for (const table of ['unknown', 'inactive']) {
+      for (const [handler, path] of [
+        [analysisHandler, summary],
+        [analysisChartsHandler, charts],
+      ] as const) {
+        await expect(handler(event({ path: `${path}&table=${table}` }))).rejects.toMatchObject({
+          statusCode: 404,
+          statusMessage: 'Difficulty table not found',
+        })
+      }
+    }
+    expect((await analysisHandler(event({ path: summary }))).table.id).toBe('fixture')
+    expect(
+      (await analysisChartsHandler(event({ path: `${charts}&table=fixture` }))).charts,
+    ).toEqual([])
+  })
+
+  test('distribution uses chart digest indexes and looks up history by player and chart', async () => {
+    await db.insert(schema.difficultyTables).values({
+      id: 'fixture',
+      sourceUrl: 'https://example.invalid/table',
+      activeGeneration: 'current',
+    })
+    const execute = spyOn(client, 'execute')
+    try {
+      await analysisHandler(
+        event({ path: '/api/v1/analysis?player=alice&mode=score&include=first_pages' }),
+      )
+      await analysisChartsHandler(
+        event({
+          path: '/api/v1/analysis/charts?player=alice&table=fixture&level=1&rank=0&mode=score',
+        }),
+      )
+      const queries = execute.mock.calls.flatMap(([statement]) =>
+        typeof statement === 'object' && statement.sql.includes('as "rank_index"')
+          ? [statement]
+          : [],
+      )
+      expect(queries).toHaveLength(3)
+      for (const { sql, args } of queries) {
+        const plan = await client.execute({ sql: `EXPLAIN QUERY PLAN ${sql}`, args })
+        const steps = plan.rows.map((row) => String(row.detail))
+        expect(steps.filter((step) => /^SCAN charts\b/.test(step))).toEqual([])
+        expect(steps.some((step) => step.includes('idx_charts_md5_nocase'))).toBeTrue()
+        expect(steps.some((step) => step.includes('sqlite_autoindex_charts_1'))).toBeTrue()
+        const historyLookups = steps.filter((step) => step.startsWith('SEARCH scores '))
+        expect(historyLookups.length).toBeGreaterThan(0)
+        for (const lookup of historyLookups) {
+          expect(lookup).toMatch(/player_id=\? AND chart_sha256=\?/)
+        }
+      }
+    } finally {
+      execute.mockRestore()
+    }
+  })
+
+  test('course ranking pages keep ties and the signed-in player outside the page', async () => {
+    for (const [i, id] of ['alice', 'bob', 'carol'].entries()) {
+      const payload = coursePayload([CHART_A], 'course-page', i === 2 ? 90 : 100)
+      payload.result.bp = i
+      await submitCourseScore({ id }, payload)
+    }
+    const hash = computeCourseHash([CHART_A], {})
+    const token = (await createAuthTokens('alice')).accessToken
+    const getPage = (offset: number) =>
+      courseRankingHandler(
+        event({
+          path: `/api/v1/courses/${hash}/ranking?limit=1&offset=${offset}`,
+          params: { hash },
+          token,
+        }),
+      )
+    const second = await getPage(1)
+    expect(second.ranking.entries).toMatchObject([{ rank: 1, player: { id: 'bob' } }])
+    expect(second.ranking.self).toMatchObject({ rank: 1, included_in_entries: false })
+    expect(second.ranking.pagination).toEqual({ limit: 1, offset: 1, total: 3, has_more: true })
+    const last = await getPage(2)
+    expect(last.ranking.entries).toMatchObject([{ rank: 3, player: { id: 'carol' } }])
+    expect(last.ranking.pagination).toEqual({ limit: 1, offset: 2, total: 3, has_more: false })
+  })
+
   test.each([99, 100])(
-    'player pages with limit=%i keep both statistics within D1 limits',
+    'player pages with limit=%i sort public activity before paging and stay within D1 limits',
     async (limit) => {
       const ids = Array.from({ length: 102 }, (_, i) => `page-${i}`)
       for (const [i, id] of [...ids, 'page-banned'].entries()) {
@@ -1472,18 +2203,16 @@ describe('rankings, courses, and aggregates', () => {
           await submitCourseScore({ id }, coursePayload(charts, computeCourseHash(charts, {})))
         }
         await db
-          .update(schema.bestScores)
+          .update(schema.scores)
           .set({ serverReceivedAt: new Date('2026-01-02') })
-          .where(
-            and(eq(schema.bestScores.playerId, id), eq(schema.bestScores.chartSha256, CHART_A)),
-          )
+          .where(and(eq(schema.scores.playerId, id), eq(schema.scores.chartSha256, CHART_A)))
         await db
-          .update(schema.bestCourseScores)
+          .update(schema.courseScores)
           .set({ serverReceivedAt: new Date(Date.UTC(2026, 0, 3 + i)) })
           .where(
             and(
-              eq(schema.bestCourseScores.playerId, id),
-              eq(schema.bestCourseScores.courseHash, publicCourse),
+              eq(schema.courseScores.playerId, id),
+              eq(schema.courseScores.courseHash, publicCourse),
             ),
           )
       }
@@ -1493,13 +2222,12 @@ describe('rankings, courses, and aggregates', () => {
       const page = await playersIndexHandler(
         event({ path: `/api/v1/players?q=page-&limit=${limit}` }),
       )
-      const scored = ids.slice(98, limit).reverse()
+      const sorted = [ids[99], ids[98], ...ids.slice(0, 98), ...ids.slice(100)]
       expect(page.players.map((player: { id: string }) => player.id)).toEqual([
-        ...scored,
-        ...ids.slice(0, 98),
+        ...sorted.slice(0, limit),
       ])
       expect(page.pagination).toEqual({ limit, offset: 0, total: 102, has_more: true })
-      for (const [i, id] of ids.slice(98, limit).entries()) {
+      for (const [i, id] of ids.slice(98, 100).entries()) {
         expect(page.players.find((player: { id: string }) => player.id === id)).toMatchObject({
           best_score_count: 1,
           best_course_score_count: 1,
@@ -1515,7 +2243,7 @@ describe('rankings, courses, and aggregates', () => {
       const tail = await playersIndexHandler(
         event({ path: `/api/v1/players?q=page-&limit=${limit}&offset=${limit}` }),
       )
-      expect(tail.players.map((player: { id: string }) => player.id)).toEqual(ids.slice(limit))
+      expect(tail.players.map((player: { id: string }) => player.id)).toEqual(sorted.slice(limit))
       expect(tail.pagination).toEqual({ limit, offset: limit, total: 102, has_more: false })
       const empty = await playersIndexHandler(
         event({ path: '/api/v1/players?limit=100&q=no-match' }),
@@ -1526,6 +2254,64 @@ describe('rankings, courses, and aggregates', () => {
       })
     },
   )
+
+  test('player list uses the latest accepted submission and can sort by profile and best counts', async () => {
+    for (const [i, id] of ['bob', 'carol', 'alice'].entries()) {
+      await db
+        .update(schema.users)
+        .set({ createdAt: new Date(1000 + i) })
+        .where(eq(schema.users.id, id))
+      await db
+        .update(schema.profiles)
+        .set({ displayName: `sort fixture ${id}` })
+        .where(eq(schema.profiles.id, id))
+    }
+    for (const [id, sha256, key, points, received] of [
+      ['alice', CHART_A, 'alice-best', 150, '2026-01-01'],
+      ['alice', CHART_A, 'alice-latest', 100, '2026-01-03'],
+      ['bob', CHART_A, 'bob-public', 100, '2026-01-02'],
+      ['alice', CHART_B, 'alice-other', 100, '2026-01-01'],
+    ] as const) {
+      const score = await submitScore({ id }, submission({ sha256, key, exScore: points }), [], 10)
+      expect(score.accepted).toBe(true)
+      await db
+        .update(schema.scores)
+        .set({ serverReceivedAt: new Date(received) })
+        .where(eq(schema.scores.id, score.score_id))
+    }
+    const rejected = await submitScore(
+      { id: 'bob' },
+      submission({ key: 'rejected', exScore: 99 }),
+      [],
+      10,
+    )
+    await db
+      .update(schema.scores)
+      .set({ accepted: false })
+      .where(eq(schema.scores.id, rejected.score_id))
+    await submitCourseScore({ id: 'bob' }, coursePayload([CHART_B], 'bob-course'))
+    await db.update(schema.courseScores).set({ serverReceivedAt: new Date('2026-01-01') })
+    for (const [query, expected] of [
+      ['', ['alice', 'bob', 'carol']],
+      ['order=asc', ['bob', 'alice', 'carol']],
+      ['sort=display_name', ['alice', 'bob', 'carol']],
+      ['sort=display_name&order=desc', ['carol', 'bob', 'alice']],
+      ['sort=created_at', ['alice', 'carol', 'bob']],
+      ['sort=created_at&order=asc', ['bob', 'carol', 'alice']],
+      ['sort=best_score_count', ['alice', 'bob', 'carol']],
+      ['sort=best_score_count&order=asc', ['carol', 'bob', 'alice']],
+      ['sort=best_course_score_count', ['bob', 'alice', 'carol']],
+      ['sort=best_course_score_count&order=asc', ['alice', 'carol', 'bob']],
+    ] as const) {
+      const page = await playersIndexHandler(
+        event({ path: `/api/v1/players?q=sort+fixture&${query}` }),
+      )
+      expect(page.players.map((player: { id: string }) => player.id)).toEqual([...expected])
+      expect(
+        page.players.find((player: { id: string }) => player.id === 'alice').last_score_at,
+      ).toBe('2026-01-03T00:00:00.000Z')
+    }
+  })
 
   test('banned players are excluded before ranking, paging, totals, and clear rate', async () => {
     await submitScore({ id: 'alice' }, submission({ exScore: 300 }), [], 10)
@@ -1667,8 +2453,7 @@ describe('course visibility with several courses', () => {
 
   function bestCourseCount(players: { players: Array<{ id: string }> }, id: string) {
     return (players.players.find((player) => player.id === id) as
-      | { best_course_score_count: number }
-      | undefined)!.best_course_score_count
+      { best_course_score_count: number } | undefined)!.best_course_score_count
   }
 
   test('a blocked chart hides only the courses that contain it', async () => {

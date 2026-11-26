@@ -6,9 +6,22 @@ import type {
   IrDoubleOption,
   IrRuleMode,
 } from '../../shared/types/ir'
+import {
+  DAILY_BOUNDARY_MAX_MINUTES,
+  DAILY_BOUNDARY_MIN_MINUTES,
+  JST_UTC_OFFSET_MINUTES,
+} from '../../shared/constants/ir'
 
-const JST_OFFSET_MINUTES = 9 * 60
 const DAY_MS = 24 * 60 * 60 * 1000
+
+/** プロフィールに保存できる、JST 00:00 からの切り替わり分か。 */
+export function isDailyBoundaryMinutes(value: unknown): value is number {
+  return (
+    Number.isInteger(value) &&
+    Number(value) >= DAILY_BOUNDARY_MIN_MINUTES &&
+    Number(value) <= DAILY_BOUNDARY_MAX_MINUTES
+  )
+}
 
 export interface DailyDateRange {
   start: Date
@@ -78,8 +91,10 @@ export function dailyDateRange(date: string, boundaryMinutes: number): DailyDate
   if (!match) {
     throw new Error('date must be YYYY-MM-DD')
   }
-  if (!Number.isInteger(boundaryMinutes) || boundaryMinutes < 0 || boundaryMinutes > 1439) {
-    throw new Error('daily boundary must be between 0 and 1439 minutes')
+  if (!isDailyBoundaryMinutes(boundaryMinutes)) {
+    throw new Error(
+      `daily boundary must be between ${DAILY_BOUNDARY_MIN_MINUTES} and ${DAILY_BOUNDARY_MAX_MINUTES} minutes`,
+    )
   }
 
   const year = Number(match[1])
@@ -95,7 +110,7 @@ export function dailyDateRange(date: string, boundaryMinutes: number): DailyDate
     throw new Error('date is invalid')
   }
 
-  const start = new Date(utcMidnight + (boundaryMinutes - JST_OFFSET_MINUTES) * 60_000)
+  const start = new Date(utcMidnight + (boundaryMinutes - JST_UTC_OFFSET_MINUTES) * 60_000)
   return { start, end: new Date(start.getTime() + DAY_MS) }
 }
 

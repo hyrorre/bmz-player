@@ -1,6 +1,14 @@
-import { and, desc, sql, type SQL } from 'drizzle-orm'
+import { and, asc, desc, sql, type SQL } from 'drizzle-orm'
 import { getQuery } from 'h3'
 import { db, schema } from 'hub:db'
+import { readDifficultyFilter } from '../../../../shared/utils/difficulty_filter'
+import { readListSort } from '../../../../shared/utils/list_sort'
+import {
+  chartDifficultyCondition,
+  chartDifficultyLevelOrder,
+  difficultyFilterLabel,
+  lookupDifficultyLabels,
+} from '../../../services/difficulty_tables'
 import { publicChartCondition } from '../../../services/moderation/visibility'
 
 export default defineEventHandler(async (event) => {
@@ -8,16 +16,32 @@ export default defineEventHandler(async (event) => {
   const limit = Math.max(1, Math.min(100, Number(query.limit ?? 50) || 50))
   const offset = Math.max(0, Number(query.offset ?? 0) || 0)
   const search = typeof query.q === 'string' ? query.q.trim() : ''
+  const difficulty = readDifficultyFilter(query)
+  const { sort, order } = readListSort('charts', query)
+  const direction = order === 'asc' ? asc : desc
+  const chartsTable = schema.charts
+  const sortColumns = {
+    created_at: chartsTable.createdAt,
+    title: sql`nullif(${chartsTable.title}, '') collate nocase`,
+    artist: sql`nullif(${chartsTable.artist}, '') collate nocase`,
+    level: chartsTable.level,
+    notes: chartsTable.notes,
+    table_level:
+      sort === 'table_level' && difficulty ? chartDifficultyLevelOrder(difficulty) : null,
+  }
+  const sortColumn = sortColumns[sort] ?? chartsTable.createdAt
 
   const conditions: SQL[] = [publicChartCondition(schema.charts.sha256)]
   if (search) {
     const pattern = `%${escapeLikePattern(search)}%`
     conditions.push(sql`${schema.charts.title} like ${pattern} escape '\\'`)
   }
+  if (difficulty) conditions.push(chartDifficultyCondition(difficulty))
 
   const listRequest = db
     .select({
       sha256: schema.charts.sha256,
+      md5: schema.charts.md5,
       title: schema.charts.title,
       subtitle: schema.charts.subtitle,
       genre: schema.charts.genre,
@@ -30,7 +54,7 @@ export default defineEventHandler(async (event) => {
     })
     .from(schema.charts)
     .where(and(...conditions))
-    .orderBy(desc(schema.charts.updatedAt))
+    .orderBy(sql`${direction(sortColumn)} nulls last`, schema.charts.sha256)
     .limit(limit)
     .offset(offset)
   const countRequest = db
@@ -38,11 +62,20 @@ export default defineEventHandler(async (event) => {
     .from(schema.charts)
     .where(and(...conditions))
 
-  const [charts, countRows] = await Promise.all([listRequest, countRequest])
+  const [charts, countRows, selectedDifficulty] = await Promise.all([
+    listRequest,
+    countRequest,
+    difficulty ? difficultyFilterLabel(difficulty) : null,
+  ])
+  const labels = await lookupDifficultyLabels(charts)
   const total = Number(countRows[0]?.total ?? 0)
 
   return {
-    charts,
+    difficulty_filter: selectedDifficulty,
+    charts: charts.map(({ md5: _md5, ...chart }) => ({
+      ...chart,
+      difficulty_labels: labels.get(chart.sha256) ?? [],
+    })),
     pagination: {
       limit,
       offset,

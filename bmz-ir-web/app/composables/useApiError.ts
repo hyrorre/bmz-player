@@ -22,7 +22,7 @@ const apiErrorKeys: Record<string, string> = {
   'Administrator accounts cannot be restricted': 'apiErrors.cannotRestrictAdministrator',
 }
 
-function extractApiMessage(error: unknown): string | undefined {
+export function extractApiMessage(error: unknown): string | undefined {
   if (!error || typeof error !== 'object') return undefined
 
   const candidate = error as {

@@ -11,7 +11,6 @@ export default defineI18nLocale(() =>
       common: {
         language: '言語',
         openMenu: 'メニューを開く',
-        licenses: 'ライセンス',
         backHome: 'トップへ戻る',
         loading: '読み込み中...',
         search: '検索',
@@ -22,9 +21,11 @@ export default defineI18nLocale(() =>
         save: '保存する',
       },
       nav: {
+        account: 'アカウント',
         charts: '譜面',
         courses: 'コース',
         players: 'ユーザー',
+        myPage: 'マイページ',
         daily: '本日の成果',
         rivals: 'ライバル',
         profile: 'プロフィール',
@@ -88,6 +89,8 @@ export default defineI18nLocale(() =>
           'メール送信による再設定は現在未対応です。ログイン中のアカウント設定から変更してください。',
       },
       manual: {
+        contents: '章一覧',
+        chapters: '章を選ぶ',
         title: 'マニュアル',
         description: 'BMZ Player の始め方、操作方法、困ったときの対処をまとめています。',
         englishOnly: 'この言語のマニュアルはまだないため、英語版を表示しています。',

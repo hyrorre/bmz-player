@@ -82,6 +82,7 @@ GET    /api/v1/charts/{sha256}/ranking         # ランキング
 GET    /api/v1/charts/{sha256}/self-scores     # 自分の履歴
 GET    /api/v1/charts/by-md5/{md5}
 GET    /api/v1/charts/lookup?md5=...           # MD5からSHA-256を引く
+GET    /api/v1/difficulty-tables               # 同期済み難易度表と現在のレベル
 POST   /api/v1/course-scores                   # コーススコア（kind=dan / course）
 GET    /api/v1/courses                         # コースの一覧（?q=）
 GET    /api/v1/courses/{course_hash}           # registry + play_count
@@ -90,6 +91,8 @@ GET    /api/v1/courses/{course_hash}/self-scores
 GET    /api/v1/players                         # プレイヤーの一覧（?q=）
 GET    /api/v1/players/{id}                    # プロフィール + best scores
 GET    /api/v1/daily                           # player / date / mode=allの日次成果
+GET    /api/v1/analysis                        # player / table / mode の難易度表別成績分布
+GET    /api/v1/analysis/charts                 # table / level / rank に該当する譜面
 ```
 
 ### ライバルと管理
@@ -110,7 +113,7 @@ POST   /api/v1/admin/moderation/charts/status  # 管理者: 確認中・非公�
 GET    /api/v1/admin/moderation/audit-logs     # 管理者: 監査ログ（?target_type=&target_id=&actor_id=&limit=&offset=）
 ```
 
-`PUT /api/v1/charts/{sha256}`と、難易度表を公開・管理するAPIはありません。譜面はscore submitの中で登録します。
+譜面はscore submitの中で登録します。難易度表は運用側のallowlistから同期します。
 
 ### 送信の制限
 
@@ -547,7 +550,7 @@ Workerの更新前にD1のmigration `0018_score_cleanup_consistency.sql`と`0019
 
 - EXスコアは`(FAST PGREAT + SLOW PGREAT) * 2 + FAST GREAT + SLOW GREAT`です。
 - 判定数はBMZの`ScoreState`のJudgeCountsと同じで、FAST / SLOWそれぞれの`pgreat` / `great` / `good` / `bad` / `poor` / `empty_poor`です。BMZでは「Miss」という判定名は使わず、見逃しは`poor`、空押しは`empty_poor`です。`empty_poor`にもFAST / SLOWがあるため、丸めずに保存します。
-- APIの`bp`は`bad + poor + empty_poor`、`cb`は`bad + poor`です。BMZはプレイ終了時の処理済みノーツ数を`pass_notes`で送り、途中FAILEDでは未処理ノーツを加えた記録値を`min_bp` / `min_cb`で送ります。単曲のスコア詳細にはそのプレイの`min_bp`を表示し、自己ベストは各プレイの記録値の最小を取ります。
+- APIの`bp`は`bad + poor + empty_poor`、`cb`は`bad + poor`です。BMZはプレイ終了時の処理済みノーツ数を`pass_notes`で送り、途中FAILEDでは未処理ノーツを加えた記録値を`min_bp` / `min_cb`で送ります。単曲のスコア詳細にはそのプレイの`min_bp`と`min_cb`を表示し、自己ベストは項目ごとに各プレイの記録値の最小を取ります。
 - `device_type`は、プレイ中の人による押下入力（`InputSource::Human`の`InputKind::Press`）を数え、コントローラーの押下数がキーボードより多ければ`controller`、それ以外は`keyboard`にします。`mixed`はありません。スクラッチだけをキーボード入力へ変換している環境でも、鍵盤がコントローラーなら`controller`になります。device情報のない古いリプレイは`keyboard`として扱います。
 - ローカルのscore DBは、`score_history` / `score_best` / `replay_slots`に`bp` / `cb`を、`score_history` / `score_best`に`device_type`を保存します。IRのpayloadは`score_history`の値から作ります。BMZでは`miss_count`という名前は使いません。
 
@@ -574,6 +577,7 @@ Workerの更新前にD1のmigration `0018_score_cleanup_consistency.sql`と`0019
 - ランキングの代表となるスコアは、EXスコアが高い、同点ならクリアが高い、BPが低い、CBが低い、最大コンボが高い、の順で比べます。
 - クリア・最大コンボ・BP・CBは、それぞれの最良値と、その値を記録したscoreを別に保持します（beatorajaの`IR_SEND_UPDATE_SCORE`と同じく、項目ごとに更新します）。
 - `best_scores.device_type`は、代表のスコアを記録した投稿の値で上書きします。
+- `GET /api/v1/players/{id}`は公開譜面のベストスコアを返します。`limit`（1〜200、既定50）、`offset`（0〜100000、既定0）、`ln_policy`、`rule_mode`を指定できます。`pagination.total`は絞り込み後の件数です。LNの選択肢を決める`ln_filters`は、ページや絞り込みにかかわらず、そのプレイヤーの公開ベスト全体を基準にします。
 
 ## ライバル
 
@@ -592,10 +596,9 @@ Workerの更新前にD1のmigration `0018_score_cleanup_consistency.sql`と`0019
 - score identityは`course_hash + gauge + ln_policy + rule_mode + scoring`です。段位（class系の制約）ではゲージが制約で決まりますが、通常のコースではユーザーが選ぶため、gaugeを含めます。`ln_policy`は、コース内の全譜面のLN情報とコースのLN制約から、単曲と同じ規則で正規化します。
 - bestは、EXスコア、クリア、BP（小さいほうが良い）、最大コンボの順で比べます。比較と更新を同じSQLで行います。
 - 同じプレイヤー・同じ`idempotency_key`の重複投稿には、既存の`course_score_id`を返します。bestの書き込みが完了していなければ再試行し、実際に更新した場合だけ`best_updated=true`を返します。
-- `GET /api/v1/courses/{course_hash}/ranking`はglobalだけで、`gauge` / `ln_policy` / `rule_mode`（それぞれ`ALL`で全体）と`limit`（1〜200、既定100）で絞り込めます。認証付きの取得では、`limit`の範囲外でも`ranking.self`に自分の順位を返します。`ranking.pagination.total`は条件に合う全プレイヤー数です。BMZ Playerは、ログイン済みならコースランキングも認証付きで取得し、Course Resultの自分の順位と参加人数に使います。
+- `GET /api/v1/courses/{course_hash}/ranking`はglobalだけで、`gauge` / `ln_policy` / `rule_mode`（それぞれ`ALL`で全体）で絞り込めます。`limit`（1〜200、既定100）と`offset`（0〜100000、既定0）でページを指定します。同点の順位はページをまたいでも同じです。認証付きの取得では、表示範囲外でも`ranking.self`に自分の順位を返します。`ranking.pagination.total`は条件に合う全プレイヤー数です。BMZ Playerは、ログイン済みならコースランキングも認証付きで取得し、Course Resultの自分の順位と参加人数に使います。
 - BMZ Playerは、コースの終了時に`CourseResultSummary`からpayloadを作り、`ir_score_jobs`へ`kind=course`のjobを入れます。`local_score_id`にはローカルのcourse score ID、`chart_sha256`にはcourse hashを入れます。
 - 未登録の譜面がコースに含まれる場合は、metadataなしでSHA-256だけを登録します。
-- 難易度表（tables）の専用の実装は、まだありません。
 
 ```json
 {
@@ -633,11 +636,32 @@ Workerの更新前にD1のmigration `0018_score_cleanup_consistency.sql`と`0019
 }
 ```
 
+## 一覧APIのソート
+
+一覧APIの`sort`で種別を、`order=asc`または`order=desc`で方向を指定します。検索と公開範囲の絞り込みを反映し、ソートしてから`limit`と`offset`を適用します。
+
+| API | 既定 | ほかの`sort`と既定方向 |
+|---|---|---|
+| `/api/v1/players` | `last_score_at desc` | `display_name asc`、`created_at desc`、`best_score_count desc`、`best_course_score_count desc` |
+| `/api/v1/charts` | `created_at desc` | `title asc`、`artist asc`、`level asc`、`notes asc`、`table_level asc` |
+| `/api/v1/courses` | `created_at desc` | `title asc`、`chart_count asc` |
+
+`last_score_at`は、公開対象の譜面・コースへの受理済みスコアのうち、サーバー受理日時が最新の投稿です。スコアのないユーザーは両方向で末尾に表示します。`table_level`には`difficulty_table`を指定します。複数レベルに載る譜面は、絞り込みの対象内で表の定義順が最初のレベルを使います。
+
 ## 日次成果と難易度表
 
 - 日次成果は`/api/v1/daily?player=<id>&date=YYYY-MM-DD&mode=all`で公開します。`player`を省略すると、ログイン中の本人を対象にします。
-- 成果日の切り替わりは、プロフィールの`daily_boundary_minutes`（JST 00:00からの分、既定0）で設定できます。
-- 難易度表は、運用側のallowlistを6時間ごとにD1へ世代単位で同期し、日次APIの返却時にMD5優先、SHA-256をfallbackとしてラベルを付けます。
+- 成果日の切り替わりは、プロフィールの`daily_boundary_minutes`（JST 00:00からの分、既定0）で設定できます。範囲は-300〜2699です。UTC-12:00〜UTC+14:00のどの地域でも、現地の任意の時刻を切り替わりにでき、成果日の日付が現地の日付と一致します。成果日`date`は`date`のJST 00:00に`daily_boundary_minutes`を足した時刻から24時間です。
+- プロフィールでは、切り替わりの選択肢を閲覧中のタイムゾーンの00:00〜23:30で表示し、その日のUTCとの差でJST基準の分に換算して保存します。保存値はタイムゾーン名を持たないため、夏時間のある地域では季節によって現地の切り替わりが1時間ずれます。切り替わりが閲覧者の現地日付で別の日になる場合は、成果日から何日前・何日後かを時刻に添えます。
+- 日次成果の日付は区間の名前として表示し、閲覧者のタイムゾーンでは変換しません。切り替わり時刻は、その日の区間の開始を閲覧者のタイムゾーンで、タイムゾーンの略称付きで表示します。
+- 難易度表は、運用側のallowlistを6時間ごとにD1へ世代単位で同期します。公開IDは [難易度表の定義](../bmz-ir-web/server/constants/difficulty_tables.ts) の `id` に `stella` や `satellite` のような短い値を指定します。公開IDを変更しても、取得元URLに紐付く既存の同期世代を利用します。日次API、譜面の一覧・詳細APIではMD5を優先し、SHA-256をfallbackとして`difficulty_labels`を返します。
+- `GET /api/v1/difficulty-tables`は、現在の同期世代に収録譜面がある難易度表の`id`、`name`、`symbol`、`levels`を返します。レベルには難易度表の定義順を使います。従来のハッシュIDを持つ表では、互換用に`legacy_id`も返します。分析の`table`と譜面一覧の`difficulty_table`には公開IDと従来のハッシュIDの両方を使えます。
+- 譜面一覧APIでは`difficulty_table`（`difficulty_labels[].table_id`）のみを指定すると、その表のバッジが付く公開譜面を全レベルから返します。`difficulty_level`（`difficulty_labels[].level`）を指定すると、そのレベルに絞り込みます。タイトル検索の`q`と組み合わせられます。
+- `GET /api/v1/analysis`は同期済みの難易度表の譜面をレベルごとに集計します。`player`を省略するとログイン中の本人、`table`を省略すると同期済みの優先順で先頭の表です。`mode=lamp`（既定値）は譜面ごとの最高クリア、`mode=score`は採点対象ノーツ数に基づく最高スコアランクです。どちらも通常のランキングと同じ`double_option=off`を対象にし、LN・RULEの区分をまたいで最高値を使います。該当する記録がない公開譜面とIR未登録譜面は、両方のモードで`NO PLAY`に集計します。非公開・ブロック済みの譜面は集計から除外します。
+- `include=first_pages`を指定した分布APIは、区画ごとの総件数に加え、一覧の先頭50件を`segments[].first_page`に返します。
+- 難易度表にMD5だけが載るIR未登録譜面も、同期中のいずれかの表の有効世代で非公開・ブロック済みのSHA-256と対応すれば、分布と譜面一覧の両方から除外します。
+- `GET /api/v1/analysis/charts`は`table`、`level`、`rank`（集計結果の`segments[].rank`）、任意の`player`と`mode`で区画内の譜面を取得します。`limit`（1〜100、既定50）と`offset`（0〜100000、既定0）でページを指定します。IR未登録譜面の`sha256`は`null`で、タイトルとアーティストは難易度表の情報を返します。
+- 両方の分析APIは、指定された`table`が未登録または同期済みでなければ`404 Difficulty table not found`を返します。
 - 難易度表を即時に同期する管理APIは、ログイン済みのユーザーのうち`NUXT_IR_ADMIN_USER_IDS`（カンマ区切り）に含まれるIDだけが実行できます。未設定の場合は全員を拒否します。
 - Cronと管理APIが重なった場合は、D1の期限付きのロックで片方を`already_running`としてスキップします。
 - 同期の失敗は、Cloudflare LogsへURLと原因を最大10件、各500文字まで記録します。全件が失敗した場合は、最初の原因を管理APIの502エラーにも含めます。
@@ -892,9 +916,28 @@ payloadと署名は次のとおりです。
 
 ### Webの表示
 
+- ヘッダーから譜面・コース・ユーザーへ移動できます。「マニュアル」を開くと章一覧と各章のリンクが表示されます。ログイン中のアカウントメニューには「マイページ」「本日の成果」「分析」の順で表示します。狭い画面ではヘッダー左のメニューボタンにリンクをまとめます。マニュアルの章は各記事の上部でも切り替えられます。
 - ユーザーページからライバルを登録・解除できます。
+- プレイヤー詳細は、公開譜面のベストスコアを50件ずつ表示します。`score_page`、`ln_policy`、`rule_mode`をURLに保持し、絞り込みを変えると1ページ目に戻ります。ユーザー一覧から開いた詳細では、一覧へのリンクに検索語とページ番号を引き継ぎます。
+- プレイヤー詳細の譜面欄には難易度表バッジを、クリア欄にはベストランプを表示します。公開スコアにLN譜面があればLNの列と絞り込みを表示し、定義LNと未定義LNが同じ譜面に共存する場合は`AUTO`を選べます。RULE・OPTIONの表記は譜面ランキングと共通です。
 - `/rivals`では、自分をライバルに登録しているプレイヤーの一覧と、score identityごとのEX / BPの比較を表示します。
 - 譜面のランキングは、全体と「自分＋ライバル」を切り替えられます。
+- 譜面・コース・プレイヤーの一覧では検索語を`q`、ページ番号を`page`、ソート種別と方向を`sort`・`order`に保持します。詳細から一覧に戻るリンクでもこれらを引き継ぎます。ソートを変更すると検索語と絞り込みを維持して1ページ目を表示します。ライバル比較では比較相手を`player`、ページ番号を`page`に保持します。
+- ユーザー一覧の既定は、公開譜面・コースへの受理済みスコアの最終投稿が新しい順です。表示名、登録日、譜面・コースのベスト件数でも並び替えられます。譜面・コース一覧の既定はIRへの登録が新しい順です。譜面は譜面名、アーティスト、譜面レベル、ノーツ数、選択中の難易度表の定義順で並び替えられます。コースはコース名と構成譜面数でも並び替えられます。
+- 譜面・コースのランキングは現在の条件に合う参加者数を表示し、100人ずつ閲覧できます。ランキングのページ番号は`ranking_page`、LNとRULEの選択は`ln_policy`と`rule_mode`に保持します。単曲の表示範囲は`scope`に保持します。条件変更時はランキングの1ページ目を表示します。譜面・コースのランキングとプレイヤーのベストスコアでは、URLのページ番号が最終ページを超える場合、絞り込み条件を保ったまま最終ページを表示します。
+- 譜面一覧から難易度表とレベルを直接選べます。表を変更するとその表の全レベルを表示します。難易度表バッジからは同じ表・レベルが選択された一覧を開けます。譜面一覧で表・レベルを変更したり難易度の絞り込みを外したりすると、タイトル検索を引き継いで1ページ目を表示します。
+- 譜面詳細ではMD5とSHA-256を並べて表示し、押した方のハッシュ値をコピーできます。コピーに成功すると、一時的にチェックマークが表示されます。「外部サービス」からは、その譜面のMD5またはSHA-256で外部IRのランキングや検索結果を別タブで開けます。MD5を必要とするリンクは、譜面にMD5が登録されている場合に表示します。
+- 「分析」ページ（`/analysis`）ではプレイヤーのクリアランプ分布とスコアランク分布を切り替えられます。プレイヤー詳細の「分析」から対象を指定できます。最後に選んだ難易度表と表示種別をCookieに保存し、次回開いたときに復元します。URLで指定された表や表示種別を優先します。URLで指定した表が利用できない場合は「難易度表を選び直す」から表の指定を外して開けます。Cookieにだけ保存されていた表が利用できなければ、設定を消して既定の表を表示します。難易度ごとの棒の区画を選ぶと、取得済みの先頭50件を表示します。2ページ目以降はページ移動時に取得します。IR登録済みの譜面名からはランキングに移動でき、未登録譜面には「IR未登録」を表示します。譜面一覧を開いたときはプレイヤー、表示中の難易度表、表示種別、区画をURLに保持します。
+- 「分析」と「本日の成果」では、結果をPNGに保存したり、画像や共有URLをクリップボードにコピーしたりできます。「Xで投稿」は結果の説明とURLを入れた投稿画面を開きます。共有URLには対象プレイヤーと、分析の表・表示種別、または成果の日付を含めます。画像を投稿に添えるときは、貼り付けるか、保存したPNGを添付できます。
+- ランキングと「本日の成果」のクリアランプ・スコアランクのバッジは、分析ページの凡例の色を基に、淡い背景と細い枠で表示します。「本日の成果」の更新前後にも、表示しているランプとランクの色を使います。スコア表では`FULL COMBO`を`FC`と表示します。
+- 譜面・コースのランキング、プレイヤー詳細、自己スコア履歴、「本日の成果」では、EX SCORE列にスコア・満点と達成率、RANK列にランクと最も近いランク境界との差を表示します。「本日の成果」は更新前後のスコアとランクをそれぞれの列に表示します。
+- MAX COMBO欄では、最大コンボと、そのプレイの総ノーツ数を表示します。単曲のベスト一覧では最大コンボを記録したプレイから総ノーツ数を取得します。コースでは投稿された満点の半分を使います。総ノーツ数が取得できない記録では最大コンボだけを表示します。
+- 譜面・コースのランキング、プレイヤー詳細、自己スコア履歴ではBPの隣にCBを表示します。コースのCBは記録BPから空POORを引いた値です。空POORの記録がないコーススコアのCBは`-`で表示します。
+- 単曲ランキング、プレイヤー詳細、単曲の自己スコア履歴、ライバル比較では、行の右端にある「…」から個別プレイの判定内訳、スコアの署名状態、リプレイを確認できます。表を横スクロールしても「…」は右端に表示します。EXベストとクリアベストが別のプレイの場合は行内で切り替えられ、入力デバイスと日時も選択したプレイの値を表示します。詳細は開いたときに取得します。旧`/scores/{id}`のURLは、スコアが閲覧できる場合に、その譜面のランキングへ301で転送します。非公開譜面のランキングは投稿者本人にも公開しません。
+- 単曲・コースのランキングと自己スコア履歴、プレイヤー詳細、ライバル比較では、行の「…」に、送信時のバージョンを`bmz-player 0.5.4`の形式で表示します。単曲ではリプレイダウンロードボタンの下に表示します。ローカル履歴の一括送信では、一括送信に使用したバージョンが表示されます。
+- IR Webの日時は閲覧者のタイムゾーンで表示します。ブラウザのタイムゾーンを`ir-time-zone` Cookieに保存し、SSRもその値で描画します。Cookieがない初回のSSRとhydrationは日本標準時で描画し、表示後にブラウザのタイムゾーンへ切り替えます。譜面・コースのランキング、プレイヤー詳細、自己スコア履歴の日時列では、日付を1行目、時刻を2行目に表示します。画面幅1280px未満では譜面ランキングとプレイヤー詳細の入力・日時列、コースランキングと自己スコア履歴の日時列をたたみます。入力デバイスと日時は行の「…」で表示できます。
+- LNのフィルターと列はLNを含む場合に表示します。定義LNが複数種類ある場合は`AutoLn`、定義LNと未定義LNが共存する場合は`AutoLn`・`AutoCn`・`AutoHcn`を選べます。コースでは構成譜面のLN情報を集約します。IR未登録の構成譜面がある場合は、公開対象のコーススコアに記録されたLN区分も使います。コースのランキングと自己履歴はゲージをまとめて表示します。
+- `OPTION`の配置は10K・14Kで両サイド、それ以外で1P側を表示します。コースは記録された配置を譜面順に表示し、同じ表記をまとめます。配置の保存に対応する前のコーススコアでは`-`を表示します。
 
 ### BMS-IR
 

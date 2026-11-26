@@ -1,17 +1,18 @@
 <script setup lang="ts">
 import type {
+  IrChartLnProfile,
+  IrDifficultyLabel,
   IrRanking,
   IrRankingEntry,
   IrRankingScope,
-  IrRuleMode,
   IrScoreHistoryResult,
-  LnScorePolicy,
 } from '~~/bmz-ir-web/shared/types/ir'
+import { readDifficultyFilter } from '~~/bmz-ir-web/shared/utils/difficulty_filter'
 
 interface ChartDetail {
-  chart: {
+  chart: IrChartLnProfile & {
     sha256: string
-    md5: string
+    md5: string | null
     title: string
     subtitle: string | null
     genre: string | null
@@ -27,16 +28,15 @@ interface ChartDetail {
     ln_notes: number
     cn_notes: number
     hcn_notes: number
+    hln_notes: number
     mine_notes: number
     has_random: boolean
     has_stop: boolean
-    has_undefined_ln: boolean
-    has_defined_ln: boolean
-    has_defined_cn: boolean
-    has_defined_hcn: boolean
     has_ln: boolean
     has_cn: boolean
     has_hcn: boolean
+    has_hln: boolean
+    difficulty_labels: IrDifficultyLabel[]
     has_mine: boolean
     source_url: string | null
     append_url: string | null
@@ -52,9 +52,14 @@ interface ChartDetail {
 
 const route = useRoute()
 const localePath = useLocalePath()
+const listLocation = computed(() =>
+  localePath({
+    path: '/charts',
+    query: { ...listReturnQuery(route.query), ...readDifficultyFilter(route.query) },
+  }),
+)
 const { user } = useUserSession()
 const { t } = useI18n()
-const { formatDateTime } = useLocaleFormat()
 const { translateApiError } = useApiError()
 const chartParam = computed(() =>
   String(route.params.sha256 ?? '')
@@ -68,7 +73,10 @@ if (/^[0-9a-f]{32}$/.test(chartParam.value)) {
     const lookup = await $fetch<{ sha256: string }>('/api/v1/charts/lookup', {
       query: { md5: chartParam.value },
     })
-    await navigateTo(localePath(`/charts/${lookup.sha256}`), { redirectCode: 301, replace: true })
+    await navigateTo(localePath({ path: `/charts/${lookup.sha256}`, query: route.query }), {
+      redirectCode: 301,
+      replace: true,
+    })
   } catch {
     paramError.value = t('chart.md5NotFound')
   }
@@ -79,24 +87,7 @@ if (/^[0-9a-f]{32}$/.test(chartParam.value)) {
 const sha256 = computed(() => (/^[0-9a-f]{64}$/.test(chartParam.value) ? chartParam.value : ''))
 const canLoadChart = computed(() => sha256.value.length === 64)
 
-type LnPolicyFilter = 'ALL' | LnScorePolicy
-type RuleModeFilter = 'ALL' | IrRuleMode
 type RankingScopeFilter = Extract<IrRankingScope, 'global' | 'self_and_rivals'>
-
-const lnPolicy = ref<LnPolicyFilter>('ALL')
-const lnPolicies: LnPolicyFilter[] = [
-  'ALL',
-  'AutoLn',
-  'AutoCn',
-  'AutoHcn',
-  'ForceLn',
-  'ForceCn',
-  'ForceHcn',
-  'ForceHln',
-]
-const ruleMode = ref<RuleModeFilter>('ALL')
-const ruleModes: RuleModeFilter[] = ['ALL', 'Beatoraja', 'Lr2Oraja', 'Dx']
-const rankingScope = ref<RankingScopeFilter>('global')
 const rankingScopes = computed(() => [
   { label: t('ranking.global'), value: 'global' as const },
   ...(user.value ? [{ label: t('ranking.selfAndRivals'), value: 'self_and_rivals' as const }] : []),
@@ -106,19 +97,60 @@ const { data: detail, error: detailError } = await useFetch<ChartDetail>(
   () => `/api/v1/charts/${sha256.value}`,
   { immediate: canLoadChart.value, watch: [sha256] },
 )
+const chartHashes = computed(() => {
+  if (!detail.value) return []
+  const { md5, sha256 } = detail.value.chart
+  return [...(md5 ? [{ label: 'MD5', value: md5 }] : []), { label: 'SHA256', value: sha256 }]
+})
+const externalLinks = computed(() => {
+  if (!detail.value) return []
+  const { md5, sha256 } = detail.value.chart
+  const links = [
+    { label: 'rianIR', to: `https://rianir.link/ranking?sha256=${sha256}` },
+    { label: 'Mocha', to: `https://mocha-repository.info/song.php?sha256=${sha256}` },
+    { label: 'MinIR', to: `https://www.gaftalk.com/minir/#/viewer/song/${sha256}/0` },
+    { label: 'Kaleid IR', to: `https://kaleidir.com/charts/${sha256}` },
+    { label: 'Bokutachi IR', to: `https://boku.tachi.ac/search?q=${sha256}&hasPlayedGame=false` },
+  ]
+  if (md5 && /^[0-9a-f]{32}$/i.test(md5)) {
+    links.push(
+      { label: 'BMS-IR', to: `https://bms-ir.org/new/song?songmd5=${md5}` },
+      { label: 'Stellaverse IR', to: `https://ir.stellabms.xyz/redirecthash/${md5}` },
+      { label: 'BMS Score Viewer', to: `https://bms-score-viewer.pages.dev/view?md5=${md5}` },
+    )
+  }
+  return links
+})
+const lnPolicies = computed(() => lnFilterItems(detail.value?.chart))
+const {
+  lnPolicy,
+  ruleMode,
+  ruleQuery,
+  rankingQuery,
+  setRankingFilter,
+  page,
+  pageSize,
+  maxPage,
+  pageLocation,
+  correctOutOfRangePage,
+} = useRankingQuery(lnPolicies)
+const rankingScope = computed<RankingScopeFilter>({
+  get: () => (user.value && route.query.scope === 'self_and_rivals' ? 'self_and_rivals' : 'global'),
+  set(value) {
+    if (value !== rankingScope.value) {
+      void setRankingFilter('scope', value === 'global' ? undefined : value)
+    }
+  },
+})
 const {
   data: ranking,
   pending: rankingPending,
   error: rankingError,
 } = await useFetch<IrRanking>(() => `/api/v1/charts/${sha256.value}/ranking`, {
   immediate: canLoadChart.value,
-  watch: [sha256, lnPolicy, ruleMode, rankingScope],
-  query: computed(() => ({
-    scope: rankingScope.value,
-    ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
-    ...(ruleMode.value === 'ALL' ? {} : { rule_mode: ruleMode.value }),
-  })),
+  query: computed(() => ({ ...rankingQuery.value, scope: rankingScope.value })),
 })
+await correctOutOfRangePage(() => ranking.value?.ranking.pagination)
 
 const selfBestEntry = computed<IrRankingEntry | null>(
   () =>
@@ -136,41 +168,29 @@ const {
   openHistory,
 } = useSelfScoreHistory<IrScoreHistoryResult>(
   () => `/api/v1/charts/${sha256.value}/self-scores`,
-  () => ({
-    scope: 'self',
-    ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
-    ...(ruleMode.value === 'ALL' ? {} : { rule_mode: ruleMode.value }),
-  }),
+  () => ({ ...ruleQuery.value, scope: 'self' }),
 )
 
 const canShowSelfArea = computed(() => Boolean(selfBestEntry.value || detail.value?.stats.self))
+const { expandedScoreRow, scoreDetailsId, toggleScoreDetails } = useScoreDisclosure()
+const wideScoreTable = useWideScoreTable()
 
-watch(user, (currentUser) => {
-  if (!currentUser) rankingScope.value = 'global'
+const copiedHash = shallowRef<{ hash: string }>()
+watch(copiedHash, (copied, _, onCleanup) => {
+  if (!copied) return
+  const timeout = window.setTimeout(() => {
+    copiedHash.value = undefined
+  }, 1500)
+  onCleanup(() => window.clearTimeout(timeout))
 })
 
-const copyMd5 = async () => {
-  if (detail.value) {
-    await navigator.clipboard.writeText(detail.value.chart.md5)
+async function copyHash(hash: string) {
+  try {
+    await navigator.clipboard.writeText(hash)
+  } catch {
+    return
   }
-}
-
-const copySha256 = async () => {
-  if (detail.value) {
-    await navigator.clipboard.writeText(detail.value.chart.sha256)
-  }
-}
-
-function formatScoreDate(value: string | null) {
-  return value ? formatDateTime(value) : '-'
-}
-
-function formatArrange(value: string | null | undefined) {
-  return value ? value.toUpperCase() : '-'
-}
-
-function formatArrangePair(score: { arrange_1p?: string | null; arrange_2p?: string | null }) {
-  return `ARRANGE 1P ${formatArrange(score.arrange_1p)} / 2P ${formatArrange(score.arrange_2p)}`
+  copiedHash.value = { hash }
 }
 
 const detailErrorDescription = computed(() =>
@@ -188,8 +208,8 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
 </script>
 
 <template>
-  <main>
-    <section class="mx-auto w-full max-w-4xl px-5 py-10">
+  <main class="min-w-0">
+    <section class="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
       <UAlert v-if="paramError" color="error" :description="paramError" class="mb-6" />
       <UAlert
         v-else-if="detailError"
@@ -200,9 +220,7 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
       <template v-else-if="detail">
         <div class="mb-8">
           <p class="mb-2 text-sm font-medium text-primary-300">
-            <NuxtLink :to="localePath('/charts')" class="hover:underline">{{
-              t('charts.title')
-            }}</NuxtLink>
+            <NuxtLink :to="listLocation" class="hover:underline">{{ t('charts.title') }}</NuxtLink>
           </p>
           <p>{{ detail.chart.genre }}</p>
           <h1 class="text-3xl font-semibold">
@@ -228,81 +246,129 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
               })
             }}
           </p>
-          <p class="mt-3 text-sm text-neutral-400">
-            md5 {{ detail.chart.md5 }}
-            <UButton size="xs" variant="subtle" color="neutral" @click="copyMd5">{{
-              t('chart.copy')
-            }}</UButton>
-          </p>
-          <p class="mt-1 text-sm text-neutral-400">
-            sha256 {{ detail.chart.sha256 }}
-            <UButton size="xs" variant="subtle" color="neutral" @click="copySha256">{{
-              t('chart.copy')
-            }}</UButton>
-          </p>
+          <DifficultyTableBadges :labels="detail.chart.difficulty_labels" class="mt-2" />
+          <div class="mt-3 flex flex-wrap items-center gap-2">
+            <UButton
+              v-for="hash in chartHashes"
+              :key="hash.label"
+              type="button"
+              :title="t('chart.copy')"
+              :trailing-icon="copiedHash?.hash === hash.value ? 'i-lucide-check' : 'i-lucide-copy'"
+              :ui="{
+                trailingIcon: copiedHash?.hash === hash.value ? 'text-success' : 'text-muted',
+              }"
+              color="neutral"
+              variant="subtle"
+              size="sm"
+              class="max-w-full min-w-0 cursor-pointer rounded-full text-start"
+              @click="copyHash(hash.value)"
+            >
+              <span class="shrink-0 font-semibold">{{ hash.label }}</span>
+              <span class="min-w-0 font-mono text-xs break-all text-toned">{{ hash.value }}</span>
+            </UButton>
+            <span class="sr-only" role="status">{{ copiedHash ? t('chart.copied') : '' }}</span>
+          </div>
+          <nav
+            aria-labelledby="chart-external-services"
+            class="mt-4 flex flex-wrap items-center gap-2"
+          >
+            <span id="chart-external-services" class="text-sm font-medium text-muted">
+              {{ t('chart.externalServices') }}
+            </span>
+            <UButton
+              v-for="link in externalLinks"
+              :key="link.label"
+              :to="link.to"
+              :label="link.label"
+              target="_blank"
+              rel="noopener noreferrer"
+              trailing-icon="i-lucide-external-link"
+              :ui="{ trailingIcon: 'text-muted' }"
+              color="neutral"
+              variant="subtle"
+              size="sm"
+            />
+          </nav>
         </div>
 
         <div class="mb-4 flex flex-wrap items-center gap-3">
-          <template v-if="user">
-            {{ t('ranking.scope') }}
+          <UFormField v-if="user" :label="t('ranking.scope')" orientation="horizontal">
             <USelect v-model="rankingScope" :items="rankingScopes" class="w-48" />
-          </template>
-          LN <USelect v-model="lnPolicy" :items="lnPolicies" class="w-40" /> RULE
-          <USelect v-model="ruleMode" :items="ruleModes" class="w-40" />
+          </UFormField>
+          <UFormField v-if="lnPolicies.length" label="LN" orientation="horizontal">
+            <USelect v-model="lnPolicy" :items="lnPolicies" class="w-28" />
+          </UFormField>
+          <UFormField label="RULE" orientation="horizontal">
+            <USelect v-model="ruleMode" :items="ruleModeItems" class="w-32" />
+          </UFormField>
         </div>
 
-        <div
-          v-if="canShowSelfArea"
-          class="mb-4 flex flex-col gap-3 rounded-lg border border-neutral-800 p-4 sm:flex-row sm:items-center sm:justify-between"
-        >
-          <div v-if="selfBestEntry" class="min-w-0">
-            <p class="text-xs text-neutral-500">{{ t('ranking.personalBest') }}</p>
-            <div class="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1">
-              <p class="text-sm text-neutral-300">#{{ selfBestEntry.rank }}</p>
-              <p class="text-xl font-semibold">
-                EX
-                <NuxtLink
-                  :to="localePath(`/scores/${selfBestEntry.score.score_id}`)"
-                  class="hover:underline"
+        <div v-if="canShowSelfArea" class="mb-4 rounded-lg border border-default p-4">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div v-if="selfBestEntry" class="min-w-0">
+              <p class="text-xs text-neutral-500">{{ t('ranking.personalBest') }}</p>
+              <div class="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                <p class="text-sm text-neutral-300">#{{ selfBestEntry.rank }}</p>
+                <RankingExScore
+                  :score="selfBestEntry.score.ex_score"
+                  :max="selfBestEntry.score.max_ex_score"
+                />
+                <RankingScoreRank
+                  :score="selfBestEntry.score.ex_score"
+                  :max="selfBestEntry.score.max_ex_score"
+                />
+                <IrClearBadge :clear="selfBestEntry.score.clear" />
+                <p class="text-sm">
+                  MAX COMBO
+                  <RankingMaxCombo
+                    :combo="selfBestEntry.score.max_combo"
+                    :total-notes="selfBestEntry.score.max_combo_notes"
+                  />
+                </p>
+                <p class="text-sm">BP {{ selfBestEntry.score.min_bp }}</p>
+                <p class="text-sm">CB {{ selfBestEntry.score.min_cb }}</p>
+              </div>
+              <p class="mt-1 text-xs text-neutral-500">
+                {{ selfBestEntry.score.gauge }} ·
+                <template v-if="lnPolicies.length"
+                  >{{ lnPolicyLabel(selfBestEntry.score.ln_policy) }} ·</template
                 >
-                  {{ selfBestEntry.score.ex_score }}
-                </NuxtLink>
+                {{ ruleModeLabel(selfBestEntry.score.rule_mode) }} ·
+                {{ formatRankingArrange(selfBestEntry.score, detail.chart.mode) }}
               </p>
-              <p class="text-sm">
-                CLEAR
-                <NuxtLink
-                  :to="
-                    localePath(
-                      `/scores/${selfBestEntry.score.source_score_ids?.clear ?? selfBestEntry.score.score_id}`,
-                    )
-                  "
-                  class="hover:underline"
-                >
-                  {{ selfBestEntry.score.clear }}
-                </NuxtLink>
-              </p>
-              <p class="text-sm">COMBO {{ selfBestEntry.score.max_combo }}</p>
-              <p class="text-sm">BP {{ selfBestEntry.score.min_bp }}</p>
             </div>
-            <p class="mt-1 text-xs text-neutral-500">
-              {{ selfBestEntry.score.gauge }} / {{ selfBestEntry.score.ln_policy }} /
-              {{ selfBestEntry.score.rule_mode }}
-            </p>
-            <p class="mt-1 text-xs text-neutral-500">
-              {{ formatArrangePair(selfBestEntry.score) }}
-            </p>
+            <p v-else class="text-sm text-neutral-400">{{ t('ranking.noPersonalBest') }}</p>
+            <div class="flex shrink-0 items-center justify-end gap-2">
+              <UButton icon="i-lucide-list" color="neutral" variant="subtle" @click="openHistory">
+                {{ t('ranking.selfHistory') }}
+              </UButton>
+              <ScoreDetailToggle
+                v-if="selfBestEntry"
+                :expanded="expandedScoreRow === 'personal-best'"
+                :controls="scoreDetailsId"
+                @toggle="toggleScoreDetails('personal-best')"
+              />
+            </div>
           </div>
-          <p v-else class="text-sm text-neutral-400">{{ t('ranking.noPersonalBest') }}</p>
-          <UButton
-            icon="i-lucide-list"
-            color="neutral"
-            variant="subtle"
-            class="shrink-0"
-            @click="openHistory"
-          >
-            {{ t('ranking.selfHistory') }}
-          </UButton>
+          <ScoreInlineDetails
+            v-if="selfBestEntry && expandedScoreRow === 'personal-best'"
+            :id="scoreDetailsId"
+            :score-id="
+              selfBestEntry.score.source_score_ids?.ex_score ?? selfBestEntry.score.score_id
+            "
+            :other-score-id="selfBestEntry.score.source_score_ids?.clear"
+            class="mt-3 border-t border-default"
+          />
         </div>
+
+        <RankingPagination
+          v-if="ranking && !rankingPending && !rankingError"
+          :page="page"
+          :page-size="pageSize"
+          :max-page="maxPage"
+          :total="ranking.ranking.pagination.total"
+          :page-location="pageLocation"
+        />
 
         <UAlert v-if="rankingError" color="error" :description="rankingErrorDescription" />
         <p v-else-if="rankingPending" class="text-sm text-neutral-400">
@@ -311,72 +377,104 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
         <p v-else-if="!ranking?.ranking.entries.length" class="text-sm text-neutral-400">
           {{ t('ranking.noScores') }}
         </p>
-        <div v-else class="overflow-x-auto rounded-lg border border-neutral-800">
+        <div v-else class="overflow-x-auto rounded-lg border border-default">
           <table class="w-full text-sm">
-            <thead class="bg-neutral-900 text-left text-neutral-300">
+            <thead class="bg-elevated text-left text-toned">
               <tr>
                 <th class="px-3 py-2">#</th>
                 <th class="px-3 py-2">{{ t('table.player') }}</th>
-                <th class="px-3 py-2 text-right">EX</th>
+                <th class="px-3 py-2 text-right whitespace-nowrap">EX SCORE</th>
+                <th class="px-3 py-2 text-center">RANK</th>
                 <th class="px-3 py-2">{{ t('table.clear') }}</th>
-                <th class="px-3 py-2">{{ t('table.conditions') }}</th>
-                <th class="px-3 py-2 text-right">COMBO</th>
-                <th class="px-3 py-2 text-right">BP</th>
-                <th class="px-3 py-2">{{ t('table.input') }}</th>
-                <th class="px-3 py-2">{{ t('table.date') }}</th>
+                <th v-if="lnPolicies.length" class="px-3 py-2">LN</th>
+                <th class="px-3 py-2">RULE</th>
+                <th class="px-3 py-2">OPTION</th>
+                <th class="px-3 py-2 text-right whitespace-nowrap">MAX COMBO</th>
+                <th class="px-2 py-2 text-right">BP</th>
+                <th class="px-2 py-2 text-right">CB</th>
+                <th class="hidden px-3 py-2 xl:table-cell">{{ t('table.input') }}</th>
+                <th class="hidden w-px px-3 py-2 whitespace-nowrap xl:table-cell">
+                  {{ t('table.date') }}
+                </th>
+                <th scope="col" class="sticky right-0 z-10 w-px bg-elevated px-1">
+                  <span class="sr-only">{{ t('score.title') }}</span>
+                </th>
               </tr>
             </thead>
             <tbody>
-              <tr
-                v-for="entry in ranking.ranking.entries"
-                :key="entry.score.score_id"
-                class="border-t border-neutral-800"
-              >
-                <td class="px-3 py-2 text-neutral-300">{{ entry.rank }}</td>
-                <td class="px-3 py-2">
-                  <NuxtLink :to="localePath(`/players/${entry.player.id}`)" class="hover:underline">
-                    {{ entry.player.display_name }}
-                  </NuxtLink>
-                  <UBadge v-if="entry.relation.is_rival" size="sm" color="warning" variant="subtle">
-                    rival
-                  </UBadge>
-                </td>
-                <td class="px-3 py-2 text-right font-medium">
-                  <NuxtLink
-                    :to="localePath(`/scores/${entry.score.score_id}`)"
-                    class="hover:underline"
-                  >
-                    {{ entry.score.ex_score }}
-                  </NuxtLink>
-                </td>
-                <td class="px-3 py-2">
-                  <NuxtLink
-                    :to="
-                      localePath(
-                        `/scores/${entry.score.source_score_ids?.clear ?? entry.score.score_id}`,
-                      )
-                    "
-                    class="hover:underline"
-                  >
-                    {{ entry.score.clear }}
-                  </NuxtLink>
-                </td>
-                <td class="px-3 py-2 text-neutral-400">
-                  <p>
-                    {{ entry.score.gauge }} / {{ entry.score.ln_policy }} /
-                    {{ entry.score.rule_mode }}
-                  </p>
-                  <p class="text-xs text-neutral-500">
-                    {{ formatArrangePair(entry.score) }}
-                  </p>
-                </td>
-                <td class="px-3 py-2 text-right">{{ entry.score.max_combo }}</td>
-                <td class="px-3 py-2 text-right">{{ entry.score.min_bp }}</td>
-                <td class="px-3 py-2 text-neutral-400">{{ entry.score.device_type }}</td>
-                <td class="px-3 py-2 text-neutral-400">
-                  {{ formatScoreDate(entry.score.played_at) }}
-                </td>
-              </tr>
+              <template v-for="entry in ranking.ranking.entries" :key="entry.score.score_id">
+                <tr class="border-t border-default">
+                  <td class="px-3 py-2 text-toned">{{ entry.rank }}</td>
+                  <td class="px-3 py-2">
+                    <NuxtLink
+                      :to="localePath(`/players/${entry.player.id}`)"
+                      class="hover:underline"
+                    >
+                      {{ entry.player.display_name }}
+                    </NuxtLink>
+                    <UBadge
+                      v-if="entry.relation.is_rival"
+                      size="sm"
+                      color="warning"
+                      variant="subtle"
+                    >
+                      rival
+                    </UBadge>
+                  </td>
+                  <td class="px-3 py-2 text-right">
+                    <RankingExScore :score="entry.score.ex_score" :max="entry.score.max_ex_score" />
+                  </td>
+                  <td class="px-3 py-2 text-center">
+                    <RankingScoreRank
+                      :score="entry.score.ex_score"
+                      :max="entry.score.max_ex_score"
+                    />
+                  </td>
+                  <td class="px-3 py-2">
+                    <IrClearBadge :clear="entry.score.clear" compact />
+                  </td>
+                  <td v-if="lnPolicies.length" class="px-3 py-2 text-muted">
+                    {{ lnPolicyLabel(entry.score.ln_policy) }}
+                  </td>
+                  <td class="px-3 py-2 text-muted">{{ ruleModeLabel(entry.score.rule_mode) }}</td>
+                  <td class="px-3 py-2 text-xs text-muted">
+                    {{ formatRankingArrange(entry.score, detail.chart.mode) }}
+                  </td>
+                  <td class="px-3 py-2 text-right">
+                    <RankingMaxCombo
+                      :combo="entry.score.max_combo"
+                      :total-notes="entry.score.max_combo_notes"
+                    />
+                  </td>
+                  <td class="px-2 py-2 text-right tabular-nums">{{ entry.score.min_bp }}</td>
+                  <td class="px-2 py-2 text-right tabular-nums">{{ entry.score.min_cb }}</td>
+                  <td class="hidden px-3 py-2 text-muted xl:table-cell">
+                    {{ entry.score.device_type }}
+                  </td>
+                  <td class="hidden px-3 py-2 text-muted xl:table-cell">
+                    <ScoreTableDateTime :value="entry.score.played_at" />
+                  </td>
+                  <td class="sticky right-0 z-10 bg-default px-1 py-1">
+                    <ScoreDetailToggle
+                      :expanded="expandedScoreRow === entry.score.score_id"
+                      :controls="scoreDetailsId"
+                      @toggle="toggleScoreDetails(entry.score.score_id)"
+                    />
+                  </td>
+                </tr>
+                <tr
+                  v-if="expandedScoreRow === entry.score.score_id"
+                  class="border-t border-default bg-elevated"
+                >
+                  <td :colspan="11 + (lnPolicies.length ? 1 : 0) + (wideScoreTable ? 2 : 0)">
+                    <ScoreInlineDetails
+                      :id="scoreDetailsId"
+                      :score-id="entry.score.source_score_ids?.ex_score ?? entry.score.score_id"
+                      :other-score-id="entry.score.source_score_ids?.clear"
+                    />
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
         </div>
@@ -390,12 +488,11 @@ useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
           :limit="historyLimit"
           :score-key="(score) => score.score_id"
           :score-bp="(score) => score.min_bp"
-          :score-to="(score) => localePath(`/scores/${score.score_id}`)"
-        >
-          <template #conditions="{ score }">
-            <p class="text-xs text-dimmed">{{ formatArrangePair(score) }}</p>
-          </template>
-        </ScoreHistoryModal>
+          :score-cb="(score) => score.min_cb"
+          :score-detail-id="(score) => score.score_id"
+          :show-ln="Boolean(lnPolicies.length)"
+          :score-option="(score) => formatRankingArrange(score, detail?.chart.mode ?? null)"
+        />
       </template>
     </section>
   </main>

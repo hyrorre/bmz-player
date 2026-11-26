@@ -16,7 +16,14 @@ interface DailyRow {
 const route = useRoute()
 const localePath = useLocalePath()
 const { t } = useI18n()
-const { formatNumber: formatLocaleNumber, formatDate, compareText } = useLocaleFormat()
+const {
+  formatNumber: formatLocaleNumber,
+  formatDate,
+  formatTimeWithZone,
+  timeZone,
+  compareText,
+} = useLocaleFormat()
+const dailyBoundaryLabel = useDailyBoundaryLabel()
 const { translateApiError } = useApiError()
 const initialDate = ref(currentDailyDate(0))
 const dateInput = ref(queryString(route.query.date) ?? initialDate.value)
@@ -33,6 +40,15 @@ const apiQuery = computed(() => {
 
 const { data, status, error } = await useFetch<IrDailyReport>('/api/v1/daily', {
   query: apiQuery,
+})
+const reportCapture = useTemplateRef<HTMLElement>('reportCapture')
+const sharePath = computed(() => {
+  const report = data.value
+  if (!report) return
+  return localePath({
+    path: '/daily',
+    query: { player: report.player.id, date: report.date, mode: report.mode },
+  })
 })
 
 watch(
@@ -71,7 +87,17 @@ const rows = computed<DailyRow[]>(() =>
 )
 
 const todayDate = computed(() => currentDailyDate(data.value?.boundary_minutes ?? 0))
-const boundaryLabel = computed(() => formatBoundary(data.value?.boundary_minutes ?? 0))
+const boundaryLabel = computed(() => {
+  const report = data.value
+  if (!report) return ''
+  // The day starts at a fixed instant; show it in the viewer's time zone.
+  const start = dailyBoundaryStart(report.date, report.boundary_minutes)
+  const { dayOffset } = localDailyBoundary(
+    report.boundary_minutes,
+    timeZoneOffsetMinutes(timeZone.value, start),
+  )
+  return dailyBoundaryLabel(formatTimeWithZone(start), dayOffset)
+})
 
 function queryString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
@@ -119,70 +145,19 @@ function formatPlayTime(value: number): string {
   return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
 }
 
-function formatBoundary(value: number): string {
-  const hours = Math.floor(value / 60)
-  const minutes = value % 60
-  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')} JST`
-}
-
+// The date names a result day, not an instant, so it must not move with the viewer's time zone.
 function displayDate(value: string): string {
-  return formatDate(new Date(`${value}T12:00:00+09:00`))
+  return formatDate(`${value}T00:00:00Z`, {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC',
+  })
 }
 
-function clearLabel(value: string | undefined): string {
-  const labels: Record<string, string> = {
-    no_play: 'NO PLAY',
-    NoPlay: 'NO PLAY',
-    failed: 'FAILED',
-    Failed: 'FAILED',
-    assisted_easy_clear: 'ASSIST',
-    AssistEasy: 'ASSIST',
-    LightAssistEasy: 'ASSIST',
-    easy_clear: 'EASY',
-    Easy: 'EASY',
-    clear: 'CLEAR',
-    Normal: 'CLEAR',
-    hard_clear: 'HARD',
-    Hard: 'HARD',
-    ex_hard_clear: 'EX HARD',
-    ExHard: 'EX HARD',
-    full_combo: 'FULL COMBO',
-    FullCombo: 'FULL COMBO',
-    perfect: 'PERFECT',
-    Perfect: 'PERFECT',
-    Max: 'MAX',
-  }
-  return value ? (labels[value] ?? value.toUpperCase()) : '-'
-}
-
-function clearColor(rank: number | undefined) {
-  if ((rank ?? 0) >= 7) return 'warning' as const
-  if ((rank ?? 0) >= 5) return 'error' as const
-  if ((rank ?? 0) >= 3) return 'success' as const
-  return 'neutral' as const
-}
-
-function scoreRate(result: IrDailyRuleResult): number | null {
-  return scoreRateForSnapshot(result.after)
-}
-
-function scoreRateForSnapshot(snapshot: IrDailyBestSnapshot): number | null {
-  const score = snapshot.ex_score
+function maxExScore(snapshot: IrDailyBestSnapshot): number | null {
   const notes = snapshot.ex_score_notes
-  return score !== null && notes !== null && notes > 0 ? (score / (notes * 2)) * 100 : null
-}
-
-function scoreGrade(rate: number | null): string {
-  if (rate === null) return '-'
-  if (rate >= 100) return 'MAX'
-  if (rate >= 88.888_888) return 'AAA'
-  if (rate >= 77.777_777) return 'AA'
-  if (rate >= 66.666_666) return 'A'
-  if (rate >= 55.555_555) return 'B'
-  if (rate >= 44.444_444) return 'C'
-  if (rate >= 33.333_333) return 'D'
-  if (rate >= 22.222_222) return 'E'
-  return 'F'
+  return notes === null ? null : notes * 2
 }
 
 function signedDelta(value: number): string {
@@ -213,7 +188,7 @@ useSeoMeta({ title: () => t('daily.title') })
         {{ t('common.loading') }}
       </div>
 
-      <template v-else-if="data">
+      <article v-else-if="data" ref="reportCapture">
         <section
           class="rounded-t-2xl border border-muted bg-elevated px-5 py-8 text-center shadow-lg sm:px-8"
         >
@@ -258,7 +233,7 @@ useSeoMeta({ title: () => t('daily.title') })
         </section>
 
         <section class="rounded-b-2xl border-x border-b border-muted bg-default p-4 sm:p-6">
-          <div class="mb-6 flex flex-wrap items-center justify-center gap-2">
+          <div data-report-controls class="mb-4 flex flex-wrap items-center justify-center gap-2">
             <UButton
               color="neutral"
               icon="i-lucide-chevron-left"
@@ -287,6 +262,14 @@ useSeoMeta({ title: () => t('daily.title') })
               {{ t('daily.nextDay') }}
             </UButton>
           </div>
+          <ReportShareActions
+            v-if="sharePath"
+            :capture-target="reportCapture"
+            :share-path="sharePath"
+            :share-text="`${data.player.display_name || data.player.id} · ${t('daily.reportForDate', { date: displayDate(data.date) })}`"
+            :filename="`bmz-ir-daily-${data.date}`"
+            class="mb-6 justify-center"
+          />
 
           <p class="mb-4 text-center text-xs text-muted">
             {{
@@ -297,14 +280,19 @@ useSeoMeta({ title: () => t('daily.title') })
             }}
           </p>
 
-          <div v-if="rows.length" class="overflow-x-auto rounded-xl border border-muted">
-            <table class="w-full min-w-[760px] text-sm">
+          <div
+            v-if="rows.length"
+            data-report-scroll
+            class="overflow-x-auto rounded-xl border border-muted"
+          >
+            <table class="w-full min-w-[860px] text-sm">
               <thead class="bg-elevated text-left text-muted">
                 <tr>
                   <th class="w-32 px-4 py-3">LV</th>
                   <th class="px-4 py-3">TITLE</th>
                   <th class="w-52 px-4 py-3">CLEAR</th>
-                  <th class="w-56 px-4 py-3">SCORE</th>
+                  <th class="w-52 px-4 py-3 text-right whitespace-nowrap">EX SCORE</th>
+                  <th class="w-40 px-4 py-3 text-center">RANK</th>
                   <th class="w-32 px-4 py-3">MISS</th>
                 </tr>
               </thead>
@@ -315,18 +303,10 @@ useSeoMeta({ title: () => t('daily.title') })
                   class="border-t border-muted"
                 >
                   <td class="px-4 py-3 align-top">
-                    <div v-if="row.difficultyLabels.length" class="flex flex-wrap gap-1">
-                      <UBadge
-                        v-for="label in row.difficultyLabels"
-                        :key="`${label.table_id}-${label.level}`"
-                        color="primary"
-                        size="sm"
-                        variant="subtle"
-                        :title="label.table_name"
-                      >
-                        {{ difficultyLabel(label) }}
-                      </UBadge>
-                    </div>
+                    <DifficultyTableBadges
+                      v-if="row.difficultyLabels.length"
+                      :labels="row.difficultyLabels"
+                    />
                     <UBadge v-else color="neutral" size="sm" variant="subtle">
                       ☆{{ row.chart.level ?? '?' }}
                     </UBadge>
@@ -348,54 +328,71 @@ useSeoMeta({ title: () => t('daily.title') })
                   <td class="px-4 py-3 align-top">
                     <div class="flex flex-wrap items-center gap-1.5">
                       <template v-if="row.result.updated_fields.clear && row.result.before.clear">
-                        <UBadge :color="clearColor(row.result.before.clear.rank)" variant="subtle">
-                          {{ clearLabel(row.result.before.clear.type) }}
-                        </UBadge>
+                        <IrClearBadge
+                          :clear="row.result.before.clear.type"
+                          :rank="row.result.before.clear.rank"
+                          compact
+                        />
                         <span class="text-muted">»</span>
                       </template>
-                      <UBadge :color="clearColor(row.result.after.clear?.rank)" variant="subtle">
-                        {{ clearLabel(row.result.after.clear?.type) }}
-                      </UBadge>
+                      <IrClearBadge
+                        :clear="row.result.after.clear?.type"
+                        :rank="row.result.after.clear?.rank"
+                        compact
+                      />
                     </div>
                   </td>
-                  <td class="px-4 py-3 align-top">
-                    <div class="font-semibold">
+                  <td class="px-4 py-3 text-right align-top">
+                    <div class="flex items-start justify-end gap-2">
                       <template
                         v-if="
                           row.result.updated_fields.ex_score && row.result.before.ex_score !== null
                         "
                       >
-                        <UBadge color="neutral" size="sm" variant="subtle">
-                          {{ scoreGrade(scoreRateForSnapshot(row.result.before)) }}
-                        </UBadge>
-                        <span class="text-muted">{{ row.result.before.ex_score }}</span>
-                        <span class="mx-1.5 text-muted">»</span>
+                        <RankingExScore
+                          :score="row.result.before.ex_score"
+                          :max="maxExScore(row.result.before)"
+                          :rate-digits="2"
+                          class="text-muted"
+                        />
+                        <span class="text-muted">»</span>
                       </template>
-                      <UBadge color="warning" size="sm" variant="subtle">
-                        {{ scoreGrade(scoreRate(row.result)) }}
-                      </UBadge>
-                      <span class="ml-1.5">{{ row.result.after.ex_score ?? '-' }}</span>
+                      <RankingExScore
+                        v-if="row.result.after.ex_score !== null"
+                        :score="row.result.after.ex_score"
+                        :max="maxExScore(row.result.after)"
+                        :rate-digits="2"
+                      />
+                      <span v-else class="text-muted">-</span>
                     </div>
-                    <div class="mt-1 text-xs text-muted">
+                    <p
+                      v-if="
+                        row.result.updated_fields.ex_score &&
+                        row.result.before.ex_score !== null &&
+                        row.result.after.ex_score !== null
+                      "
+                      class="mt-1 text-xs font-medium text-error"
+                    >
+                      {{ signedDelta(row.result.after.ex_score - row.result.before.ex_score) }}
+                    </p>
+                  </td>
+                  <td class="px-4 py-3 text-center align-top">
+                    <div class="flex items-start justify-center gap-2">
                       <template
                         v-if="
                           row.result.updated_fields.ex_score && row.result.before.ex_score !== null
                         "
                       >
-                        {{ formatAccuracy(scoreRateForSnapshot(row.result.before)) }}
-                        <span class="mx-1">»</span>
+                        <RankingScoreRank
+                          :score="row.result.before.ex_score"
+                          :max="maxExScore(row.result.before)"
+                        />
+                        <span class="text-muted">»</span>
                       </template>
-                      {{ formatAccuracy(scoreRate(row.result)) }}
-                      <span
-                        v-if="
-                          row.result.updated_fields.ex_score &&
-                          row.result.before.ex_score !== null &&
-                          row.result.after.ex_score !== null
-                        "
-                        class="ml-1 font-medium text-error"
-                      >
-                        {{ signedDelta(row.result.after.ex_score - row.result.before.ex_score) }}
-                      </span>
+                      <RankingScoreRank
+                        :score="row.result.after.ex_score"
+                        :max="maxExScore(row.result.after)"
+                      />
                     </div>
                   </td>
                   <td class="px-4 py-3 align-top">
@@ -427,7 +424,7 @@ useSeoMeta({ title: () => t('daily.title') })
             <p class="font-medium">{{ t('daily.empty') }}</p>
           </div>
         </section>
-      </template>
+      </article>
     </section>
   </main>
 </template>
