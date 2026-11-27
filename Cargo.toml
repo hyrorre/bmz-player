@@ -51,7 +51,7 @@ fluent-syntax = "0.12"
 unic-langid = "0.9"
 sys-locale = "0.3.2"
 
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled", "fallible_uint"] }
 
 md5 = "0.7"
 sha2 = "0.10"

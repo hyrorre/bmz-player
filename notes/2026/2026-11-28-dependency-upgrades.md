@@ -17,3 +17,9 @@
 ## Prettier
 
 固定版を3.9.10から3.10.1へ更新した。既存の `.prettierignore` を使ったIR Webの整形検査が通り、整形差分は発生しなかった。一時コピーで `vue-tsc --noEmit` とIRテスト272件も成功した。
+
+## SQLite
+
+`rusqlite` 0.43.0 と `libsqlite3-sys` 0.40.0に更新し、同梱SQLiteを3.54.1にした。`fallible_uint` を有効にして、スコアDBの `u64` を従来どおりSQLiteの `INTEGER` に変換する。DBスキーマの移行は不要。
+
+workspaceの整形・型検査・ClippyとmacOS arm64のライセンスレポート生成が成功した。workspaceテストではDBのmigration、スコア保存、外部スコアDBの取り込みを含む `bmz-player` の3508件が成功した。`bmz-video` の再開時刻テスト1件は断続的に失敗した。SQLite更新前後で同じテスト実行ファイルを使用しており、そのファイルを20回再実行すると19回成功、1回失敗した。
