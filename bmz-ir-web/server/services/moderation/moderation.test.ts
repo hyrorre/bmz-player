@@ -378,6 +378,89 @@ function submission(
   }
 }
 
+describe('rival comparison', () => {
+  beforeEach(async () => {
+    await db
+      .insert(schema.rivalRelationships)
+      .values({ ownerPlayerId: 'bob', targetPlayerId: 'alice' })
+  })
+
+  async function addBest(player: string, sha256: string, exScore = 200, minBp = 0, level?: number) {
+    const score = submission({ sha256, exScore })
+    score.result.min_bp = minBp
+    score.chart.level = level
+    await submitScore({ id: player }, score, [], 10)
+  }
+
+  test('counts higher EX and lower BP independently, including ties', async () => {
+    await addBest('bob', CHART_A, 180, 5)
+    await addBest('alice', CHART_A, 160, 10)
+    await addBest('bob', CHART_B, 160, 20)
+    await addBest('alice', CHART_B, 160, 10)
+    const result = await loadRivalComparison('bob', 'alice', 1, 0)
+    expect(result!.summary).toEqual({
+      ex_score: { wins: 1, losses: 0, draws: 1 },
+      min_bp: { wins: 1, losses: 1, draws: 0 },
+    })
+    expect(result!.pagination).toMatchObject({ total: 2, has_more: true })
+    expect(result!.comparisons).toHaveLength(1)
+    expect(result!.comparisons[0]).toMatchObject({
+      chart: { sha256: CHART_B },
+      difference: { ex_score: 0, min_bp: 10 },
+      outcome: { ex_score: 'draw', min_bp: 'loss' },
+    })
+    const next = await loadRivalComparison('bob', 'alice', 1, 1)
+    expect(next!.comparisons[0]).toMatchObject({
+      chart: { sha256: CHART_A },
+      difference: { ex_score: 20, min_bp: -5 },
+      outcome: { ex_score: 'win', min_bp: 'win' },
+    })
+  })
+
+  test('joins only scores with the same chart, LN policy, double option, rule mode and scoring', async () => {
+    await addBest('bob', CHART_A)
+    await addBest('alice', CHART_A)
+    await addBest('alice', CHART_B)
+    const identity = {
+      lnPolicy: 'ForceLn',
+      doubleOption: 'off',
+      ruleMode: 'Beatoraja',
+      scoring: 'bms_ex_score_v1',
+    } as const
+    const { bestScores } = schema
+    for (const change of [
+      { lnPolicy: 'AutoLn' },
+      { doubleOption: 'battle' },
+      { ruleMode: 'Dx' },
+      { scoring: 'other_scoring' },
+    ] as const) {
+      await db
+        .update(bestScores)
+        .set({ ...identity, ...change })
+        .where(and(eq(bestScores.playerId, 'alice'), eq(bestScores.chartSha256, CHART_A)))
+      const result = await loadRivalComparison('bob', 'alice', 50, 0)
+      expect(result!.pagination.total).toBe(0)
+      expect(result!.comparisons).toEqual([])
+    }
+  })
+
+  test('pages higher levels first and places unknown levels last', async () => {
+    const high = 'c'.repeat(64)
+    for (const [sha256, level] of [
+      [CHART_A, undefined],
+      [CHART_B, 5],
+      [high, 12],
+    ] as const) {
+      for (const player of ['bob', 'alice']) await addBest(player, sha256, 200, 0, level)
+    }
+    const first = await loadRivalComparison('bob', 'alice', 2, 0)
+    const last = await loadRivalComparison('bob', 'alice', 2, 2)
+    expect(first!.comparisons.map((row) => row.chart.sha256)).toEqual([high, CHART_B])
+    expect(last!.comparisons.map((row) => row.chart.sha256)).toEqual([CHART_A])
+    expect(last!.pagination).toMatchObject({ total: 3, has_more: false })
+  })
+})
+
 function rankingQuery() {
   return parseRankingQuery({ ln_policy: 'ForceLn' })
 }

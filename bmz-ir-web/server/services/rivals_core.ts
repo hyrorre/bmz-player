@@ -79,16 +79,6 @@ export interface RivalComparisonRow {
   }
 }
 
-export interface RivalComparisonSummary {
-  ex_score: { wins: number; losses: number; draws: number }
-  min_bp: { wins: number; losses: number; draws: number }
-}
-
-export interface RivalComparisonResult {
-  summary: RivalComparisonSummary
-  rows: RivalComparisonRow[]
-}
-
 export interface RivalMutation {
   targetPlayerId: string
   action: 'add' | 'remove'
@@ -108,36 +98,6 @@ export function parseRivalMutation(value: unknown, ownerPlayerId: string): Rival
     throw new Error('action must be add or remove')
   }
   return { targetPlayerId, action: body.action }
-}
-
-export function buildRivalComparison(
-  selfScores: readonly RivalComparisonScoreRow[],
-  rivalScores: readonly RivalComparisonScoreRow[],
-): RivalComparisonResult {
-  const rivalByKey = new Map(rivalScores.map((score) => [scoreKey(score), score]))
-  const summary: RivalComparisonSummary = {
-    ex_score: { wins: 0, losses: 0, draws: 0 },
-    min_bp: { wins: 0, losses: 0, draws: 0 },
-  }
-  const rows: RivalComparisonRow[] = []
-
-  for (const selfScore of selfScores) {
-    const rivalScore = rivalByKey.get(scoreKey(selfScore))
-    if (!rivalScore) continue
-
-    const row = buildRivalComparisonRow(selfScore, rivalScore)
-    incrementSummary(summary.ex_score, row.outcome.ex_score)
-    incrementSummary(summary.min_bp, row.outcome.min_bp)
-    rows.push(row)
-  }
-
-  rows.sort(
-    (left, right) =>
-      compareLevelDescending(left.chart.level, right.chart.level) ||
-      left.chart.title.localeCompare(right.chart.title) ||
-      comparisonKey(left).localeCompare(comparisonKey(right)),
-  )
-  return { summary, rows }
 }
 
 export function buildRivalComparisonRow(
@@ -181,46 +141,10 @@ export function buildRivalComparisonRow(
   }
 }
 
-function scoreKey(score: RivalComparisonScoreRow): string {
-  return [
-    score.chartSha256,
-    score.lnPolicy,
-    score.doubleOption,
-    score.ruleMode,
-    score.scoring,
-  ].join('\0')
-}
-
-function comparisonKey(row: RivalComparisonRow): string {
-  return [
-    row.chart.sha256,
-    row.rule.ln_policy,
-    row.rule.double_option,
-    row.rule.rule_mode,
-    row.rule.scoring,
-  ].join('\0')
-}
-
 function higherWins(difference: number): RivalComparisonOutcome {
   return difference > 0 ? 'win' : difference < 0 ? 'loss' : 'draw'
 }
 
 function lowerWins(difference: number): RivalComparisonOutcome {
   return difference < 0 ? 'win' : difference > 0 ? 'loss' : 'draw'
-}
-
-function incrementSummary(
-  summary: { wins: number; losses: number; draws: number },
-  outcome: RivalComparisonOutcome,
-): void {
-  if (outcome === 'win') summary.wins += 1
-  else if (outcome === 'loss') summary.losses += 1
-  else summary.draws += 1
-}
-
-function compareLevelDescending(left: number | null, right: number | null): number {
-  if (left === null && right === null) return 0
-  if (left === null) return 1
-  if (right === null) return -1
-  return right - left
 }
