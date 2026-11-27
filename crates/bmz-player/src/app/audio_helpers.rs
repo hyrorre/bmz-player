@@ -170,13 +170,6 @@ pub(super) fn select_preview_normalization_gain(enabled: bool, analyzed_gain: f3
     if enabled && analyzed_gain.is_finite() { analyzed_gain.clamp(0.0, 1.0) } else { 1.0 }
 }
 
-pub(super) fn should_use_generated_preview(
-    preview_file: &str,
-    explicit_preview_missing: bool,
-) -> bool {
-    preview_file.is_empty() || explicit_preview_missing
-}
-
 pub(super) fn result_exit_audio_gain(elapsed: Duration, fadeout: Duration) -> f32 {
     let audio_fade = result_exit_audio_fade_duration(fadeout);
     if audio_fade.is_zero() {

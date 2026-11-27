@@ -184,7 +184,9 @@ pub(crate) fn archive_asset_entry(
         .iter()
         .filter(|candidate| !candidate.is_directory)
         .filter_map(|candidate| candidate.name.strip_prefix(&prefix).map(|name| (candidate, name)))
-        .filter(|(_, name)| !name.contains('/') && is_preview_audio_file(Path::new(name)))
+        .filter(|(_, name)| {
+            !name.contains('/') && is_preview_audio_file(Path::new(name), "preview")
+        })
         .min_by_key(|(_, name)| preview_sort_key(Path::new(name)))
         .map(|(candidate, _)| candidate.name.clone()))
 }
@@ -226,14 +228,16 @@ pub(crate) fn normalize_preview_file_with_fallback(
     };
     resolve_declared_preview_file(folder, preview_file)
         .as_ref()
-        .or_else(|| fallback.get_or_init(|| find_preview_prefix_audio_file(folder)).as_ref())
+        .or_else(|| {
+            fallback.get_or_init(|| find_preview_prefix_audio_file(folder, "preview")).as_ref()
+        })
         .and_then(|path| relative_to_folder(folder, path))
         .unwrap_or_else(|| preview_file.trim().to_string())
 }
 
 pub fn resolve_preview_file(folder: &Path, preview_file: &str) -> Option<PathBuf> {
     resolve_declared_preview_file(folder, preview_file)
-        .or_else(|| find_preview_prefix_audio_file(folder))
+        .or_else(|| find_preview_prefix_audio_file(folder, "preview"))
 }
 
 fn resolve_declared_preview_file(folder: &Path, preview_file: &str) -> Option<PathBuf> {
@@ -285,14 +289,14 @@ fn resolve_same_stem_image_file(folder: &Path, relative: &Path) -> Option<PathBu
     None
 }
 
-fn find_preview_prefix_audio_file(folder: &Path) -> Option<PathBuf> {
+pub(crate) fn find_preview_prefix_audio_file(folder: &Path, prefix: &str) -> Option<PathBuf> {
     let mut candidates = Vec::new();
     for entry in std::fs::read_dir(folder).ok()? {
         let entry = entry.ok()?;
         let path = entry.path();
         // Match the name before any stat: a song folder holds hundreds of key sounds,
         // and this runs for every chart without a usable #PREVIEW during a scan.
-        if !is_preview_audio_file(&path) || !path.is_file() {
+        if !is_preview_audio_file(&path, prefix) || !path.is_file() {
             continue;
         }
         candidates.push(path);
@@ -301,11 +305,11 @@ fn find_preview_prefix_audio_file(folder: &Path) -> Option<PathBuf> {
     candidates.into_iter().next()
 }
 
-fn is_preview_audio_file(path: &Path) -> bool {
+fn is_preview_audio_file(path: &Path, prefix: &str) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
-    if !name.to_ascii_lowercase().starts_with("preview") {
+    if !name.to_ascii_lowercase().starts_with(prefix) {
         return false;
     }
     let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {

@@ -22,6 +22,13 @@ mod stamp;
 
 pub(super) const SELECT_PREVIEW_FADE_DURATION: Duration = Duration::from_millis(150);
 const SELECT_PREVIEW_CACHE_LIMIT: usize = 8;
+const FOLDER_PREVIEW_PREFIX: &str = "folder-preview|";
+
+fn folder_preview_request(key: &str) -> Option<(u64, &str)> {
+    let (selection, folder) = key.strip_prefix(FOLDER_PREVIEW_PREFIX)?.split_once('|')?;
+    Some((selection.parse().ok()?, folder))
+}
+
 /// Decoded animation frames kept in the meta image cache; older animations keep their
 /// first frame only.
 const SELECT_META_ANIMATION_CACHE_LIMIT_BYTES: u64 = 128 * 1024 * 1024;
@@ -164,6 +171,7 @@ pub(super) struct SelectAssetRuntime {
     banner: SelectMetaImageState,
     preview_source: Option<String>,
     preview_selection: Option<(u64, Option<i64>)>,
+    folder_preview_selection: u64,
     preview_played_once: bool,
     preview_fade: SelectPreviewFade,
     preview_normalization_gain: f32,
@@ -198,17 +206,28 @@ impl SelectAssetRuntime {
         self.source_stamp.update(folder, now);
     }
 
-    pub(super) fn generated_preview_cache_key(
+    pub(super) fn preview_cache_key(
         &self,
         chart_id: i64,
-        start_ms: i64,
         folder: &str,
+        file: &str,
+        fallback_start_ms: impl FnOnce() -> Option<i64>,
     ) -> Option<String> {
+        let stamp = self.source_stamp.get(folder)?;
+        let key = if stamp.is_none() && file.trim().is_empty() {
+            // A preview may have been added since the scan or the last selection.
+            format!("{FOLDER_PREVIEW_PREFIX}{}|{folder}", self.folder_preview_selection)
+        } else {
+            crate::chart_asset::asset_cache_key_with_stamp(folder, file, stamp)
+        };
+        if !matches!(self.preview_cache.get(&key), Some(SelectPreviewCacheEntry::Missing)) {
+            return Some(key);
+        }
         Some(crate::generated_preview::generated_preview_cache_key_with_stamp(
             chart_id,
-            start_ms,
+            fallback_start_ms()?,
             folder,
-            self.source_stamp.get(folder)?,
+            stamp,
         ))
     }
 
@@ -239,6 +258,7 @@ impl SelectAssetRuntime {
             banner: SelectMetaImageState::default(),
             preview_source: None,
             preview_selection: None,
+            folder_preview_selection: 0,
             preview_played_once: false,
             preview_fade: SelectPreviewFade::Silent,
             preview_normalization_gain: 1.0,
@@ -277,6 +297,8 @@ impl SelectAssetRuntime {
             return false;
         }
         self.preview_selection = selection;
+        self.folder_preview_selection = self.folder_preview_selection.wrapping_add(1);
+        self.preview_cache.retain(|key, _| !key.starts_with(FOLDER_PREVIEW_PREFIX));
         self.preview_played_once = false;
         true
     }
@@ -303,10 +325,6 @@ impl SelectAssetRuntime {
 
     pub(super) fn install_preview(&mut self, preview: SelectChartPreview) {
         self.preview = Some(preview);
-    }
-
-    pub(super) fn explicit_preview_missing(&self, key: &str) -> bool {
-        matches!(self.preview_cache.get(key), Some(SelectPreviewCacheEntry::Missing))
     }
 
     pub(super) fn poll_loads(&mut self) -> Vec<SelectMetaImageUpload> {
@@ -600,6 +618,11 @@ impl SelectAssetRuntime {
     }
 
     fn insert_preview_cache(&mut self, key: String, entry: SelectPreviewCacheEntry) {
+        if let Some((selection, _)) = folder_preview_request(&key)
+            && (self.preview_selection.is_none() || selection != self.folder_preview_selection)
+        {
+            return;
+        }
         self.preview_cache.insert(key, entry);
         while self.preview_cache.len() > SELECT_PREVIEW_CACHE_LIMIT {
             let current = self.preview_source.as_deref();
@@ -609,6 +632,8 @@ impl SelectAssetRuntime {
                 .find(|(candidate, entry)| {
                     Some(candidate.as_str()) != current
                         && !matches!(entry, SelectPreviewCacheEntry::Loading)
+                        // Keep the folder miss while its generated preview is selected.
+                        && !candidate.starts_with(FOLDER_PREVIEW_PREFIX)
                 })
                 .map(|(candidate, _)| candidate.clone());
             let Some(removable_key) = removable_key else {
@@ -662,7 +687,13 @@ impl SelectAssetRuntime {
 
         let cache_dir = self.cache_dir.clone();
         thread::spawn(move || {
-            let resolved = crate::chart_asset::resolve_cached_asset(&key, &cache_dir, true);
+            let resolved = match folder_preview_request(&key) {
+                Some((_, folder)) => Ok(crate::chart_asset::find_preview_prefix_audio_file(
+                    folder.as_ref(),
+                    "preview.",
+                )),
+                None => crate::chart_asset::resolve_cached_asset(&key, &cache_dir, true),
+            };
             let path = resolved.as_ref().ok().and_then(Clone::clone);
             let result = match path.as_ref() {
                 Some(path) => {
@@ -866,8 +897,14 @@ mod tests {
                 assert!(Instant::now() < deadline, "metadata worker did not complete");
                 std::thread::sleep(Duration::from_millis(1));
             }
+            let file_key = crate::chart_asset::asset_cache_key(&folder, "");
             assert_eq!(
-                runtime.generated_preview_cache_key(1, 0, &folder),
+                runtime.preview_cache_key(1, &folder, "", || None).as_ref(),
+                Some(&file_key)
+            );
+            runtime.insert_preview_cache(file_key, SelectPreviewCacheEntry::Missing);
+            assert_eq!(
+                runtime.preview_cache_key(1, &folder, "", || Some(0)),
                 Some(crate::generated_preview::generated_preview_cache_key_for_source(
                     1, 0, &folder
                 ))
@@ -941,7 +978,7 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(5));
         }
-        panic!("select meta image worker did not finish");
+        panic!("select asset worker did not finish");
     }
 
     /// Selects `key` in the STAGEFILE slot and returns the image uploaded immediately.
@@ -1064,6 +1101,70 @@ mod tests {
         assert!(runtime.meta_image_cache.is_empty());
         assert!(runtime.preview_cache.is_empty());
         assert!(!runtime.generated_preview_loading);
+    }
+
+    #[test]
+    fn blank_folder_preview_is_checked_once_and_picks_up_audio_on_reselection() {
+        use bmz_audio::{command::AudioEngineHandle, engine::AudioEngine};
+
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().to_str().unwrap();
+        let wav = include_bytes!("../../../../data/songs/sample-playable/key.wav");
+        std::fs::write(dir.path().join("preview-other.wav"), wav).unwrap();
+        let preview = SelectChartPreview::new(AudioEngineHandle::new(AudioEngine::new(48_000)));
+        let mut runtime = SelectAssetRuntime::new(Some(preview), PathBuf::new(), dir.path().into());
+        runtime.update_preview_selection(1, Some(10));
+        let preview_key = |runtime: &SelectAssetRuntime| {
+            runtime.preview_cache_key(10, folder, "", || Some(0)).unwrap()
+        };
+        let generated = crate::generated_preview::generated_preview_cache_key(10, 0);
+        let missing = preview_key(&runtime);
+        assert_ne!(missing, generated);
+        assert!(runtime.sync_preview(Some(missing), false, Instant::now()).is_none());
+        assert_eq!(
+            runtime.preview_cache_key(10, folder, "", || panic!("lookup pending")),
+            runtime.preview_source.clone()
+        );
+        poll_until(&mut runtime, |runtime, _| preview_key(runtime) == generated);
+
+        std::fs::write(dir.path().join("preview.wav"), wav).unwrap();
+        runtime.preview_source = Some(generated.clone());
+        for other in 0..SELECT_PREVIEW_CACHE_LIMIT {
+            runtime
+                .insert_preview_cache(format!("other-{other}"), SelectPreviewCacheEntry::Missing);
+        }
+        assert!(!runtime.update_preview_selection(1, Some(10)));
+        assert_eq!(preview_key(&runtime), generated);
+
+        runtime.update_preview_selection(2, None);
+        runtime.update_preview_selection(3, Some(10));
+        let found = preview_key(&runtime);
+        assert_ne!(found, generated);
+        assert!(runtime.sync_preview(Some(found.clone()), false, Instant::now()).is_none());
+        poll_until(&mut runtime, |runtime, _| !runtime.preview_load_queue.active);
+        let prepared =
+            runtime.sync_preview(Some(found), false, Instant::now()).expect("preview.wav");
+        assert!(!prepared.sample.frames.is_empty());
+        assert_eq!(
+            runtime.preview_cache_key(10, folder, "named.wav", || None),
+            runtime.asset_cache_key(folder, "named.wav")
+        );
+    }
+
+    #[test]
+    fn stale_folder_preview_miss_does_not_skip_the_current_lookup() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().to_str().unwrap();
+        let mut runtime = SelectAssetRuntime::new(None, PathBuf::new(), dir.path().into());
+        runtime.update_preview_selection(1, Some(10));
+        let old = runtime.preview_cache_key(10, folder, "", || None).unwrap();
+        runtime.request_preview_load(old.clone());
+        runtime.stop_preview();
+        runtime.update_preview_selection(1, Some(10));
+        let current = runtime.preview_cache_key(10, folder, "", || None).unwrap();
+        poll_until(&mut runtime, |runtime, _| !runtime.preview_load_queue.active);
+        assert!(!runtime.preview_cache.contains_key(&old));
+        assert_eq!(runtime.preview_cache_key(10, folder, "", || None), Some(current));
     }
 
     #[test]

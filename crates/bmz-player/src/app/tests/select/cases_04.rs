@@ -225,13 +225,6 @@ fn select_preview_load_queue_keeps_only_latest_pending_request() {
 }
 
 #[test]
-fn select_preview_uses_generated_fallback_after_explicit_preview_fails() {
-    assert!(should_use_generated_preview("", false));
-    assert!(should_use_generated_preview("missing-preview.ogg", true));
-    assert!(!should_use_generated_preview("preview.ogg", false));
-}
-
-#[test]
 fn audio_diagnostic_marks_generated_preview_callback_pressure() {
     assert_eq!(
         classify_audio_output_issue(AudioOutputIssueMetrics {
