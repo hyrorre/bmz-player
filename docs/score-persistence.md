@@ -219,6 +219,7 @@ H-RANDOM / ALL-SCRの鍵盤は、同じレーンの直前ノーツから閾値�
 当時の配置を再現するため、H-RANDOM / ALL-SCRは100ms、7K→9Kは125msのまま扱います。
 beatorajaのreplay取込は`config_player.json`の`hranThresholdBPM`から閾値を求め、
 見つからなければ125msを記録します。
+同じ `.brd` でも、取り込み時の入力機器（CLIでは `--controller`）または換算後の閾値を変更すると、単曲・コースとも再変換します。
 
 ### 判定アルゴリズムと入力時刻
 

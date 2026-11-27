@@ -295,7 +295,10 @@ fn import_one(
 ) -> Result<ImportOneOutcome> {
     let (document, source_fingerprint) =
         load_beatoraja_replay_document_with_fingerprint(source_path)?;
-    let source_fingerprint = format!("{REPLAY_IMPORT_CONVERSION}:{source_fingerprint}");
+    let source_fingerprint = format!(
+        "{REPLAY_IMPORT_CONVERSION}:{}:{h_random_threshold_ms}:{source_fingerprint}",
+        request.device_kind.as_str()
+    );
     let replay = match document {
         BeatorajaReplayDocument::Single(replay) => *replay,
         BeatorajaReplayDocument::Course(stages) => {
@@ -1015,8 +1018,8 @@ mod tests {
         assert_eq!(repeated.unchanged, 1);
 
         let mut legacy_slot = score_db.replay_slot(key, 0).unwrap().unwrap();
-        legacy_slot.source_fingerprint =
-            legacy_slot.source_fingerprint.split_once(':').unwrap().1.to_string();
+        let source_hash = legacy_slot.source_fingerprint.rsplit_once(':').unwrap().1;
+        legacy_slot.source_fingerprint = format!("{REPLAY_IMPORT_CONVERSION}:{source_hash}");
         score_db.upsert_replay_slot(&legacy_slot).unwrap();
         converted.input_excludes_start_margin = false;
         save_replay_for_import(&replay_path, &converted).unwrap();
@@ -1030,6 +1033,22 @@ mod tests {
         assert_eq!(refreshed.imported, 1);
         assert_eq!(refreshed.replaced, 1);
         assert!(load_replay(&replay_path).unwrap().input_excludes_start_margin);
+
+        let mut request = ImportBeatorajaReplaysRequest::new(&player);
+        request.device_kind = InputDeviceKind::Controller;
+        let mut reimport =
+            || import_beatoraja_replays(&library_db, &mut score_db, &paths, &request).unwrap();
+        assert_eq!(reimport().replaced, 1);
+        let controller = load_replay(&replay_path).unwrap();
+        assert!(!controller.events.is_empty());
+        assert!(
+            controller.events.iter().all(|event| event.device_kind == InputDeviceKind::Controller)
+        );
+        assert_eq!(reimport().unchanged, 1);
+        fs::write(player.join("config_player.json"), br#"{"hranThresholdBPM":150}"#).unwrap();
+        assert_eq!(reimport().replaced, 1);
+        assert_eq!(load_replay(&replay_path).unwrap().h_random_threshold_ms, Some(100));
+        assert_eq!(reimport().unchanged, 1);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -1315,6 +1334,18 @@ mod tests {
         assert_eq!(
             load_replay(&paths.root_dir.join(&stages[0].replay_path)).unwrap().played_at,
             1_700_100_000
+        );
+
+        let mut request = ImportBeatorajaReplaysRequest::new(&player);
+        request.device_kind = InputDeviceKind::Controller;
+        let report =
+            import_beatoraja_replays(&library_db, &mut score_db, &paths, &request).unwrap();
+        assert_eq!((report.course_imported, report.replaced), (1, 1));
+        assert_eq!(
+            import_beatoraja_replays(&library_db, &mut score_db, &paths, &request)
+                .unwrap()
+                .unchanged,
+            1
         );
 
         fs::remove_dir_all(root).unwrap();
