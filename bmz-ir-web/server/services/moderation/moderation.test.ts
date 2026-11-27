@@ -2818,7 +2818,22 @@ describe('administrator operations and audit logs', () => {
       limit: 10,
       offset: 0,
     })
-    expect(filtered.logs.map((log) => log.action)).toEqual(['user_restore', 'user_ban'])
+    // 同じミリ秒のログは UUID 順になるため、各操作のレスポンスと照合する。
+    expect(filtered.logs).toHaveLength(2)
+    expect(filtered.logs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: banned.audit_log_id,
+          action: 'user_ban',
+          metadata: expect.objectContaining({ revision: 1 }),
+        }),
+        expect.objectContaining({
+          id: restored.audit_log_id,
+          action: 'user_restore',
+          metadata: expect.objectContaining({ revision: 2 }),
+        }),
+      ]),
+    )
     const byActor = await listAuditLogs({ actorId: 'nobody', limit: 10, offset: 0 })
     expect(byActor.logs).toHaveLength(0)
   })
