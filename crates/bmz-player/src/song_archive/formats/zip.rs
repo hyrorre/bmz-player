@@ -1,5 +1,6 @@
 use super::*;
-use ::zip::HasZipMetadata;
+
+const UTF8_NAME_FLAG: u16 = 1 << 11;
 
 pub(super) fn open(
     mut file: CheckedFile,
@@ -30,7 +31,7 @@ pub(super) fn open(
         }
         raw.push((
             entry.name_raw().to_vec(),
-            entry.get_metadata().is_utf8,
+            entry.flags().as_u16() & UTF8_NAME_FLAG != 0,
             directory,
             entry.size(),
         ));

@@ -49,7 +49,7 @@ BMS text detection uses `chardetng` (Apache-2.0 OR MIT) and `encoding_rs`
 ZIP, RAR, 7z, tar.gz and LZH song playback uses Rust library decoders. Releases do not require
 or bundle the `7z`, `unrar`, or `unar` command-line programs. `rars` 0.10.0 is
 Apache-2.0 and is built with default features disabled (reading only);
-`sevenz-rust2` 0.22.2 is Apache-2.0, and `zip` 4.6.1 is MIT. Filename decoding
+`sevenz-rust2` 0.22.2 is Apache-2.0, and `zip` 9.8.2 is MIT. Filename decoding
 uses `encoding_rs` ((Apache-2.0 OR MIT) AND BSD-3-Clause), and collision detection
 uses `unicode-normalization` (MIT OR Apache-2.0). LZH decoding uses `delharc`
 0.8.0 (MIT OR Apache-2.0). The existing release scripts

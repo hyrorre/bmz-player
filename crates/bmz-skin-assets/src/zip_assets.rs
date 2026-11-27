@@ -36,6 +36,8 @@ fn archive(path: &Path) -> Result<Archive> {
     let mut exact = HashMap::new();
     let mut folded: HashMap<String, String> = HashMap::new();
     for stored in zip.file_names() {
+        let decoded = stored.context("invalid skin ZIP entry name")?;
+        let stored = decoded.as_ref();
         let name = normalized_entry(stored);
         if name.ends_with('/') || validate_entry(&name).is_err() {
             continue;

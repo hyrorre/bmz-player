@@ -41,7 +41,7 @@ tar.workspace = true
 sevenz-rust2.workspace = true
 rars.workspace = true
 delharc.workspace = true
-zip = { version = "4.6", default-features = false, features = ["deflate"] }
+zip = { version = "9.8.2", default-features = false, features = ["deflate"] }
 encoding_rs.workspace = true
 unicode-normalization.workspace = true
 webbrowser.workspace = true

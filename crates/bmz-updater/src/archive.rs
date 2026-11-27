@@ -16,12 +16,11 @@ pub fn extract(
     ensure!(!stage.exists(), "staging directory already exists");
     let mut archive = zip::ZipArchive::new(File::open(zip_path)?)?;
     ensure!(archive.len() <= 150_000, "too many archive entries");
-    let manifest_path =
-        if archive.file_names().any(|name| name == "BMZ Player/updater/bmz-package.json") {
-            crate::MANIFEST
-        } else {
-            crate::LEGACY_MANIFEST
-        };
+    let manifest_path = if archive.index_for_name("BMZ Player/updater/bmz-package.json").is_some() {
+        crate::MANIFEST
+    } else {
+        crate::LEGACY_MANIFEST
+    };
     let manifest: PackageManifest = {
         let mut file = archive.by_name(&format!("BMZ Player/{manifest_path}"))?;
         ensure!(file.size() <= 16 * 1024 * 1024, "package manifest too large");
@@ -43,8 +42,9 @@ pub fn extract(
     for i in 0..archive.len() {
         checkpoint()?;
         let mut file = archive.by_index(i)?;
+        let file_name = file.name().context("invalid archive entry name")?;
         let name =
-            file.name().strip_prefix("BMZ Player/").context("unexpected archive root")?.to_owned();
+            file_name.strip_prefix("BMZ Player/").context("unexpected archive root")?.to_owned();
         if name.is_empty() && file.is_dir() {
             continue;
         }
