@@ -67,8 +67,16 @@ type FetchResult = (
 );
 type CourseFetchResult =
     (String, SelectCourseIrTarget, Instant, Result<IrCourseRankingResult, String>);
-type RivalFetchResult = (SelectRivalFetchTarget, Instant, Result<Vec<IrRivalScoreRecord>, String>);
 type RivalScoreKey = ([u8; 32], u8, Option<BmzRivalScoreIdentity>);
+type RivalScores = HashMap<RivalScoreKey, IrRivalScoreRecord>;
+type RivalFetchResult = (SelectRivalFetchTarget, Instant, Result<RivalScores, String>);
+
+#[derive(PartialEq, Eq)]
+enum RivalDiskState {
+    Idle,
+    Pending,
+    Loading,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectRivalFetchTarget {
@@ -280,7 +288,9 @@ pub struct SelectIrRanking {
     course_receiver: Receiver<CourseFetchResult>,
     active_scope: SelectIrRankingScope,
     active_rival: Option<SelectRivalFetchTarget>,
-    active_rival_scores: HashMap<RivalScoreKey, IrRivalScoreRecord>,
+    active_rival_scores: RivalScores,
+    rival_disk_state: RivalDiskState,
+    rival_disk_result: Option<Receiver<anyhow::Result<RivalScores>>>,
     rival_in_flight: Option<(SelectRivalFetchTarget, Instant)>,
     rival_pending: Option<Instant>,
     rival_fetched_this_session: HashSet<SelectRivalFetchKey>,
@@ -309,6 +319,8 @@ impl Default for SelectIrRanking {
             active_scope: SelectIrRankingScope::Global,
             active_rival: None,
             active_rival_scores: HashMap::new(),
+            rival_disk_state: RivalDiskState::Idle,
+            rival_disk_result: None,
             rival_in_flight: None,
             rival_pending: None,
             rival_fetched_this_session: HashSet::new(),
@@ -993,7 +1005,11 @@ mod tests {
         select_ir.rival_in_flight = Some((first.clone(), requested_at));
         select_ir
             .rival_sender
-            .send((first.clone(), requested_at, Ok(vec![score.clone()])))
+            .send((
+                first.clone(),
+                requested_at,
+                Ok(index_rival_scores(&first.provider, vec![score.clone()])),
+            ))
             .unwrap();
         select_ir.update_rival(Some(first), &root);
         let snapshot = rival_snapshot(&select_ir, sha).unwrap();
@@ -1016,7 +1032,8 @@ mod tests {
         select_ir.rival_in_flight = Some((second.clone(), requested_at));
         assert!(cycle_forward(&mut profile, &mut select_ir).is_none());
         assert!(profile.rival.active_rival.is_empty());
-        select_ir.rival_sender.send((second, requested_at, Ok(vec![score]))).unwrap();
+        let scores = index_rival_scores(&second.provider, vec![score]);
+        select_ir.rival_sender.send((second, requested_at, Ok(scores))).unwrap();
         select_ir.update_rival(None, &root);
         assert!(select_ir.active_rival_display_name().is_none());
         assert!(rival_snapshot(&select_ir, sha).is_none());
@@ -1063,6 +1080,74 @@ mod tests {
     }
 
     #[test]
+    fn stale_disk_read_cannot_replace_fresh_rival_scores() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = rival_fetch_target("42", "beatoraja");
+        let mut ir = SelectIrRanking::default();
+        let (tx, rx) = channel();
+        ir.active_rival = Some(target.clone());
+        ir.rival_disk_state = RivalDiskState::Loading;
+        ir.rival_disk_result = Some(rx);
+        let score = convert_bmz_rival_score(crate::ir::bmz_official::BmzRivalBestScore {
+            chart_sha256: "11".repeat(32),
+            ln_policy: LnScorePolicy::ForceLn.as_str().into(),
+            double_option: DoubleOptionScoreBucket::Off.ir_value().into(),
+            ex_score: 200,
+            clear_type: "clear".into(),
+            max_combo: 100,
+            min_bp: 0,
+            arrange_1p: None,
+            arrange_2p: None,
+            applied_double_option: None,
+            play_seed: None,
+        })
+        .unwrap();
+        let scores = index_rival_scores(&target.provider, vec![score]);
+        ir.rival_sender.send((target.clone(), Instant::now(), Ok(scores))).unwrap();
+        ir.update_rival(Some(target.clone()), temp.path());
+        tx.send(Ok(RivalScores::new())).unwrap();
+        ir.update_rival(Some(target), temp.path());
+        assert_eq!(ir.active_rival_scores.len(), 1);
+    }
+
+    #[test]
+    #[ignore = "rival selection timing with a populated local database"]
+    fn measure_rival_selection() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("network.db");
+        crate::storage::migration::migrate_network_db(&path).unwrap();
+        let target = rival_fetch_target("42", "beatoraja");
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<20000)
+             INSERT INTO ir_rival_scores(provider, rival_id, body, chart_sha256, ln_mode,
+                 ex_score, clear_type, max_combo, min_bp, play_option, fetched_at)
+             SELECT ?1, ?2, ?3, printf('%064x',i), 0, 1500, 6, 700, 12, 0, 1 FROM n",
+                rusqlite::params![target.provider, target.rival_id, target.body],
+            )
+            .unwrap();
+        let mut timings = Vec::new();
+        let mut ready = Vec::new();
+        for _ in 0..11 {
+            let mut ir = SelectIrRanking::default();
+            ir.rival_fetched_this_session.insert((&target).into());
+            let start = Instant::now();
+            ir.update_rival(Some(target.clone()), temp.path());
+            timings.push(start.elapsed());
+            while ir.active_rival_scores.len() != 20000 {
+                assert!(start.elapsed() < Duration::from_secs(10));
+                std::thread::yield_now();
+                ir.update_rival(Some(target.clone()), temp.path());
+            }
+            ready.push(start.elapsed());
+        }
+        timings.sort();
+        ready.sort();
+        eprintln!("selection median {:?}, ready median {:?}", timings[5], ready[5]);
+    }
+
+    #[test]
     fn bmz_rival_cache_preserves_ln_policy_and_double_option() {
         use crate::storage::{migration::migrate_network_db, network_db::NetworkDatabase};
 
@@ -1105,7 +1190,15 @@ mod tests {
         )
         .unwrap();
         let mut select_ir = SelectIrRanking::default();
-        select_ir.update_rival(Some(target), temp.path());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            select_ir.update_rival(Some(target.clone()), temp.path());
+            if !select_ir.active_rival_scores.is_empty() {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
         assert_eq!(select_ir.active_rival_display_name(), Some("Rival 42"));
         for (policy, bucket, expected) in [(ln, off, 1300), (cn, off, 1400), (cn, battle, 1500)] {
             let snapshot = select_ir.active_rival_snapshot(sha, 0, policy, bucket).unwrap();
@@ -1128,7 +1221,7 @@ mod tests {
 
         select_ir.active_rival = Some(first.clone());
         select_ir.rival_in_flight = Some((first.clone(), requested_at));
-        select_ir.rival_sender.send((first.clone(), requested_at, Ok(Vec::new()))).unwrap();
+        select_ir.rival_sender.send((first.clone(), requested_at, Ok(RivalScores::new()))).unwrap();
         select_ir.update_rival(Some(first.clone()), &root);
 
         assert!(select_ir.rival_fetched_this_session.contains(&SelectRivalFetchKey::from(&first)));
@@ -1166,7 +1259,7 @@ mod tests {
 
         select_ir.active_rival = Some(second.clone());
         select_ir.rival_in_flight = Some((first.clone(), requested_at));
-        select_ir.rival_sender.send((first.clone(), requested_at, Ok(Vec::new()))).unwrap();
+        select_ir.rival_sender.send((first.clone(), requested_at, Ok(RivalScores::new()))).unwrap();
         select_ir.update_rival(Some(second), &root);
 
         assert!(select_ir.rival_fetched_this_session.contains(&SelectRivalFetchKey::from(&first)));

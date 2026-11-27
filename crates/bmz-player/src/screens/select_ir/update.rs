@@ -2,8 +2,20 @@ use super::*;
 
 impl SelectIrRanking {
     /// 選択中のrianIRライバルだけを全曲キャッシュする。切り替え直後は
-    /// network.db の値を即時利用し、通信更新は起動中の取得条件ごとに1回だけ実行する。
+    /// network.db の値をワーカーから受け取り、通信更新は起動中の取得条件ごとに1回だけ実行する。
     pub fn update_rival(&mut self, target: Option<SelectRivalFetchTarget>, profile_root: &Path) {
+        if self.active_rival != target {
+            self.active_rival = target.clone();
+            self.active_rival_scores.clear();
+            self.rival_disk_state =
+                if target.is_some() { RivalDiskState::Pending } else { RivalDiskState::Idle };
+            self.rival_pending = target
+                .as_ref()
+                .filter(|target| {
+                    !self.rival_fetched_this_session.contains(&SelectRivalFetchKey::from(*target))
+                })
+                .map(|_| Instant::now());
+        }
         while let Ok((result_target, requested_at, result)) = self.rival_receiver.try_recv() {
             if self.rival_in_flight.as_ref().is_some_and(|(target, _)| target == &result_target) {
                 self.rival_in_flight = None;
@@ -18,7 +30,8 @@ impl SelectIrRanking {
             match result {
                 Ok(scores) => {
                     self.rival_pending = None;
-                    self.install_rival_scores(scores);
+                    self.rival_disk_state = RivalDiskState::Idle;
+                    self.active_rival_scores = scores;
                     tracing::info!(
                         rival = %result_target.rival_id,
                         scores = self.active_rival_scores.len(),
@@ -34,28 +47,7 @@ impl SelectIrRanking {
             }
         }
 
-        if self.active_rival != target {
-            self.active_rival = target.clone();
-            self.active_rival_scores.clear();
-            self.rival_pending = target
-                .as_ref()
-                .filter(|target| {
-                    !self.rival_fetched_this_session.contains(&SelectRivalFetchKey::from(*target))
-                })
-                .map(|_| Instant::now());
-            if let Some(target) = &target {
-                let path = profile_root.join("network.db");
-                match crate::storage::network_db::NetworkDatabase::open(&path).and_then(|db| {
-                    db.rival_scores(&target.provider, &target.rival_id, &target.body)
-                }) {
-                    Ok(scores) => {
-                        self.install_rival_scores(scores);
-                    }
-                    Err(error) => tracing::debug!(%error, "rival score disk cache is unavailable"),
-                }
-            }
-        }
-
+        self.poll_rival_disk(target.as_ref(), profile_root);
         let Some(target) = target else {
             self.rival_pending = None;
             return;
@@ -75,22 +67,41 @@ impl SelectIrRanking {
         spawn_rival_fetch(target, profile_root, requested_at, self.rival_sender.clone());
     }
 
-    fn install_rival_scores(&mut self, mut scores: Vec<IrRivalScoreRecord>) {
-        // The BMS-IR rival snapshot has no seed format in our cache contract.
-        // Both cached and fresh rows would otherwise be treated as beatoraja.
-        if self
-            .active_rival
-            .as_ref()
-            .is_some_and(|rival| crate::ir::bms_ir::is_bms_ir_provider(&rival.provider))
-        {
-            for score in &mut scores {
-                score.play_seed = None;
+    fn poll_rival_disk(&mut self, target: Option<&SelectRivalFetchTarget>, profile_root: &Path) {
+        if let Some(rx) = &self.rival_disk_result {
+            let result = match rx.try_recv() {
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                result => result,
+            };
+            self.rival_disk_result = None;
+            if self.rival_disk_state == RivalDiskState::Loading {
+                self.rival_disk_state = RivalDiskState::Idle;
+                match result {
+                    Ok(Ok(scores)) => self.active_rival_scores = scores,
+                    Ok(Err(error)) => {
+                        tracing::debug!(%error, "rival score disk cache is unavailable")
+                    }
+                    Err(error) => tracing::warn!(%error, "rival cache worker disconnected"),
+                }
             }
         }
-        self.active_rival_scores = scores
-            .into_iter()
-            .map(|score| ((score.chart_sha256, score.ln_mode, score.bmz_identity), score))
-            .collect();
+        if self.rival_disk_state == RivalDiskState::Pending
+            && let Some(target) = target
+        {
+            let target = target.clone();
+            let path = profile_root.join("network.db");
+            let (tx, rx) = channel();
+            self.rival_disk_state = RivalDiskState::Loading;
+            self.rival_disk_result = Some(rx);
+            std::thread::spawn(move || {
+                let result = crate::storage::network_db::NetworkDatabase::open(&path)
+                    .and_then(|db| {
+                        db.rival_scores(&target.provider, &target.rival_id, &target.body)
+                    })
+                    .map(|scores| index_rival_scores(&target.provider, scores));
+                let _ = tx.send(result);
+            });
+        }
     }
 
     /// 毎フレーム呼ぶ。取得完了の取り込みと、カーソル譜面の取得予約を行う。

@@ -158,9 +158,24 @@ pub(super) fn spawn_rival_fetch(
             anyhow::Ok(scores)
         }
         .await
+        .map(|scores| index_rival_scores(&target.provider, scores))
         .map_err(|error| format!("{error:#}"));
         let _ = sender.send((target, requested_at, result));
     });
+}
+
+pub(super) fn index_rival_scores(provider: &str, scores: Vec<IrRivalScoreRecord>) -> RivalScores {
+    let discard_seed = crate::ir::bms_ir::is_bms_ir_provider(provider);
+    scores
+        .into_iter()
+        .map(|mut score| {
+            // BMS-IR does not identify the seed format.
+            if discard_seed {
+                score.play_seed = None;
+            }
+            ((score.chart_sha256, score.ln_mode, score.bmz_identity), score)
+        })
+        .collect()
 }
 
 fn convert_rival_score(

@@ -8,3 +8,10 @@ GPUに32枚保持できる設定で、新しいバナーを1枚表示したと�
 `full_gpu_cache_retires_only_one_banner_for_one_upload` でアップロード要求を実行し、
 解放待ちのキューを直接数えた。変更後は件数上限の256枚に達した場合も退避は1枚。
 解放前は次のアップロードを待つ。実GPUのフレーム時間は計測対象外。
+
+## IRライバルの選択
+
+一時SQLiteに2万件のスコアを置き、通信を無効にして、未選択からライバル1人を選んだ。
+debugテストで11回実行した中央値。選曲側の最初の呼び出しは46.545msから0.016ms、
+全スコアが利用可能になるまでは46.545msから47.709msだった。
+再現コマンドは `cargo test -p bmz-player --lib measure_rival_selection -- --ignored --nocapture`。
