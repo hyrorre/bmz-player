@@ -52,6 +52,33 @@ export function dailyBoundaryStart(date: string, boundaryMinutes: number): numbe
   return Date.parse(`${date}T00:00:00+09:00`) + boundaryMinutes * MINUTE_MS
 }
 
+export function currentDailyDate(boundaryMinutes: number, now = Date.now()): string {
+  const shifted = now + (JST_UTC_OFFSET_MINUTES - boundaryMinutes) * MINUTE_MS
+  return new Date(shifted).toISOString().slice(0, 10)
+}
+
+/** 成果日の境界とタブ復帰時に「今日」を更新する。 */
+export function watchDailyDate(boundaryMinutes: number, update: (date: string) => void) {
+  let timer: ReturnType<typeof setTimeout>
+  function sync() {
+    clearTimeout(timer)
+    const now = Date.now()
+    const date = currentDailyDate(boundaryMinutes, now)
+    update(date)
+    const next = dailyBoundaryStart(date, boundaryMinutes) + DAY_MINUTES * MINUTE_MS
+    timer = setTimeout(sync, next - now)
+  }
+  function onVisibilityChange() {
+    if (document.visibilityState === 'visible') sync()
+  }
+  sync()
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  return () => {
+    clearTimeout(timer)
+    document.removeEventListener('visibilitychange', onVisibilityChange)
+  }
+}
+
 /**
  * 保存済みの切り替わりを、UTC との差が offsetMinutes の地域の時刻にする。
  * dayOffset は成果日の日付に対する現地の日付のずれ（前日なら -1）。

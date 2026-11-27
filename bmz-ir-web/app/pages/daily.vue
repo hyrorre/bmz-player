@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { currentDailyDate, watchDailyDate } from '../utils/timeZone'
 import type {
   IrDailyBestSnapshot,
   IrDailyChartResult,
@@ -86,7 +87,21 @@ const rows = computed<DailyRow[]>(() =>
     }),
 )
 
-const todayDate = computed(() => currentDailyDate(data.value?.boundary_minutes ?? 0))
+const boundaryMinutes = computed(() => data.value?.boundary_minutes ?? 0)
+const todayDate = ref(currentDailyDate(boundaryMinutes.value))
+onMounted(() => {
+  watch(
+    boundaryMinutes,
+    (minutes, _, onCleanup) => {
+      onCleanup(
+        watchDailyDate(minutes, (date) => {
+          todayDate.value = date
+        }),
+      )
+    },
+    { immediate: true },
+  )
+})
 const boundaryLabel = computed(() => {
   const report = data.value
   if (!report) return ''
@@ -101,11 +116,6 @@ const boundaryLabel = computed(() => {
 
 function queryString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
-}
-
-function currentDailyDate(boundaryMinutes: number): string {
-  const shifted = Date.now() + (9 * 60 - boundaryMinutes) * 60_000
-  return new Date(shifted).toISOString().slice(0, 10)
 }
 
 function shiftDate(date: string, days: number): string {

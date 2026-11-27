@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { expect, jest, test } from 'bun:test'
 import { dailyDateRange } from '../server/services/daily_report_core'
 import { DAILY_BOUNDARY_MAX_MINUTES, DAILY_BOUNDARY_MIN_MINUTES } from '../shared/constants/ir'
 import {
@@ -8,6 +8,7 @@ import {
   localDailyBoundary,
   normalizeTimeZone,
   timeZoneOffsetMinutes,
+  watchDailyDate,
 } from '../app/utils/timeZone'
 
 const winter = Date.parse('2026-01-15T12:00:00Z')
@@ -65,4 +66,33 @@ test('shows boundaries saved for another zone or season with their local day', (
   expect(localDailyBoundary(boundary, -420)).toEqual({ dayOffset: 0, minutes: 60 })
   expect(localDailyBoundary(2699, 540)).toEqual({ dayOffset: 1, minutes: 20 * 60 + 59 })
   expect(formatClockMinutes(5 * 60 + 45)).toBe('05:45')
+})
+
+test('updates today at the configured boundary and after a suspended tab resumes', () => {
+  const minutes = 25 * 60
+  const start = dailyBoundaryStart('2026-01-15', minutes)
+  jest.useFakeTimers({ now: start - 1 })
+  const tab = Object.assign(new EventTarget(), { visibilityState: 'visible' })
+  Object.assign(globalThis, { document: tab })
+  const dates: string[] = []
+  const stop = watchDailyDate(minutes, (date) => dates.push(date))
+  try {
+    expect(dates).toEqual(['2026-01-14'])
+    jest.advanceTimersByTime(1)
+    expect(dates).toEqual(['2026-01-14', '2026-01-15'])
+
+    jest.setSystemTime(dailyBoundaryStart('2026-01-17', minutes) - 1)
+    tab.dispatchEvent(new Event('visibilitychange'))
+    expect(dates.at(-1)).toBe('2026-01-16')
+    jest.advanceTimersByTime(1)
+    expect(dates.at(-1)).toBe('2026-01-17')
+    stop()
+    tab.dispatchEvent(new Event('visibilitychange'))
+    jest.advanceTimersByTime(86_400_000)
+    expect(dates).toHaveLength(4)
+  } finally {
+    stop()
+    jest.useRealTimers()
+    Reflect.deleteProperty(globalThis, 'document')
+  }
 })
