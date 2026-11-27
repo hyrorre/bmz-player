@@ -11,6 +11,7 @@ impl ScoreDatabase {
         slot: u8,
         source_path: &str,
         source_fingerprint: &str,
+        expected_score_id: Option<i64>,
     ) -> Result<i64> {
         super::super::course_score_db::insert_imported_course_replay(
             &mut self.conn,
@@ -18,6 +19,7 @@ impl ScoreDatabase {
             slot,
             source_path,
             source_fingerprint,
+            expected_score_id,
         )
     }
 

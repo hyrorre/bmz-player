@@ -240,30 +240,34 @@ pub(super) fn insert_imported_course_replay(
     slot: u8,
     source_path: &str,
     source_fingerprint: &str,
+    expected_score_id: Option<i64>,
 ) -> Result<i64> {
     if slot > 3 {
         anyhow::bail!("course replay slot must be in 0..=3 (got {slot})");
     }
     let tx = conn.transaction()?;
-    let previous_import_id = tx
+    let previous = tx
         .query_row(
-            "SELECT slots.course_score_id
+            "SELECT slots.course_score_id, scores.replay_only
              FROM course_replay_slots slots
              JOIN course_scores scores ON scores.id = slots.course_score_id
              WHERE slots.course_hash = ?1
                AND slots.ln_policy = ?2
                AND slots.rule_mode = ?3
-               AND slots.slot = ?4
-               AND scores.replay_only = 1",
+               AND slots.slot = ?4",
             params![
                 record.course_hash,
                 record.ln_policy.as_str(),
                 record.rule_mode.as_str(),
                 slot,
             ],
-            |row| row.get::<_, i64>(0),
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?)),
         )
         .optional()?;
+    anyhow::ensure!(
+        previous.map(|(id, _)| id) == expected_score_id,
+        "course replay slot changed during import"
+    );
     let course_score_id =
         insert_course_score_rows(&tx, record, true, "Beatoraja", source_path, source_fingerprint)?;
     if !course_replay_attempt_is_complete(&tx, course_score_id)? {
@@ -291,7 +295,7 @@ pub(super) fn insert_imported_course_replay(
             record.played_at,
         ],
     )?;
-    if let Some(previous_import_id) = previous_import_id {
+    if let Some((previous_import_id, true)) = previous {
         tx.execute("DELETE FROM course_scores WHERE id = ?1", params![previous_import_id])?;
     }
     tx.commit()?;

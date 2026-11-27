@@ -541,20 +541,28 @@ fn import_course_replay(
             previous.source_kind,
         )));
     }
-    if let Some(previous) = previous.as_ref()
-        && previous.replay_only
-        && previous.source_kind == ScoreSourceKind::Beatoraja.as_str()
-        && previous.source_fingerprint == source_fingerprint
-    {
-        let files_exist = score_db
-            .list_course_replays(previous.course_score_id)?
-            .iter()
-            .all(|replay| profile_paths.root_dir.join(&replay.replay_path).is_file());
-        if files_exist {
-            return Ok(ImportOneOutcome::Unchanged);
+    let old_replays = match previous.as_ref() {
+        Some(row) if row.replay_only && row.source_kind == ScoreSourceKind::Beatoraja.as_str() => {
+            score_db.list_course_replays(row.course_score_id)?
         }
+        _ => Vec::new(),
+    };
+    if let Some(previous) = previous.as_ref()
+        && previous.source_fingerprint == source_fingerprint
+        && !old_replays.is_empty()
+        && old_replays.iter().all(|r| profile_paths.root_dir.join(&r.replay_path).is_file())
+    {
+        return Ok(ImportOneOutcome::Unchanged);
     }
 
+    // Nothing references this directory until the slot transaction commits.
+    let staged =
+        tempfile::Builder::new().prefix("course-import-").tempdir_in(&profile_paths.replay_dir)?;
+    let generation = staged
+        .path()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("invalid course replay directory name")?;
     let mut replay_records = Vec::with_capacity(stages.len());
     let mut chart_records = Vec::with_capacity(stages.len());
     let mut played_at = i64::MIN;
@@ -581,11 +589,11 @@ fn import_course_replay(
             slot,
             position,
         );
-        save_replay_for_import(&profile_paths.replay_dir.join(&file_name), &converted)?;
+        save_replay_for_import(&staged.path().join(&file_name), &converted)?;
         replay_records.push(CourseReplayRecord {
             position: position as i64,
             chart_sha256: *sha256,
-            replay_path: format!("replay/{file_name}"),
+            replay_path: format!("replay/{generation}/{file_name}"),
         });
         chart_records.push(CourseScoreChartRecord {
             position: position as i64,
@@ -627,7 +635,38 @@ fn import_course_replay(
         slot,
         &source_path.to_string_lossy(),
         &source_fingerprint,
+        previous.as_ref().map(|row| row.course_score_id),
     )?;
+    let _ = staged.keep();
+    for old in old_replays {
+        let Ok(position) = usize::try_from(old.position) else { continue };
+        let name = imported_course_replay_file_name(
+            &target.course_hash,
+            ln_policy,
+            rule_mode,
+            slot,
+            position,
+        );
+        let Some(relative) = old.replay_path.strip_prefix("replay/") else { continue };
+        let directory = match relative.rsplit_once('/') {
+            None if relative == name => &profile_paths.replay_dir,
+            Some((dir, file))
+                if file == name
+                    && dir.starts_with("course-import-")
+                    && !dir.contains(['/', '\\']) =>
+            {
+                &profile_paths.replay_dir.join(dir)
+            }
+            _ => continue,
+        };
+        if let Err(error) = fs::remove_file(directory.join(name)) {
+            tracing::debug!(%error, "could not remove superseded course replay");
+        }
+        if directory != &profile_paths.replay_dir {
+            // Remove only an empty generation directory, after its final stage.
+            let _ = fs::remove_dir(directory);
+        }
+    }
     Ok(ImportOneOutcome::ImportedCourse { replaced: previous.is_some() })
 }
 
@@ -1237,6 +1276,46 @@ mod tests {
         .unwrap();
         assert_eq!(repeated.imported, 0);
         assert_eq!(repeated.unchanged, 1);
+
+        let old_path = paths.root_dir.join(&replays[0].replay_path);
+        let old_bytes = fs::read(&old_path).unwrap();
+        let mut first = replay_value();
+        first["date"] = json!(1_700_100_000);
+        let mut second = replay_value();
+        second["sha256"] = json!("03".repeat(32));
+        second["randomoption"] = json!(99);
+        let mut replace = |second: &serde_json::Value| {
+            fs::write(&source, gzip(json!([first, second]).to_string().as_bytes())).unwrap();
+            import_beatoraja_replays(
+                &library_db,
+                &mut score_db,
+                &paths,
+                &ImportBeatorajaReplaysRequest::new(&player),
+            )
+            .unwrap()
+        };
+        assert_eq!(replace(&second).unsupported, 1);
+        assert_eq!(fs::read(&old_path).unwrap(), old_bytes);
+        assert_eq!(fs::read_dir(&paths.replay_dir).unwrap().count(), 1);
+        second["randomoption"] = json!(0);
+        assert_eq!(replace(&second).replaced, 1);
+        assert!(!old_path.exists());
+        assert_eq!(fs::read_dir(&paths.replay_dir).unwrap().count(), 1);
+        let current = score_db
+            .course_replay_slot_source(
+                &identity.course_hash,
+                crate::ln_policy::LnScorePolicy::ForceLn,
+                RuleMode::Beatoraja,
+                0,
+            )
+            .unwrap()
+            .unwrap();
+        let stages = score_db.list_course_replays(current.course_score_id).unwrap();
+        assert_eq!(stages.len(), 2);
+        assert_eq!(
+            load_replay(&paths.root_dir.join(&stages[0].replay_path)).unwrap().played_at,
+            1_700_100_000
+        );
 
         fs::remove_dir_all(root).unwrap();
     }

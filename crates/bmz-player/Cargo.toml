@@ -74,6 +74,7 @@ ed25519-dalek.workspace = true
 keyring.workspace = true
 getrandom.workspace = true
 uuid.workspace = true
+tempfile = "3"
 
 bmz-core = { path = "../bmz-core" }
 bmz-chart = { path = "../bmz-chart" }
@@ -93,7 +94,6 @@ winres = "0.1.12"
 
 [dev-dependencies]
 fluent-syntax.workspace = true
-tempfile = "3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop"] }
