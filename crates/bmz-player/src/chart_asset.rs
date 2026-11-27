@@ -37,7 +37,7 @@ pub(crate) fn asset_cache_key_with_stamp(folder: &str, file: &str, stamp: Option
             "archive-asset|{}",
             serde_json::to_string(&(folder, file, stamp)).expect("string tuple")
         ),
-        None => format!("{folder}|{file}"),
+        None => serde_json::to_string(&(folder, file)).expect("string tuple"),
     }
 }
 
@@ -55,8 +55,7 @@ pub(crate) fn resolve_cached_asset(
         );
         (folder, file)
     } else {
-        let (folder, file) = key.split_once('|').unwrap_or(("", ""));
-        (folder.to_owned(), file.to_owned())
+        serde_json::from_str(key)?
     };
     let locator = crate::chart_source::ChartLocator::parse(Path::new(&folder))?;
     if let crate::chart_source::ChartLocator::Archive { container, entry } = &locator {
@@ -339,6 +338,24 @@ fn relative_to_folder(folder: &Path, path: &Path) -> Option<String> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[cfg(unix)]
+    #[test]
+    fn native_asset_keys_keep_pipes_in_folders_and_filenames() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("A|B");
+        fs::create_dir(&folder).unwrap();
+        for (file, preview) in [("stage|1.png", false), ("listen|1.wav", true)] {
+            let path = folder.join(file);
+            fs::write(&path, []).unwrap();
+            let key = asset_cache_key(folder.to_str().unwrap(), file);
+            assert_ne!(
+                key,
+                asset_cache_key(dir.path().join("A").to_str().unwrap(), &format!("B|{file}"))
+            );
+            assert_eq!(resolve_cached_asset(&key, dir.path(), preview).unwrap(), Some(path));
+        }
+    }
 
     #[test]
     fn resolves_relative_path_under_folder() {
