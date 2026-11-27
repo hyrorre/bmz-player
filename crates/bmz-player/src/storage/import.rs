@@ -37,7 +37,7 @@ pub(crate) fn import_chart_file_with_encoding_source(
     let stable_path = locator.to_path_buf();
     let path = stable_path.as_path();
     let metadata = std::fs::metadata(locator.container_path())?;
-    let modified_at = super::common::chart_mtime_ns(metadata.modified().ok());
+    let modified_at = super::common::chart_mtime_seconds(metadata.modified().ok());
 
     let (bytes, archive_index, file_size) = if let crate::chart_source::ChartLocator::Archive {
         container,

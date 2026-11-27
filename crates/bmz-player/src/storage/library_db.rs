@@ -47,8 +47,14 @@ pub(crate) fn library_path_key(path: &Path) -> String {
     path_helpers::path_key(path)
 }
 
-// v14 replaces whole-second chart file timestamps with nanosecond fingerprints.
-pub const CHART_IMPORT_VERSION: i64 = 14;
+// v13 re-imports unchanged charts with the extended CJK text detection.
+// Version 14 was used by development builds for nanosecond timestamps. Reserve it.
+pub const CHART_IMPORT_VERSION: i64 = 13;
+pub(super) const NANOSECOND_IMPORT_VERSION: i64 = 14;
+
+pub(super) fn metadata_version(version: i64) -> i64 {
+    if version == NANOSECOND_IMPORT_VERSION { 13 } else { version }
+}
 // v5 analyzes scheduled keysounds and counts each LN start once.
 pub const CHART_LOUDNESS_ANALYSIS_VERSION: i64 = 5;
 const MAX_ANALYSIS_DISTRIBUTION_SECONDS: usize = 10 * 60;

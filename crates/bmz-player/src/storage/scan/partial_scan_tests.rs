@@ -36,39 +36,52 @@ fn chart(path: &Path, title: &str) {
 }
 
 #[test]
-fn incremental_scan_detects_same_size_edits_within_one_second() {
+fn rescans_reuse_second_precision_and_development_fingerprints() {
     use std::time::{Duration, UNIX_EPOCH};
     let root = temp();
     let path = root.path().join("chart.bms");
     let roots = [entry(root.path(), true)];
     let mut library = db();
-    for (title, fraction) in [("Alpha", 100_000_000), ("Bravo", 900_000_000)] {
+    let write = |title, seconds, nanos| {
         chart(&path, title);
-        let time = UNIX_EPOCH + Duration::new(1_700_000_000, fraction);
+        let time = UNIX_EPOCH + Duration::new(seconds, nanos);
         std::fs::File::options().write(true).open(&path).unwrap().set_modified(time).unwrap();
-        let report = scan_song_roots(&mut library, &roots, &config(), 1, false).unwrap();
-        assert_eq!(report.summary.imported, 1);
-        let stored: String =
-            library.conn().query_row("SELECT title FROM charts", [], |r| r.get(0)).unwrap();
-        assert_eq!(stored, title);
-    }
-    assert_eq!(
-        scan_song_roots(&mut library, &roots, &config(), 2, false).unwrap().summary.skipped,
-        1
-    );
+    };
+    let scan = |db: &mut LibraryDatabase| {
+        scan_song_roots(db, &roots, &config(), 1, false).unwrap().summary
+    };
+    write("Alpha", 1_700_000_000, 100_000_000);
+    assert_eq!(scan(&mut library).imported, 1);
+    let fingerprint = library.chart_file_fingerprint(&path).unwrap().unwrap();
+    assert_eq!((fingerprint.import_version, fingerprint.modified_at), (13, 1_700_000_000));
+
+    write("Bravo", 1_700_000_000, 900_000_000);
+    assert_eq!(scan(&mut library).skipped, 1);
+    library
+        .conn()
+        .execute_batch(
+            "UPDATE charts SET import_version = 14;
+             UPDATE chart_files SET modified_at = 1700000000100000000;",
+        )
+        .unwrap();
+    assert_eq!(scan(&mut library).skipped, 1);
+    write("Bravo", 1_700_000_001, 0);
+    assert_eq!(scan(&mut library).imported, 1);
+    write("Longer", 1_700_000_001, 0);
+    assert_eq!(scan(&mut library).imported, 1);
 }
 
 #[test]
-fn everything_and_native_timestamps_agree_to_one_filetime_tick() {
-    use crate::storage::common::{chart_filetime_ns, chart_mtime_ns};
+fn everything_and_native_timestamps_agree_to_one_second() {
+    use crate::storage::common::{chart_filetime_seconds, chart_mtime_seconds};
     use std::time::{Duration, UNIX_EPOCH};
     let epoch = 116_444_736_000_000_000;
-    for ticks in [-1_i32, 0, 1, 12_345_678] {
+    for ticks in [-1_i32, 0, 1, 9_999_999, 10_000_000] {
         let delta = Duration::from_nanos(u64::from(ticks.unsigned_abs()) * 100);
         let time = if ticks < 0 { UNIX_EPOCH - delta } else { UNIX_EPOCH + delta };
         assert_eq!(
-            chart_filetime_ns(u64::try_from(epoch + i64::from(ticks)).unwrap()),
-            chart_mtime_ns(Some(time))
+            chart_filetime_seconds(u64::try_from(epoch + i64::from(ticks)).unwrap()),
+            chart_mtime_seconds(Some(time))
         );
     }
 }
@@ -282,6 +295,8 @@ fn partial_and_full_scans_reuse_unchanged_loose_and_archived_files() {
     let mut db = db();
     let roots = [entry(base.path(), true)];
     configure_and_scan(&mut db, &roots);
+    // An unchanged archive scanned by the development importer has the same metadata.
+    db.conn().execute("UPDATE song_archive_scans SET import_version = 14", []).unwrap();
     let report = partial_scan(&mut db, entry(&child, true), 2);
     assert_eq!((report.summary.imported, report.summary.skipped), (0, 2));
 

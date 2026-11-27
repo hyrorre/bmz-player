@@ -10,8 +10,8 @@ use rayon::prelude::*;
 
 use crate::config::app_config::{PathEntry, ScanConfig};
 
-use super::common::{UNKNOWN_CHART_MTIME, chart_mtime_ns};
-use super::library_db::{CHART_IMPORT_VERSION, LibraryDatabase};
+use super::common::{UNKNOWN_CHART_MTIME, chart_mtime_seconds};
+use super::library_db::{CHART_IMPORT_VERSION, LibraryDatabase, metadata_version};
 
 #[derive(Debug, Clone, Default)]
 pub struct ScanSummary {

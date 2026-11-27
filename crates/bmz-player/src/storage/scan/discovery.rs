@@ -536,7 +536,7 @@ fn chart_file_entry(
     metadata: &std::fs::Metadata,
     has_document: bool,
 ) -> ChartFileEntry {
-    let modified_at = chart_mtime_ns(metadata.modified().ok());
+    let modified_at = chart_mtime_seconds(metadata.modified().ok());
     ChartFileEntry { path, file_size: metadata.len(), modified_at, has_document }
 }
 
@@ -609,7 +609,7 @@ pub(super) fn discover_archive_charts_with(
     // A listing, not the full index: the index cache holds only a few archives, so a
     // repeated scan in one process would otherwise open every archive again.
     let listing = crate::song_archive::chart_listing(path, control)?;
-    let modified_at = chart_mtime_ns(listing.modified);
+    let modified_at = chart_mtime_seconds(listing.modified);
     let entries = listing
         .charts
         .iter()

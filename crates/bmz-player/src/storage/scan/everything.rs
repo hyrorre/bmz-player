@@ -142,7 +142,7 @@ pub(super) fn discover_chart_files_everything(
         entries.push(ChartFileEntry {
             path: output_path,
             file_size,
-            modified_at: crate::storage::common::chart_filetime_ns(filetime),
+            modified_at: crate::storage::common::chart_filetime_seconds(filetime),
             has_document: false,
         });
     }

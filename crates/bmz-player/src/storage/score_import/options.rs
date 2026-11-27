@@ -222,7 +222,7 @@ pub(super) fn import_chart_metadata(
         }
     };
     anyhow::ensure!(
-        source.import_version == CHART_IMPORT_VERSION,
+        crate::storage::library_db::metadata_version(source.import_version) == CHART_IMPORT_VERSION,
         "outdated chart metadata (version {}, expected {}); rescan the library before importing scores",
         source.import_version,
         CHART_IMPORT_VERSION

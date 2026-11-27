@@ -319,12 +319,12 @@ impl LibraryDatabase {
         let Ok(ChartLocator::Archive { container, entry }) = source.locator() else {
             return false;
         };
-        let Some(generation) = self
+        let Some((generation, version)) = self
             .conn
             .query_row(
-                "SELECT generation FROM song_archive_scans WHERE path = ?1 AND import_version = ?2",
-                rusqlite::params![library_path_key(&container), source.import_version],
-                |row| row.get::<_, String>(0),
+                "SELECT generation, import_version FROM song_archive_scans WHERE path = ?1",
+                [library_path_key(&container)],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
             )
             .optional()
             .ok()
@@ -332,6 +332,9 @@ impl LibraryDatabase {
         else {
             return false;
         };
+        if metadata_version(version) != metadata_version(source.import_version) {
+            return false;
+        }
         // inspect() only re-hashes when the archive's metadata stamp changed.
         crate::song_archive::inspect(&container, &Default::default()).is_ok_and(|index| {
             index.generation.fingerprint == generation

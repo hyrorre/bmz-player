@@ -715,10 +715,17 @@ fn unchanged_file(
     fp: &crate::storage::library_db::ChartFileFingerprint,
     entry: &ChartFileEntry,
 ) -> bool {
+    let stored_seconds =
+        if fp.import_version == crate::storage::library_db::NANOSECOND_IMPORT_VERSION {
+            fp.modified_at.max(0) / 1_000_000_000
+        } else {
+            fp.modified_at
+        };
     fp.file_size == entry.file_size
         && entry.modified_at != UNKNOWN_CHART_MTIME
-        && fp.modified_at == entry.modified_at
-        && fp.import_version == CHART_IMPORT_VERSION
+        && fp.modified_at != UNKNOWN_CHART_MTIME
+        && stored_seconds == entry.modified_at
+        && metadata_version(fp.import_version) == CHART_IMPORT_VERSION
 }
 
 /// The importer version to record for a failure. Bytes that failed to parse fail the
