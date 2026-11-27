@@ -14,8 +14,8 @@ fn chart_index_preserves_hcn_overlap_order_and_falls_back_after_chart_replacemen
     let passing = |now| {
         judge
             .hcn_pairs_at(&chart, TimeUs(now))
-            .filter(|pair| pair.start_time.0 <= now && now < pair.end_time.0)
-            .map(|pair| pair.start_note_id)
+            .filter(|(_, pair)| pair.start_time.0 <= now && now < pair.end_time.0)
+            .map(|(_, pair)| pair.start_note_id)
             .collect::<Vec<_>>()
     };
     assert_eq!(passing(99), vec![NoteId(1)]);
@@ -29,6 +29,20 @@ fn chart_index_preserves_hcn_overlap_order_and_falls_back_after_chart_replacemen
     replaced.lane_notes[Lane::Key1.index()][0].id = NoteId(9999);
     assert!(judge.note_by_id(&replaced, NoteId(9999)).is_some());
     assert!(judge.note_by_id(&chart, NoteId(9999)).is_none());
+}
+
+#[test]
+fn hold_index_returns_the_original_hln_pair_position() {
+    let mut chart = chart_with_long_start(TimeUs(0), TimeUs(1000));
+    chart.long_notes[0].mode = Some(LongNoteMode::Ln);
+    let mut hln = chart.long_notes[0].clone();
+    hln.mode = Some(LongNoteMode::Hln);
+    chart.long_notes.push(hln);
+    let chart = std::sync::Arc::new(chart);
+    let judge = JudgeEngine::new(windows()).with_chart_index(chart.clone());
+    assert!(!judge.has_hcn(&chart));
+    let pairs: Vec<_> = judge.hcn_pairs_at(&chart, TimeUs(500)).map(|(i, _)| i).collect();
+    assert_eq!(pairs, [1]);
 }
 
 #[test]
@@ -46,8 +60,8 @@ fn indexed_hcn_handles_unsorted_pairs_and_per_pair_mode_override() {
     let judge = JudgeEngine::new(windows()).with_chart_index(chart.clone());
     let passing: Vec<_> = judge
         .hcn_pairs_at(&chart, TimeUs(100))
-        .filter(|pair| pair.start_time <= TimeUs(100) && TimeUs(100) < pair.end_time)
-        .map(|pair| pair.start_note_id)
+        .filter(|(_, pair)| pair.start_time <= TimeUs(100) && TimeUs(100) < pair.end_time)
+        .map(|(_, pair)| pair.start_note_id)
         .collect();
     assert_eq!(passing, vec![NoteId(3)]);
 }

@@ -15,3 +15,10 @@ GPUに32枚保持できる設定で、新しいバナーを1枚表示したと�
 debugテストで11回実行した中央値。選曲側の最初の呼び出しは46.545msから0.016ms、
 全スコアが利用可能になるまでは46.545msから47.709msだった。
 再現コマンドは `cargo test -p bmz-player --lib measure_rival_selection -- --ignored --nocapture`。
+
+## HCNのゲージ更新
+
+同じレーンに時間順に並ぶHCNが1万本あり、先頭を保持している譜面を使用した。
+チャート索引の構築を計測から除き、100µs間隔のゲージ更新1,000回を11回反復した。
+releaseビルドの中央値は4.490msから0.046msに短縮した。FPSや譜面全体のプレイ時間は測っていない。
+再現コマンドは `cargo test -p bmz-gameplay --release --lib measure_hold_gauge_updates -- --ignored --nocapture`。

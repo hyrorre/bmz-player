@@ -1,6 +1,36 @@
 use super::*;
 
 #[test]
+#[ignore = "hold gauge timing on a chart with many long notes"]
+fn measure_hold_gauge_updates() {
+    let mut chart = chart_with_hcn_long_note();
+    let first = chart.long_notes[0].clone();
+    for n in 1..10000 {
+        let mut pair = first.clone();
+        pair.start_time = TimeUs(i64::from(n) * 1_000_000);
+        pair.end_time = TimeUs(pair.start_time.0 + 1_000_000);
+        pair.start_note_id = NoteId(n * 2 + 1);
+        pair.end_note_id = NoteId(n * 2 + 2);
+        chart.long_notes.push(pair);
+    }
+    let mut session = session_with_autoplay(chart);
+    session.judge.judged_notes.insert(first.start_note_id, Judge::PGreat);
+    update_hcn_lane_timers(&mut session, TimeUs(0));
+    assert!(session.lane_hcn_timer[first.lane.index()].is_some());
+    let mut times = Vec::new();
+    for _ in 0..11 {
+        session.last_hcn_gauge_at = Some(TimeUs(0));
+        let start = std::time::Instant::now();
+        for n in 1..=1000 {
+            std::hint::black_box(apply_hcn_gauge(&mut session, TimeUs(n * 100)));
+        }
+        times.push(start.elapsed());
+    }
+    times.sort();
+    eprintln!("1000 gauge updates median {:?}", times[5]);
+}
+
+#[test]
 fn advance_session_frame_starts_full_combo_timer_after_last_note() {
     let mut session = session_with_autoplay(chart_with_keysound());
     let mut audio = TestAudio::default();

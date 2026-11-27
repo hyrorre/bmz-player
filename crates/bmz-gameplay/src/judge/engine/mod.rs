@@ -557,7 +557,7 @@ impl JudgeEngine {
         let side = side_from_delta(candidate.delta.0);
         // A regrab can restore the HCN body after its tail has already failed.
         if candidate.judge == Judge::EmptyPoor
-            && self.hcn_pairs_at(chart, input.time).any(|pair| {
+            && self.hcn_pairs_at(chart, input.time).any(|(_, pair)| {
                 pair.lane == input.lane
                     && pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hcn
                     && pair.start_time <= input.time

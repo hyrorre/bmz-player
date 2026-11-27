@@ -109,7 +109,9 @@ impl JudgeEngine {
         pair_index: usize,
         now: TimeUs,
     ) -> Option<(bool, bool, TimeUs, i64)> {
-        let body = self.hln.bodies.iter().find(|body| body.pair_index == pair_index)?;
+        let index =
+            self.hln.bodies.binary_search_by_key(&pair_index, |body| body.pair_index).ok()?;
+        let body = &self.hln.bodies[index];
         (body.activated.is_some_and(|at| at <= now) && !body.ended).then_some((
             body.held,
             body.reactive,

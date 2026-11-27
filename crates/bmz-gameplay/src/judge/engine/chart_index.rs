@@ -12,6 +12,7 @@ pub(super) struct ChartIndex {
     hcn: Vec<usize>,
     hcn_prefix_end: Vec<TimeUs>,
     hcn_sorted: bool,
+    has_hcn: bool,
     result_end_time: TimeUs,
     has_mines: bool,
     bpm_reflections: Vec<TickTimePoint>,
@@ -27,13 +28,15 @@ impl JudgeEngine {
                 notes.entry(note.id).or_insert((lane, offset));
             }
         }
+        let mut has_hcn = false;
         let hcn: Vec<_> = chart
             .long_notes
             .iter()
             .enumerate()
             .filter_map(|(i, pair)| {
-                (pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hcn)
-                    .then_some(i)
+                let mode = pair.mode.unwrap_or(chart.metadata.long_note_mode);
+                has_hcn |= mode == LongNoteMode::Hcn;
+                matches!(mode, LongNoteMode::Hcn | LongNoteMode::Hln).then_some(i)
             })
             .collect();
         let hcn_sorted = hcn.windows(2).all(|pair| {
@@ -57,6 +60,7 @@ impl JudgeEngine {
             hcn,
             hcn_prefix_end,
             hcn_sorted,
+            has_hcn,
             result_end_time,
             has_mines,
             bpm_reflections,
@@ -80,7 +84,7 @@ impl JudgeEngine {
                     .iter()
                     .any(|p| p.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hcn)
             },
-            |index| !index.hcn.is_empty(),
+            |index| index.has_hcn,
         )
     }
 
@@ -114,7 +118,7 @@ impl JudgeEngine {
         &'a self,
         chart: &'a PlayableChart,
         now: TimeUs,
-    ) -> impl Iterator<Item = &'a LongNotePair> + 'a {
+    ) -> impl Iterator<Item = (usize, &'a LongNotePair)> + 'a {
         self.hcn_pairs_between(chart, now, now)
     }
 
@@ -136,7 +140,7 @@ impl JudgeEngine {
             }
         };
         let mut passing = false;
-        for pair in self.hcn_pairs_between(chart, previous, now) {
+        for (_, pair) in self.hcn_pairs_between(chart, previous, now) {
             if pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hcn
                 && pair.end_time > previous
                 && pair.start_time <= now
@@ -189,7 +193,7 @@ impl JudgeEngine {
         chart: &'a PlayableChart,
         previous: TimeUs,
         now: TimeUs,
-    ) -> impl Iterator<Item = &'a LongNotePair> + 'a {
+    ) -> impl Iterator<Item = (usize, &'a LongNotePair)> + 'a {
         let (indices, range) = match self.matching_index(chart) {
             Some(index) if index.hcn_sorted => {
                 let start = index.hcn_prefix_end.partition_point(|&end| end <= previous);
@@ -199,7 +203,10 @@ impl JudgeEngine {
             Some(index) => (Some(index.hcn.as_slice()), 0..index.hcn.len()),
             None => (None, 0..chart.long_notes.len()),
         };
-        range.map(move |i| &chart.long_notes[indices.map_or(i, |indices| indices[i])])
+        range.map(move |i| {
+            let index = indices.map_or(i, |indices| indices[i]);
+            (index, &chart.long_notes[index])
+        })
     }
 }
 

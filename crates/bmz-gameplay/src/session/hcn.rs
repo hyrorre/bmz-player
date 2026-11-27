@@ -24,7 +24,7 @@ pub struct HcnLaneTimer {
 pub fn update_hcn_lane_timers(session: &mut GameSession, audio_now: TimeUs) {
     let mut next: [Option<HcnLaneTimer>; LANE_COUNT] = [None; LANE_COUNT];
     let mut next_muted: [Option<bool>; LANE_COUNT] = [None; LANE_COUNT];
-    for pair in session.judge.hcn_pairs_at(&session.chart, audio_now) {
+    for (index, pair) in session.judge.hcn_pairs_at(&session.chart, audio_now) {
         let idx = pair.lane.index();
         if next[idx].is_some() {
             continue;
@@ -32,6 +32,7 @@ pub fn update_hcn_lane_timers(session: &mut GameSession, audio_now: TimeUs) {
         let Some(timer) = hcn_timer_for_pair(
             &session.chart,
             &session.judge,
+            index,
             pair,
             session.lane_keyon_started_at[idx],
             session.lane_hcn_timer[idx],
@@ -100,6 +101,7 @@ const HCN_UPDATE_US: i64 = 200_000;
 fn hcn_timer_for_pair(
     chart: &PlayableChart,
     judge: &JudgeEngine,
+    index: usize,
     pair: &bmz_chart::model::LongNotePair,
     keyon: Option<TimeUs>,
     previous: Option<HcnLaneTimer>,
@@ -109,8 +111,6 @@ fn hcn_timer_for_pair(
         return None;
     }
     if pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hln {
-        let index =
-            chart.long_notes.iter().position(|other| other.start_note_id == pair.start_note_id)?;
         let (held, _, since, counter) = judge.hln_body_state(index, now)?;
         return Some(HcnLaneTimer { inclease: held, since, passing_count_us: counter });
     }
@@ -148,7 +148,7 @@ fn advance_hcn_counter(timer: &mut HcnLaneTimer, delta_us: i64) -> i64 {
 
 pub(super) fn update_battle_opponent_hcn(opponent: &mut BattleOpponentSession, now: TimeUs) {
     let mut next = [None; LANE_COUNT];
-    for pair in opponent.judge.hcn_pairs_at(&opponent.chart, now) {
+    for (index, pair) in opponent.judge.hcn_pairs_at(&opponent.chart, now) {
         let idx = pair.lane.index();
         if next[idx].is_some() {
             continue;
@@ -156,6 +156,7 @@ pub(super) fn update_battle_opponent_hcn(opponent: &mut BattleOpponentSession, n
         if let Some(timer) = hcn_timer_for_pair(
             &opponent.chart,
             &opponent.judge,
+            index,
             pair,
             opponent.lane_keyon_started_at[idx],
             opponent.lane_hcn_timer[idx],
@@ -172,6 +173,7 @@ pub(super) fn update_battle_opponent_hcn(opponent: &mut BattleOpponentSession, n
 /// make the order of a recovery and damage on different lanes observable.
 fn hcn_ticks(
     chart: &PlayableChart,
+    judge: &JudgeEngine,
     timers: &mut [Option<HcnLaneTimer>; LANE_COUNT],
     previous: TimeUs,
     now: TimeUs,
@@ -179,9 +181,18 @@ fn hcn_ticks(
     use std::cmp::Reverse;
     let mut next = std::collections::BinaryHeap::new();
     let delta = now.0.saturating_sub(previous.0).max(0);
+    let mut hln_lanes = [false; LANE_COUNT];
+    for (_, pair) in judge.hcn_pairs_at(chart, previous) {
+        if pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hln
+            && pair.start_time <= previous
+            && previous < pair.end_time
+        {
+            hln_lanes[pair.lane.index()] = true;
+        }
+    }
     for (lane, timer) in timers.iter_mut().enumerate() {
         let Some(timer) = timer else { continue };
-        if hln_passing(chart, lane, previous) {
+        if hln_lanes[lane] {
             continue;
         }
         let count = timer.passing_count_us;
@@ -224,8 +235,14 @@ pub(super) fn apply_battle_opponent_hcn_gauge(
         && now > previous
     {
         opponent.last_hcn_gauge_at = Some(now);
-        let mut ticks =
-            hcn_ticks(&opponent.chart, &mut opponent.lane_hcn_timer, previous, now).peekable();
+        let mut ticks = hcn_ticks(
+            &opponent.chart,
+            &opponent.judge,
+            &mut opponent.lane_hcn_timer,
+            previous,
+            now,
+        )
+        .peekable();
         while !opponent.gauge.current_closes_play_on_zero()
             && let Some(outcome) =
                 next_hold_outcome(&mut ticks, &mut opponent.judge, &opponent.chart)
@@ -256,20 +273,13 @@ pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) -> Vec<Judg
     session.last_hcn_gauge_at = Some(audio_now);
 
     let mut ticks =
-        hcn_ticks(&session.chart, &mut session.lane_hcn_timer, previous, audio_now).peekable();
+        hcn_ticks(&session.chart, &session.judge, &mut session.lane_hcn_timer, previous, audio_now)
+            .peekable();
     while session.state != PlayState::Failed
         && let Some(outcome) = next_hold_outcome(&mut ticks, &mut session.judge, &session.chart)
     {
         events.extend(apply_judge_outcome(session, outcome));
     }
     events
-}
-fn hln_passing(chart: &PlayableChart, lane: usize, now: TimeUs) -> bool {
-    chart.long_notes.iter().any(|pair| {
-        pair.lane.index() == lane
-            && pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hln
-            && pair.start_time <= now
-            && now < pair.end_time
-    })
 }
 use super::*;
