@@ -405,9 +405,10 @@ impl RowBannerRuntime {
             if uploaded_bytes + bytes > 2 * MAX_THUMB_BYTES {
                 continue;
             }
-            while self.gpu_bytes + bytes > self.gpu_limit
-                || self.gpu.len() + self.retired.len() >= MAX_SOURCES
-            {
+            // Retire only what the pending upload will need after collection.
+            let retired_bytes: usize = self.retired.iter().map(|image| image.bytes).sum();
+            let mut live_bytes = self.gpu_bytes - retired_bytes;
+            while live_bytes + bytes > self.gpu_limit || self.gpu.len() >= MAX_SOURCES {
                 let victim = self
                     .gpu
                     .iter()
@@ -418,6 +419,7 @@ impl RowBannerRuntime {
                     break;
                 };
                 let image = self.gpu.remove(&victim).unwrap();
+                live_bytes -= image.bytes;
                 self.retire(image);
             }
             if self.gpu_bytes + bytes > self.gpu_limit

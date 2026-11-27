@@ -215,6 +215,28 @@ fn pending_upload_gate_matches_visibility_cpu_readiness_and_retry_delay() {
 }
 
 #[test]
+fn full_gpu_cache_retires_only_one_banner_for_one_upload() {
+    let now = Instant::now();
+    for capacity in [32, MAX_SOURCES] {
+        let mut runtime = RowBannerRuntime {
+            gpu_limit: if capacity == MAX_SOURCES { GPU_LIMIT } else { capacity * 4 },
+            ..Default::default()
+        };
+        for n in 0..=capacity {
+            let file = n.to_string();
+            runtime.reconcile([(SourceRef { folder: "song", file: &file }, true)].into_iter());
+            seed(&mut runtime, 0, key(n as u64));
+            runtime.upload_ready(now, |_| Some(view(n as u32)));
+        }
+        runtime.upload_ready(now, |_| panic!("pending releases still count"));
+        assert_eq!(runtime.retired.len(), 1, "capacity={capacity}");
+        runtime.collect_retired(|texture| assert_eq!(texture, SkinTextureId(0)));
+        runtime.upload_ready(now, |_| Some(view(capacity as u32)));
+        assert_eq!(runtime.gpu.len(), capacity);
+    }
+}
+
+#[test]
 fn snapshot_leases_pin_retired_textures_and_keep_them_in_the_budget() {
     let now = Instant::now();
     let mut runtime = RowBannerRuntime { gpu_limit: 4, ..Default::default() };
