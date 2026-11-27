@@ -22,22 +22,10 @@ pub(in crate::app) fn mode_filter_removes_everything(
     items: &[SelectItem],
     filter: SelectModeFilter,
 ) -> bool {
-    if items.is_empty() {
-        return false;
-    }
-    let Some(key_mode) = filter.key_mode() else {
-        // ALL は絞り込まないので空にはならない。
-        return false;
-    };
-    items.iter().all(|item| match item {
-        SelectItem::Chart(row) => !row
-            .chart
-            .as_ref()
-            .and_then(|chart| KeyMode::from_str_opt(&chart.mode))
-            .is_some_and(|mode| mode == key_mode),
-        // フォルダ・コース等は除去対象外なので、残れば「全除去」ではない。
-        _ => false,
-    })
+    !items.is_empty()
+        && filter
+            .key_mode()
+            .is_some_and(|mode| !items.iter().any(|item| matches_select_key_mode(item, mode)))
 }
 
 pub(in crate::app) fn apply_select_mode_filter(
@@ -47,14 +35,17 @@ pub(in crate::app) fn apply_select_mode_filter(
     let Some(key_mode) = filter.key_mode() else {
         return;
     };
-    items.retain(|item| match item {
-        SelectItem::Chart(row) => row
-            .chart
-            .as_ref()
-            .and_then(|chart| KeyMode::from_str_opt(&chart.mode))
-            .is_some_and(|mode| mode == key_mode),
+    items.retain(|item| matches_select_key_mode(item, key_mode));
+}
+
+fn matches_select_key_mode(item: &SelectItem, key_mode: KeyMode) -> bool {
+    match item {
+        SelectItem::Chart(row) => match &row.chart {
+            Some(chart) => KeyMode::from_str_opt(&chart.mode) == Some(key_mode),
+            None => row.table_mode.as_deref().is_none_or(|mode| mode == key_mode.as_str()),
+        },
         _ => true,
-    });
+    }
 }
 
 /// LR2風の譜面難易度フィルター。

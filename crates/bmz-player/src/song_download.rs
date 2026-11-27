@@ -34,7 +34,7 @@ mod integration_tests;
 #[cfg(test)]
 mod network_tests;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 pub use manager::{
     ChartDownloadManager, DownloadControl, DownloadServices, DownloadState, DownloadTask,
     DownloadTaskId,

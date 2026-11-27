@@ -991,4 +991,8 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
                        WHERE has_document IS NULL;",
         ],
     },
+    Migration {
+        version: 41,
+        statements: &["ALTER TABLE difficulty_table_entries ADD COLUMN mode TEXT;"],
+    },
 ];

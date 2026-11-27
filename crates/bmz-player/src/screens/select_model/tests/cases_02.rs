@@ -128,6 +128,7 @@ fn song_scan_path_from_context_reads_folder_and_chart() {
     assert_eq!(song_scan_path_from_context(&[], Some(&folder)), Some("/music/bms".to_string()));
 
     let chart = SelectItem::Chart(SelectChartRow {
+        table_mode: None,
         last_played_at: None,
         lr2_added_at: None,
         chart: Some(ChartListItem {
@@ -240,6 +241,7 @@ fn course_contents_preserve_stage_order_and_missing_download_metadata() {
             level_order: vec!["12".to_string()],
             entries: vec![FetchedTableEntry {
                 level: "12".to_string(),
+                mode: Some("14K".into()),
                 md5: missing_md5.to_string(),
                 sha256: String::new(),
                 title: "Missing Stage".to_string(),
@@ -314,6 +316,7 @@ fn course_contents_preserve_stage_order_and_missing_download_metadata() {
     assert_eq!(rows[1].display_artist(), "Missing Artist");
     assert_eq!(rows[1].download_metadata.url, "https://example.com/missing-stage");
     assert_eq!(rows[1].table_level, "★12");
+    assert_eq!(rows[1].table_mode.as_deref(), Some("14K"));
     assert!(rows[2].in_library());
 }
 
@@ -425,6 +428,7 @@ fn load_select_items_in_table_level_shows_missing_library_entry() {
         level_order: vec!["12".to_string()],
         entries: vec![FetchedTableEntry {
             level: "12".to_string(),
+            mode: None,
             md5: "aabbcc".repeat(5) + "aabb",
             sha256: String::new(),
             title: "Missing Song".to_string(),

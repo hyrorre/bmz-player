@@ -234,6 +234,7 @@ fn chart_row_with_mode(index: usize, mode: &str) -> SelectItem {
 
 fn select_chart_row(index: usize) -> SelectChartRow {
     SelectChartRow {
+        table_mode: None,
         last_played_at: None,
         lr2_added_at: None,
         chart: Some(ChartListItem {

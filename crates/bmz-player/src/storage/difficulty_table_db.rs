@@ -3,7 +3,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::difficulty_table::FetchedDifficultyTable;
 
-const DOWNLOAD_METADATA_VERSION: i64 = 1;
+// Stored in the existing download_metadata_version column.
+const TABLE_METADATA_VERSION: i64 = 2;
 
 #[derive(Debug, Clone)]
 pub struct DifficultyTableRecord {
@@ -29,6 +30,7 @@ pub struct DifficultyTableEntryRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableEntryRow {
     pub level: String,
+    pub mode: Option<String>,
     pub md5: String,
     pub sha256: String,
     pub title: String,
@@ -76,7 +78,7 @@ pub(super) fn upsert_difficulty_table_in_transaction(
             table.symbol,
             level_order_json,
             table.fetched_at,
-            DOWNLOAD_METADATA_VERSION,
+            TABLE_METADATA_VERSION,
         ],
     )?;
 
@@ -91,8 +93,8 @@ pub(super) fn upsert_difficulty_table_in_transaction(
     let mut insert = conn.prepare(
         "INSERT INTO difficulty_table_entries
              (table_id, level, md5, sha256, title, artist, comment,
-              url, append_url, ipfs, append_ipfs)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+              url, append_url, ipfs, append_ipfs, mode)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
     )?;
     for entry in &table.entries {
         insert.execute(params![
@@ -107,9 +109,20 @@ pub(super) fn upsert_difficulty_table_in_transaction(
             entry.append_url,
             entry.ipfs,
             entry.append_ipfs,
+            entry.mode,
         ])?;
     }
 
+    let course_source = format!("table:{}", table.source_url);
+    for (position, course) in table.courses.iter().enumerate() {
+        super::course_db::upsert_course_in_transaction(
+            conn,
+            &course_source,
+            course,
+            position as i64,
+            table.fetched_at,
+        )?;
+    }
     Ok(table_id)
 }
 
@@ -161,7 +174,7 @@ pub(super) fn delete_difficulty_table(conn: &Connection, source_url: &str) -> Re
         > 0)
 }
 
-pub(super) fn list_difficulty_table_sources_with_current_download_metadata(
+pub(super) fn list_difficulty_table_sources_with_current_metadata(
     conn: &Connection,
 ) -> Result<Vec<String>> {
     let mut stmt = conn.prepare(
@@ -169,7 +182,7 @@ pub(super) fn list_difficulty_table_sources_with_current_download_metadata(
          FROM difficulty_tables
          WHERE download_metadata_version = ?1",
     )?;
-    let rows = stmt.query_map(params![DOWNLOAD_METADATA_VERSION], |row| row.get(0))?;
+    let rows = stmt.query_map(params![TABLE_METADATA_VERSION], |row| row.get(0))?;
     rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
 }
 
@@ -180,7 +193,7 @@ pub(super) fn list_table_entries(
 ) -> Result<Vec<TableEntryRow>> {
     let sql = "
         SELECT dte.level, dte.md5, dte.sha256, dte.title, dte.artist, dte.comment,
-               dte.url, dte.append_url, dte.ipfs, dte.append_ipfs
+               dte.url, dte.append_url, dte.ipfs, dte.append_ipfs, dte.mode
         FROM difficulty_table_entries dte
         JOIN difficulty_tables dt ON dt.id = dte.table_id
         WHERE dt.source_url = ?1";
@@ -195,7 +208,7 @@ pub(super) fn list_table_entries_at_level(
 ) -> Result<Vec<TableEntryRow>> {
     let sql = "
         SELECT dte.level, dte.md5, dte.sha256, dte.title, dte.artist, dte.comment,
-               dte.url, dte.append_url, dte.ipfs, dte.append_ipfs
+               dte.url, dte.append_url, dte.ipfs, dte.append_ipfs, dte.mode
         FROM difficulty_table_entries dte
         JOIN difficulty_tables dt ON dt.id = dte.table_id
         WHERE dt.source_url = ?1 AND dte.level = ?2";
@@ -214,7 +227,7 @@ pub(super) fn list_table_entry_levels(conn: &Connection, source_url: &str) -> Re
     rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
 }
 
-/// Finds download metadata for one course entry in its source difficulty table.
+/// Finds metadata for one course entry in its source difficulty table.
 pub(super) fn find_table_entry_by_hash(
     conn: &Connection,
     source_url: &str,
@@ -228,7 +241,7 @@ pub(super) fn find_table_entry_by_hash(
     }
     let sql = "
         SELECT dte.level, dte.md5, dte.sha256, dte.title, dte.artist, dte.comment,
-               dte.url, dte.append_url, dte.ipfs, dte.append_ipfs
+               dte.url, dte.append_url, dte.ipfs, dte.append_ipfs, dte.mode
         FROM difficulty_table_entries dte
         JOIN difficulty_tables dt ON dt.id = dte.table_id
         WHERE dt.source_url = ?1
@@ -263,6 +276,7 @@ fn table_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TableEntryR
         append_url: row.get(7)?,
         ipfs: row.get(8)?,
         append_ipfs: row.get(9)?,
+        mode: row.get(10)?,
     })
 }
 
@@ -369,6 +383,7 @@ mod tests {
             entries: vec![
                 FetchedTableEntry {
                     level: "1".to_string(),
+                    mode: Some("24K".into()),
                     md5: "aabbcc".repeat(5) + "aabb",
                     sha256: "00".repeat(32),
                     title: "Song A".to_string(),
@@ -410,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn download_metadata_round_trips_with_table_entries() {
+    fn metadata_round_trips_with_table_entries() {
         let mut conn = open_db();
         let table = sample_table("https://example.com/");
         upsert_difficulty_table(&mut conn, &table).unwrap();
@@ -418,6 +433,7 @@ mod tests {
         let rows = list_table_entries_at_level(&conn, &table.source_url, "1").unwrap();
 
         assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].mode.as_deref(), Some("24K"));
         assert_eq!(rows[0].url, "https://example.com/song-a");
         assert_eq!(rows[0].append_url, "https://example.com/song-a-diff");
         assert_eq!(rows[0].ipfs, "/ipfs/bafy-song-a");
@@ -425,25 +441,66 @@ mod tests {
     }
 
     #[test]
-    fn download_metadata_version_marks_legacy_tables_for_refresh() {
-        let mut conn = open_db();
-        let table = sample_table("https://example.com/");
-        upsert_difficulty_table(&mut conn, &table).unwrap();
-
-        assert_eq!(
-            list_difficulty_table_sources_with_current_download_metadata(&conn).unwrap(),
-            vec!["https://example.com/".to_string()]
-        );
-
-        conn.execute(
-            "UPDATE difficulty_tables SET download_metadata_version = 0 WHERE source_url = ?1",
-            params![table.source_url],
+    fn migration_keeps_legacy_table_entries_and_marks_them_for_refresh() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        let previous_migrations = LIBRARY_MIGRATIONS.partition_point(|m| m.version < 41);
+        run_migrations(&mut conn, &LIBRARY_MIGRATIONS[..previous_migrations]).unwrap();
+        let source = "https://example.com/";
+        conn.execute_batch(
+            "INSERT INTO difficulty_tables
+                 (id, source_url, head_url, name, symbol, level_order, fetched_at,
+                  download_metadata_version)
+             VALUES (3, 'https://example.com/', 'https://example.com/header.json',
+                     'Old table', '★', '[\"1\"]', 123, 1);
+             INSERT INTO difficulty_table_entries
+                 (table_id, level, md5, sha256, title, artist, comment, url)
+             VALUES (3, '1', '00000000000000000000000000000000', '', 'Old chart', '', '',
+                     'https://example.com/download');",
         )
         .unwrap();
 
-        assert!(
-            list_difficulty_table_sources_with_current_download_metadata(&conn).unwrap().is_empty()
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let rows = list_table_entries(&conn, source).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "Old chart");
+        assert_eq!(rows[0].url, "https://example.com/download");
+        assert_eq!(rows[0].mode, None);
+        assert!(list_difficulty_table_sources_with_current_metadata(&conn).unwrap().is_empty());
+
+        let mut table = sample_table(source);
+        table.entries.retain(|entry| entry.mode.is_none());
+        assert_eq!(upsert_difficulty_table(&mut conn, &table).unwrap(), 3);
+        assert_eq!(list_table_entries(&conn, source).unwrap()[0].mode, None);
+        assert_eq!(list_difficulty_table_sources_with_current_metadata(&conn).unwrap(), [source]);
+    }
+
+    #[test]
+    fn failed_course_write_rolls_back_table_refresh() {
+        let mut conn = open_db();
+        let source = "https://example.com/";
+        let mut table = sample_table(source);
+        upsert_difficulty_table(&mut conn, &table).unwrap();
+        let original = list_table_entries(&conn, source).unwrap();
+        conn.execute_batch(
+            "UPDATE difficulty_tables SET download_metadata_version = 1;
+             CREATE TRIGGER reject_course BEFORE INSERT ON courses
+             BEGIN SELECT RAISE(ABORT, 'fixture course write failure'); END;",
+        )
+        .unwrap();
+
+        table.entries[0].mode = Some("7K".into());
+        table.courses = crate::difficulty_table::parse_courses_from_header_for_test(
+            source,
+            &Some(serde_json::json!([{
+                "name": "Course", "charts": [{"sha256": &table.entries[0].sha256}]
+            }])),
         );
+        assert_eq!(table.courses.len(), 1);
+        let error = upsert_difficulty_table(&mut conn, &table).unwrap_err();
+        assert!(error.to_string().contains("fixture course write failure"));
+        assert_eq!(list_table_entries(&conn, source).unwrap(), original);
+        assert!(list_difficulty_table_sources_with_current_metadata(&conn).unwrap().is_empty());
     }
 
     #[test]

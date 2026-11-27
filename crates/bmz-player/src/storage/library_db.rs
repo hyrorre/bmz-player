@@ -226,6 +226,7 @@ pub struct ChartLaneNotes {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TableEntryListItem {
     pub level: String,
+    pub mode: Option<String>,
     pub md5: String,
     pub sha256: String,
     pub title: String,

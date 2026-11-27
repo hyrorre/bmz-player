@@ -27,6 +27,7 @@ fn profile_collection_flags_per_list_load() -> Result<()> {
     let row = |chart: &ChartListItem| {
         SelectItem::Chart(SelectChartRow {
             chart: Some(chart.clone()),
+            table_mode: None,
             chart_analysis: None,
             has_document: false,
             fallback_title: String::new(),

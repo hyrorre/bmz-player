@@ -19,6 +19,8 @@ pub struct FetchedDifficultyTable {
 #[derive(Debug, Clone, Default)]
 pub struct FetchedTableEntry {
     pub level: String,
+    /// Normalized key mode (for example `7K` or `24K`), if published by the table.
+    pub mode: Option<String>,
     pub md5: String,
     pub sha256: String,
     pub title: String,
@@ -34,6 +36,8 @@ pub struct FetchedTableEntry {
 struct HeaderJson {
     name: String,
     symbol: String,
+    #[serde(default, deserialize_with = "deserialize_table_mode")]
+    mode: Option<String>,
     #[serde(default)]
     tag: Option<String>,
     #[serde(default)]
@@ -51,6 +55,25 @@ struct HeaderJson {
     /// grade_mirror and gauge_lr2 constraints.
     #[serde(default)]
     grade: Option<serde_json::Value>,
+}
+
+fn deserialize_table_mode<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    // Match bms.model.Mode's exact hints. Both Pop'n hints share its 9K filter.
+    let mode = match value.as_str() {
+        Some("beat-5k") => "5K",
+        Some("beat-7k") => "7K",
+        Some("beat-10k") => "10K",
+        Some("beat-14k") => "14K",
+        Some("popn-5k" | "popn-9k") => "9K",
+        Some("keyboard-24k") => "24K",
+        Some("keyboard-24k-double") => "48K",
+        _ => return Ok(None),
+    };
+    Ok(Some(mode.to_owned()))
 }
 
 /// Deserializes `level_order`, tolerating entries that are numbers or strings.
@@ -94,6 +117,8 @@ impl DataUrl {
 #[derive(Deserialize)]
 struct DataEntry {
     level: Option<serde_json::Value>,
+    #[serde(default, deserialize_with = "deserialize_table_mode")]
+    mode: Option<String>,
     #[serde(default)]
     md5: Option<String>,
     #[serde(default)]
@@ -203,6 +228,7 @@ pub(crate) async fn fetch_difficulty_table_with_client(
             }
             entries.push(FetchedTableEntry {
                 level,
+                mode: entry.mode.or_else(|| header.mode.clone()),
                 md5,
                 sha256,
                 title: entry.title.unwrap_or_default(),
@@ -519,6 +545,43 @@ mod tests {
         let header: HeaderJson =
             serde_json::from_str(body).expect("mixed numeric/string level_order should parse");
         assert_eq!(header.level_order, vec!["1", "2", "3", "???"]);
+    }
+
+    #[test]
+    fn table_mode_uses_exact_beatoraja_hints() {
+        for (hint, expected) in [
+            ("beat-5k", "5K"),
+            ("beat-7k", "7K"),
+            ("beat-10k", "10K"),
+            ("beat-14k", "14K"),
+            ("popn-5k", "9K"),
+            ("popn-9k", "9K"),
+            ("keyboard-24k", "24K"),
+            ("keyboard-24k-double", "48K"),
+        ] {
+            let header: HeaderJson = serde_json::from_value(serde_json::json!({
+                "name": "Table", "symbol": "T", "mode": hint
+            }))
+            .unwrap();
+            assert_eq!(header.mode.as_deref(), Some(expected));
+        }
+        for invalid in [
+            serde_json::json!(""),
+            serde_json::json!(" beat-7k"),
+            serde_json::json!("BEAT-7K"),
+            serde_json::json!("7K"),
+            serde_json::json!(0),
+            serde_json::json!(null),
+            serde_json::json!({"mode": "beat-7k"}),
+        ] {
+            let header: HeaderJson = serde_json::from_value(serde_json::json!({
+                "name": "Table", "symbol": "T", "mode": invalid
+            }))
+            .unwrap();
+            let entry: DataEntry =
+                serde_json::from_value(serde_json::json!({"mode": invalid})).unwrap();
+            assert_eq!(entry.mode.or(header.mode), None, "{invalid}");
+        }
     }
 
     #[test]

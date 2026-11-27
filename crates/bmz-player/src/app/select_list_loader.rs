@@ -79,7 +79,7 @@ impl SelectListLoader {
             SelectListAction::Enter(_) | SelectListAction::Exit => SelectListAction::Refresh,
             action => action,
         };
-        // RefreshDownloads also keeps the mode filter; never weaken it to Refresh.
+        // RefreshDownloads keeps the current folder even if it is empty.
         if !matches!(self.deferred, Some(SelectListAction::RefreshDownloads)) {
             self.deferred = Some(action);
         }
@@ -202,7 +202,7 @@ fn load(request: &SelectListRequest) -> Result<LoadedSelectList> {
         request.selected_index,
         request.selected_key.clone(),
         |stack| {
-            let (mut items, mut mode) = load_items_for_stack(
+            load_items_for_stack(
                 SelectListContext {
                     boot: source,
                     collections: &mut collections,
@@ -213,12 +213,7 @@ fn load(request: &SelectListRequest) -> Result<LoadedSelectList> {
                 request.mode,
                 request.difficulty,
                 request.sort,
-            )?;
-            if matches!(request.action, SelectListAction::RefreshDownloads) {
-                mode = request.mode;
-                apply_select_mode_filter(&mut items, mode);
-            }
-            Ok((items, mode))
+            )
         },
     )?;
     if let Some(prepared) = &mut prepared {
@@ -261,10 +256,13 @@ fn load(request: &SelectListRequest) -> Result<LoadedSelectList> {
 mod profile;
 
 #[cfg(test)]
+mod table_modes;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    fn request(boot: &BootstrappedApp, action: SelectListAction) -> SelectListRequest {
+    pub(super) fn request(boot: &BootstrappedApp, action: SelectListAction) -> SelectListRequest {
         SelectListRequest {
             action,
             app_config: boot.app_config.clone(),

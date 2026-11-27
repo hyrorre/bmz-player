@@ -43,15 +43,6 @@ impl LibraryDatabase {
             let course_source = format!("table:{}", table.source_url);
             super::super::course_db::delete_courses_by_source(&tx, &course_source)?;
             super::super::difficulty_table_db::upsert_difficulty_table_in_transaction(&tx, table)?;
-            for (position, course) in table.courses.iter().enumerate() {
-                super::super::course_db::upsert_course_in_transaction(
-                    &tx,
-                    &course_source,
-                    course,
-                    position as i64,
-                    table.fetched_at,
-                )?;
-            }
             entries += table.entries.len();
         }
         tx.commit()?;
@@ -85,10 +76,8 @@ impl LibraryDatabase {
         super::super::course_db::delete_table_courses_by_source_prefix(&self.conn, source_prefix)
     }
 
-    pub fn list_difficulty_table_sources_with_current_download_metadata(
-        &self,
-    ) -> Result<Vec<String>> {
-        super::super::difficulty_table_db::list_difficulty_table_sources_with_current_download_metadata(
+    pub fn list_difficulty_table_sources_with_current_metadata(&self) -> Result<Vec<String>> {
+        super::super::difficulty_table_db::list_difficulty_table_sources_with_current_metadata(
             &self.conn,
         )
     }
@@ -168,6 +157,7 @@ impl LibraryDatabase {
                     });
                 TableEntryListItem {
                     level: row.level,
+                    mode: row.mode,
                     md5: row.md5,
                     sha256: row.sha256,
                     title: row.title,

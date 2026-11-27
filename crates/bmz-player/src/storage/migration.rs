@@ -536,6 +536,7 @@ mod tests {
             CREATE TABLE chart_file_links (chart_id INTEGER, chart_file_id INTEGER);
             CREATE TABLE chart_import_warnings (chart_file_id INTEGER);
             CREATE TABLE course_entries (chart_id INTEGER);
+            CREATE TABLE difficulty_table_entries (id INTEGER PRIMARY KEY);
             INSERT INTO chart_analysis (
                 loudness_lufs, normalization_gain, loudness_analysis_version
             ) VALUES (-10.5, 0.75, 1);

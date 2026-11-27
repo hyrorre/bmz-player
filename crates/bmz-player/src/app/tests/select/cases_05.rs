@@ -213,6 +213,38 @@ fn resolve_mode_filter_keeps_all_filter() {
 }
 
 #[test]
+fn select_mode_filter_keeps_unknown_missing_charts_in_every_mode() {
+    let items = vec![SelectItem::Chart(missing_select_chart_row("14K in the title"))];
+    for filter in SelectModeFilter::ORDER {
+        assert_eq!(resolve_non_empty_mode_filter(&items, filter), filter);
+        let mut filtered = items.clone();
+        apply_select_mode_filter(&mut filtered, filter);
+        assert_eq!(filtered, items);
+    }
+    assert_eq!(resolve_non_empty_mode_filter(&[], SelectModeFilter::K7), SelectModeFilter::K7);
+}
+
+#[test]
+fn select_mode_filter_advances_for_known_missing_charts() {
+    for (table_mode, expected) in [
+        ("7K", SelectModeFilter::K7),
+        ("14K", SelectModeFilter::K14),
+        ("24K", SelectModeFilter::All),
+        ("48K", SelectModeFilter::All),
+    ] {
+        let mut row = missing_select_chart_row("Missing");
+        row.table_mode = Some(table_mode.into());
+        let mut items = vec![SelectItem::Chart(row)];
+        assert_eq!(resolve_non_empty_mode_filter(&items, SelectModeFilter::K7), expected);
+        let mut filtered = items.clone();
+        apply_select_mode_filter(&mut filtered, expected);
+        assert_eq!(filtered, items);
+        apply_select_mode_filter(&mut items, SelectModeFilter::K7);
+        assert_eq!(items.len(), usize::from(table_mode == "7K"));
+    }
+}
+
+#[test]
 fn select_mode_filter_roundtrips_through_str() {
     for mode in SelectModeFilter::ORDER {
         assert_eq!(SelectModeFilter::from_str_or_default(mode.as_str()), mode);

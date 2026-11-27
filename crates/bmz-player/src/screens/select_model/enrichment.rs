@@ -121,6 +121,7 @@ fn chart_items_with_optional_table_enrichment(
         items.push(SelectItem::Chart(SelectChartRow {
             chart_analysis: analysis_map.remove(&chart.chart_id),
             chart: Some(chart),
+            table_mode: None,
             has_document,
             fallback_title: String::new(),
             fallback_artist: String::new(),

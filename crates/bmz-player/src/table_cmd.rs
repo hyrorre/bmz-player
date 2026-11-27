@@ -325,11 +325,6 @@ pub(crate) fn store_fetched_table(
 ) -> Result<TableFetchSuccess> {
     library_db.upsert_difficulty_table(table)?;
 
-    let source = format!("table:{}", table.source_url);
-    for (position, course) in table.courses.iter().enumerate() {
-        library_db.upsert_course(&source, course, position as i64, table.fetched_at)?;
-    }
-
     Ok(TableFetchSuccess {
         url: table.source_url.clone(),
         name: table.name.clone(),

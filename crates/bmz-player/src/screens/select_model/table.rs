@@ -182,6 +182,7 @@ pub fn load_select_items_for_course_contents(
         };
         items.push(SelectItem::Chart(SelectChartRow {
             chart: None,
+            table_mode: table_entry.as_ref().and_then(|row| row.mode.clone()),
             chart_analysis: None,
             has_document: false,
             fallback_title,
@@ -735,6 +736,7 @@ pub(super) fn select_chart_row_from_table_entry(
     let table_level = table_text.table_level.clone();
     SelectChartRow {
         chart: entry.chart,
+        table_mode: entry.mode,
         chart_analysis,
         has_document,
         fallback_title: entry.title,

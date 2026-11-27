@@ -188,6 +188,7 @@ pub(super) fn missing_favorite_chart_item(
         score_and_replays_for_missing_favorite(score_db, record.chart_sha256, rule_mode)?;
     Ok(SelectItem::Chart(SelectChartRow {
         chart: None,
+        table_mode: None,
         chart_analysis: None,
         has_document: false,
         fallback_title: fallback_favorite_title(&record.title_hint, record.chart_sha256),
@@ -214,6 +215,7 @@ pub(super) fn missing_favorite_song_item(
         score_and_replays_for_missing_favorite(score_db, record.representative_sha256, rule_mode)?;
     Ok(SelectItem::Chart(SelectChartRow {
         chart: None,
+        table_mode: None,
         chart_analysis: None,
         has_document: false,
         fallback_title: fallback_favorite_title(&record.title_hint, record.representative_sha256),

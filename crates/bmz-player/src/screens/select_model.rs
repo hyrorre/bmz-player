@@ -195,6 +195,7 @@ pub fn difficulty_table_text_for_chart_with_active_sources(
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectChartRow {
     pub chart: Option<ChartListItem>,
+    pub table_mode: Option<String>,
     pub chart_analysis: Option<ChartAnalysisSummary>,
     /// beatoraja `SongData.hasDocument()` compatible same-folder `.txt` presence.
     pub has_document: bool,

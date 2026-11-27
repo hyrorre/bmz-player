@@ -851,6 +851,7 @@ fn collection_cache_observes_other_connection_commits() {
 
 fn missing_favorite_chart_item_for_test() -> SelectItem {
     SelectItem::Chart(SelectChartRow {
+        table_mode: None,
         last_played_at: None,
         lr2_added_at: None,
         chart: None,

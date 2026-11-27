@@ -97,12 +97,10 @@ pub(super) fn startup_difficulty_table_fetch_urls_for_boot(
     startup_difficulty_table_fetch_urls(&boot.app_config, || {
         let phase =
             super::StartupPhase::begin(startup, "startup_difficulty_table_download_metadata");
-        match phase
-            .result(boot.library_db.list_difficulty_table_sources_with_current_download_metadata())
-        {
+        match phase.result(boot.library_db.list_difficulty_table_sources_with_current_metadata()) {
             Ok(source_urls) => source_urls.into_iter().collect(),
             Err(error) => {
-                tracing::warn!(%error, "failed to list difficulty tables with current download metadata");
+                tracing::warn!(%error, "failed to list difficulty tables with current metadata");
                 HashSet::new()
             }
         }
