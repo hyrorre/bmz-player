@@ -115,6 +115,13 @@ test('shows BMZ score versions with the bmz-player name', () => {
 test('displays two sides for DP and keeps known course options in chart order', () => {
   const randomMirror = { arrange_1p: 'random', arrange_2p: 'mirror' }
   expect(formatRankingArrange(randomMirror, '7K')).toBe('RANDOM')
+  expect(formatRankingArrange({ ...randomMirror, double_option: 'off' }, '5K')).toBe('RANDOM')
+  expect(formatRankingArrange({ ...randomMirror, double_option: 'battle' }, '7K')).toBe(
+    'RANDOM / MIRROR',
+  )
+  expect(
+    formatRankingArrange({ ...randomMirror, double_option: 'battle_auto_scratch' }, '5K'),
+  ).toBe('RANDOM / MIRROR')
   expect(formatRankingArrange(randomMirror, '10k')).toBe('RANDOM / MIRROR')
   expect(formatRankingArrange(randomMirror, '14K')).toBe('RANDOM / MIRROR')
   expect(formatCourseArrange([], [{ mode: '14K' }])).toBe('-')

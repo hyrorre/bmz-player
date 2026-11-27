@@ -141,6 +141,7 @@ export default defineEventHandler(async (event) => {
         min_bp: best.minBp,
         min_cb: best.minCb,
         device_type: best.deviceType,
+        double_option: best.doubleOption,
         gauge: best.gauge,
         ln_policy: best.lnPolicy,
         rule_mode: best.ruleMode,

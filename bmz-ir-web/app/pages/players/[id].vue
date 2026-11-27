@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { IR_PLAYER_SCORE_PAGE_SIZE } from '~~/bmz-ir-web/shared/constants/ir'
-import type { IrArrangeOptions, IrDifficultyLabel, IrRanking } from '~~/bmz-ir-web/shared/types/ir'
+import type {
+  IrArrangeOptions,
+  IrDifficultyLabel,
+  IrDoubleOption,
+  IrRanking,
+} from '~~/bmz-ir-web/shared/types/ir'
 import type { RankingLnFilters } from '../../utils/rankingDisplay'
 
 interface PlayerDetail {
@@ -31,6 +36,7 @@ interface PlayerDetail {
     min_bp: number
     min_cb: number
     device_type: string
+    double_option: IrDoubleOption
     ln_policy: string
     rule_mode: string
     played_at: string | null

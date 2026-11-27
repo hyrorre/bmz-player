@@ -2,6 +2,7 @@ import { IR_SCORE_GRADES } from '../../shared/constants/ir'
 import type {
   IrArrangeOptions,
   IrChartLnProfile,
+  IrDoubleOption,
   IrRuleMode,
   LnScorePolicy,
 } from '../../shared/types/ir'
@@ -103,12 +104,17 @@ export function ruleModeLabel(value: string) {
 }
 
 export function formatRankingArrange(
-  options: IrArrangeOptions | null | undefined,
+  options: (IrArrangeOptions & { double_option?: IrDoubleOption }) | null | undefined,
   mode: string | null,
 ) {
   const first = options?.arrange_1p?.toUpperCase()
   const second = options?.arrange_2p?.toUpperCase()
-  if ((mode?.toUpperCase() === '10K' || mode?.toUpperCase() === '14K') && (first || second)) {
+  const battle =
+    options?.double_option === 'battle' || options?.double_option === 'battle_auto_scratch'
+  if (
+    (battle || mode?.toUpperCase() === '10K' || mode?.toUpperCase() === '14K') &&
+    (first || second)
+  ) {
     return `${first ?? '-'} / ${second ?? '-'}`
   }
   return first ?? '-'
