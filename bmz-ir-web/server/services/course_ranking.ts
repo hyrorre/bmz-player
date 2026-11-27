@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql, type SQL } from 'drizzle-orm'
+import { and, sql, type SQL } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
 
 /** Course BP includes empty POORs and unplayed notes. CB excludes only empty POORs. */
@@ -12,79 +12,73 @@ export function courseComboBreaks(bp: number, judges?: Record<string, unknown>) 
     : null
 }
 
-/** player 単位の best 行を順位順に返す。limit 省略時は全行。 */
-export async function fetchCourseRankingRows(conditions: SQL[], limit?: number) {
-  const scores = schema.courseScores
-  const ranked = db
-    .select({
-      player_id: scores.playerId,
-      course_score_id: scores.id,
-      ex_score: scores.exScore,
-      max_ex_score: scores.maxExScore,
-      clear_type: scores.clearType,
-      clear_rank: scores.clearRank,
-      course_clear: scores.courseClear,
-      max_combo: scores.maxCombo,
-      bp: scores.bp,
-      device_type: scores.deviceType,
-      ln_policy: scores.lnPolicy,
-      rule_mode: scores.ruleMode,
-      played_at: scores.playedAt,
-      server_received_at: scores.serverReceivedAt,
-      verification: scores.verification,
-      player_position: sql<number>`row_number() over (partition by ${scores.playerId}
-      order by ${scores.exScore} desc, ${scores.clearRank} desc, ${scores.bp} asc,
-      ${scores.maxCombo} desc, ${scores.serverReceivedAt} desc, ${scores.id} asc)`.as(
-        'player_position',
-      ),
-    })
-    .from(scores)
-    .where(and(...conditions))
-    .as('ranked')
-  const query = db
-    .select()
-    .from(ranked)
-    .where(eq(ranked.player_position, 1))
-    .orderBy(
-      desc(ranked.ex_score),
-      desc(ranked.clear_rank),
-      asc(ranked.bp),
-      desc(ranked.max_combo),
-      desc(ranked.server_received_at),
-      asc(ranked.course_score_id),
-    )
-  return limit === undefined ? await query : await query.limit(limit)
+type StoredCourseScore = typeof schema.courseScores.$inferSelect
+interface CourseRankingRow {
+  player_id: string
+  course_score_id: string
+  ex_score: number
+  max_ex_score: number
+  clear_type: string
+  course_clear: boolean
+  max_combo: number
+  bp: number
+  device_type: StoredCourseScore['deviceType']
+  ln_policy: string
+  rule_mode: StoredCourseScore['ruleMode']
+  played_at: Date | null
+  verification: StoredCourseScore['verification']
 }
-
-export type CourseRankingRow = Awaited<ReturnType<typeof fetchCourseRankingRows>>[number]
 
 export interface RankedCourseRow {
   rank: number
   row: CourseRankingRow
 }
 
-/**
- * 全 best 行に同点同順位の順位を付け、指定ページと自分の行を返す。
- * 自分の順位と total は表示範囲外の行も含めて求める。
- */
-export function rankCourseRows(
-  rows: CourseRankingRow[],
+export async function fetchCourseRankingPage(
+  conditions: SQL[],
   selfId: string | null,
   limit: number,
   offset = 0,
 ) {
-  let previousEx: number | null = null
-  let rank = 0
-  const ranked: RankedCourseRow[] = rows.map((row, index) => {
-    if (previousEx !== row.ex_score) {
-      rank = index + 1
-      previousEx = row.ex_score
-    }
-    return { rank, row }
-  })
-  return {
-    entries: ranked.slice(offset, offset + limit),
-    self: selfId ? ranked.find((entry) => entry.row.player_id === selfId) : undefined,
-    total: ranked.length,
+  type Raw = Omit<CourseRankingRow, 'played_at' | 'course_clear'> & {
+    played_at: number | null
+    course_clear: number
+    position: number
+    rank: number
+    total: number
   }
+  const order = sql`ex_score desc, clear_rank desc, bp, max_combo desc, server_received_at desc, id`
+  const rows = await db.all<Raw>(sql`
+    with candidates as (
+      select id, player_id, ex_score, clear_rank, bp, max_combo, server_received_at,
+        row_number() over(partition by player_id order by ${order}) as personal
+      from ${schema.courseScores} where ${and(...conditions)}
+    ), ranked as (
+      select id, player_id, rank() over(order by ex_score desc) as rank,
+        row_number() over(order by ${order}) as position
+      from candidates where personal=1
+    ), page as (
+      select * from ranked where (position>${offset} and position<=${offset + limit}) or player_id=${selfId}
+    )
+    select totals.total, p.rank, p.position, s.id as course_score_id, s.player_id, s.ex_score, s.max_ex_score,
+      s.clear_type, s.course_clear, s.max_combo, s.bp, s.device_type, s.ln_policy, s.rule_mode, s.played_at, s.verification
+    from (select count(*) as total from ranked) totals left join page p on true
+    left join ${schema.courseScores} s on s.id=p.id order by p.position
+  `)
+  const entries: RankedCourseRow[] = []
+  let self: RankedCourseRow | undefined
+  for (const row of rows) {
+    if (!row.course_score_id) continue
+    const entry = {
+      rank: row.rank,
+      row: {
+        ...row,
+        course_clear: !!row.course_clear,
+        played_at: row.played_at === null ? null : new Date(row.played_at),
+      },
+    }
+    if (row.player_id === selfId) self = entry
+    if (row.position > offset && row.position <= offset + limit) entries.push(entry)
+  }
+  return { entries, self, total: rows[0]!.total }
 }

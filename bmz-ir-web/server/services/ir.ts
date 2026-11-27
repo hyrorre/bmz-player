@@ -27,13 +27,7 @@ import {
   scoreSubmissionMetadata,
   validateSeedOptions,
 } from './ir/common'
-import {
-  bestRowsFromHistory,
-  dedupeBestRowsByPlayer,
-  previousRankFromEntries,
-  rankingJudges,
-  rankRows,
-} from './ir/ranking'
+import { bestRowsFromHistory, rankingJudges } from './ir/ranking'
 import {
   idempotentScoreResponse,
   partitionLocalBackfillRows,
@@ -43,7 +37,6 @@ import { verificationStatusForSignedSubmission } from './ir/verification'
 
 export const __test = {
   arrangeOptionsFromPlayOptions,
-  dedupeBestRowsByPlayer,
   bestRowsFromHistory,
   uniqueBestScoreKeys,
   partitionLocalBackfillRows,
@@ -52,6 +45,4 @@ export const __test = {
   scoreSubmissionMetadata,
   validateSeedOptions,
   rankingJudges,
-  rankRows,
-  previousRankFromEntries,
 }

@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/sqlite-core'
 import { db, schema } from 'hub:db'
 import { isUniqueConstraintError } from '../../utils/db_errors'
@@ -12,7 +12,6 @@ import type {
   IrJudges,
   IrRanking,
   IrRankingEntry,
-  IrRankingScope,
   IrRuleMode,
   IrScoreSubmission,
   IrScoreSourceKind,
@@ -61,57 +60,64 @@ export async function getRankingWithPreviousRank(
   query: RankingQuery,
   previousBestExScore: number | null,
 ): Promise<{ data: IrRanking; previousRank: number }> {
-  const result = await buildRanking(user, sha256, query)
-  return {
-    data: result.data,
-    previousRank: previousRankFromEntries(result.ranked, user.id, previousBestExScore),
-  }
+  return buildRanking(user, sha256, query, previousBestExScore)
 }
 
 async function buildRanking(
   user: IrRequestUser | null,
   sha256: string,
   query: RankingQuery,
-): Promise<{ data: IrRanking; ranked: IrRankingEntry[] }> {
+  previousBestExScore: number | null = null,
+): Promise<{ data: IrRanking; previousRank: number }> {
   requireHex(sha256, 64, 'sha256')
-  const bestRows = await fetchRankingBestRows(sha256, query)
-  const rivalIds = user ? await getRivalIds(user.id) : new Set<string>()
-  const rankingRows = dedupeBestRowsByPlayer(bestRows)
-  const ranked = rankRows(rankingRows, user?.id ?? null, rivalIds)
-  const scoped = applyScope(ranked, query.scope, user?.id ?? null, rivalIds)
-  const total = scoped.length
-  // 全プレイヤー中のクリア率 (%)。NoPlay/Failed を除いた割合。
-  const clearRate = rankingRows.length
-    ? Math.round(
-        (rankingRows.filter((row) => row.clear_rank > 1).length / rankingRows.length) * 100,
-      )
-    : null
-  const page = scoped.slice(query.offset, query.offset + query.limit)
-  const selfEntry = ranked.find((entry) => entry.relation.is_self)
-  const selfInPage = selfEntry !== undefined && page.includes(selfEntry)
+  const selfId = user?.id ?? null
+  const rows = await fetchRankingPage(sha256, query, selfId, previousBestExScore)
+  const summary = rows[0]!
+  const page: IrRankingEntry[] = []
+  let selfEntry: IrRankingEntry | undefined
+  let selfInPage = false
+  for (const row of rows) {
+    if (row.player_id === null) continue
+    const best = rowToBestScoreRow({
+      ...row,
+      played_at: row.played_at === null ? null : new Date(row.played_at),
+      server_received_at: new Date(row.server_received_at),
+    })
+    const entry = rankingEntry(
+      best,
+      row.global_rank,
+      row.global_pos,
+      row.player_id === selfId,
+      !!row.is_rival,
+    )
+    if (entry.relation.is_self) selfEntry = entry
+    if (
+      row.scope_pos !== null &&
+      row.scope_pos > query.offset &&
+      row.scope_pos <= query.offset + query.limit
+    ) {
+      // Self retains its global position even when the page uses a narrower scope.
+      page.push({ ...entry, scope_rank: row.scope_pos })
+      if (entry.relation.is_self) selfInPage = true
+    }
+  }
   await loadRankingEntryDetails(selfEntry && !selfInPage ? [...page, selfEntry] : page)
-  const entries = page.map((entry, index) => ({
-    ...entry,
-    scope_rank: query.offset + index + 1,
-  }))
-
   return {
+    previousRank: summary.previous_rank,
     data: {
       chart: { sha256 },
       rule: {
         scoring: query.scoring,
         ln_policy: query.lnPolicy,
-        effective_ln_mode: query.lnPolicy
-          ? rankingRows.find((row) => row.ln_policy === query.lnPolicy)?.effective_ln_mode
-          : undefined,
+        effective_ln_mode: query.lnPolicy ? (summary.rule_mode_ln ?? undefined) : undefined,
         double_option: query.doubleOption,
         rule_mode: query.ruleMode,
       },
       ranking: {
         scope: query.scope,
         sort: 'ex_score_desc',
-        clear_rate: clearRate,
-        entries,
+        clear_rate: summary.clear_rate,
+        entries: page,
         self: selfEntry
           ? {
               rank: selfEntry.rank,
@@ -123,81 +129,112 @@ async function buildRanking(
         pagination: {
           limit: query.limit,
           offset: query.offset,
-          total,
-          has_more: query.offset + query.limit < total,
+          total: summary.total,
+          has_more: query.offset + query.limit < summary.total,
         },
       },
     },
-    ranked,
   }
 }
 
-export function previousRankFromEntries(
-  entries: IrRankingEntry[],
-  selfId: string,
-  previousBestExScore: number | null,
-): number {
-  if (previousBestExScore === null) {
-    return 0
-  }
-  return (
-    entries.filter(
-      (entry) => entry.player.id !== selfId && entry.score.ex_score > previousBestExScore,
-    ).length + 1
-  )
+function rankingSource(
+  table: typeof schema.bestScores | typeof schema.scores,
+  sha256: string,
+  query: RankingQuery,
+) {
+  const historical = table === schema.scores
+  return sql`select player_id, chart_sha256, ex_score, clear_type, clear_rank, max_combo, min_bp, min_cb,
+    device_type, gauge, ln_policy, effective_ln_mode, double_option, rule_mode, played_at, server_received_at, verification,
+    ${
+      historical
+        ? sql`id as score_id, id as best_ex_score_id, id as best_clear_score_id,
+      id as best_max_combo_score_id, id as best_min_bp_score_id, id as best_min_cb_score_id`
+        : sql`score_id, best_ex_score_id, best_clear_score_id, best_max_combo_score_id, best_min_bp_score_id, best_min_cb_score_id`
+    }
+    from ${table} where ${and(
+      eq(table.chartSha256, sha256),
+      eq(table.scoring, query.scoring),
+      eq(table.doubleOption, query.doubleOption),
+      query.lnPolicy ? eq(table.lnPolicy, query.lnPolicy) : undefined,
+      query.ruleMode ? eq(table.ruleMode, query.ruleMode) : undefined,
+      historical ? sql`accepted = 1 and not exists (select 1 from best)` : undefined,
+      publicPlayerCondition(table.playerId),
+      publicChartCondition(table.chartSha256),
+    )}`
 }
 
-async function fetchRankingBestRows(sha256: string, query: RankingQuery): Promise<BestScoreRow[]> {
-  const conditions = [
-    eq(schema.bestScores.chartSha256, sha256),
-    eq(schema.bestScores.scoring, query.scoring),
-    eq(schema.bestScores.doubleOption, query.doubleOption),
-    // BAN・非公開譜面は順位付けの前に除外し、順位・件数・クリア率に混ぜない。
-    publicPlayerCondition(schema.bestScores.playerId),
-    publicChartCondition(schema.bestScores.chartSha256),
-  ]
-  if (query.lnPolicy) {
-    conditions.push(eq(schema.bestScores.lnPolicy, query.lnPolicy))
+function fetchRankingPage(
+  sha256: string,
+  query: RankingQuery,
+  selfId: string | null,
+  previous: number | null,
+) {
+  const self = sql`player_id = ${selfId}`
+  const around = sql`(select global_pos from ranked where ${self})`
+  const scopes = {
+    global: sql`1`,
+    self,
+    rivals: sql`is_rival`,
+    self_and_rivals: sql`(${self} or is_rival)`,
+    around_self: sql`(${around} is null or abs(global_pos - ${around}) <= 5)`,
   }
-  if (query.ruleMode) {
-    conditions.push(eq(schema.bestScores.ruleMode, query.ruleMode))
+  // Rank globally, then filter the scope. Fold source IDs only for the selected players.
+  type PageRow = Omit<
+    Parameters<typeof rowToBestScoreRow>[0],
+    'played_at' | 'server_received_at'
+  > & {
+    played_at: number | null
+    server_received_at: number
+    global_rank: number
+    global_pos: number
+    scope_pos: number | null
+    is_rival: number
+    clear_rate: number | null
+    total: number
+    previous_rank: number
+    rule_mode_ln: BestScoreRow['effective_ln_mode'] | null
   }
-
-  const rows = await db
-    .select({
-      player_id: schema.bestScores.playerId,
-      chart_sha256: schema.bestScores.chartSha256,
-      score_id: schema.bestScores.scoreId,
-      best_ex_score_id: schema.bestScores.bestExScoreId,
-      best_clear_score_id: schema.bestScores.bestClearScoreId,
-      best_max_combo_score_id: schema.bestScores.bestMaxComboScoreId,
-      best_min_bp_score_id: schema.bestScores.bestMinBpScoreId,
-      best_min_cb_score_id: schema.bestScores.bestMinCbScoreId,
-      ex_score: schema.bestScores.exScore,
-      clear_type: schema.bestScores.clearType,
-      clear_rank: schema.bestScores.clearRank,
-      max_combo: schema.bestScores.maxCombo,
-      min_bp: schema.bestScores.minBp,
-      min_cb: schema.bestScores.minCb,
-      device_type: schema.bestScores.deviceType,
-      gauge: schema.bestScores.gauge,
-      ln_policy: schema.bestScores.lnPolicy,
-      effective_ln_mode: schema.bestScores.effectiveLnMode,
-      double_option: schema.bestScores.doubleOption,
-      rule_mode: schema.bestScores.ruleMode,
-      scoring: schema.bestScores.scoring,
-      played_at: schema.bestScores.playedAt,
-      server_received_at: schema.bestScores.serverReceivedAt,
-      verification: schema.bestScores.verification,
-    })
-    .from(schema.bestScores)
-    .where(and(...conditions))
-    .orderBy(desc(schema.bestScores.exScore))
-
-  if (rows.length > 0) {
-    return rows.map(rowToBestScoreRow)
-  }
-  return fetchRankingBestRowsFromHistory(sha256, query)
+  return db.all<PageRow>(sql`
+    with best as (${rankingSource(schema.bestScores, sha256, query)}),
+    source as (select * from best union all ${rankingSource(schema.scores, sha256, query)}),
+    representatives as (
+      select *, row_number() over (partition by player_id order by ex_score desc, clear_rank desc,
+        min_bp, min_cb, max_combo desc, coalesce(played_at,server_received_at), score_id) as representative from source
+    ), players as (
+      select player_id, max(ex_score) as ex_score, max(clear_rank) as clear_rank, min(min_bp) as bp, min(min_cb) as cb,
+        max(max_combo) as combo, max(case when representative=1 then coalesce(played_at,server_received_at) end) as played
+      from representatives group by player_id
+    ), ranked as (
+      select *, rank() over(order by ex_score desc) as global_rank,
+        row_number() over(order by ex_score desc, clear_rank desc, bp, cb, combo desc, played, player_id) as global_pos,
+        player_id in (select target_player_id from rival_relationships where owner_player_id=${selfId} and relation_type='rival') as is_rival
+      from players
+    ), scoped as (
+      select player_id, row_number() over(order by global_pos) as scope_pos from ranked where ${scopes[query.scope]}
+    ), visible as (
+      select ranked.*, scoped.scope_pos from ranked left join scoped using(player_id)
+      where (scope_pos > ${query.offset} and scope_pos <= ${query.offset + query.limit}) or ranked.player_id=${selfId}
+    ), winners as (
+      select r.player_id, r.chart_sha256, r.score_id, r.best_ex_score_id, r.ex_score, r.gauge, r.ln_policy,
+        r.effective_ln_mode, r.rule_mode, r.double_option, r.device_type, r.played_at, r.server_received_at, r.verification,
+        v.global_rank, v.global_pos, v.is_rival, v.scope_pos, v.clear_rank, v.bp as min_bp, v.cb as min_cb, v.combo as max_combo,
+        r.representative, first_value(r.clear_type) over clearest as clear_type,
+        first_value(coalesce(r.best_clear_score_id,r.score_id)) over clearest as best_clear_score_id,
+        first_value(coalesce(r.best_max_combo_score_id,r.score_id)) over combo as best_max_combo_score_id,
+        first_value(coalesce(r.best_min_bp_score_id,r.score_id)) over bp as best_min_bp_score_id,
+        first_value(coalesce(r.best_min_cb_score_id,r.score_id)) over cb as best_min_cb_score_id
+      from visible v join representatives r using(player_id)
+      window clearest as (partition by r.player_id order by r.clear_rank desc, coalesce(r.played_at,r.server_received_at), r.ex_score desc, r.score_id),
+        combo as (partition by r.player_id order by r.max_combo desc, r.ex_score desc, r.score_id),
+        bp as (partition by r.player_id order by r.min_bp, r.ex_score desc, r.score_id),
+        cb as (partition by r.player_id order by r.min_cb, r.ex_score desc, r.score_id)
+    ), summary as (
+      select (select count(*) from scoped) as total, round(100.0 * avg(clear_rank>1)) as clear_rate,
+        case when ${previous} is null then 0 else 1+count(case when ex_score>${previous} and player_id!=${selfId} then 1 end) end as previous_rank,
+        (select effective_ln_mode from source order by ex_score desc limit 1) as rule_mode_ln from players
+    )
+    select summary.*, winners.* from summary left join winners on winners.representative=1 order by winners.global_pos
+  `)
 }
 
 async function loadRankingEntryDetails(entries: IrRankingEntry[]): Promise<void> {
@@ -248,56 +285,6 @@ async function loadRankingEntryDetails(entries: IrRankingEntry[]): Promise<void>
       max_combo_notes: details?.combo === entry.score.max_combo ? details.comboNotes : null,
     })
   }
-}
-
-async function fetchRankingBestRowsFromHistory(
-  sha256: string,
-  query: RankingQuery,
-): Promise<BestScoreRow[]> {
-  const conditions = [
-    eq(schema.scores.chartSha256, sha256),
-    eq(schema.scores.scoring, query.scoring),
-    eq(schema.scores.doubleOption, query.doubleOption),
-    eq(schema.scores.accepted, true),
-    publicPlayerCondition(schema.scores.playerId),
-    publicChartCondition(schema.scores.chartSha256),
-  ]
-  if (query.lnPolicy) {
-    conditions.push(eq(schema.scores.lnPolicy, query.lnPolicy))
-  }
-  if (query.ruleMode) {
-    conditions.push(eq(schema.scores.ruleMode, query.ruleMode))
-  }
-
-  const rows = await db
-    .select({
-      id: schema.scores.id,
-      player_id: schema.scores.playerId,
-      chart_sha256: schema.scores.chartSha256,
-      ex_score: schema.scores.exScore,
-      clear_type: schema.scores.clearType,
-      clear_rank: schema.scores.clearRank,
-      max_combo: schema.scores.maxCombo,
-      min_bp: schema.scores.minBp,
-      min_cb: schema.scores.minCb,
-      device_type: schema.scores.deviceType,
-      gauge: schema.scores.gauge,
-      ln_policy: schema.scores.lnPolicy,
-      effective_ln_mode: schema.scores.effectiveLnMode,
-      double_option: schema.scores.doubleOption,
-      rule_mode: schema.scores.ruleMode,
-      scoring: schema.scores.scoring,
-      played_at: schema.scores.playedAt,
-      server_received_at: schema.scores.serverReceivedAt,
-      verification: schema.scores.verification,
-    })
-    .from(schema.scores)
-    .where(and(...conditions))
-    .orderBy(desc(schema.scores.exScore))
-
-  return bestRowsFromHistory(
-    rows.map((row) => ({ ...rowToBestScoreRow({ ...row, score_id: row.id }), id: row.id })),
-  )
 }
 
 export function rowToBestScoreRow(row: {
@@ -414,15 +401,6 @@ export function bestRowWins(next: BestScoreRow, current: BestScoreRow): boolean 
   )
 }
 
-export function dedupeBestRowsByPlayer(rows: BestScoreRow[]): BestScoreRow[] {
-  const bestByPlayer = new Map<string, BestScoreRow>()
-  for (const row of rows) {
-    const current = bestByPlayer.get(row.player_id)
-    bestByPlayer.set(row.player_id, current ? mergeBestRows(current, row) : row)
-  }
-  return [...bestByPlayer.values()]
-}
-
 export function mergeBestRows(current: BestScoreRow, next: BestScoreRow): BestScoreRow {
   const ranking = bestRowWins(next, current) ? next : current
   const clear = bestClearWins(next, current) ? next : current
@@ -456,108 +434,47 @@ export function bestClearWins(next: BestScoreRow, current: BestScoreRow): boolea
   )
 }
 
-export function rankRows(
-  rows: BestScoreRow[],
-  selfId: string | null,
-  rivalIds: Set<string>,
-): IrRankingEntry[] {
-  const sorted = [...rows].sort(
-    (a, b) =>
-      b.ex_score - a.ex_score ||
-      b.clear_rank - a.clear_rank ||
-      a.min_bp - b.min_bp ||
-      a.min_cb - b.min_cb ||
-      b.max_combo - a.max_combo ||
-      String(a.played_at ?? a.server_received_at).localeCompare(
-        String(b.played_at ?? b.server_received_at),
-      ),
-  )
-  let previousEx: number | null = null
-  let currentRank = 0
-  return sorted.map((row, index) => {
-    if (previousEx !== row.ex_score) {
-      currentRank = index + 1
-      previousEx = row.ex_score
-    }
-    return {
-      rank: currentRank,
-      scope_rank: index + 1,
-      player: {
-        id: row.player_id,
-        display_name: 'Player',
+function rankingEntry(
+  row: BestScoreRow,
+  rank: number,
+  position: number,
+  isSelf: boolean,
+  isRival: boolean,
+): IrRankingEntry {
+  return {
+    rank,
+    scope_rank: position,
+    player: {
+      id: row.player_id,
+      display_name: 'Player',
+    },
+    score: {
+      score_id: row.score_id,
+      clear: row.clear_type,
+      ex_score: row.ex_score,
+      max_combo: row.max_combo,
+      min_bp: row.min_bp,
+      min_cb: row.min_cb,
+      gauge: row.gauge,
+      ln_policy: row.ln_policy,
+      double_option: row.double_option,
+      rule_mode: row.rule_mode,
+      device_type: row.device_type,
+      played_at: row.played_at,
+      verification: row.verification,
+      source_score_ids: {
+        ex_score: row.best_ex_score_id,
+        clear: row.best_clear_score_id,
+        max_combo: row.best_max_combo_score_id,
+        min_bp: row.best_min_bp_score_id,
+        min_cb: row.best_min_cb_score_id,
       },
-      score: {
-        score_id: row.score_id,
-        clear: row.clear_type,
-        ex_score: row.ex_score,
-        max_combo: row.max_combo,
-        min_bp: row.min_bp,
-        min_cb: row.min_cb,
-        gauge: row.gauge,
-        ln_policy: row.ln_policy,
-        double_option: row.double_option,
-        rule_mode: row.rule_mode,
-        device_type: row.device_type,
-        played_at: row.played_at,
-        verification: row.verification,
-        source_score_ids: {
-          ex_score: row.best_ex_score_id,
-          clear: row.best_clear_score_id,
-          max_combo: row.best_max_combo_score_id,
-          min_bp: row.best_min_bp_score_id,
-          min_cb: row.best_min_cb_score_id,
-        },
-      },
-      relation: {
-        is_self: row.player_id === selfId,
-        is_rival: rivalIds.has(row.player_id),
-      },
-    }
-  })
-}
-
-/** around_self で自分の前後に表示する人数 (自分を含めて最大 2N+1 件)。 */
-export const AROUND_SELF_WINDOW = 5
-
-export function applyScope(
-  entries: IrRankingEntry[],
-  scope: IrRankingScope,
-  selfId: string | null,
-  rivalIds: Set<string>,
-) {
-  if (scope === 'global') {
-    return entries
+    },
+    relation: {
+      is_self: isSelf,
+      is_rival: isRival,
+    },
   }
-  if (scope === 'around_self') {
-    // 自分の前後 AROUND_SELF_WINDOW 件ずつを切り出す。未ログイン /
-    // 自己スコアなしのときは global と同じ全件を返す。
-    const selfIndex = selfId ? entries.findIndex((entry) => entry.player.id === selfId) : -1
-    if (selfIndex < 0) {
-      return entries
-    }
-    const start = Math.max(0, selfIndex - AROUND_SELF_WINDOW)
-    return entries.slice(start, selfIndex + AROUND_SELF_WINDOW + 1)
-  }
-  if (scope === 'self') {
-    return entries.filter((entry) => entry.player.id === selfId)
-  }
-  if (scope === 'rivals') {
-    return entries.filter((entry) => rivalIds.has(entry.player.id))
-  }
-  return entries.filter((entry) => entry.player.id === selfId || rivalIds.has(entry.player.id))
-}
-
-export async function getRivalIds(playerId: string): Promise<Set<string>> {
-  const rows = await db
-    .select({ target_player_id: schema.rivalRelationships.targetPlayerId })
-    .from(schema.rivalRelationships)
-    .where(
-      and(
-        eq(schema.rivalRelationships.ownerPlayerId, playerId),
-        eq(schema.rivalRelationships.relationType, 'rival'),
-      ),
-    )
-  return new Set(rows.map((row) => row.target_player_id))
 }
 
 /**

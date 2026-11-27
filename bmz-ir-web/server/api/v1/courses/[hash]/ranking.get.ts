@@ -8,8 +8,7 @@ import { isPublicCourse, publicPlayerCondition } from '../../../../services/mode
 import { resolveIrUser } from '../../../../utils/auth'
 import {
   courseComboBreaks,
-  fetchCourseRankingRows,
-  rankCourseRows,
+  fetchCourseRankingPage,
   type RankedCourseRow,
 } from '../../../../services/course_ranking'
 
@@ -57,12 +56,7 @@ export default defineEventHandler(async (event) => {
     conditions.push(eq(schema.courseScores.ruleMode, ruleMode))
   }
 
-  const ranked = rankCourseRows(
-    await fetchCourseRankingRows(conditions),
-    user?.id ?? null,
-    limit,
-    offset,
-  )
+  const ranked = await fetchCourseRankingPage(conditions, user?.id ?? null, limit, offset)
   const visibleIds = new Set(ranked.entries.map(({ row }) => row.course_score_id))
   if (ranked.self) visibleIds.add(ranked.self.row.course_score_id)
   const details =

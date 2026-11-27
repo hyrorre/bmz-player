@@ -96,45 +96,6 @@ describe('ranking best row aggregation', () => {
     ).toBeUndefined()
   })
 
-  test('deduplicates users and keeps independent display bests', () => {
-    const rows = [
-      rankingRow({
-        player_id: 'player-1',
-        score_id: 'hard-score',
-        ex_score: 2000,
-        clear_type: 'Hard',
-        clear_rank: 5,
-        max_combo: 900,
-        min_bp: 20,
-      }),
-      rankingRow({
-        player_id: 'player-1',
-        score_id: 'fc-score',
-        ex_score: 1900,
-        clear_type: 'FullCombo',
-        clear_rank: 7,
-        max_combo: 1000,
-        min_bp: 0,
-      }),
-      rankingRow({
-        player_id: 'player-2',
-        score_id: 'other-score',
-        ex_score: 1950,
-      }),
-    ]
-
-    const deduped = __test.dedupeBestRowsByPlayer(rows)
-
-    expect(deduped).toHaveLength(2)
-    const player = deduped.find((row) => row.player_id === 'player-1')
-    expect(player?.score_id).toBe('hard-score')
-    expect(player?.ex_score).toBe(2000)
-    expect(player?.clear_type).toBe('FullCombo')
-    expect(player?.best_clear_score_id).toBe('fc-score')
-    expect(player?.max_combo).toBe(1000)
-    expect(player?.min_bp).toBe(0)
-  })
-
   test('rebuilds aggregate best rows from score history', () => {
     const rebuilt = __test.bestRowsFromHistory([
       {
@@ -158,20 +119,6 @@ describe('ranking best row aggregation', () => {
     expect(rebuilt[0]?.score_id).toBe('hard-score')
     expect(rebuilt[0]?.clear_type).toBe('FullCombo')
     expect(rebuilt[0]?.best_clear_score_id).toBe('fc-score')
-  })
-
-  test('computes previous rank from the latest leaderboard with competition ties', () => {
-    const rows = [
-      rankingRow({ player_id: 'self', score_id: 'current', ex_score: 1500 }),
-      rankingRow({ player_id: 'leader', score_id: 'leader', ex_score: 1600 }),
-      rankingRow({ player_id: 'current-tie', score_id: 'current-tie', ex_score: 1500 }),
-      rankingRow({ player_id: 'middle', score_id: 'middle', ex_score: 1400 }),
-      rankingRow({ player_id: 'previous-tie', score_id: 'previous-tie', ex_score: 1000 }),
-    ]
-    const entries = __test.rankRows(rows, 'self', new Set())
-
-    expect(__test.previousRankFromEntries(entries, 'self', 1000)).toBe(4)
-    expect(__test.previousRankFromEntries(entries, 'self', null)).toBe(0)
   })
 
   test('groups cleanup rebuilds by the complete ranking bucket', () => {

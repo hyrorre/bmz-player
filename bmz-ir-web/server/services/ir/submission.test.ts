@@ -45,8 +45,7 @@ const { getRanking, getRankingWithPreviousRank } = await import('./ranking')
 const { IrIdempotencyCollisionError } = await import('./idempotency')
 const { submitCourseScore, computeCourseHash, validateCourseScoreSubmission } =
   await import('../course_ir')
-const { courseComboBreaks, fetchCourseRankingRows, rankCourseRows } =
-  await import('../course_ranking')
+const { courseComboBreaks, fetchCourseRankingPage } = await import('../course_ranking')
 const migrations = new URL('../../../../server/db/migrations/sqlite/', import.meta.url)
 for (const name of (await readdir(migrations)).filter((name) => name.endsWith('.sql')).sort()) {
   await client.executeMultiple(await readFile(new URL(name, migrations), 'utf8'))
@@ -174,6 +173,38 @@ test('joins details only for a full ranking page and the player outside that pag
     included_in_entries: false,
     entry: { scope_rank: 203, score: { arrange_1p: 'mirror', judges: own.result.judges } },
   })
+  await db.insert(schema.rivalRelationships).values({
+    ownerPlayerId: user.id,
+    targetPlayerId: playerIds[0]!,
+    relationType: 'rival',
+  })
+  for (const [scope, total] of [
+    ['self', 1],
+    ['rivals', 1],
+    ['self_and_rivals', 2],
+    ['around_self', 6],
+  ] as const) {
+    const { ranking } = await getRanking(
+      user,
+      own.chart.sha256,
+      parseRankingQuery({ scope, limit: 1 }),
+    )
+    expect(ranking.pagination.total).toBe(total)
+    expect(ranking.clear_rate).toBe(50)
+    expect(ranking.self?.rank).toBe(203)
+    expect(ranking.entries[0]?.rank).toBe(scope === 'self' ? 203 : 1)
+    expect(ranking.entries[0]?.scope_rank).toBe(1)
+  }
+  const beyond = await getRankingWithPreviousRank(
+    user,
+    own.chart.sha256,
+    parseRankingQuery({ offset: 300 }),
+    200,
+  )
+  expect(beyond.previousRank).toBe(1)
+  expect(beyond.data.ranking.entries).toEqual([])
+  expect(beyond.data.ranking.pagination.total).toBe(203)
+  expect(beyond.data.ranking.self?.included_in_entries).toBe(false)
 })
 
 test('keeps independent bests and their details when falling back to history', async () => {
@@ -219,6 +250,75 @@ test('keeps independent bests and their details when falling back to history', a
   expect(await getRanking(user, bestEx.chart.sha256, query)).toEqual(cached)
 })
 
+test.skipIf(!process.env.BMZ_RANKING_BENCH)('measure ranking page transfers', async () => {
+  const chart = submission()
+  const course = courseSubmission()
+  await submitScore(user, validateScoreSubmission(chart), [], 10)
+  await submitCourseScore(user, course)
+  await client.execute('create temp table bench_players(i integer primary key)')
+  await client.execute(
+    'with recursive n(i) as (values (1) union all select i+1 from n where i<5000) insert into bench_players select i from n',
+  )
+  await client.execute(
+    "insert into users(id,email,password_hash) select 'bench-'||i, i||'@bench.invalid','' from bench_players",
+  )
+  await client.execute("insert into profiles(id) select 'bench-'||i from bench_players")
+  for (const table of ['scores', 'best_scores', 'course_scores']) {
+    const columns = (await client.execute('pragma table_info(' + table + ')')).rows.map((row) =>
+      String(row.name),
+    )
+    const values = columns.map((c) => {
+      if (c === 'player_id') return "'bench-' || i"
+      if (c === 'id' || c === 'score_id' || (c.startsWith('best_') && c.endsWith('_id')))
+        return "'bench-score-' || i"
+      if (c === 'ex_score') return 'i / 2'
+      return 's.' + c
+    })
+    await client.execute(
+      'insert into ' +
+        table +
+        ' (' +
+        columns.join(',') +
+        ') select ' +
+        values.join(',') +
+        ' from ' +
+        table +
+        " s cross join bench_players where s.player_id='player'",
+    )
+  }
+  const measure = async (name: string, query: () => Promise<unknown>) => {
+    const run = client.execute.bind(client)
+    let transferred = 0
+    const spy = spyOn(client, 'execute').mockImplementation(async (...args) => {
+      const result = await run(...args)
+      transferred += result.rows.length
+      return result
+    })
+    try {
+      const times = []
+      for (let i = 0; i < 9; i++) {
+        transferred = 0
+        const start = performance.now()
+        await query()
+        times.push(performance.now() - start)
+      }
+      console.log(name, 'rows', transferred, 'median ms', times.sort((a, b) => a - b)[4])
+    } finally {
+      spy.mockRestore()
+    }
+  }
+  await measure('chart', () =>
+    getRanking(user, chart.chart.sha256, parseRankingQuery({ limit: 20 })),
+  )
+  await measure('course', () =>
+    fetchCourseRankingPage(
+      [eq(schema.courseScores.courseHash, course.course.course_hash)],
+      user.id,
+      20,
+    ),
+  )
+})
+
 function courseSubmission() {
   const charts = ['a'.repeat(64)]
   const constraints = { gauge: 'Normal' }
@@ -259,7 +359,7 @@ test('course ranking reads recorded arrangements and accepts retries of legacy s
   }
   const submitted = await submitCourseScore(user, validateCourseScoreSubmission(payload))
   const conditions = [eq(schema.courseScores.courseHash, payload.course.course_hash)]
-  expect((await fetchCourseRankingRows(conditions))[0]).toMatchObject({
+  expect((await fetchCourseRankingPage(conditions, null, 1)).entries[0]?.row).toMatchObject({
     max_ex_score: 200,
     ln_policy: 'AutoLn',
   })
@@ -862,19 +962,18 @@ describe('score submission idempotency', () => {
       })
     }
     await submitCourseScore(secondUser, payload)
-    const rows = await fetchCourseRankingRows(
+    const firstPage = await fetchCourseRankingPage(
       [eq(schema.courseScores.courseHash, payload.course.course_hash)],
+      null,
       2,
     )
-    expect(rows.map((row) => [row.player_id, row.ex_score])).toEqual([
+    expect(firstPage.entries.map(({ row }) => [row.player_id, row.ex_score])).toEqual([
       ['player', 200],
       ['second', 100],
     ])
     // Self rank and total include players outside the returned entries.
-    const ranked = rankCourseRows(
-      await fetchCourseRankingRows([
-        eq(schema.courseScores.courseHash, payload.course.course_hash),
-      ]),
+    const ranked = await fetchCourseRankingPage(
+      [eq(schema.courseScores.courseHash, payload.course.course_hash)],
       'second',
       1,
     )
