@@ -1,6 +1,25 @@
 use anyhow::Result;
 use rusqlite::Connection;
 use rusqlite::types::{FromSqlError, Type};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Signed Unix nanoseconds for the chart_files fingerprint. An unavailable stamp is never reused.
+pub(super) const UNKNOWN_CHART_MTIME: i64 = i64::MIN;
+
+pub(super) fn chart_mtime_ns(time: Option<SystemTime>) -> i64 {
+    let Some(time) = time else { return UNKNOWN_CHART_MTIME };
+    let ns = match time.duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_nanos() as i128,
+        Err(error) => -(error.duration().as_nanos() as i128),
+    };
+    i64::try_from(ns).unwrap_or(UNKNOWN_CHART_MTIME)
+}
+
+#[cfg(any(windows, test))]
+pub(super) fn chart_filetime_ns(ticks: u64) -> i64 {
+    const UNIX_EPOCH_TICKS: i128 = 116_444_736_000_000_000;
+    i64::try_from((i128::from(ticks) - UNIX_EPOCH_TICKS) * 100).unwrap_or(UNKNOWN_CHART_MTIME)
+}
 
 pub fn configure_connection(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "foreign_keys", "ON")?;

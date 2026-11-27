@@ -716,6 +716,7 @@ fn unchanged_file(
     entry: &ChartFileEntry,
 ) -> bool {
     fp.file_size == entry.file_size
+        && entry.modified_at != UNKNOWN_CHART_MTIME
         && fp.modified_at == entry.modified_at
         && fp.import_version == CHART_IMPORT_VERSION
 }

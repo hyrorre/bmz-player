@@ -47,8 +47,8 @@ pub(crate) fn library_path_key(path: &Path) -> String {
     path_helpers::path_key(path)
 }
 
-// v13 re-imports unchanged charts with the extended CJK text detection.
-pub const CHART_IMPORT_VERSION: i64 = 13;
+// v14 replaces whole-second chart file timestamps with nanosecond fingerprints.
+pub const CHART_IMPORT_VERSION: i64 = 14;
 // v5 analyzes scheduled keysounds and counts each LN start once.
 pub const CHART_LOUDNESS_ANALYSIS_VERSION: i64 = 5;
 const MAX_ANALYSIS_DISTRIBUTION_SECONDS: usize = 10 * 60;

@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::time::UNIX_EPOCH;
 
 use anyhow::Result;
 use bmz_chart::import::error::ImportWarning;
@@ -38,12 +37,7 @@ pub(crate) fn import_chart_file_with_encoding_source(
     let stable_path = locator.to_path_buf();
     let path = stable_path.as_path();
     let metadata = std::fs::metadata(locator.container_path())?;
-    let modified_at = metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0);
+    let modified_at = super::common::chart_mtime_ns(metadata.modified().ok());
 
     let (bytes, archive_index, file_size) = if let crate::chart_source::ChartLocator::Archive {
         container,

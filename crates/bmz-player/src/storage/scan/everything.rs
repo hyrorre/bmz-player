@@ -12,8 +12,6 @@ use super::discovery::{
 };
 use super::{ScanConfig, ScanDiscoveryBackend, ScanDiscoveryOperation, ScanPause};
 
-const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
-const FILETIME_TICKS_PER_SECOND: u64 = 10_000_000;
 const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 const ARCHIVE_BATCH_SIZE: usize = 4;
 
@@ -144,7 +142,7 @@ pub(super) fn discover_chart_files_everything(
         entries.push(ChartFileEntry {
             path: output_path,
             file_size,
-            modified_at: filetime_to_unix_seconds(filetime),
+            modified_at: crate::storage::common::chart_filetime_ns(filetime),
             has_document: false,
         });
     }
@@ -282,13 +280,6 @@ fn path_relative_to_root(path: &Path, root: &Path) -> Option<PathBuf> {
     Some(PathBuf::from(suffix.trim_start_matches('\\')))
 }
 
-fn filetime_to_unix_seconds(filetime: u64) -> i64 {
-    filetime
-        .checked_sub(FILETIME_UNIX_EPOCH)
-        .map(|ticks| (ticks / FILETIME_TICKS_PER_SECOND).min(i64::MAX as u64) as i64)
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,15 +390,5 @@ mod tests {
             path_relative_to_root(Path::new(r"G:\BMS-old\song.bms"), Path::new(r"G:\BMS")),
             None
         );
-    }
-
-    #[test]
-    fn filetime_conversion_matches_unix_seconds() {
-        assert_eq!(filetime_to_unix_seconds(FILETIME_UNIX_EPOCH), 0);
-        assert_eq!(
-            filetime_to_unix_seconds(FILETIME_UNIX_EPOCH + 42 * FILETIME_TICKS_PER_SECOND),
-            42
-        );
-        assert_eq!(filetime_to_unix_seconds(FILETIME_UNIX_EPOCH - 1), 0);
     }
 }

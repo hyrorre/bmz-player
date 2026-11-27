@@ -35,6 +35,44 @@ fn chart(path: &Path, title: &str) {
     file.write_all(chart_text(title).as_bytes()).unwrap();
 }
 
+#[test]
+fn incremental_scan_detects_same_size_edits_within_one_second() {
+    use std::time::{Duration, UNIX_EPOCH};
+    let root = temp();
+    let path = root.path().join("chart.bms");
+    let roots = [entry(root.path(), true)];
+    let mut library = db();
+    for (title, fraction) in [("Alpha", 100_000_000), ("Bravo", 900_000_000)] {
+        chart(&path, title);
+        let time = UNIX_EPOCH + Duration::new(1_700_000_000, fraction);
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(time).unwrap();
+        let report = scan_song_roots(&mut library, &roots, &config(), 1, false).unwrap();
+        assert_eq!(report.summary.imported, 1);
+        let stored: String =
+            library.conn().query_row("SELECT title FROM charts", [], |r| r.get(0)).unwrap();
+        assert_eq!(stored, title);
+    }
+    assert_eq!(
+        scan_song_roots(&mut library, &roots, &config(), 2, false).unwrap().summary.skipped,
+        1
+    );
+}
+
+#[test]
+fn everything_and_native_timestamps_agree_to_one_filetime_tick() {
+    use crate::storage::common::{chart_filetime_ns, chart_mtime_ns};
+    use std::time::{Duration, UNIX_EPOCH};
+    let epoch = 116_444_736_000_000_000;
+    for ticks in [-1_i32, 0, 1, 12_345_678] {
+        let delta = Duration::from_nanos(u64::from(ticks.unsigned_abs()) * 100);
+        let time = if ticks < 0 { UNIX_EPOCH - delta } else { UNIX_EPOCH + delta };
+        assert_eq!(
+            chart_filetime_ns(u64::try_from(epoch + i64::from(ticks)).unwrap()),
+            chart_mtime_ns(Some(time))
+        );
+    }
+}
+
 fn write_zip(path: &Path, entries: &[(&str, &str)]) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut writer = zip::ZipWriter::new(std::fs::File::create(path).unwrap());

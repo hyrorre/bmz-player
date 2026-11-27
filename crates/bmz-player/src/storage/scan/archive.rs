@@ -61,11 +61,7 @@ pub(super) fn import_archive<'a>(
     // Importing needs the entry list for preview lookup; it also rechecks the generation.
     let index = song_archive::inspect(container, control)?;
     anyhow::ensure!(index.generation == *expected, "archive changed after discovery");
-    let modified_at = std::fs::metadata(container)?
-        .modified()?
-        .duration_since(UNIX_EPOCH)
-        .map(|time| time.as_secs() as i64)
-        .unwrap_or(0);
+    let modified_at = chart_mtime_ns(Some(std::fs::metadata(container)?.modified()?));
     let started = Instant::now();
     let cache = cache();
     let previews = ArchivePreviewFiles::new(&index);

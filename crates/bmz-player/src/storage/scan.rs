@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::time::{Instant, UNIX_EPOCH};
+use std::time::Instant;
 
 use anyhow::Result;
 use bmz_chart::import::error::ImportError;
@@ -10,6 +10,7 @@ use rayon::prelude::*;
 
 use crate::config::app_config::{PathEntry, ScanConfig};
 
+use super::common::{UNKNOWN_CHART_MTIME, chart_mtime_ns};
 use super::library_db::{CHART_IMPORT_VERSION, LibraryDatabase};
 
 #[derive(Debug, Clone, Default)]
