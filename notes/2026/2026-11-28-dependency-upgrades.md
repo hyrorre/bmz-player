@@ -13,3 +13,7 @@
 - Nuxt 4.7.0、Nuxt UI 4.13.1、NuxtHub 0.10.13、Nuxt i18n 10.7.0、Tailwind 4.3.5、marked 18.3.0、Wrangler 4.169.0に更新した。Bun型定義と同じBun 1.4.5、`vue-tsc` 3.3.14、Lucideのアイコンデータ1.2.160で検証した。
 - `nuxt-auth-utils` は既存のセッション設定と互換性がある0.5.34を選んだ。型検査は既存の `vue-tsc` が使用するTypeScript 6.0.3で行った。
 - 一時コピーで固定lockfileによるインストール、Prettier、`vue-tsc --noEmit`、IRテスト272件、`bun run build` が成功した。ビルドはWranglerのdry-runと78パッケージの配布用ライセンスレポート生成まで実行した。
+
+## Prettier
+
+固定版を3.9.10から3.10.1へ更新した。既存の `.prettierignore` を使ったIR Webの整形検査が通り、整形差分は発生しなかった。一時コピーで `vue-tsc --noEmit` とIRテスト272件も成功した。
