@@ -40,8 +40,8 @@ toml = "0.8"
 base64 = "0.22"
 flate2 = "1"
 tar = "0.4.46"
-sevenz-rust2 = { version = "0.22.2", features = ["util"] }
-rars = { version = "0.10.0", default-features = false }
+sevenz-rust2 = { version = "0.27.0", features = ["util"] }
+rars = { version = "0.10.2", default-features = false }
 delharc = { version = "0.8.0", default-features = false, features = ["std", "lh1", "lz", "lhx"] }
 webbrowser = "1.2"
 bytemuck = "1"

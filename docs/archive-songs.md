@@ -148,7 +148,7 @@ F3は元書庫をファイルブラウザーで選択します。曲テキスト
 | tar.gz | `.tar.gz` / `.tgz` |
 | LZH | `.lzh` / `.lha` |
 
-ZIPはStore / DeflateとZIP64に対応します。RARは`rars 0.10.0`、7zは`sevenz-rust2`の
+ZIPはStore / DeflateとZIP64に対応します。RARは`rars 0.10.2`、7zは`sevenz-rust2`の
 既定codecを使用し、外部の展開実行ファイルは不要です。通常のsolid RAR / 7zも対象です。
 tar.gzはgzip内の通常ファイル・ディレクトリとGNU long name / PAXのパス名に対応します。
 書庫全体をディスクへ展開せず、順読みで必要な資源をメモリへ取り込みます。

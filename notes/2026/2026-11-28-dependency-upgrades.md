@@ -34,4 +34,16 @@ workspaceの整形・型検査・全ターゲットのClippy・テスト、macOS
 
 `cpal` を0.18.2、Windows向けの `asio-sys` を0.4.0に更新した。Windows互換ターゲットでのASIOの依存解決と、SDKを `CPAL_ASIO_DIR` で渡す既存の配布手順との整合を確認した。
 
-workspaceの整形・型検査・全ターゲットのClippy・テストが成功した。macOSの既定出力で48 kHz・3秒の無音プローブを実行し、144,896フレームを処理した。macOS arm64、Windows互換ターゲット、Linux x86_64のライセンスレポートを生成した。Windows・Linuxのビルドと実機確認は未実施。
+workspaceの整形・型検査・全ターゲットのClippy・テストが成功した。macOSの既定出力で48 kHzの無音プローブを実行した。初回の3秒で144,896フレームを処理し、ストリームエラーの通知が1件あった。再確認の5秒では242,176フレームを処理し、通知は0件だった。macOS arm64、Windows互換ターゲット、Linux x86_64のライセンスレポートを生成した。Windows・Linuxのビルドと実機確認は未実施。
+
+## RARと7z
+
+`rars` を0.10.2、`sevenz-rust2` を0.27.0に更新した。RAR5の展開・検証と、7zのヘッダー解析、solidブロック、CRCの修正を取り込む。利用するcodecとBMZ側の書庫検証・資源上限は既存の実装に従う。
+
+workspaceの整形・型検査・全ターゲットのClippy・テストが成功した。既存のフィクスチャでRAR4・RAR5・7zのsolid書庫、収録曲と資源の読み込み、RARのCP932ファイル名を確認した。最終lockfileでWindows互換ターゲットの依存解決と、macOS arm64・Windows互換ターゲット・Linux x86_64のライセンス生成を確認した。`wgpu`、`egui`、`naga`など描画関連17パッケージのバージョンとチェックサム、および `gpu-allocator` が参照する `windows` のバージョンは更新前と一致した。
+
+## 互換性確認で保留した候補
+
+- `reqwest` 0.13.5は `rustls-tls-webpki-roots`、`keyring` 4.2.0は `apple-native` を含む現行のストア選択用featureを使えず、バージョン変更だけでは依存解決が失敗した。採用にはそれぞれTLSの信頼設定、OS別ストアと既存の資格情報の扱いを確認する必要がある。
+- `mlua` 0.12.3と `mlua-sys` 0.14.0は、一時コピーでLua 5.4とAPI差分に対応してテストした。ロード時の数値変換を検証する既存テストで `number.fraction` が整数0からエラーに変わったため、0.10系列を維持した。
+- TypeScript 7.0.2を単独で組み合わせると `vue-tsc` 3.3.14の起動が `ERR_PACKAGE_PATH_NOT_EXPORTED` で失敗したため、TypeScript 6.0.3を維持した。`nuxt-auth-utils` 0.6系列はセッション秘密鍵の切り替えと再ログインを伴うため、0.5.34を選んだ。
