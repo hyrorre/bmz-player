@@ -715,6 +715,20 @@ mod tests {
         select_ir.context = "course-context".to_string();
         select_ir.course_in_flight =
             Some((select_ir.context.clone(), target.clone(), requested_at));
+        // A was requested again after leaving it. The old failure must not cancel or satisfy the new request.
+        let (_temp, root) = missing_profile_root("course-ranking");
+        select_ir
+            .course_sender
+            .send((
+                select_ir.context.clone(),
+                target.clone(),
+                requested_at - Duration::from_millis(1),
+                Err("old request".to_string()),
+            ))
+            .unwrap();
+        select_ir.update_course(&ir_config(true), &root, "course-context", Some(target.clone()));
+        assert!(select_ir.course_cache.is_empty());
+        assert_eq!(select_ir.course_in_flight.as_ref().unwrap().2, requested_at);
         select_ir
             .course_sender
             .send((
@@ -757,7 +771,6 @@ mod tests {
             ))
             .unwrap();
 
-        let (_temp, root) = missing_profile_root("course-ranking");
         select_ir.update_course(&ir_config(true), &root, "course-context", Some(target.clone()));
         let snapshot = select_ir.course_snapshot_for(&ir_config(true), Some(&target));
 

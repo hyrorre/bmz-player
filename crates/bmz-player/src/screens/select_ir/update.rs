@@ -361,14 +361,14 @@ impl SelectIrRanking {
         while let Ok((result_context, target, requested_at, result)) =
             self.course_receiver.try_recv()
         {
-            if self.course_in_flight.as_ref().is_some_and(|(context, current, _)| {
-                context == &result_context && current == &target
-            }) {
-                self.course_in_flight = None;
-            }
-            if result_context != self.context {
+            let is_current =
+                self.course_in_flight.as_ref().is_some_and(|(context, current, since)| {
+                    context == &result_context && current == &target && *since == requested_at
+                });
+            if !is_current || result_context != self.context {
                 continue;
             }
+            self.course_in_flight = None;
             if self
                 .course_cache
                 .get(&target)
