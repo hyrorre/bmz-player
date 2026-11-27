@@ -12,6 +12,52 @@ fn at(session: &mut GameSession, time: i64) {
 }
 
 #[test]
+fn early_hln_changes_body_timer_and_sound_before_the_gauge_starts() {
+    let mut chart = hln_chart();
+    let lane = Lane::Key1.index();
+    chart.long_notes[0].start_time = TimeUs(1_000_000);
+    chart.long_notes[0].end_time = TimeUs(2_000_000);
+    chart.lane_notes[lane][0].time = chart.long_notes[0].start_time;
+    chart.lane_notes[lane][1].time = chart.long_notes[0].end_time;
+    let mut session = session_with_autoplay(chart);
+    session.autoplay = None;
+    session.state = PlayState::Playing;
+    session.gauge.set_initial_value(50.0);
+
+    for (time, held, reactive) in
+        [(970_000, true, false), (980_000, false, true), (990_000, true, true)]
+    {
+        let at = TimeUs(time);
+        session.pending_keysound_volumes.clear();
+        input::process_session_input(
+            &mut session,
+            if held { human_press(at) } else { human_release(at) },
+        );
+        crate::session::conditional::advance_time(&mut session, at);
+        let body = session.judge.hln_body_visuals().next().unwrap();
+        assert_eq!((body.activated, body.held, body.reactive), (TimeUs(970_000), held, reactive));
+        let timer = session.lane_hcn_timer[lane].unwrap();
+        assert_eq!((timer.since, timer.inclease), (at, held));
+        if reactive {
+            assert_eq!(
+                session.pending_keysound_volumes,
+                [(SoundId(7), if held { 1.0 } else { 0.0 })]
+            );
+        }
+    }
+
+    let mut expected = session.gauge.clone();
+    crate::session::conditional::advance_time(&mut session, TimeUs(1_200_000));
+    assert_eq!(session.gauge.carry_values(), expected.carry_values());
+    expected.apply_hcn_hold();
+    crate::session::conditional::advance_time(&mut session, TimeUs(1_200_001));
+    assert_eq!(session.gauge.carry_values(), expected.carry_values());
+    crate::session::conditional::advance_time(&mut session, TimeUs(2_000_000));
+    assert!(session.lane_hcn_timer[lane].is_none());
+    assert!(session.judge.hln_body_visuals().next().is_none());
+}
+
+#[test]
 fn hln_scores_once_and_body_ticks_only_affect_gauge() {
     let mut session = session_with_autoplay(hln_chart());
     session.autoplay = None;

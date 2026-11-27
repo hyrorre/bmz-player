@@ -117,6 +117,10 @@ defined種別が混在する譜面ではscore policyは`AutoLn`になります�
 始点 / 終点の扱いはbeatorajaの`JudgeManager`を基準にします。ここでいうLN / CN / HCNは、
 profile policyを適用した後のeffective LN modeを指します。
 
+LN / CN / HCN / HLNはいずれも、早押しが始点判定として受理されると、その入力時刻から本体を保持中として描画し、
+スキンのHOLDタイマーを開始します。HCNのactive/damageタイマーは譜面上の始点から、HLNのactive/damageタイマーは
+受理した入力時刻から動きます。早押しした場合の保持ゲージは、どちらも譜面上の始点から時間を数えます。
+
 - LNは始点押下時の判定を保持し、終点まで維持できた時点で1ノーツ分として確定します。
   始点と終点を別々のスコア対象にはしません。
 - beatoraja modeのLNを終点のGOOD幅以内で早く離した場合は、上流と同じく終点時刻まで判定を保留します。

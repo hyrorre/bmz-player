@@ -24,7 +24,7 @@ pub struct HcnLaneTimer {
 pub fn update_hcn_lane_timers(session: &mut GameSession, audio_now: TimeUs) {
     let mut next: [Option<HcnLaneTimer>; LANE_COUNT] = [None; LANE_COUNT];
     let mut next_muted: [Option<bool>; LANE_COUNT] = [None; LANE_COUNT];
-    for (index, pair) in session.judge.hcn_pairs_at(&session.chart, audio_now) {
+    for (index, pair) in session.judge.hold_timer_pairs_at(&session.chart, audio_now) {
         let idx = pair.lane.index();
         if next[idx].is_some() {
             continue;
@@ -148,7 +148,7 @@ fn advance_hcn_counter(timer: &mut HcnLaneTimer, delta_us: i64) -> i64 {
 
 pub(super) fn update_battle_opponent_hcn(opponent: &mut BattleOpponentSession, now: TimeUs) {
     let mut next = [None; LANE_COUNT];
-    for (index, pair) in opponent.judge.hcn_pairs_at(&opponent.chart, now) {
+    for (index, pair) in opponent.judge.hold_timer_pairs_at(&opponent.chart, now) {
         let idx = pair.lane.index();
         if next[idx].is_some() {
             continue;
@@ -182,10 +182,10 @@ fn hcn_ticks(
     let mut next = std::collections::BinaryHeap::new();
     let delta = now.0.saturating_sub(previous.0).max(0);
     let mut hln_lanes = [false; LANE_COUNT];
-    for (_, pair) in judge.hcn_pairs_at(chart, previous) {
+    for (index, pair) in judge.hold_timer_pairs_at(chart, previous) {
         if pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hln
-            && pair.start_time <= previous
             && previous < pair.end_time
+            && (pair.start_time <= previous || judge.hln_body_state(index, previous).is_some())
         {
             hln_lanes[pair.lane.index()] = true;
         }

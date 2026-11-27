@@ -69,6 +69,38 @@ fn add_ln_is_visible_and_shows_its_hold_with_or_without_extra_notes() {
 }
 
 #[test]
+fn early_capture_starts_the_hold_in_every_long_note_mode() {
+    use bmz_chart::model::LongNoteMode::{Cn, Hcn, Hln, Ln};
+    use bmz_gameplay::session::update_hcn_lane_timers;
+
+    let profile = ProfileConfig::new_default("default", "Default", 1);
+    let now = TimeUs(490_000);
+    let lane = Lane::Key1.index();
+    for mode in [Ln, Cn, Hcn, Hln] {
+        let mut chart = chart_with_long_note();
+        chart.long_notes[0].mode = Some(mode);
+        let mut session =
+            build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        session.judge.process_input(
+            &session.chart,
+            InputEvent {
+                lane: Lane::Key1,
+                kind: InputKind::Press,
+                time: now,
+                source: InputSource::Human,
+                device_kind: InputDeviceKind::Keyboard,
+                scratch_direction: None,
+            },
+        );
+        update_hcn_lane_timers(&mut session, now);
+        let snap = build_render_snapshot(&session, now, &[], None);
+        assert_eq!(snap.visible_long_notes[0].body_state, LongBodyState::Processing, "{mode:?}");
+        assert_eq!(snap.hold_ms[lane], Some(0), "{mode:?}");
+        assert_eq!(snap.hcn_active_ms[lane], (mode == Hln).then_some(0), "{mode:?}");
+    }
+}
+
+#[test]
 fn negative_bpm_fold_moves_past_unjudged_notes_back_into_the_snapshot() {
     use bmz_chart::model::{BarLine, TimingEvent, TimingEventKind};
 

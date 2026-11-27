@@ -122,6 +122,16 @@ impl JudgeEngine {
         self.hcn_pairs_between(chart, now, now)
     }
 
+    pub(crate) fn hold_timer_pairs_at<'a>(
+        &'a self,
+        chart: &'a PlayableChart,
+        now: TimeUs,
+    ) -> impl Iterator<Item = (usize, &'a LongNotePair)> + 'a {
+        // A captured HLN can already drive its skin timer before its chart head.
+        let through = self.hln.latest_captured_head.map_or(now, |head| now.max(head));
+        self.hcn_pairs_between(chart, now, through)
+    }
+
     /// Keep discrete judgements and mine damage in order with hold recovery, including
     /// when one owner update spans a whole HCN. Only inspect nearby notes on each lane.
     pub(crate) fn append_hcn_boundaries(

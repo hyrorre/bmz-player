@@ -7,6 +7,8 @@ const INTERVAL_US: i64 = 200_000;
 pub(super) struct HlnState {
     initialized: bool,
     bodies: Vec<HlnBody>,
+    /// Latest chart head whose body has already been activated.
+    pub(super) latest_captured_head: Option<TimeUs>,
     /// 鍵盤、方向未記録スクラッチ、上、下の押下を独立に保持する。
     held: [[u16; 3]; LANE_COUNT],
 }
@@ -35,6 +37,7 @@ impl HlnState {
         let previous = std::mem::take(&mut self.bodies);
         self.initialized = false;
         self.ensure(new);
+        self.latest_captured_head = None;
         for body in &mut self.bodies {
             let id = new.long_notes[body.pair_index].start_note_id;
             if let Some(saved) = previous.iter().find(|p| {
@@ -44,6 +47,10 @@ impl HlnState {
                 let index = body.pair_index;
                 *body = saved.clone();
                 body.pair_index = index;
+                if !body.ended {
+                    self.latest_captured_head =
+                        self.latest_captured_head.max(Some(new.long_notes[index].start_time));
+                }
                 if let Some(active) = &mut body.active {
                     active.pair_index = index;
                 }
@@ -302,9 +309,11 @@ impl JudgeEngine {
                 if let Some(active) = &mut body.active {
                     active.scratch_direction = input.scratch_direction;
                 }
-                body.activated = Some(input.time.max(pair.start_time));
+                self.hln.latest_captured_head =
+                    self.hln.latest_captured_head.max(Some(pair.start_time));
+                body.activated = Some(input.time);
                 body.last = input.time.max(pair.start_time);
-                body.since = body.last;
+                body.since = input.time;
                 body.held = true;
                 body.reactive = event.judge == Judge::Bad;
                 body.sound_started = true;
@@ -375,7 +384,7 @@ impl JudgeEngine {
             let held = self.hln.held[idx].iter().any(|count| *count != 0);
             if body.held != held {
                 body.held = held;
-                body.since = input.time.max(pair.start_time);
+                body.since = input.time;
                 body.reactive = true;
                 let start_at = (held && !body.sound_started).then_some(pair.start_time);
                 body.sound_started |= held;
