@@ -40,7 +40,77 @@ pub(super) fn compile_gauge_definition_for_rule(
         death: base.death,
         values,
         guts: base.guts,
+        legacy: (rule_mode == RuleMode::Legacy)
+            .then(|| legacy_gauge_rule(base.gauge_type, total, total_notes))
+            .flatten(),
     }
+}
+
+/// OpenLR2 `judge_damage` for a single song (LR2_bmsload.cpp). `total` is the
+/// integer LR2 TOTAL. The C types are kept: `total / (float)notes` is a float
+/// division, while the HARD damage factor uses doubles.
+pub fn legacy_gauge_rule(
+    gauge_type: GaugeType,
+    total: f64,
+    total_notes: u32,
+) -> Option<LegacyGaugeRule> {
+    let table = legacy_judge_damage(total, total_notes)?;
+    let (index, guts, floor_two) = match gauge_type {
+        GaugeType::Normal => (0, false, true),
+        GaugeType::Hard => (1, true, false),
+        GaugeType::Hazard => (2, true, false),
+        GaugeType::Easy => (3, false, true),
+        _ => return None,
+    };
+    Some(LegacyGaugeRule { damage: table[index], guts, floor_two })
+}
+
+/// OpenLR2's whole `judge_damage[gauge][judge]` table for a single song.
+/// Gauges: GROOVE, HARD, DEATH, EASY, P-ATTACK, G-ATTACK. Judges: EMPTY POOR,
+/// POOR, BAD, GOOD, GREAT, PGREAT. `None` without notes, where LR2 leaves the
+/// table at 0.
+pub fn legacy_judge_damage(total: f64, total_notes: u32) -> Option<[[f64; 6]; 6]> {
+    if total_notes == 0 {
+        return None;
+    }
+    let total_int = total as i32;
+    let notes = total_notes as i32;
+    let per_note = (total_int as f32 / notes as f32) as f64;
+    let per_good = (total_int as f32 / (notes + notes) as f32) as f64;
+    let notes_f = f64::from(notes);
+    let notebase = if notes < 20 {
+        10.0
+    } else if notes < 30 {
+        10.0 - (notes_f - 20.0) / 10.0 * 2.0
+    } else if notes < 45 {
+        7.0 - (notes_f - 30.0) / 15.0
+    } else if notes < 60 {
+        6.0 - (notes_f - 45.0) / 15.0
+    } else if notes < 125 {
+        5.0 - (notes_f - 60.0) / 65.0
+    } else if notes < 250 {
+        4.0 - (notes_f - 125.0) / 125.0
+    } else if notes < 500 {
+        3.0 - (notes_f - 250.0) / 250.0
+    } else if notes < 1000 {
+        2.0 - (notes_f - 500.0) / 500.0
+    } else {
+        1.0
+    };
+    let mut recover = ((f64::from(total_int) - 80.0) * 0.125 / 2.0) as i32;
+    if recover <= 0 {
+        recover = 1;
+    }
+    let totalbase = 100.0 / f64::from(recover);
+    let dmg = (notebase * 10.0).max(totalbase) / 10.0;
+    Some([
+        [-2.0, -6.0, -4.0, per_good, per_note, per_note],
+        [dmg * -2.0, dmg * -10.0, dmg * -6.0, 0.05, 0.1, 0.1],
+        [0.0, -100.0, -100.0, 0.0, 0.0, 0.0],
+        [-1.6, -4.800000000000001, -3.2, per_good * 1.2, per_note * 1.2, per_note * 1.2],
+        [-100.0, -100.0, -100.0, -100.0, -1.0, 0.1],
+        [dmg * -2.0, dmg * -10.0, -6.0, 0.1, -1.0, dmg * -10.0],
+    ])
 }
 
 pub(super) fn apply_modifier(

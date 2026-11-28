@@ -549,21 +549,34 @@ fn score_best_is_separate_per_rule_mode() {
     let mut dx = record(80, ClearType::Hard);
     dx.rule_mode = RuleMode::Dx.as_str().to_string();
 
+    let mut legacy = record(60, ClearType::Easy);
+    legacy.rule_mode = RuleMode::Legacy.as_str().into();
+    legacy.played_at = beatoraja.played_at + 100;
     db.insert_score(&beatoraja).unwrap();
     db.insert_score(&dx).unwrap();
+    db.insert_score(&legacy).unwrap();
 
+    let legacy_key = key([7; 32]).with_rule_mode(RuleMode::Legacy);
     let beatoraja_key = key([7; 32]).with_rule_mode(RuleMode::Beatoraja);
     let dx_key = key([7; 32]).with_rule_mode(RuleMode::Dx);
 
     assert_eq!(db.best_ex_score(beatoraja_key).unwrap(), Some(20));
     assert_eq!(db.best_ex_score(dx_key).unwrap(), Some(80));
 
-    let summaries = db.best_scores_for_charts(&[beatoraja_key, dx_key]).unwrap();
-    assert_eq!(summaries.len(), 2);
+    assert_eq!(db.best_ex_score(legacy_key).unwrap(), Some(60));
+
+    let summaries = db.best_scores_for_charts(&[beatoraja_key, dx_key, legacy_key]).unwrap();
+    assert_eq!(summaries.len(), 3);
     assert_eq!(summaries[0].rule_mode, RuleMode::Beatoraja);
     assert_eq!(summaries[0].ex_score, 20);
     assert_eq!(summaries[1].rule_mode, RuleMode::Dx);
     assert_eq!(summaries[1].ex_score, 80);
+    assert_eq!(summaries[2].rule_mode, RuleMode::Legacy);
+    assert_eq!(summaries[2].ex_score, 60);
+    let last = db.last_played_times_for_charts(&[beatoraja_key, legacy_key]).unwrap();
+    assert_eq!(last[&beatoraja_key], beatoraja.played_at);
+    assert_eq!(last[&legacy_key], legacy.played_at);
+    assert_eq!(db.clear_option_history(legacy_key).unwrap().len(), 1);
 }
 
 #[test]

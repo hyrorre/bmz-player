@@ -27,10 +27,30 @@ pub fn gauge_total_for_chart_and_rule_mode(
     total_notes: u32,
     rule_mode: RuleMode,
 ) -> f64 {
+    if rule_mode == RuleMode::Legacy {
+        // LR2 keeps TOTAL as an int and replaces values below 1.
+        return metadata_total
+            .map(|total| f64::from(total as i32))
+            .filter(|total| *total >= 1.0)
+            .unwrap_or_else(|| openlr2_default_gauge_total(total_notes));
+    }
     metadata_total.filter(|total| *total > 0.0).unwrap_or_else(|| match rule_mode {
         RuleMode::Beatoraja | RuleMode::Dx => default_gauge_total(total_notes),
-        RuleMode::Lr2Oraja => lr2oraja_default_gauge_total(total_notes),
+        RuleMode::Lr2Oraja | RuleMode::Legacy => lr2oraja_default_gauge_total(total_notes),
     })
+}
+
+/// OpenLR2's default TOTAL (LR2_bmsload.cpp), truncated to its int TOTAL.
+pub fn openlr2_default_gauge_total(total_notes: u32) -> f64 {
+    let notes = total_notes as i32;
+    let calc = if notes < 400 {
+        f64::from(notes) / 5.0 + 200.0
+    } else if notes < 600 {
+        f64::from(notes - 400) / 2.5 + 280.0
+    } else {
+        f64::from(notes - 600) / 5.0 + 360.0
+    };
+    f64::from((calc * 0.8) as i32)
 }
 
 pub fn gauge_total_for_play(

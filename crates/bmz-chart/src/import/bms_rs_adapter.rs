@@ -90,6 +90,24 @@ use text::*;
 use timing::*;
 
 pub(crate) const MAX_SUPPORTED_MEASURE: u32 = 100_000;
+
+pub(crate) fn openlr2_resolved_text(
+    path: &Path,
+    bytes: &[u8],
+    encoding: Option<BmsTextEncoding>,
+    source: &BmsRandomSource,
+) -> Result<String, ImportError> {
+    let text = decode_bms_source(path, (bytes, encoding), &mut Vec::new())?;
+    Ok(resolve_kaleid_source(
+        &text,
+        false,
+        source,
+        &mut Vec::new(),
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .0)
+}
 const SPARSE_BMS_MESSAGE_OBJECT_THRESHOLD: usize = 8_192;
 const SPARSE_BMS_MARKER_HEADER: &str = "BMZSPARSE";
 

@@ -3,6 +3,7 @@ pub mod gauge;
 pub mod hit_error;
 pub mod input;
 pub mod judge;
+pub mod lr2_score;
 pub mod replay;
 pub mod result;
 pub mod rule;

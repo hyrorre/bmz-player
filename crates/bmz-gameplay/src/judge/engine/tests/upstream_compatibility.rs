@@ -44,6 +44,7 @@ fn hcn_empty_poor_uses_the_effective_kind_lane_and_half_open_judge_time() {
                 &chart,
                 press_lane_at(lane, TimeUs(3_000_000)),
                 TimeUs(time),
+                false,
             );
             if suppressed && mode == LongNoteMode::Hcn && lane == Lane::Key1 {
                 assert!(result.events.is_empty() && result.keysounds.is_empty());

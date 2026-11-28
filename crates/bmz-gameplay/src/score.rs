@@ -98,6 +98,8 @@ pub struct ScoreState {
     pub empty_poor_breaks_combo: bool,
     /// In-memory breakdown for a played attempt. Imported scores have no lane data.
     pub lane_scores: Option<Box<[LaneScore; LANE_COUNT]>>,
+    /// LEGACY mine hits, counted in `slow_poor` (POOR and BP) but not combo breaks.
+    pub legacy_mine_poor: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -155,6 +157,14 @@ impl ScoreState {
         }
     }
 
+    /// OpenLR2's `ApplyJudgeMine` adds a hit mine to the POOR count, and so to
+    /// BP. It does not touch the combo, the EX score, the processed notes or
+    /// the combo break count (`extendedStats.cb`).
+    pub fn record_legacy_mine_hit(&mut self) {
+        self.judges.slow_poor += 1;
+        self.legacy_mine_poor += 1;
+    }
+
     pub fn ex_score(&self) -> u32 {
         (self.judges.fast_pgreat + self.judges.slow_pgreat) * 2
             + self.judges.fast_great
@@ -170,11 +180,20 @@ impl ScoreState {
     }
 
     pub fn bp(&self) -> u32 {
-        self.cb() + self.judges.fast_empty_poor + self.judges.slow_empty_poor
+        self.judges.fast_bad
+            + self.judges.slow_bad
+            + self.judges.fast_poor
+            + self.judges.slow_poor
+            + self.judges.fast_empty_poor
+            + self.judges.slow_empty_poor
     }
 
     pub fn cb(&self) -> u32 {
-        self.judges.fast_bad + self.judges.slow_bad + self.judges.fast_poor + self.judges.slow_poor
+        (self.judges.fast_bad
+            + self.judges.slow_bad
+            + self.judges.fast_poor
+            + self.judges.slow_poor)
+            .saturating_sub(self.legacy_mine_poor)
     }
 
     pub fn bp_with_unprocessed_notes(&self, total_notes: u32) -> u32 {
@@ -211,7 +230,7 @@ pub fn empty_poor_breaks_combo_for_rule_mode(key_mode: KeyMode, rule_mode: RuleM
     match rule_mode {
         RuleMode::Beatoraja => matches!(key_mode, KeyMode::K5 | KeyMode::K10 | KeyMode::K9),
         RuleMode::Dx => key_mode == KeyMode::K9,
-        RuleMode::Lr2Oraja => false,
+        RuleMode::Lr2Oraja | RuleMode::Legacy => false,
     }
 }
 

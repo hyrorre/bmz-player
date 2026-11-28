@@ -207,11 +207,26 @@ impl ScoreKey {
         double_option: DoubleOptionScoreBucket,
         rule_mode: RuleMode,
     ) -> Self {
-        Self { chart_sha256, ln_policy, double_option, rule_mode }
+        Self {
+            chart_sha256,
+            ln_policy: rule_ln_policy(ln_policy, rule_mode),
+            double_option,
+            rule_mode,
+        }
     }
 
     pub const fn with_rule_mode(self, rule_mode: RuleMode) -> Self {
-        Self { rule_mode, ..self }
+        Self { rule_mode, ln_policy: rule_ln_policy(self.ln_policy, rule_mode), ..self }
+    }
+}
+
+/// LEGACY plays every long note as a standard LN, as OpenLR2 does, whatever
+/// the LN setting or `#LNMODE`. Its scores share one `ForceLn` bucket so that
+/// play, the select screen and replay lookup agree.
+pub const fn rule_ln_policy(ln_policy: LnScorePolicy, rule_mode: RuleMode) -> LnScorePolicy {
+    match rule_mode {
+        RuleMode::Legacy => LnScorePolicy::ForceLn,
+        _ => ln_policy,
     }
 }
 

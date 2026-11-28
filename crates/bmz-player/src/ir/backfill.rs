@@ -172,6 +172,11 @@ pub(crate) fn enqueue_local_score_jobs_with_scan(
                 }
             };
 
+            if row.rule_mode == bmz_gameplay::rule::RuleMode::Legacy.as_str() {
+                processed.insert(row.id);
+                report.record_invalid(row.id, &anyhow::anyhow!("LEGACY scores are local only"));
+                continue;
+            }
             if !options.include_course_stages && row.course_score_id.is_some() {
                 report.skipped_course_stage += 1;
                 continue;

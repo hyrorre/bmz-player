@@ -285,6 +285,9 @@ fn apply_untimed_judge_outcome(
         // Mine はスコア/コンボに影響を与えず、ゲージのみ削る。譜面指定音は通常の
         // keysound scheduler へ渡し、未指定時の既定SE判定はフレーム終端へ運ぶ。
         session.gauge.apply_mine(hit.damage);
+        if session.rule_mode == RuleMode::Legacy {
+            session.score.record_legacy_mine_hit();
+        }
         if hit.sound.is_some() {
             session.pending_keysounds.push(KeySoundEvent {
                 note_id: hit.note_id,

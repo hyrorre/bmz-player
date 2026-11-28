@@ -87,6 +87,7 @@ pub(in crate::ui) fn rule_mode_label(value: RuleMode) -> &'static str {
         RuleMode::Beatoraja => "BEATORAJA",
         RuleMode::Lr2Oraja => "LR2ORAJA",
         RuleMode::Dx => "DX",
+        RuleMode::Legacy => "LEGACY",
     }
 }
 

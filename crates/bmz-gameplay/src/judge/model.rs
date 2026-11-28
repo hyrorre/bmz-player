@@ -356,4 +356,8 @@ pub struct LaneJudgeState {
     pub last_press_time: Option<TimeUs>,
     pub next_mine_index: usize,
     pub(crate) scratch_press_absorbed_at: Option<TimeUs>,
+    /// LEGACY: the cursor is in OpenLR2's free buffer slots after the lane's objects.
+    pub(crate) legacy_in_free_slots: bool,
+    /// LEGACY: free buffer slots judged so far.
+    pub(crate) legacy_free_slots_used: u32,
 }

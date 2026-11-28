@@ -1,6 +1,74 @@
 use super::*;
 
 #[test]
+fn legacy_same_input_can_score_differently_when_an_idle_poll_precedes_it() {
+    let chart = chart_with_two_taps(TimeUs(1_000_100), TimeUs(1_201_100));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut fine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    let mut coarse = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    let idle = fine.process_legacy_idle_lane(&chart, Lane::Key1, TimeUs(1_201_000), false);
+    assert_eq!(idle.events[0].judge, Judge::Poor);
+    // Same chart, input, judge engine and input time; only the idle poll differs.
+    let input = press_at(TimeUs(1_202_000));
+    let fine_result = fine.process_input(&chart, input);
+    let coarse_result = coarse.process_input(&chart, input);
+    assert_eq!(fine_result.events[0].note_id, Some(NoteId(2)));
+    assert_eq!(fine_result.events[0].judge, Judge::PGreat);
+    assert_eq!(coarse_result.events[0].note_id, Some(NoteId(1)));
+    assert_eq!(coarse_result.events[0].judge, Judge::Poor);
+}
+
+#[test]
+fn legacy_bad_recursion_scores_the_next_ln_as_a_single_note() {
+    let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+    let mut tap = chart.lane_notes[Lane::Key1.index()][0].clone();
+    tap.kind = NoteKind::Tap;
+    tap.id = NoteId(3);
+    tap.time = TimeUs(860_000);
+    chart.lane_notes[Lane::Key1.index()].insert(0, tap);
+    chart.total_notes = 2;
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    let outcome = engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+    let scored: Vec<_> =
+        outcome.events.iter().filter(|e| e.affects_score).map(|e| e.judge).collect();
+    assert_eq!(scored, [Judge::Bad, Judge::PGreat]);
+    assert!(engine.lanes[Lane::Key1.index()].active_long.is_none());
+    assert!(engine.process_input(&chart, release_at(TimeUs(1_100_000))).events.is_empty());
+    assert!(
+        engine
+            .process_legacy_idle_lane(&chart, Lane::Key1, TimeUs(2_001_000), false)
+            .events
+            .is_empty()
+    );
+}
+
+#[test]
+fn legacy_recursive_ln_bad_uses_the_tap_window_and_continues_recursion() {
+    let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+    let mut first = chart.lane_notes[Lane::Key1.index()][0].clone();
+    first.kind = NoteKind::Tap;
+    first.id = NoteId(3);
+    first.time = TimeUs(950_000);
+    let mut last = first.clone();
+    last.id = NoteId(4);
+    last.time = TimeUs(1_150_000);
+    chart.lane_notes[Lane::Key1.index()].insert(0, first);
+    chart.lane_notes[Lane::Key1.index()].insert(2, last);
+    chart.total_notes = 3;
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    let outcome = engine.process_input(&chart, press_at(TimeUs(1_150_000)));
+    let scored: Vec<_> =
+        outcome.events.iter().filter(|e| e.affects_score).map(|e| e.judge).collect();
+    assert_eq!(scored, [Judge::Bad, Judge::Bad, Judge::PGreat]);
+    assert!(engine.lanes[Lane::Key1.index()].active_long.is_none());
+}
+
+#[test]
 fn chart_index_preserves_hcn_overlap_order_and_falls_back_after_chart_replacement() {
     let mut chart = chart_with_long_start(TimeUs(0), TimeUs(1000));
     chart.metadata.long_note_mode = LongNoteMode::Hcn;
@@ -946,4 +1014,329 @@ fn defined_hcn_pair_judges_early_release_even_when_chart_default_is_ln() {
     assert_eq!(release.events[0].note_id, Some(NoteId(2)));
     assert_eq!(release.events[0].judge, Judge::Poor);
     assert_eq!(engine.judged_notes.get(&NoteId(2)), Some(&Judge::Poor));
+}
+
+#[test]
+fn legacy_tap_bad_consumes_the_note_and_continues_with_the_same_press() {
+    let chart = chart_with_two_taps(TimeUs(1_000_900), TimeUs(1_161_900));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    let outcome = engine.process_input(&chart, press_at(TimeUs(1_179_001)));
+    let grades: Vec<_> = outcome.events.iter().map(|event| (event.note_id, event.judge)).collect();
+    assert_eq!(grades, vec![(Some(NoteId(1)), Judge::Bad), (Some(NoteId(2)), Judge::PGreat)]);
+    assert_eq!(outcome.events[1].delta, TimeUs(18_000));
+}
+
+#[test]
+fn legacy_empty_poor_does_not_consume_and_excludes_exact_early_boundary() {
+    let chart = chart_with_tap(TimeUs(2_000_000));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    assert!(engine.process_input(&chart, press_at(TimeUs(1_000_000))).events.is_empty());
+    let early = engine.process_input(&chart, press_at(TimeUs(1_001_000)));
+    assert_eq!(early.events[0].note_id, None);
+    assert_eq!(early.events[0].judge, Judge::EmptyPoor);
+    let on_time = engine.process_input(&chart, press_at(TimeUs(2_000_000)));
+    assert_eq!(on_time.events[0].judge, Judge::PGreat);
+}
+
+/// 実際の OpenLR2 (RianMod) が記録した判定との照合 (`Air -GOD-`)。
+///
+/// `air7god.bme` (title `Air -GOD-`, `#RANK 3`, BPM 180, LN なし, 3414 notes) を
+/// OpenLR2_RianMod_x64.exe で RANDOM を掛けてプレイしたときの
+/// `LR2files/Replay/lightning_23k/751738dea1169c5c39db935adfc9e85f.lr2rep` には、
+/// 確定した判定が op 210 (P1) の value として 3418 件残っている
+/// (`Scene04_Play.cpp` の `ApplyJudgeNote` が `AddReplayData` で書き出す)。
+/// 同じプレイのスコア DB 集計は perfect 3106 / great 261 / good 22 / bad 10 / poor 19
+/// (totalnotes 3414, clear 4) で、リプレイの 3418 件 (poor 19 = POOR 15 + 空 POOR 4) と一致する。
+///
+/// ここでは OpenLR2 が実際に使った譜面時刻と押下時刻をそのまま LEGACY エンジンへ与え、
+/// 3418 件の判定値が記録された順序まで含めて一致することを確認する。
+/// フィクスチャは `tests/data/air_god_*.csv`:
+///
+/// - `air_god_notes.csv`: `譜面レーン,ノート時刻ms`。BMS の `#xxx16` `#xxx11`..`#xxx19` を
+///   小節位置に直し、OpenLR2 の `realTiming` 逐次加算
+///   (`240.0 / BPM * meaLength * (bmsTiming - prev) * 1000.0`, `meaLength = 1.0`) で求めた値を
+///   `(int)note.realTiming` と同じく切り捨てたもの。
+/// - `air_god_presses.csv`: `入力レーン,押下時刻ms`。リプレイの op 0-7 の value=1。
+/// - `air_god_judgements.csv`: `時刻ms,判定`。リプレイの op 210。5=PGREAT 4=GREAT
+///   3=GOOD 2=BAD 1=POOR 0=空 POOR (`JudgeToScore` の引数)。
+///
+/// 3414 notes / 3400 押下 / 3418 判定と量が多いので、テスト本体ではなく CSV に分けている。
+///
+/// このプレイは RANDOM なので、リプレイの入力レーン (op) と譜面レーンは一致しない。
+/// 押下回数と譜面ノート数の対応、および最近傍ノートとの差が ±21ms 以内になる割合から
+/// `op 0..7 -> 譜面レーン {0, 4, 1, 5, 2, 6, 7, 3}` と確定できる
+/// (例: op 2 の押下 564 回のうち 520 回が譜面 Key1 のノートから ±21ms 以内)。
+#[test]
+fn legacy_matches_openlr2_recorded_judgement_of_air_god() {
+    /// 譜面レーン番号 (BMS の scratch, key1..key7) -> `Lane`。
+    const LANE_BY_INDEX: [Lane; 8] = [
+        Lane::Scratch,
+        Lane::Key1,
+        Lane::Key2,
+        Lane::Key3,
+        Lane::Key4,
+        Lane::Key5,
+        Lane::Key6,
+        Lane::Key7,
+    ];
+    /// リプレイの入力レーン (op 0..7) -> 譜面レーン。RANDOM で決まった対応。
+    const RANDOM_LANE: [Lane; 8] = [
+        Lane::Scratch,
+        Lane::Key4,
+        Lane::Key1,
+        Lane::Key5,
+        Lane::Key2,
+        Lane::Key6,
+        Lane::Key7,
+        Lane::Key3,
+    ];
+
+    const NOTES_CSV: &str = include_str!("data/air_god_notes.csv");
+    const PRESSES_CSV: &str = include_str!("data/air_god_presses.csv");
+    const JUDGEMENTS_CSV: &str = include_str!("data/air_god_judgements.csv");
+
+    fn parse_rows(csv: &str) -> Vec<(usize, i64)> {
+        csv.lines()
+            .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+            .map(|line| {
+                let (first, second) = line.split_once(',').expect("csv row");
+                (
+                    first.trim().parse().expect("first column"),
+                    second.trim().parse().expect("second column"),
+                )
+            })
+            .collect()
+    }
+
+    let notes = parse_rows(NOTES_CSV);
+    let presses = parse_rows(PRESSES_CSV);
+    let expected = parse_rows(JUDGEMENTS_CSV);
+
+    assert_eq!(notes.len(), 3414);
+    assert_eq!(presses.len(), 3400);
+    assert_eq!(expected.len(), 3418);
+
+    // 譜面。CSV は譜面レーン順に並んでいるので、ノート ID もレーンごとに昇順になる。
+    let mut chart = chart_with_lane_tap(Lane::Scratch, TimeUs(0));
+    chart.lane_notes = std::array::from_fn(|_| Vec::new());
+    let mut end_time = 0;
+    for (index, &(lane_index, ms)) in notes.iter().enumerate() {
+        let lane = LANE_BY_INDEX[lane_index];
+        chart.lane_notes[lane.index()].push(NoteEvent {
+            id: NoteId(index as u32 + 1),
+            lane,
+            kind: NoteKind::Tap,
+            tick: Default::default(),
+            time: TimeUs(ms * 1_000),
+            sound: None,
+            layered_sounds: Vec::new(),
+            damage: None,
+        });
+        end_time = end_time.max(ms * 1_000);
+    }
+    chart.total_notes = notes.len() as u32;
+    chart.end_time = TimeUs(end_time);
+
+    let window = crate::judge::window::judge_window_for_rule_mode(
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy),
+        100, // #RANK 3 -> 21 / 60 / 120ms, BAD 200ms, 空 POOR 1000ms
+        RuleMode::Legacy,
+    );
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+
+    // 実プレイと同じく、そのフレームの入力を先に処理し、その後で全レーンの
+    // 取りこぼしを確定する。入力レーン内の期限切れは process_input 側が
+    // 先に確定する (OpenLR2 の ProcSinglenote と同じ順序)。
+    let mut timeline: Vec<i64> = presses.iter().map(|&(_, ms)| ms).collect();
+    timeline.extend(notes.iter().map(|&(_, ms)| ms + 201));
+    timeline.sort_unstable();
+    timeline.dedup();
+
+    let mut press_cursor = 0;
+    let mut judged = Vec::new();
+    for &ms in &timeline {
+        let now = TimeUs(ms * 1_000);
+        while let Some(&(op, press_ms)) = presses.get(press_cursor) {
+            if press_ms != ms {
+                break;
+            }
+            // 同じフレームの押下は OpenLR2 と同じく入力レーン順に処理する。
+            assert!(op < RANDOM_LANE.len(), "op {op} is not a P1 input lane");
+            let outcome = engine.process_input(&chart, press_lane_at(RANDOM_LANE[op], now));
+            judged.extend(outcome.events.iter().map(|e| e.judge));
+            press_cursor += 1;
+        }
+        judged.extend(engine.process_misses(&chart, now).events.iter().map(|e| e.judge));
+    }
+    assert_eq!(press_cursor, presses.len());
+
+    // 3414 notes がすべて 1 回ずつ消費され、取りこぼしも残らない。
+    assert!(engine.process_misses(&chart, TimeUs(1_000_000_000)).events.is_empty());
+
+    let judge_value = |judge: Judge| match judge {
+        Judge::PGreat => 5,
+        Judge::Great => 4,
+        Judge::Good => 3,
+        Judge::Bad => 2,
+        Judge::Poor => 1,
+        Judge::EmptyPoor => 0,
+    };
+    let judged_values: Vec<i64> = judged.iter().map(|&judge| judge_value(judge)).collect();
+    let expected_values: Vec<i64> = expected.iter().map(|&(_, value)| value).collect();
+    assert_eq!(judged_values.len(), expected_values.len());
+    for (index, (got, want)) in judged_values.iter().zip(&expected_values).enumerate() {
+        assert_eq!(got, want, "judgement #{index} of the recorded play");
+    }
+
+    let count = |want: Judge| judged.iter().filter(|&&judge| judge == want).count();
+    assert_eq!(
+        (
+            count(Judge::PGreat),
+            count(Judge::Great),
+            count(Judge::Good),
+            count(Judge::Bad),
+            count(Judge::Poor),
+            count(Judge::EmptyPoor),
+        ),
+        (3106, 261, 22, 10, 15, 4)
+    );
+}
+
+#[test]
+fn legacy_idle_lane_consumes_only_one_expired_note_per_poll() {
+    let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_001_000));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    let first = engine.process_legacy_idle_lane(&chart, Lane::Key1, TimeUs(1_500_000), false);
+    assert_eq!(first.events.len(), 1);
+    assert_eq!(first.events[0].note_id, Some(NoteId(1)));
+    let second = engine.process_legacy_idle_lane(&chart, Lane::Key1, TimeUs(1_501_000), false);
+    assert_eq!(second.events.len(), 1);
+    assert_eq!(second.events[0].note_id, Some(NoteId(2)));
+}
+
+#[test]
+fn legacy_active_ln_repress_overwrites_the_provisional_head_grade() {
+    let chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+    let head = engine.process_input(&chart, press_at(TimeUs(1_040_000)));
+    assert!(head.events.iter().all(|event| !event.affects_score));
+    let tail = engine.process_input(&chart, release_at(TimeUs(2_000_000)));
+    assert_eq!(tail.events.len(), 1);
+    assert_eq!(tail.events[0].judge, Judge::Great);
+}
+
+#[test]
+fn legacy_late_repress_of_an_active_ln_scores_empty_poor() {
+    let chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+    let extra = engine.process_input(&chart, press_at(TimeUs(1_500_000)));
+    assert_eq!(extra.events[0].judge, Judge::EmptyPoor);
+    let tail = engine.process_input(&chart, release_at(TimeUs(2_000_000)));
+    assert_eq!(tail.events[0].judge, Judge::PGreat);
+}
+
+#[test]
+fn legacy_release_poll_settles_an_expired_head_before_handling_the_edge() {
+    let chart = chart_with_tap(TimeUs(1_000_000));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    let outcome = engine.process_input(&chart, release_at(TimeUs(1_201_000)));
+    assert_eq!(outcome.events.len(), 1);
+    assert_eq!(outcome.events[0].judge, Judge::Poor);
+    assert!(outcome.consumed_input);
+}
+
+#[test]
+fn legacy_ln_release_preserves_head_grade_inside_the_good_window() {
+    let chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    for (release_ms, expected) in [(1_900, Judge::PGreat), (1_899, Judge::Bad)] {
+        let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+        engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+        let outcome = engine.process_input(&chart, release_at(TimeUs(release_ms * 1_000)));
+        assert_eq!(outcome.events[0].judge, expected);
+    }
+}
+
+#[test]
+fn legacy_press_after_an_expired_head_consumes_only_one_poor() {
+    let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_201_100));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+
+    let outcome = engine.process_input(&chart, press_at(TimeUs(1_201_500)));
+    assert_eq!(outcome.events.len(), 1);
+    assert_eq!(outcome.events[0].note_id, Some(NoteId(1)));
+    assert_eq!(outcome.events[0].judge, Judge::Poor);
+    assert!(outcome.consumed_input);
+
+    // The following note remains available for a separate press.
+    let next = engine.process_input(&chart, press_at(TimeUs(1_202_500)));
+    assert_eq!(next.events.len(), 1);
+    assert_eq!(next.events[0].note_id, Some(NoteId(2)));
+    assert_eq!(next.events[0].judge, Judge::PGreat);
+
+    // Several expired notes still consume only one note per press invocation.
+    let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_001_000));
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+    let outcome = engine.process_input(&chart, press_at(TimeUs(1_300_000)));
+    assert_eq!(outcome.events.len(), 1);
+    assert_eq!(outcome.events[0].note_id, Some(NoteId(1)));
+    let next = engine.process_input(&chart, press_at(TimeUs(1_301_000)));
+    assert_eq!(next.events.len(), 1);
+    assert_eq!(next.events[0].note_id, Some(NoteId(2)));
+    assert_eq!(next.events[0].judge, Judge::Poor);
+}
+
+#[test]
+fn legacy_ln_early_bad_mutes_the_start_keysound_for_any_head_offset() {
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    for head_ms in [980_i64, 1_000, 1_020] {
+        let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+        chart.lane_notes[Lane::Key1.index()][0].sound = Some(bmz_core::ids::SoundId(7));
+        let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+
+        engine.process_input(&chart, press_at(TimeUs(head_ms * 1_000)));
+        // #RANK 2 の GOOD 窓 (100ms) を超えて早く離すと最終判定は BAD になる。
+        let outcome = engine.process_input(&chart, release_at(TimeUs(1_899_000)));
+
+        assert_eq!(outcome.events[0].judge, Judge::Bad, "head {head_ms}ms");
+        assert_eq!(outcome.events[0].delta, TimeUs((head_ms - 1_000) * 1_000), "head {head_ms}ms");
+        assert_eq!(
+            outcome.keysound_volumes,
+            vec![(bmz_core::ids::SoundId(7), 0.0)],
+            "head {head_ms}ms"
+        );
+    }
+}
+
+#[test]
+fn legacy_press_that_settles_an_expired_head_plays_its_miss_keysound_when_enabled() {
+    let mut chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_201_100));
+    chart.lane_notes[Lane::Key1.index()][0].sound = Some(bmz_core::ids::SoundId(7));
+    let window =
+        crate::judge::window::note_judge_window_for_rule_mode(KeyMode::K7, RuleMode::Legacy);
+    let mut engine = JudgeEngine::new_with_rule_mode(window, RuleMode::Legacy);
+
+    let outcome =
+        engine.process_input_at(&chart, press_at(TimeUs(1_201_500)), TimeUs(1_201_500), true);
+
+    assert_eq!(outcome.keysounds[0].note_id, NoteId(1));
+    assert_eq!(outcome.keysounds[0].trigger, KeySoundTrigger::Miss);
 }

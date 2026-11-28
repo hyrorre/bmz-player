@@ -483,6 +483,7 @@ fn rule_mode_label(index: usize) -> &'static str {
         0 => "BEATORAJA",
         1 => "LR2ORAJA",
         2 => "DX",
+        3 => "LEGACY",
         _ => "",
     }
 }

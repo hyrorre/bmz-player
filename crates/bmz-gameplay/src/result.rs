@@ -372,8 +372,10 @@ mod tests {
                     death: 0.0,
                     values: [0.0; 6],
                     guts: &[],
+                    legacy: None,
                 },
                 value,
+                legacy_hp: None,
             }],
         }
     }

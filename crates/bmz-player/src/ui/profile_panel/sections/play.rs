@@ -36,6 +36,11 @@ pub(in crate::ui::profile_panel) fn build_profile_play_section(
                         RuleMode::Dx,
                         rule_mode_label(RuleMode::Dx),
                     );
+                    ui.selectable_value(
+                        &mut profile.play.rule_mode,
+                        RuleMode::Legacy,
+                        rule_mode_label(RuleMode::Legacy),
+                    );
                 });
             egui::ComboBox::new("profile_ln_mode", tr!(text, "profile-play-ln-mode"))
                 .selected_text(profile.play.ln_mode_policy.display_label())

@@ -276,6 +276,11 @@ fn score_primary_at(
     judgements: &mut Vec<JudgementEvent>,
 ) {
     judgements.extend(super::input::process_timed_inputs(session, now, input_limit));
+    if super::input::uses_legacy_frame_clock(session) {
+        // The LEGACY clock already polled every lane each millisecond up to
+        // `now`, misses and mines included.
+        return;
+    }
     if super::input::uses_ordered_inputs(session) || session.judge.has_hcn(&session.chart) {
         judgements.extend(super::conditional::advance_time(session, now));
         return;
@@ -787,7 +792,7 @@ impl super::input::InputScoring for BattleOpponentSession {
         } else if !held.is_held() {
             self.lane_keyon_started_at[lane] = None;
         }
-        (input, self.judge.process_input_at(&self.chart, input, judge_time))
+        (input, self.judge.process_input_at(&self.chart, input, judge_time, false))
     }
     fn pass_mines(&mut self, time: TimeUs) -> Vec<Self::Event> {
         let outcome = battle_opponent_passes(self, time);

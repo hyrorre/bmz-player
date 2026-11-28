@@ -136,6 +136,9 @@ impl WinitApp {
             arrange,
             random_seed,
         } = request;
+        if rule_mode == bmz_gameplay::rule::RuleMode::Legacy {
+            return;
+        }
         // Independent of every single-score policy and of other providers'
         // generic course payloads. Use the captured attempt, not a library reread.
         for provider in

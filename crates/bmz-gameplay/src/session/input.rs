@@ -264,8 +264,18 @@ pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
 }
 
 pub(super) fn uses_ordered_inputs(session: &GameSession) -> bool {
-    super::conditional::uses_ordered_timeline(&session.chart)
+    session.rule_mode == RuleMode::Legacy
+        || super::conditional::uses_ordered_timeline(&session.chart)
         || !session.timing_map.bpm_reflections().is_empty()
+}
+
+pub(super) fn uses_legacy_frame_clock(session: &GameSession) -> bool {
+    session.rule_mode == RuleMode::Legacy
+        && !super::conditional::uses_ordered_timeline(&session.chart)
+        && session.timing_map.bpm_reflections().is_empty()
+        && session.chart.long_notes.iter().all(|pair| {
+            pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Ln
+        })
 }
 
 /// 採点を閉じた後の入力を、判定・リプレイ記録・ゲージへ渡さずに表示とキー音へ反映する。
@@ -570,7 +580,13 @@ pub(super) fn process_timed_inputs(
     input_limit: usize,
 ) -> Vec<JudgementEvent> {
     let mut inputs = take_human_scoring_inputs(session, now);
-    append_replay_inputs(session, now, input_limit, &mut inputs);
+    // A LEGACY replay delivers the edges of the milliseconds it polls now.
+    let replay_now = match legacy_last_tick(session, now) {
+        _ if !uses_legacy_frame_clock(session) => now,
+        tick if tick < 0 => TimeUs(i64::MIN),
+        tick => TimeUs(tick + 999).min(now),
+    };
+    append_replay_inputs(session, replay_now, input_limit, &mut inputs);
     if let Some(auto) = &mut session.autoplay {
         inputs.extend(
             auto.poll_until(&session.chart, now)
@@ -578,11 +594,215 @@ pub(super) fn process_timed_inputs(
                 .map(|input| TimedInput::new(input, None)),
         );
     }
-    let events = apply_timed_inputs(session, inputs, now);
+    let events = if uses_legacy_frame_clock(session) {
+        process_legacy_timed_inputs(session, inputs, now)
+    } else {
+        apply_timed_inputs(session, inputs, now)
+    };
     if session.autoplay.is_some() {
         apply_auto_key_release(session, now);
     }
     events
+}
+
+/// LEGACY on OpenLR2's polling clock: every lane is polled each integer
+/// millisecond, scratch first, and each lane's judgements and mines reach the
+/// gauge in that order. Mines share the lane cursor with notes.
+///
+/// An edge is polled at its own millisecond. One that arrives after that
+/// millisecond was already polled is polled again at the last processed
+/// millisecond, as OpenLR2 does on its next loop. Each update that does this
+/// is a poll of its own, and `applied_after` records its boundary: a time in
+/// that millisecond, the same for every edge of the update. A replay keeps
+/// the recorded boundaries and polls a millisecond only once all its edges
+/// are due, so it judges the same way however its updates are split.
+fn process_legacy_timed_inputs(
+    session: &mut GameSession,
+    mut inputs: Vec<TimedInput>,
+    now: TimeUs,
+) -> Vec<JudgementEvent> {
+    let previous = session.conditional.processed_time.filter(|at| at.0 >= 0);
+    let ms_of = |time: TimeUs| time.0.div_euclid(1000) * 1000;
+    if let Some(at) = previous {
+        // The update's time if it is still in that millisecond, else its end.
+        let boundary = TimeUs(if ms_of(now) == at.0 { now.0 } else { at.0 + 999 });
+        for timed in &mut inputs {
+            if timed.input.source != InputSource::Replay && ms_of(timed.input.time) <= at.0 {
+                timed.applied_after = Some(boundary);
+            }
+        }
+    }
+    inputs.sort_by_key(TimedInput::order);
+    let last_tick = legacy_last_tick(session, now);
+    let repoll_previous = previous.is_some_and(|at| {
+        inputs.iter().any(|timed| timed.applied_after.is_some_and(|b| ms_of(b) == at.0))
+    });
+    let mut tick = match previous {
+        Some(at) if repoll_previous => at.0,
+        Some(at) => at.0 + 1000,
+        None => 0,
+    };
+    let mut pending: std::collections::VecDeque<_> = inputs.into();
+    let mut events = Vec::new();
+    session.judge.set_legacy_inline_mines(true);
+    while tick <= last_tick && session.state == PlayState::Playing && !session.play_end_reached() {
+        let time = TimeUs(tick);
+        super::frame::sync_judge_windows(session, time);
+        if previous.is_none_or(|at| tick > at.0) {
+            let group = take_legacy_poll(&mut pending, |timed| {
+                timed.applied_after.is_none() && ms_of(timed.input.time) <= tick
+            });
+            legacy_poll(session, &group, time, now, &mut events);
+        }
+        // Each recorded boundary of this millisecond is one more poll.
+        while let Some(boundary) = pending
+            .iter()
+            .filter_map(|timed| timed.applied_after)
+            .filter(|&b| ms_of(b) <= tick)
+            .min()
+        {
+            let group =
+                take_legacy_poll(&mut pending, |timed| timed.applied_after == Some(boundary));
+            legacy_poll(session, &group, time, now, &mut events);
+        }
+        session.conditional.processed_time = Some(time);
+        tick += 1000;
+    }
+    events
+}
+
+/// The last millisecond a LEGACY update polls. A full replay polls a
+/// millisecond only once every edge recorded in it is due.
+fn legacy_last_tick(session: &GameSession, now: TimeUs) -> i64 {
+    if session.replay_player.is_some() && session.replay_lane_mask.is_none() {
+        (now.0 - 999).div_euclid(1000) * 1000
+    } else {
+        now.0
+    }
+}
+
+/// Removes the edges of one poll from `pending`, in order.
+fn take_legacy_poll(
+    pending: &mut std::collections::VecDeque<TimedInput>,
+    mut take: impl FnMut(&TimedInput) -> bool,
+) -> Vec<TimedInput> {
+    let mut group = Vec::new();
+    pending.retain(|timed| {
+        let taken = take(timed);
+        if taken {
+            group.push(*timed);
+        }
+        !taken
+    });
+    group
+}
+
+/// One OpenLR2 loop over all lanes at `time` with the edges of this poll.
+fn legacy_poll(
+    session: &mut GameSession,
+    group: &[TimedInput],
+    time: TimeUs,
+    now: TimeUs,
+    events: &mut Vec<JudgementEvent>,
+) {
+    let mut human_events = Vec::new();
+    for lane in crate::judge::engine::LEGACY_LANE_ORDER {
+        let mut edges = Vec::new();
+        for timed in group.iter().filter(|timed| timed.input.lane == lane) {
+            record_human_edge(session, *timed);
+            let mut input = timed.input;
+            if input.source == InputSource::Replay {
+                input = project_replay_input(session, input);
+            }
+            update_recent_inputs(session, &[input], now);
+            update_lane_key_states(session, &[input]);
+            if input.source == InputSource::Human
+                && let Some(collected_at) = timed.collected_at
+            {
+                super::latency::judged(collected_at);
+            }
+            edges.push(input);
+        }
+        let judged: Vec<_> = if matches!(lane, Lane::Scratch | Lane::Scratch2) {
+            legacy_scratch_edge(&edges, session.lane_key_hold[lane.index()].is_held())
+                .into_iter()
+                .collect()
+        } else {
+            (0..edges.len()).collect()
+        };
+        for (index, input) in edges.iter().enumerate() {
+            if !judged.contains(&index) {
+                push_skin_runtime_event(session, SkinRuntimeEventKind::Input(*input));
+            }
+        }
+        for &index in &judged {
+            let input = edges[index];
+            let outcome = evaluate_session_input(session, input);
+            if input.source == InputSource::Human {
+                human_events.extend(outcome.events.iter().cloned());
+            }
+            // LR2 applies each judgement and mine to the gauge as its lane is
+            // polled; the order matters at the gauge limits.
+            events.extend(apply_judge_outcome(session, outcome));
+        }
+        if judged.is_empty() {
+            let outcome = session.judge.process_legacy_lane_poll(
+                &session.chart,
+                lane,
+                time,
+                session.lane_key_hold[lane.index()].is_held(),
+                session.play_keysound_on_miss,
+            );
+            events.extend(apply_judge_outcome(session, outcome));
+        }
+    }
+    // LR2 checks gauge failure only after polling all lanes, so a gauge that
+    // fails mid-poll still lets the remaining lanes (and any BAD recursion) be
+    // judged and scored; the loop stops before the next poll.
+    apply_input_offset_auto_adjust(session, &human_events);
+}
+
+/// The scratch edge OpenLR2 judges in one poll. Its input layer merges the up
+/// and down directions into one key state (`En_input.cpp`): a new press in
+/// either direction wins, then a direction still held, then a release. So a
+/// release while the other direction is held is no release, and a release
+/// and a press in the same poll is the press. `edges` are this poll's edges
+/// in order; `held` is the merged state after them.
+fn legacy_scratch_edge(edges: &[InputEvent], held: bool) -> Option<usize> {
+    let mut last_by_direction: Vec<(Option<ScratchDirection>, usize)> = Vec::new();
+    for (index, input) in edges.iter().enumerate() {
+        match last_by_direction.iter_mut().find(|(d, _)| *d == input.scratch_direction) {
+            Some(entry) => entry.1 = index,
+            None => last_by_direction.push((input.scratch_direction, index)),
+        }
+    }
+    let last = |kind| {
+        last_by_direction
+            .iter()
+            .map(|&(_, index)| index)
+            .filter(|&index| edges[index].kind == kind)
+            .max()
+    };
+    match last(InputKind::Press) {
+        Some(press) => Some(press),
+        None if held => None,
+        None => last(InputKind::Release),
+    }
+}
+
+/// Writes a human edge to the replay with the boundary it was applied after.
+fn record_human_edge(session: &mut GameSession, timed: TimedInput) {
+    let input = timed.input;
+    if input.source != InputSource::Human || session.display_only_lane_mask[input.lane.index()] {
+        return;
+    }
+    let lane = session
+        .replay_lane_projection
+        .as_ref()
+        .map_or(Some(input.lane), |p| p.record_to_source[input.lane.index()]);
+    if let Some(lane) = lane {
+        session.replay_recorder.record_after(InputEvent { lane, ..input }, timed.applied_after);
+    }
 }
 
 /// Player-specific effects of an input. The order in which passage, key state,
@@ -682,17 +902,8 @@ impl InputScoring for GameSession {
     }
 
     fn judge_edge(&mut self, timed: TimedInput, now: TimeUs) -> (InputEvent, JudgeOutcome) {
+        record_human_edge(self, timed);
         let mut input = timed.input;
-        if input.source == InputSource::Human && !self.display_only_lane_mask[input.lane.index()] {
-            let lane = self
-                .replay_lane_projection
-                .as_ref()
-                .map_or(Some(input.lane), |p| p.record_to_source[input.lane.index()]);
-            if let Some(lane) = lane {
-                self.replay_recorder
-                    .record_after(InputEvent { lane, ..input }, timed.applied_after);
-            }
-        }
         if input.source == InputSource::Replay {
             input = project_replay_input(self, input);
         }
@@ -738,7 +949,12 @@ fn evaluate_session_input(session: &mut GameSession, input: InputEvent) -> Judge
     } else {
         session.timing_map.reflected_judge_time(input.time)
     };
-    let mut outcome = session.judge.process_input_at(&session.chart, input, judge_time);
+    let mut outcome = session.judge.process_input_at(
+        &session.chart,
+        input,
+        judge_time,
+        session.play_keysound_on_miss,
+    );
     if input.kind == InputKind::Press {
         let hcn_passing = hold_note_passing_at(session, input.lane, input.time, LongNoteMode::Hcn);
         let hln_passing = hold_note_passing_at(session, input.lane, input.time, LongNoteMode::Hln);

@@ -2313,6 +2313,7 @@ Rule Modeは次のindexとlabelを使います。
 | 0 | `BEATORAJA` | 1988 |
 | 1 | `LR2ORAJA` | 1989 |
 | 2 | `DX` | 1990 |
+| 3 | `LEGACY` | 1991 |
 
 `ref=1987`はnumber / event index / imageset refでは上表のindex、textではlabelを返します。
 Selectでは現在のprofile設定、Decide / Playでは開始する試行のScoreKey、Resultでは終了した

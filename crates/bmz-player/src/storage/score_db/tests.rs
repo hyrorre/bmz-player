@@ -278,3 +278,20 @@ mod independent_bests;
 mod last_play;
 #[path = "tests/source_min_bp.rs"]
 mod source_min_bp;
+
+#[test]
+fn legacy_score_keys_share_the_force_ln_bucket() {
+    use crate::ln_policy::LnScorePolicy;
+    let key = ScoreKey::with_options(
+        [1; 32],
+        LnScorePolicy::ForceCn,
+        DoubleOptionScoreBucket::Off,
+        RuleMode::Legacy,
+    );
+    assert_eq!(key.ln_policy, LnScorePolicy::ForceLn);
+    let key = ScoreKey::new([1; 32], LnScorePolicy::AutoHcn).with_rule_mode(RuleMode::Legacy);
+    assert_eq!(key.ln_policy, LnScorePolicy::ForceLn);
+    // Other rule modes keep the LN policy.
+    let key = ScoreKey::new([1; 32], LnScorePolicy::AutoHcn).with_rule_mode(RuleMode::Lr2Oraja);
+    assert_eq!(key.ln_policy, LnScorePolicy::AutoHcn);
+}
