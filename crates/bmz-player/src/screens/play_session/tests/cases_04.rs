@@ -293,39 +293,38 @@ fn build_freq_replay_keeps_recorded_windows_after_viewing_speed_changes() {
 }
 
 #[test]
-fn dx_pop_replays_from_before_the_judge_revision_keep_the_earlier_windows() {
-    use bmz_gameplay::judge::window::{dx_pop_judge_windows, dx_pop_legacy_judge_windows};
+fn dx_pop_replays_use_the_recorded_judge_revision() {
+    use crate::storage::replay::{REPLAY_JUDGE_REVISION, ReplayFile};
 
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
     profile.play.rule_mode = RuleMode::Dx;
-    let build = |key_mode, legacy| {
+    let build = |key_mode, revision| {
         let mut source = chart();
         source.metadata.key_mode = key_mode;
+        let mut replay =
+            ReplayFile::new([0; 32], 1, None, ArrangeOption::Normal, None, None, vec![]);
+        replay.judge_revision = revision;
         build_game_session(
             Arc::new(source),
             &profile,
-            PlaySessionOptions {
-                replay_player: Some(ReplayPlayer {
-                    legacy_dx_pop_judge: legacy,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
+            PlaySessionOptions { replay_player: Some(replay.player()), ..Default::default() },
         )
         .base_judge_windows
     };
-    // Profile judge settings still apply on top, so compare the LN fields they keep.
-    let (legacy, current) = (build(KeyMode::K9, true), build(KeyMode::K9, false));
-    let (old_pop, new_pop) = (dx_pop_legacy_judge_windows(), dx_pop_judge_windows());
-    assert_eq!(legacy.long_note_end, old_pop.long_note_end);
-    assert_eq!(legacy.long_note_end_fast, None);
-    assert_eq!(legacy.long_note_release_margin_us, old_pop.long_note_release_margin_us);
-    assert_eq!(current.long_note_end, new_pop.long_note_end);
-    assert_eq!(current.long_note_end_fast, new_pop.long_note_end_fast);
-    assert_eq!(current.long_note_release_margin_us, new_pop.long_note_release_margin_us);
-    assert_ne!(legacy.note, current.note);
-    // Only POP changed; other DX MODE key modes keep the current windows either way.
-    assert_eq!(build(KeyMode::K7, true), build(KeyMode::K7, false));
+    let iidx = build(KeyMode::K7, REPLAY_JUDGE_REVISION);
+    for (revision, note_good, end_good, early_good, margin) in [
+        (0, 87_500, 217_000, None, 200_000),
+        (1, 116_667, 116_667, Some(233_333), 116_667),
+        (4, 116_667, 116_667, Some(233_333), 116_667),
+        (REPLAY_JUDGE_REVISION, 116_667, 116_667, Some(281_667), 165_000),
+    ] {
+        let pop = build(KeyMode::K9, revision);
+        assert_eq!(pop.note.good_us, note_good);
+        assert_eq!(pop.long_note_end.good_us, end_good);
+        assert_eq!(pop.long_note_end_fast.map(|window| window.good_us), early_good);
+        assert_eq!(pop.long_note_release_margin_us, margin);
+        assert_eq!(build(KeyMode::K7, revision), iidx);
+    }
 }
 
 #[test]

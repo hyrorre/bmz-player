@@ -616,9 +616,8 @@ pub const fn dx_pop_note_judge_window() -> JudgeWindow {
 
 /// `JudgeProperty.POP` の LN 終端窓のうち、終端以降に離した (SLOW / LATE) 側。
 ///
-/// 参照値は PG/GR/GD が {-116667, 233333}、BD が {-183333, 366667} で、EARLY 側だけが広い。
-/// EARLY 側は [`dx_pop_long_note_end_fast_judge_window`] で表す。`bad_fast_us` は
-/// SLOW 側だけを見る利用者向けに EARLY 側の BD 幅と揃える。#RANK による拡縮はしない。
+/// PG/GR/GD は 116667、BD は 183333。`bad_fast_us` は EARLY 側の BD 幅 366667。
+/// #RANK による拡縮はしない。
 pub const fn dx_pop_long_note_end_judge_window() -> JudgeWindow {
     JudgeWindow {
         pgreat_us: 116_667,
@@ -632,36 +631,34 @@ pub const fn dx_pop_long_note_end_judge_window() -> JudgeWindow {
     }
 }
 
-/// `JudgeProperty.POP` の LN 終端窓のうち、終端より前に離した (FAST / EARLY) 側。
-///
-/// 参照側の注記どおり、PG/GR/GD は判定幅 116667 + 離し猶予 116667 = 233333 まで、
-/// BD は 366667 まで。FAST 側だけで使うため SLOW 側フィールドも同じ値にする。
-/// 離し猶予 (`long_note_release_margin_us`) は参照側と同じく BD 以下の早離しの
-/// 押し直し猶予として別に効く。
-pub const fn dx_pop_long_note_end_fast_judge_window() -> JudgeWindow {
-    JudgeWindow {
-        pgreat_us: 233_333,
-        great_us: 233_333,
-        good_us: 233_333,
-        bad_fast_us: 366_667,
-        bad_slow_us: 366_667,
-        empty_poor_fast_us: 0,
-        empty_poor_slow_us: 0,
-        fast_bands: None,
-    }
+/// `JudgeProperty.POP` 一式。終端の早離し側は 281667、BAD 以下の押し直し猶予は 165000。
+pub const fn dx_pop_judge_windows() -> JudgeWindows {
+    dx_pop_judge_windows_with_release(281_667, 165_000)
 }
 
-/// `JudgeProperty.POP` 一式。`longnoteMargin` は 116667。
-pub const fn dx_pop_judge_windows() -> JudgeWindows {
+const fn dx_pop_judge_windows_with_release(
+    fast_good_us: i64,
+    release_margin_us: i64,
+) -> JudgeWindows {
+    let note = dx_pop_note_judge_window();
+    let long_end = dx_pop_long_note_end_judge_window();
+    let long_end_fast = JudgeWindow {
+        pgreat_us: fast_good_us,
+        great_us: fast_good_us,
+        good_us: fast_good_us,
+        // Window scaling uses both BAD fields as a cap, even for a FAST-only window.
+        bad_slow_us: long_end.bad_fast_us,
+        ..long_end
+    };
     JudgeWindows {
-        note: dx_pop_note_judge_window(),
+        note,
         // 9KEY has no scratch lanes. Keep a harmless note-window fallback.
-        scratch: dx_pop_note_judge_window(),
-        long_note_end: dx_pop_long_note_end_judge_window(),
-        long_scratch_end: dx_pop_long_note_end_judge_window(),
-        long_note_end_fast: Some(dx_pop_long_note_end_fast_judge_window()),
-        long_scratch_end_fast: Some(dx_pop_long_note_end_fast_judge_window()),
-        long_note_release_margin_us: 116_667,
+        scratch: note,
+        long_note_end: long_end,
+        long_scratch_end: long_end,
+        long_note_end_fast: Some(long_end_fast),
+        long_scratch_end_fast: Some(long_end_fast),
+        long_note_release_margin_us: release_margin_us,
         long_scratch_release_margin_us: 0,
     }
 }
@@ -702,14 +699,25 @@ pub const fn dx_pop_legacy_judge_windows() -> JudgeWindows {
     }
 }
 
-/// リプレイ再生の基準判定窓。`legacy_dx_pop` のリプレイは DX MODE POP だけ旧判定で再現する。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DxPopJudgeRevision {
+    Legacy,
+    V1ToV4,
+    #[default]
+    Current,
+}
+
+/// リプレイ再生時の DX MODE POP は記録時の判定窓を使う。
 pub const fn replay_judge_windows_for_keymode_and_rule_mode(
     key_mode: KeyMode,
     rule_mode: RuleMode,
-    legacy_dx_pop: bool,
+    dx_pop_revision: DxPopJudgeRevision,
 ) -> JudgeWindows {
-    match (rule_mode, key_mode, legacy_dx_pop) {
-        (RuleMode::Dx, KeyMode::K9, true) => dx_pop_legacy_judge_windows(),
+    match (rule_mode, key_mode, dx_pop_revision) {
+        (RuleMode::Dx, KeyMode::K9, DxPopJudgeRevision::Legacy) => dx_pop_legacy_judge_windows(),
+        (RuleMode::Dx, KeyMode::K9, DxPopJudgeRevision::V1ToV4) => {
+            dx_pop_judge_windows_with_release(233_333, 116_667)
+        }
         _ => judge_windows_for_keymode_and_rule_mode(key_mode, rule_mode),
     }
 }

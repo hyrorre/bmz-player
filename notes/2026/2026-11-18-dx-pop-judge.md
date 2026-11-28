@@ -77,3 +77,15 @@ beatoraja 5K（`K5`）はIIDX判定・IIDXゲージのままで、テストで�
 
 この記録の時点では、実装担当側ではcargoを実行していません。fmt / check / Clippy / testは別途確認します。
 実機でのDX MODE PMSプレイは未確認です。
+
+## 2026-11-24 の追加追従
+
+LR2orajaED-rianに合わせ、PMS 5K / 9KのDX POPで、LN系終端のGOOD以上の早離し幅を281667μs、
+BAD以下の押し直し猶予を165000μsに更新した。
+[上流コミット 288c52e8](https://github.com/rian-eimu/lr2oraja-endlessdream/commit/288c52e8)
+
+リプレイは本人・対戦相手ともにリビジョン0で改訂前のPOP窓、1〜4でv1.7.0相当の判定窓と猶予を使う。
+新規記録はリビジョン5とする。境界の前後1μs、猶予の満了と押し直し、リプレイ読込時の窓選択をテストした。
+
+Windowsで整形、ワークスペースのcheck、全ターゲットClippy、全テスト（6026件成功、148件ignore）を確認した。
+実機プレイは未実施。

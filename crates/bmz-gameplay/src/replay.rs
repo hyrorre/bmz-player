@@ -3,6 +3,7 @@ use bmz_core::replay::ReplayEvent;
 use bmz_core::time::TimeUs;
 
 use crate::judge::model::JudgeAlgorithm;
+use crate::judge::window::DxPopJudgeRevision;
 
 #[derive(Debug, Clone, Default)]
 pub struct ReplayRecorder {
@@ -67,9 +68,7 @@ pub struct ReplayPlayer {
     pub branch_decisions: Option<Vec<bmz_core::replay::BranchDecision>>,
     pub events: Vec<ReplayEvent>,
     pub judge_algorithm: Option<JudgeAlgorithm>,
-    /// Recorded by v0.5.2 or earlier, before the DX MODE POP judge revision. Such replays
-    /// reproduce with the earlier POP windows.
-    pub legacy_dx_pop_judge: bool,
+    pub dx_pop_judge_revision: DxPopJudgeRevision,
     /// The source recorded input relative to the chart before the start-note margin.
     pub input_excludes_start_margin: bool,
     pub next_index: usize,

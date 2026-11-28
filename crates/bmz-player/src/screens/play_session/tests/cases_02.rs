@@ -119,9 +119,9 @@ fn build_game_session_applies_dx_9key_pop_rules() {
     assert_eq!(session.judge.window_set.long_note_end.good_us, 116_667);
     assert_eq!(
         session.judge.window_set.long_note_end_fast.map(|window| window.good_us),
-        Some(233_333)
+        Some(281_667)
     );
-    assert_eq!(session.judge.window_set.long_note_release_margin_us, 116_667);
+    assert_eq!(session.judge.window_set.long_note_release_margin_us, 165_000);
     assert!(session.score.empty_poor_breaks_combo);
     let normal = session
         .gauge
@@ -186,6 +186,8 @@ fn dx_9key_replay_judgements_apply_current_pop_damage() {
 
 #[test]
 fn legacy_dx_pop_replay_uses_its_original_bands_and_margin() {
+    use bmz_gameplay::judge::window::DxPopJudgeRevision;
+
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
     profile.play.rule_mode = RuleMode::Dx;
     let mut chart = chart();
@@ -194,7 +196,10 @@ fn legacy_dx_pop_replay_uses_its_original_bands_and_margin() {
         Arc::new(chart),
         &profile,
         PlaySessionOptions {
-            replay_player: Some(ReplayPlayer { legacy_dx_pop_judge: true, ..Default::default() }),
+            replay_player: Some(ReplayPlayer {
+                dx_pop_judge_revision: DxPopJudgeRevision::Legacy,
+                ..Default::default()
+            }),
             ..Default::default()
         },
     );
